@@ -1,0 +1,12 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type scf = Dialect;
+
+extern let yield_iface_Terminator: Interface;
+
+pub let scf::r#yield = {
+    signature: (values: Many<Any>) -> (),
+    interfaces: [yield_iface_Terminator],
+};

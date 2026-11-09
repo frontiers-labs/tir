@@ -1,0 +1,16 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let CONTROL_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let CONTROL_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+
+pub let constructors::CONTROL: ConstructorSpec = {
+    dialect: "son",
+    name: "control",
+    params: [],
+    kind: Kind::Data(),
+    validate: CONTROL_validate,
+    carrier: CONTROL_carrier,
+};

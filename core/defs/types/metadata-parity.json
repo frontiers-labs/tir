@@ -1,0 +1,1006 @@
+{
+  "base_ctor_order": [
+    "INT",
+    "FLOAT",
+    "UNIT",
+    "TUPLE",
+    "STATE",
+    "NAT_ADD",
+    "RAW",
+    "ITER",
+    "SEM_STATE",
+    "NAMED"
+  ],
+  "files": [
+    {
+      "source": "core/src/dialects/builtin/fn_type.rs",
+      "source_sha256": "9499cdf3a56a3de8b929c214d94c5f82c676c830a29b2b982b5c2a765ffc70e8",
+      "canonical_sha256": "9499cdf3a56a3de8b929c214d94c5f82c676c830a29b2b982b5c2a765ffc70e8",
+      "cdsl": "core_src_dialects_builtin_fn_type.cdsl",
+      "preview_sha256": "3038ece0418564b7e2cb84a2dcff9395c36fab954d4f68ce9b1f126b6f986a74",
+      "spans": [
+        {
+          "start": 246,
+          "end": 388,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_builtin_fn_type.cdsl\", binding: constructors::VARARGS, hosts: { VARARGS_validate => valid, VARARGS_carrier => no_carrier } }",
+          "payload_sha256": "891c9d2cc1ae3a45b242e1c87e05f4f58569b3e537247240bde3d9189cc91782"
+        },
+        {
+          "start": 1023,
+          "end": 1263,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_fn_type.cdsl\", binding: spellings::VarArgsType, context: context, hosts: { VarArgsType_parse => |_, _, context| Ok(VarArgsType::new(context)), VarArgsType_print => |_, _, fmt| fmt.write(\"varargs\"), VarArgsType_ctor_id => |context| { VARARGS.id(context) } } }",
+          "payload_sha256": "75c4a71485b2476c47d81a68cf54ed84331c7d025109ff76f545b917feaeb04d"
+        },
+        {
+          "start": 1301,
+          "end": 1529,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_builtin_fn_type.cdsl\", binding: constructors::FN, hosts: { FN_validate => valid, FN_carrier => no_carrier } }",
+          "payload_sha256": "85f4a4de25ea1cfcb31b5fa4d49e87eb4fcfb904cd30d782bb04058f98ae6185"
+        },
+        {
+          "start": 3216,
+          "end": 4930,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_fn_type.cdsl\", binding: spellings::FnType, context: context, hosts: { FnType_parse => |_, parser, context| {\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                let params = parser\n                    .parse_delimited(\"(\", \")\", |parser| {\n                        parser\n                            .parse_type(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))\n                    })?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"(\")))?;\n                if !parser.parse_token(\"->\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"->\")));\n                }\n                let ret = parser\n                    .parse_type(context)?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                Ok(FnType::new(context, &params, ret))\n            }, FnType_print => |spellings, ty, fmt| {\n                let signature = FnType::view(spellings, ty).expect(\"a function type\");\n                fmt.write(\"fn<(\")?;\n                for (index, param) in signature.params().into_iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    spellings.print(param, fmt)?;\n                }\n                fmt.write(\") -> \")?;\n                spellings.print(signature.ret(), fmt)?;\n                fmt.write(\">\")\n            }, FnType_ctor_id => |context| { FN.id(context) } } }",
+          "payload_sha256": "f90da1bc6ee9cedb478e84bab36e6b2531d6d53e77b78c7fcf39de8258ce22d1"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::VARARGS",
+          "rust_hosts": {
+            "VARARGS_validate": "valid",
+            "VARARGS_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::VARARGS\", {dialect: \"builtin\", name: \"varargs\", params: [], kind: library::Kind::Data(), validate: <foreign main::VARARGS_validate>, carrier: <foreign main::VARARGS_carrier>})"
+        },
+        {
+          "binding": "spellings::VarArgsType",
+          "rust_hosts": {
+            "VarArgsType_parse": "|_, _, context| Ok(VarArgsType::new(context))",
+            "VarArgsType_print": "|_, _, fmt| fmt.write(\"varargs\")",
+            "VarArgsType_ctor_id": "|context| { VARARGS.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::VarArgsType\", {ctor_id: <foreign main::VarArgsType_ctor_id>, keys: [\"varargs\"], parse: <foreign main::VarArgsType_parse>, print: <foreign main::VarArgsType_print>, variadic_tail: true})"
+        },
+        {
+          "binding": "constructors::FN",
+          "rust_hosts": {
+            "FN_validate": "valid",
+            "FN_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::FN\", {dialect: \"builtin\", name: \"fn\", params: [{name: \"params\", param: library::Param::List(library::Kind::Data())}, {name: \"ret\", param: library::Param::One(library::Kind::Data())}], kind: library::Kind::Data(), validate: <foreign main::FN_validate>, carrier: <foreign main::FN_carrier>})"
+        },
+        {
+          "binding": "spellings::FnType",
+          "rust_hosts": {
+            "FnType_parse": "|_, parser, context| {\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                let params = parser\n                    .parse_delimited(\"(\", \")\", |parser| {\n                        parser\n                            .parse_type(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))\n                    })?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"(\")))?;\n                if !parser.parse_token(\"->\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"->\")));\n                }\n                let ret = parser\n                    .parse_type(context)?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                Ok(FnType::new(context, &params, ret))\n            }",
+            "FnType_print": "|spellings, ty, fmt| {\n                let signature = FnType::view(spellings, ty).expect(\"a function type\");\n                fmt.write(\"fn<(\")?;\n                for (index, param) in signature.params().into_iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    spellings.print(param, fmt)?;\n                }\n                fmt.write(\") -> \")?;\n                spellings.print(signature.ret(), fmt)?;\n                fmt.write(\">\")\n            }",
+            "FnType_ctor_id": "|context| { FN.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::FnType\", {ctor_id: <foreign main::FnType_ctor_id>, keys: [\"fn\"], parse: <foreign main::FnType_parse>, print: <foreign main::FnType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/builtin/mod.rs",
+      "source_sha256": "32a1e508609f390ac80ef61d2db87995fa900ab90e29cc4025b6889c05c11987",
+      "canonical_sha256": "32a1e508609f390ac80ef61d2db87995fa900ab90e29cc4025b6889c05c11987",
+      "cdsl": "core_src_dialects_builtin_mod.cdsl",
+      "preview_sha256": "1dcba3253ee9ee46294b551b6075626c31fc60bf23cebf29502234c98820fbe2",
+      "spans": [
+        {
+          "start": 2196,
+          "end": 2887,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_mod.cdsl\", binding: spellings::IntegerType, context: _context, hosts: { IntegerType_parse => |mnemonic, parser, context| {\n                use tir::parse::common::Cursor;\n                mnemonic\n                    .strip_prefix('i')\n                    .and_then(|rest| rest.parse::<u64>().ok())\n                    .map(|width| IntegerType::new(context, width))\n                    .ok_or((parser.span(), Error::ExpectedType))\n            }, IntegerType_print => |spellings, ty, fmt| match IntegerType::view(spellings, ty) {\n                Some(int) => fmt.write(format!(\"i{}\", int.width)),\n                None => spellings.print_generic(ty, fmt),\n            }, IntegerType_ctor_id => |_context| { ctor::INT } } }",
+          "payload_sha256": "c35e48ed44a472fed3ee418e1961e4525f178af9de064ca81a5e395ae8f83371"
+        },
+        {
+          "start": 5611,
+          "end": 6806,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_mod.cdsl\", binding: spellings::FloatType, context: _context, hosts: { FloatType_parse => |mnemonic, parser, context| {\n                use tir::parse::common::Cursor;\n                // A format with no name of its own prints as `builtin.f<E, M>`.\n                if mnemonic == \"f\" {\n                    return crate::ty::parse_generic(ctor::FLOAT, parser, context);\n                }\n                FLOAT_FORMATS\n                    .iter()\n                    .find(|(_, _, name)| *name == mnemonic)\n                    .map(|&(exp, mant, _)| FloatType::new(context, exp, mant))\n                    .ok_or((parser.span(), Error::ExpectedType))\n            }, FloatType_print => |spellings, ty, fmt| {\n                let named = FloatType::view(spellings, ty).and_then(|float| {\n                    FLOAT_FORMATS\n                        .iter()\n                        .find(|&&(exp, mant, _)| exp == float.exp_width && mant == float.mant_width)\n                });\n                match named {\n                    Some((_, _, name)) => fmt.write(name),\n                    None => spellings.print_generic(ty, fmt),\n                }\n            }, FloatType_ctor_id => |_context| { ctor::FLOAT } } }",
+          "payload_sha256": "c99877c9ecfb141686fad191b7522f5fc7b69581d6e1c55c3a18679663f50741"
+        },
+        {
+          "start": 6847,
+          "end": 6987,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_builtin_mod.cdsl\", binding: constructors::INDEX, hosts: { INDEX_validate => valid, INDEX_carrier => no_carrier } }",
+          "payload_sha256": "cc917c93a20cba4d9abc79e92a6e9d6c3501c45a7b255b42573b17703b6a9cd6"
+        },
+        {
+          "start": 7600,
+          "end": 7835,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_mod.cdsl\", binding: spellings::IndexType, context: context, hosts: { IndexType_parse => |_, _, context| Ok(IndexType::new(context)), IndexType_print => |_, _, fmt| fmt.write(\"index\"), IndexType_ctor_id => |context| { INDEX.id(context) } } }",
+          "payload_sha256": "215700f126a36190a62914c9662fbc15f4acf96d7fc3b9ccd142606df0cfdf27"
+        },
+        {
+          "start": 8388,
+          "end": 8614,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_mod.cdsl\", binding: spellings::UnitType, context: _context, hosts: { UnitType_parse => |_, _, context| Ok(UnitType::new(context)), UnitType_print => |_, _, fmt| fmt.write(\"unit\"), UnitType_ctor_id => |_context| { ctor::UNIT } } }",
+          "payload_sha256": "c6f3499da65b5514bbb61d38a1bcd291753349daad6dfbff7605f032c54ec5bb"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "spellings::IntegerType",
+          "rust_hosts": {
+            "IntegerType_parse": "|mnemonic, parser, context| {\n                use tir::parse::common::Cursor;\n                mnemonic\n                    .strip_prefix('i')\n                    .and_then(|rest| rest.parse::<u64>().ok())\n                    .map(|width| IntegerType::new(context, width))\n                    .ok_or((parser.span(), Error::ExpectedType))\n            }",
+            "IntegerType_print": "|spellings, ty, fmt| match IntegerType::view(spellings, ty) {\n                Some(int) => fmt.write(format!(\"i{}\", int.width)),\n                None => spellings.print_generic(ty, fmt),\n            }",
+            "IntegerType_ctor_id": "|_context| { ctor::INT }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::IntegerType\", {ctor_id: <foreign main::IntegerType_ctor_id>, keys: [\"i\"], parse: <foreign main::IntegerType_parse>, print: <foreign main::IntegerType_print>, variadic_tail: false})"
+        },
+        {
+          "binding": "spellings::FloatType",
+          "rust_hosts": {
+            "FloatType_parse": "|mnemonic, parser, context| {\n                use tir::parse::common::Cursor;\n                // A format with no name of its own prints as `builtin.f<E, M>`.\n                if mnemonic == \"f\" {\n                    return crate::ty::parse_generic(ctor::FLOAT, parser, context);\n                }\n                FLOAT_FORMATS\n                    .iter()\n                    .find(|(_, _, name)| *name == mnemonic)\n                    .map(|&(exp, mant, _)| FloatType::new(context, exp, mant))\n                    .ok_or((parser.span(), Error::ExpectedType))\n            }",
+            "FloatType_print": "|spellings, ty, fmt| {\n                let named = FloatType::view(spellings, ty).and_then(|float| {\n                    FLOAT_FORMATS\n                        .iter()\n                        .find(|&&(exp, mant, _)| exp == float.exp_width && mant == float.mant_width)\n                });\n                match named {\n                    Some((_, _, name)) => fmt.write(name),\n                    None => spellings.print_generic(ty, fmt),\n                }\n            }",
+            "FloatType_ctor_id": "|_context| { ctor::FLOAT }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::FloatType\", {ctor_id: <foreign main::FloatType_ctor_id>, keys: [\"f\", \"bf\"], parse: <foreign main::FloatType_parse>, print: <foreign main::FloatType_print>, variadic_tail: false})"
+        },
+        {
+          "binding": "constructors::INDEX",
+          "rust_hosts": {
+            "INDEX_validate": "valid",
+            "INDEX_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::INDEX\", {dialect: \"builtin\", name: \"index\", params: [], kind: library::Kind::Data(), validate: <foreign main::INDEX_validate>, carrier: <foreign main::INDEX_carrier>})"
+        },
+        {
+          "binding": "spellings::IndexType",
+          "rust_hosts": {
+            "IndexType_parse": "|_, _, context| Ok(IndexType::new(context))",
+            "IndexType_print": "|_, _, fmt| fmt.write(\"index\")",
+            "IndexType_ctor_id": "|context| { INDEX.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::IndexType\", {ctor_id: <foreign main::IndexType_ctor_id>, keys: [\"index\"], parse: <foreign main::IndexType_parse>, print: <foreign main::IndexType_print>, variadic_tail: false})"
+        },
+        {
+          "binding": "spellings::UnitType",
+          "rust_hosts": {
+            "UnitType_parse": "|_, _, context| Ok(UnitType::new(context))",
+            "UnitType_print": "|_, _, fmt| fmt.write(\"unit\")",
+            "UnitType_ctor_id": "|_context| { ctor::UNIT }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::UnitType\", {ctor_id: <foreign main::UnitType_ctor_id>, keys: [\"unit\"], parse: <foreign main::UnitType_parse>, print: <foreign main::UnitType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/builtin/state.rs",
+      "source_sha256": "c8d1305ab27d0426d3b8dee23f71b9094a668709bb78c92c3c09c7e5c91cfbff",
+      "canonical_sha256": "c8d1305ab27d0426d3b8dee23f71b9094a668709bb78c92c3c09c7e5c91cfbff",
+      "cdsl": "core_src_dialects_builtin_state.cdsl",
+      "preview_sha256": "f28bbc7803917d7b60059f427712fd68422243c0a48604574c5c8f0ca2840d2e",
+      "spans": [
+        {
+          "start": 1918,
+          "end": 2924,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_state.cdsl\", binding: spellings::StateType, context: _context, hosts: { StateType_parse => |_, parser, context| {\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                let resource = [StateResource::Memory, StateResource::FpEnv]\n                    .into_iter()\n                    .find(|resource| parser.parse_token(resource.name()))\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"state resource\")))?;\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                Ok(StateType::new(context, resource))\n            }, StateType_print => |spellings, ty, fmt| match StateType::view(ty) {\n                Some(state) => fmt.write(format!(\"state<{}>\", state.resource.name())),\n                None => spellings.print_generic(ty, fmt),\n            }, StateType_ctor_id => |_context| { ctor::STATE } } }",
+          "payload_sha256": "0da812f854256ae7c600b2e4462a00a1e1bab29dd7af577c97d0b96e60f41560"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "spellings::StateType",
+          "rust_hosts": {
+            "StateType_parse": "|_, parser, context| {\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                let resource = [StateResource::Memory, StateResource::FpEnv]\n                    .into_iter()\n                    .find(|resource| parser.parse_token(resource.name()))\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"state resource\")))?;\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                Ok(StateType::new(context, resource))\n            }",
+            "StateType_print": "|spellings, ty, fmt| match StateType::view(ty) {\n                Some(state) => fmt.write(format!(\"state<{}>\", state.resource.name())),\n                None => spellings.print_generic(ty, fmt),\n            }",
+            "StateType_ctor_id": "|_context| { ctor::STATE }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::StateType\", {ctor_id: <foreign main::StateType_ctor_id>, keys: [\"state\"], parse: <foreign main::StateType_parse>, print: <foreign main::StateType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/builtin/tuple.rs",
+      "source_sha256": "f7b3a93081611f23d99e3f3d441d4bcd37fdd173ae2d8f70728bfa7555e79a8d",
+      "canonical_sha256": "f7b3a93081611f23d99e3f3d441d4bcd37fdd173ae2d8f70728bfa7555e79a8d",
+      "cdsl": "core_src_dialects_builtin_tuple.cdsl",
+      "preview_sha256": "d1f8de0dd957601c92817cef7d41f02c6340186be1de3235f443b8622651a1c5",
+      "spans": [
+        {
+          "start": 986,
+          "end": 2021,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_tuple.cdsl\", binding: spellings::TupleType, context: _context, hosts: { TupleType_parse => |_, parser, context| {\n                let elements = parser\n                    .parse_delimited(\"<\", \">\", |parser| {\n                        parser\n                            .parse_type(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))\n                    })?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"<\")))?;\n                Ok(TupleType::new(context, elements))\n            }, TupleType_print => |spellings, ty, fmt| {\n                fmt.write(\"tuple<\")?;\n                let tuple = TupleType::view(spellings, ty).expect(\"a tuple type\");\n                for (index, element) in tuple.0.into_iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    spellings.print(element, fmt)?;\n                }\n                fmt.write(\">\")\n            }, TupleType_ctor_id => |_context| { ctor::TUPLE } } }",
+          "payload_sha256": "77f99cbfed43ba0340b72d051d562d05e544fc9a54cae7e6843b53e1788c3968"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "spellings::TupleType",
+          "rust_hosts": {
+            "TupleType_parse": "|_, parser, context| {\n                let elements = parser\n                    .parse_delimited(\"<\", \">\", |parser| {\n                        parser\n                            .parse_type(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))\n                    })?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"<\")))?;\n                Ok(TupleType::new(context, elements))\n            }",
+            "TupleType_print": "|spellings, ty, fmt| {\n                fmt.write(\"tuple<\")?;\n                let tuple = TupleType::view(spellings, ty).expect(\"a tuple type\");\n                for (index, element) in tuple.0.into_iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    spellings.print(element, fmt)?;\n                }\n                fmt.write(\">\")\n            }",
+            "TupleType_ctor_id": "|_context| { ctor::TUPLE }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::TupleType\", {ctor_id: <foreign main::TupleType_ctor_id>, keys: [\"tuple\"], parse: <foreign main::TupleType_parse>, print: <foreign main::TupleType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/builtin/type_def.rs",
+      "source_sha256": "07190119a721b7921c284a134b6d4e355060d9dbc5f979a430763fcd7d18039b",
+      "canonical_sha256": "07190119a721b7921c284a134b6d4e355060d9dbc5f979a430763fcd7d18039b",
+      "cdsl": "core_src_dialects_builtin_type_def.cdsl",
+      "preview_sha256": "d5367f0beb006e03843d14f822d471d020d1f5bce6b626eb08ab04ef2e5e97b2",
+      "spans": [
+        {
+          "start": 919,
+          "end": 1141,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_builtin_type_def.cdsl\", binding: constructors::STRUCT, hosts: { STRUCT_validate => valid, STRUCT_carrier => no_carrier } }",
+          "payload_sha256": "48e4fcd0297dffad6df57027ee12f7e80af63860455bf3816cbb377296e483e2"
+        },
+        {
+          "start": 1176,
+          "end": 1338,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_builtin_type_def.cdsl\", binding: constructors::UNION, hosts: { UNION_validate => valid, UNION_carrier => no_carrier } }",
+          "payload_sha256": "18d69c37cd811342561b0a26e5e842eb77f6db31c7e81b05a9a11f16650d77cd"
+        },
+        {
+          "start": 1375,
+          "end": 1572,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_builtin_type_def.cdsl\", binding: constructors::VARIANT, hosts: { VARIANT_validate => valid, VARIANT_carrier => no_carrier } }",
+          "payload_sha256": "b4b0c9f10851bc5fc5712ff47e4fc2687667d5cffc1a0e23f38d970409c4f7bd"
+        },
+        {
+          "start": 2950,
+          "end": 3787,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_type_def.cdsl\", binding: spellings::NamedType, context: _context, hosts: { NamedType_parse => |_, parser, _| Err((parser.span(), Error::ExpectedType)), NamedType_print => |spellings, ty, fmt| {\n                let named = NamedType::view(spellings, ty).expect(\"a named type\");\n                fmt.write(&named.name)?;\n                if named.args.is_empty() {\n                    return Ok(());\n                }\n                fmt.write(\"<\")?;\n                for (index, arg) in named.args.iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    spellings.print_arg(arg, fmt)?;\n                }\n                fmt.write(\">\")\n            }, NamedType_ctor_id => |_context| { ctor::NAMED } } }",
+          "payload_sha256": "393c188bad10ff806909820778f69b0063e2a068d4a94c5a07cad67f6fa14987"
+        },
+        {
+          "start": 7014,
+          "end": 11345,
+          "replacement": "match kind { AggregateKind::Struct => ::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_type_def.cdsl\", binding: spellings::AggregateType_Struct, context: context, hosts: { AggregateType_parse => |mnemonic, parser, context| {\n                let kind = match mnemonic {\n                    \"struct\" => AggregateKind::Struct,\n                    \"union\" => AggregateKind::Union,\n                    _ => AggregateKind::Variant,\n                };\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                // A generic definition's parameter may stand for the whole list.\n                let fields = match parser.parse_type_arg(context)? {\n                    Some(fields @ TypeArg::Var(_)) => fields,\n                    _ => TypeArg::List(\n                        parser\n                            .parse_delimited(\"{\", \"}\", |parser| {\n                                let name = parser\n                                    .parse_ident()\n                                    .or_else(|| parser.parse_string())\n                                    .ok_or_else(|| {\n                                    (parser.span(), Error::ExpectedToken(\"field name\"))\n                                })?;\n                                let name = TypeArg::Sym(context.terms().name(name));\n                                if !parser.parse_token(\":\") {\n                                    return Err((parser.span(), Error::ExpectedToken(\":\")));\n                                }\n                                let ty = parser\n                                    .parse_type_arg(context)?\n                                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                                Ok(TypeArg::List(Box::new([name, ty])))\n                            })?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"{\")))?\n                            .into(),\n                    ),\n                };\n                let mut args = vec![fields];\n                if kind != AggregateKind::Union && parser.parse_token(\",\") {\n                    let flag = [(\"false\", 0), (\"true\", 1)]\n                        .into_iter()\n                        .find(|(word, _)| parser.parse_token(word));\n                    let arg = match flag {\n                        Some((_, bit)) => TypeArg::Nat(bit),\n                        None => parser\n                            .parse_type_arg(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))?,\n                    };\n                    args.push(arg);\n                }\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                context\n                    .terms()\n                    .intern(kind.ctor().id(context), args)\n                    .map_err(|message| (parser.span(), Error::VerificationError(message)))\n            }, AggregateType_print => |spellings, ty, fmt| {\n                let Some(aggregate) = AggregateType::view(spellings, ty) else {\n                    return spellings.print_generic(ty, fmt);\n                };\n                fmt.write(format!(\"{}<{{\", aggregate.kind.keys()[0]))?;\n                for (index, (name, field)) in aggregate.fields.iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    // A name that is no identifier, as C's `_x`, is quoted.\n                    match is_identifier(name) {\n                        true => fmt.write(format!(\"{name}: \"))?,\n                        false => fmt.write(format!(\"\\\"{name}\\\": \"))?,\n                    }\n                    spellings.print_arg(field, fmt)?;\n                }\n                fmt.write(\"}\")?;\n                for arg in &spellings.terms().term(ty).args()[1..] {\n                    fmt.write(\", \")?;\n                    match (aggregate.kind, arg) {\n                        (AggregateKind::Struct, TypeArg::Nat(bit)) => fmt.write(match bit {\n                            0 => \"false\",\n                            _ => \"true\",\n                        })?,\n                        _ => spellings.print_arg(arg, fmt)?,\n                    }\n                }\n                fmt.write(\">\")\n            }, AggregateType_Struct_ctor_id => |context| { STRUCT.id(context) } } }, AggregateKind::Union => ::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_type_def.cdsl\", binding: spellings::AggregateType_Union, context: context, hosts: { AggregateType_parse => |mnemonic, parser, context| {\n                let kind = match mnemonic {\n                    \"struct\" => AggregateKind::Struct,\n                    \"union\" => AggregateKind::Union,\n                    _ => AggregateKind::Variant,\n                };\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                // A generic definition's parameter may stand for the whole list.\n                let fields = match parser.parse_type_arg(context)? {\n                    Some(fields @ TypeArg::Var(_)) => fields,\n                    _ => TypeArg::List(\n                        parser\n                            .parse_delimited(\"{\", \"}\", |parser| {\n                                let name = parser\n                                    .parse_ident()\n                                    .or_else(|| parser.parse_string())\n                                    .ok_or_else(|| {\n                                    (parser.span(), Error::ExpectedToken(\"field name\"))\n                                })?;\n                                let name = TypeArg::Sym(context.terms().name(name));\n                                if !parser.parse_token(\":\") {\n                                    return Err((parser.span(), Error::ExpectedToken(\":\")));\n                                }\n                                let ty = parser\n                                    .parse_type_arg(context)?\n                                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                                Ok(TypeArg::List(Box::new([name, ty])))\n                            })?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"{\")))?\n                            .into(),\n                    ),\n                };\n                let mut args = vec![fields];\n                if kind != AggregateKind::Union && parser.parse_token(\",\") {\n                    let flag = [(\"false\", 0), (\"true\", 1)]\n                        .into_iter()\n                        .find(|(word, _)| parser.parse_token(word));\n                    let arg = match flag {\n                        Some((_, bit)) => TypeArg::Nat(bit),\n                        None => parser\n                            .parse_type_arg(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))?,\n                    };\n                    args.push(arg);\n                }\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                context\n                    .terms()\n                    .intern(kind.ctor().id(context), args)\n                    .map_err(|message| (parser.span(), Error::VerificationError(message)))\n            }, AggregateType_print => |spellings, ty, fmt| {\n                let Some(aggregate) = AggregateType::view(spellings, ty) else {\n                    return spellings.print_generic(ty, fmt);\n                };\n                fmt.write(format!(\"{}<{{\", aggregate.kind.keys()[0]))?;\n                for (index, (name, field)) in aggregate.fields.iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    // A name that is no identifier, as C's `_x`, is quoted.\n                    match is_identifier(name) {\n                        true => fmt.write(format!(\"{name}: \"))?,\n                        false => fmt.write(format!(\"\\\"{name}\\\": \"))?,\n                    }\n                    spellings.print_arg(field, fmt)?;\n                }\n                fmt.write(\"}\")?;\n                for arg in &spellings.terms().term(ty).args()[1..] {\n                    fmt.write(\", \")?;\n                    match (aggregate.kind, arg) {\n                        (AggregateKind::Struct, TypeArg::Nat(bit)) => fmt.write(match bit {\n                            0 => \"false\",\n                            _ => \"true\",\n                        })?,\n                        _ => spellings.print_arg(arg, fmt)?,\n                    }\n                }\n                fmt.write(\">\")\n            }, AggregateType_Union_ctor_id => |context| { UNION.id(context) } } }, AggregateKind::Variant => ::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_builtin_type_def.cdsl\", binding: spellings::AggregateType_Variant, context: context, hosts: { AggregateType_parse => |mnemonic, parser, context| {\n                let kind = match mnemonic {\n                    \"struct\" => AggregateKind::Struct,\n                    \"union\" => AggregateKind::Union,\n                    _ => AggregateKind::Variant,\n                };\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                // A generic definition's parameter may stand for the whole list.\n                let fields = match parser.parse_type_arg(context)? {\n                    Some(fields @ TypeArg::Var(_)) => fields,\n                    _ => TypeArg::List(\n                        parser\n                            .parse_delimited(\"{\", \"}\", |parser| {\n                                let name = parser\n                                    .parse_ident()\n                                    .or_else(|| parser.parse_string())\n                                    .ok_or_else(|| {\n                                    (parser.span(), Error::ExpectedToken(\"field name\"))\n                                })?;\n                                let name = TypeArg::Sym(context.terms().name(name));\n                                if !parser.parse_token(\":\") {\n                                    return Err((parser.span(), Error::ExpectedToken(\":\")));\n                                }\n                                let ty = parser\n                                    .parse_type_arg(context)?\n                                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                                Ok(TypeArg::List(Box::new([name, ty])))\n                            })?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"{\")))?\n                            .into(),\n                    ),\n                };\n                let mut args = vec![fields];\n                if kind != AggregateKind::Union && parser.parse_token(\",\") {\n                    let flag = [(\"false\", 0), (\"true\", 1)]\n                        .into_iter()\n                        .find(|(word, _)| parser.parse_token(word));\n                    let arg = match flag {\n                        Some((_, bit)) => TypeArg::Nat(bit),\n                        None => parser\n                            .parse_type_arg(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))?,\n                    };\n                    args.push(arg);\n                }\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                context\n                    .terms()\n                    .intern(kind.ctor().id(context), args)\n                    .map_err(|message| (parser.span(), Error::VerificationError(message)))\n            }, AggregateType_print => |spellings, ty, fmt| {\n                let Some(aggregate) = AggregateType::view(spellings, ty) else {\n                    return spellings.print_generic(ty, fmt);\n                };\n                fmt.write(format!(\"{}<{{\", aggregate.kind.keys()[0]))?;\n                for (index, (name, field)) in aggregate.fields.iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    // A name that is no identifier, as C's `_x`, is quoted.\n                    match is_identifier(name) {\n                        true => fmt.write(format!(\"{name}: \"))?,\n                        false => fmt.write(format!(\"\\\"{name}\\\": \"))?,\n                    }\n                    spellings.print_arg(field, fmt)?;\n                }\n                fmt.write(\"}\")?;\n                for arg in &spellings.terms().term(ty).args()[1..] {\n                    fmt.write(\", \")?;\n                    match (aggregate.kind, arg) {\n                        (AggregateKind::Struct, TypeArg::Nat(bit)) => fmt.write(match bit {\n                            0 => \"false\",\n                            _ => \"true\",\n                        })?,\n                        _ => spellings.print_arg(arg, fmt)?,\n                    }\n                }\n                fmt.write(\">\")\n            }, AggregateType_Variant_ctor_id => |context| { VARIANT.id(context) } } } }",
+          "payload_sha256": "9448db766eba819e6790001fb53bfdd95db34743ab81a6df2f1208160dbe7bc3"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::STRUCT",
+          "rust_hosts": {
+            "STRUCT_validate": "valid",
+            "STRUCT_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::STRUCT\", {dialect: \"type\", name: \"struct\", params: [{name: \"fields\", param: library::Param::Fields()}, {name: \"packed\", param: library::Param::Opt(library::Kind::Bool())}], kind: library::Kind::Data(), validate: <foreign main::STRUCT_validate>, carrier: <foreign main::STRUCT_carrier>})"
+        },
+        {
+          "binding": "constructors::UNION",
+          "rust_hosts": {
+            "UNION_validate": "valid",
+            "UNION_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::UNION\", {dialect: \"type\", name: \"union\", params: [{name: \"fields\", param: library::Param::Fields()}], kind: library::Kind::Data(), validate: <foreign main::UNION_validate>, carrier: <foreign main::UNION_carrier>})"
+        },
+        {
+          "binding": "constructors::VARIANT",
+          "rust_hosts": {
+            "VARIANT_validate": "valid",
+            "VARIANT_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::VARIANT\", {dialect: \"type\", name: \"variant\", params: [{name: \"fields\", param: library::Param::Fields()}, {name: \"tag\", param: library::Param::Opt(library::Kind::Data())}], kind: library::Kind::Data(), validate: <foreign main::VARIANT_validate>, carrier: <foreign main::VARIANT_carrier>})"
+        },
+        {
+          "binding": "spellings::NamedType",
+          "rust_hosts": {
+            "NamedType_parse": "|_, parser, _| Err((parser.span(), Error::ExpectedType))",
+            "NamedType_print": "|spellings, ty, fmt| {\n                let named = NamedType::view(spellings, ty).expect(\"a named type\");\n                fmt.write(&named.name)?;\n                if named.args.is_empty() {\n                    return Ok(());\n                }\n                fmt.write(\"<\")?;\n                for (index, arg) in named.args.iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    spellings.print_arg(arg, fmt)?;\n                }\n                fmt.write(\">\")\n            }",
+            "NamedType_ctor_id": "|_context| { ctor::NAMED }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::NamedType\", {ctor_id: <foreign main::NamedType_ctor_id>, keys: [], parse: <foreign main::NamedType_parse>, print: <foreign main::NamedType_print>, variadic_tail: false})"
+        },
+        {
+          "binding": "spellings::AggregateType_Struct",
+          "rust_hosts": {
+            "AggregateType_parse": "|mnemonic, parser, context| {\n                let kind = match mnemonic {\n                    \"struct\" => AggregateKind::Struct,\n                    \"union\" => AggregateKind::Union,\n                    _ => AggregateKind::Variant,\n                };\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                // A generic definition's parameter may stand for the whole list.\n                let fields = match parser.parse_type_arg(context)? {\n                    Some(fields @ TypeArg::Var(_)) => fields,\n                    _ => TypeArg::List(\n                        parser\n                            .parse_delimited(\"{\", \"}\", |parser| {\n                                let name = parser\n                                    .parse_ident()\n                                    .or_else(|| parser.parse_string())\n                                    .ok_or_else(|| {\n                                    (parser.span(), Error::ExpectedToken(\"field name\"))\n                                })?;\n                                let name = TypeArg::Sym(context.terms().name(name));\n                                if !parser.parse_token(\":\") {\n                                    return Err((parser.span(), Error::ExpectedToken(\":\")));\n                                }\n                                let ty = parser\n                                    .parse_type_arg(context)?\n                                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                                Ok(TypeArg::List(Box::new([name, ty])))\n                            })?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"{\")))?\n                            .into(),\n                    ),\n                };\n                let mut args = vec![fields];\n                if kind != AggregateKind::Union && parser.parse_token(\",\") {\n                    let flag = [(\"false\", 0), (\"true\", 1)]\n                        .into_iter()\n                        .find(|(word, _)| parser.parse_token(word));\n                    let arg = match flag {\n                        Some((_, bit)) => TypeArg::Nat(bit),\n                        None => parser\n                            .parse_type_arg(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))?,\n                    };\n                    args.push(arg);\n                }\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                context\n                    .terms()\n                    .intern(kind.ctor().id(context), args)\n                    .map_err(|message| (parser.span(), Error::VerificationError(message)))\n            }",
+            "AggregateType_print": "|spellings, ty, fmt| {\n                let Some(aggregate) = AggregateType::view(spellings, ty) else {\n                    return spellings.print_generic(ty, fmt);\n                };\n                fmt.write(format!(\"{}<{{\", aggregate.kind.keys()[0]))?;\n                for (index, (name, field)) in aggregate.fields.iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    // A name that is no identifier, as C's `_x`, is quoted.\n                    match is_identifier(name) {\n                        true => fmt.write(format!(\"{name}: \"))?,\n                        false => fmt.write(format!(\"\\\"{name}\\\": \"))?,\n                    }\n                    spellings.print_arg(field, fmt)?;\n                }\n                fmt.write(\"}\")?;\n                for arg in &spellings.terms().term(ty).args()[1..] {\n                    fmt.write(\", \")?;\n                    match (aggregate.kind, arg) {\n                        (AggregateKind::Struct, TypeArg::Nat(bit)) => fmt.write(match bit {\n                            0 => \"false\",\n                            _ => \"true\",\n                        })?,\n                        _ => spellings.print_arg(arg, fmt)?,\n                    }\n                }\n                fmt.write(\">\")\n            }",
+            "AggregateType_Struct_ctor_id": "|context| { STRUCT.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::AggregateType_Struct\", {ctor_id: <foreign main::AggregateType_Struct_ctor_id>, keys: [\"struct\"], parse: <foreign main::AggregateType_parse>, print: <foreign main::AggregateType_print>, variadic_tail: false})"
+        },
+        {
+          "binding": "spellings::AggregateType_Union",
+          "rust_hosts": {
+            "AggregateType_parse": "|mnemonic, parser, context| {\n                let kind = match mnemonic {\n                    \"struct\" => AggregateKind::Struct,\n                    \"union\" => AggregateKind::Union,\n                    _ => AggregateKind::Variant,\n                };\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                // A generic definition's parameter may stand for the whole list.\n                let fields = match parser.parse_type_arg(context)? {\n                    Some(fields @ TypeArg::Var(_)) => fields,\n                    _ => TypeArg::List(\n                        parser\n                            .parse_delimited(\"{\", \"}\", |parser| {\n                                let name = parser\n                                    .parse_ident()\n                                    .or_else(|| parser.parse_string())\n                                    .ok_or_else(|| {\n                                    (parser.span(), Error::ExpectedToken(\"field name\"))\n                                })?;\n                                let name = TypeArg::Sym(context.terms().name(name));\n                                if !parser.parse_token(\":\") {\n                                    return Err((parser.span(), Error::ExpectedToken(\":\")));\n                                }\n                                let ty = parser\n                                    .parse_type_arg(context)?\n                                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                                Ok(TypeArg::List(Box::new([name, ty])))\n                            })?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"{\")))?\n                            .into(),\n                    ),\n                };\n                let mut args = vec![fields];\n                if kind != AggregateKind::Union && parser.parse_token(\",\") {\n                    let flag = [(\"false\", 0), (\"true\", 1)]\n                        .into_iter()\n                        .find(|(word, _)| parser.parse_token(word));\n                    let arg = match flag {\n                        Some((_, bit)) => TypeArg::Nat(bit),\n                        None => parser\n                            .parse_type_arg(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))?,\n                    };\n                    args.push(arg);\n                }\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                context\n                    .terms()\n                    .intern(kind.ctor().id(context), args)\n                    .map_err(|message| (parser.span(), Error::VerificationError(message)))\n            }",
+            "AggregateType_print": "|spellings, ty, fmt| {\n                let Some(aggregate) = AggregateType::view(spellings, ty) else {\n                    return spellings.print_generic(ty, fmt);\n                };\n                fmt.write(format!(\"{}<{{\", aggregate.kind.keys()[0]))?;\n                for (index, (name, field)) in aggregate.fields.iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    // A name that is no identifier, as C's `_x`, is quoted.\n                    match is_identifier(name) {\n                        true => fmt.write(format!(\"{name}: \"))?,\n                        false => fmt.write(format!(\"\\\"{name}\\\": \"))?,\n                    }\n                    spellings.print_arg(field, fmt)?;\n                }\n                fmt.write(\"}\")?;\n                for arg in &spellings.terms().term(ty).args()[1..] {\n                    fmt.write(\", \")?;\n                    match (aggregate.kind, arg) {\n                        (AggregateKind::Struct, TypeArg::Nat(bit)) => fmt.write(match bit {\n                            0 => \"false\",\n                            _ => \"true\",\n                        })?,\n                        _ => spellings.print_arg(arg, fmt)?,\n                    }\n                }\n                fmt.write(\">\")\n            }",
+            "AggregateType_Union_ctor_id": "|context| { UNION.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::AggregateType_Union\", {ctor_id: <foreign main::AggregateType_Union_ctor_id>, keys: [\"union\"], parse: <foreign main::AggregateType_parse>, print: <foreign main::AggregateType_print>, variadic_tail: false})"
+        },
+        {
+          "binding": "spellings::AggregateType_Variant",
+          "rust_hosts": {
+            "AggregateType_parse": "|mnemonic, parser, context| {\n                let kind = match mnemonic {\n                    \"struct\" => AggregateKind::Struct,\n                    \"union\" => AggregateKind::Union,\n                    _ => AggregateKind::Variant,\n                };\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                // A generic definition's parameter may stand for the whole list.\n                let fields = match parser.parse_type_arg(context)? {\n                    Some(fields @ TypeArg::Var(_)) => fields,\n                    _ => TypeArg::List(\n                        parser\n                            .parse_delimited(\"{\", \"}\", |parser| {\n                                let name = parser\n                                    .parse_ident()\n                                    .or_else(|| parser.parse_string())\n                                    .ok_or_else(|| {\n                                    (parser.span(), Error::ExpectedToken(\"field name\"))\n                                })?;\n                                let name = TypeArg::Sym(context.terms().name(name));\n                                if !parser.parse_token(\":\") {\n                                    return Err((parser.span(), Error::ExpectedToken(\":\")));\n                                }\n                                let ty = parser\n                                    .parse_type_arg(context)?\n                                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                                Ok(TypeArg::List(Box::new([name, ty])))\n                            })?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"{\")))?\n                            .into(),\n                    ),\n                };\n                let mut args = vec![fields];\n                if kind != AggregateKind::Union && parser.parse_token(\",\") {\n                    let flag = [(\"false\", 0), (\"true\", 1)]\n                        .into_iter()\n                        .find(|(word, _)| parser.parse_token(word));\n                    let arg = match flag {\n                        Some((_, bit)) => TypeArg::Nat(bit),\n                        None => parser\n                            .parse_type_arg(context)?\n                            .ok_or_else(|| (parser.span(), Error::ExpectedType))?,\n                    };\n                    args.push(arg);\n                }\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                context\n                    .terms()\n                    .intern(kind.ctor().id(context), args)\n                    .map_err(|message| (parser.span(), Error::VerificationError(message)))\n            }",
+            "AggregateType_print": "|spellings, ty, fmt| {\n                let Some(aggregate) = AggregateType::view(spellings, ty) else {\n                    return spellings.print_generic(ty, fmt);\n                };\n                fmt.write(format!(\"{}<{{\", aggregate.kind.keys()[0]))?;\n                for (index, (name, field)) in aggregate.fields.iter().enumerate() {\n                    if index > 0 {\n                        fmt.write(\", \")?;\n                    }\n                    // A name that is no identifier, as C's `_x`, is quoted.\n                    match is_identifier(name) {\n                        true => fmt.write(format!(\"{name}: \"))?,\n                        false => fmt.write(format!(\"\\\"{name}\\\": \"))?,\n                    }\n                    spellings.print_arg(field, fmt)?;\n                }\n                fmt.write(\"}\")?;\n                for arg in &spellings.terms().term(ty).args()[1..] {\n                    fmt.write(\", \")?;\n                    match (aggregate.kind, arg) {\n                        (AggregateKind::Struct, TypeArg::Nat(bit)) => fmt.write(match bit {\n                            0 => \"false\",\n                            _ => \"true\",\n                        })?,\n                        _ => spellings.print_arg(arg, fmt)?,\n                    }\n                }\n                fmt.write(\">\")\n            }",
+            "AggregateType_Variant_ctor_id": "|context| { VARIANT.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::AggregateType_Variant\", {ctor_id: <foreign main::AggregateType_Variant_ctor_id>, keys: [\"variant\"], parse: <foreign main::AggregateType_parse>, print: <foreign main::AggregateType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/fp/types.rs",
+      "source_sha256": "2acf375357ba9e4b8f7d74146daa1a49c991c96eff905e0adbfde6dfb90de4a4",
+      "canonical_sha256": "2acf375357ba9e4b8f7d74146daa1a49c991c96eff905e0adbfde6dfb90de4a4",
+      "cdsl": "core_src_dialects_fp_types.cdsl",
+      "preview_sha256": "34eb98b1f93857233a1182f6f634957084901c05150cfb55ca33696d3d0081b6",
+      "spans": [
+        {
+          "start": 161,
+          "end": 333,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_fp_types.cdsl\", binding: constructors::ENV, hosts: { ENV_validate => valid, ENV_carrier => |_: &Terms, _: &[TypeArg]| Some(TypeArg::Nat(13)) } }",
+          "payload_sha256": "9f951a97a0899f89c0ea628631a7b42a32b586b8583af7e3fc761ddd99ecf289"
+        },
+        {
+          "start": 853,
+          "end": 1098,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_fp_types.cdsl\", binding: spellings::EnvironmentType, context: context, hosts: { EnvironmentType_parse => |_, _, context| Ok(EnvironmentType::new(context)), EnvironmentType_print => |_, _, fmt| fmt.write(concat!(\"fp.\", \"env\")), EnvironmentType_ctor_id => |context| { ENV.id(context) } } }",
+          "payload_sha256": "5783105514422c2e9407d6cd89224d9b647d708b6531f6376eda89d8fe5ae82a"
+        },
+        {
+          "start": 1141,
+          "end": 1317,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_fp_types.cdsl\", binding: constructors::ROUNDING, hosts: { ROUNDING_validate => valid, ROUNDING_carrier => |_: &Terms, _: &[TypeArg]| Some(TypeArg::Nat(3)) } }",
+          "payload_sha256": "4e294881829aa4c738e5ac18749dd9731080a0b6550231471a4bd84f0b7c2874"
+        },
+        {
+          "start": 1846,
+          "end": 2106,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_fp_types.cdsl\", binding: spellings::RoundingType, context: context, hosts: { RoundingType_parse => |_, _, context| Ok(RoundingType::new(context)), RoundingType_print => |_, _, fmt| fmt.write(concat!(\"fp.\", \"rounding\")), RoundingType_ctor_id => |context| { ROUNDING.id(context) } } }",
+          "payload_sha256": "5e02a029ef1de0078427553fd94f71ebaacda98538596092edfd5ee0501e415c"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::ENV",
+          "rust_hosts": {
+            "ENV_validate": "valid",
+            "ENV_carrier": "|_: &Terms, _: &[TypeArg]| Some(TypeArg::Nat(13))"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::ENV\", {dialect: \"fp\", name: \"env\", params: [], kind: library::Kind::Data(), validate: <foreign main::ENV_validate>, carrier: <foreign main::ENV_carrier>})"
+        },
+        {
+          "binding": "spellings::EnvironmentType",
+          "rust_hosts": {
+            "EnvironmentType_parse": "|_, _, context| Ok(EnvironmentType::new(context))",
+            "EnvironmentType_print": "|_, _, fmt| fmt.write(concat!(\"fp.\", \"env\"))",
+            "EnvironmentType_ctor_id": "|context| { ENV.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::EnvironmentType\", {ctor_id: <foreign main::EnvironmentType_ctor_id>, keys: [\"env\"], parse: <foreign main::EnvironmentType_parse>, print: <foreign main::EnvironmentType_print>, variadic_tail: false})"
+        },
+        {
+          "binding": "constructors::ROUNDING",
+          "rust_hosts": {
+            "ROUNDING_validate": "valid",
+            "ROUNDING_carrier": "|_: &Terms, _: &[TypeArg]| Some(TypeArg::Nat(3))"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::ROUNDING\", {dialect: \"fp\", name: \"rounding\", params: [], kind: library::Kind::Data(), validate: <foreign main::ROUNDING_validate>, carrier: <foreign main::ROUNDING_carrier>})"
+        },
+        {
+          "binding": "spellings::RoundingType",
+          "rust_hosts": {
+            "RoundingType_parse": "|_, _, context| Ok(RoundingType::new(context))",
+            "RoundingType_print": "|_, _, fmt| fmt.write(concat!(\"fp.\", \"rounding\"))",
+            "RoundingType_ctor_id": "|context| { ROUNDING.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::RoundingType\", {ctor_id: <foreign main::RoundingType_ctor_id>, keys: [\"rounding\"], parse: <foreign main::RoundingType_parse>, print: <foreign main::RoundingType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/layout.rs",
+      "source_sha256": "798624fb31421965b9d3f925cc75c9a5bfa3932f268fbc8acb2026d0b391193d",
+      "canonical_sha256": "798624fb31421965b9d3f925cc75c9a5bfa3932f268fbc8acb2026d0b391193d",
+      "cdsl": "core_src_dialects_layout.cdsl",
+      "preview_sha256": "061acef5b7835772b54f79ac9b5bbd142507b593c8a593f80bfbd88ec4d61333",
+      "spans": [
+        {
+          "start": 2012,
+          "end": 2150,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_layout.cdsl\", binding: constructors::SPEC, hosts: { SPEC_validate => valid, SPEC_carrier => no_carrier } }",
+          "payload_sha256": "e5a51f2e3a47ce17c33f34a6c5ad75a99f51a03fbb47fb930c9c7470ea9b4d21"
+        },
+        {
+          "start": 2183,
+          "end": 2321,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_layout.cdsl\", binding: constructors::TYPE, hosts: { TYPE_validate => valid, TYPE_carrier => no_carrier } }",
+          "payload_sha256": "e99b9143bb8259330b5c7f9bd21fce9a98022c09f9c421de4103d2f8d83092ca"
+        },
+        {
+          "start": 2356,
+          "end": 2496,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_layout.cdsl\", binding: constructors::FIELDS, hosts: { FIELDS_validate => valid, FIELDS_carrier => no_carrier } }",
+          "payload_sha256": "69beb22595578ca0671153e5013e30ace3c6beea2af8aec59dba21843f529df4"
+        },
+        {
+          "start": 2602,
+          "end": 2798,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_layout.cdsl\", binding: constructors::ALIGN_TO, hosts: { ALIGN_TO_validate => valid, ALIGN_TO_carrier => no_carrier } }",
+          "payload_sha256": "a4639d80a8390f11e9b9555cb251e6873d56944424cf778ead929ee90226afcd"
+        },
+        {
+          "start": 2830,
+          "end": 3021,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_layout.cdsl\", binding: constructors::MIN, hosts: { MIN_validate => valid, MIN_carrier => no_carrier } }",
+          "payload_sha256": "4fdb253f50524726f5859c772efd607aaefdeb287633a171ff884eb4f4b06396"
+        },
+        {
+          "start": 3053,
+          "end": 3244,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_layout.cdsl\", binding: constructors::MAX, hosts: { MAX_validate => valid, MAX_carrier => no_carrier } }",
+          "payload_sha256": "aa6be5aa9da69a6085e8a53a4a082cf06df52804c5686cff8ce1ca6ac3848dc8"
+        },
+        {
+          "start": 3282,
+          "end": 3449,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_layout.cdsl\", binding: constructors::POW2_CEIL, hosts: { POW2_CEIL_validate => valid, POW2_CEIL_carrier => no_carrier } }",
+          "payload_sha256": "d560a3fc60c42751d96670a8317e7d2a7da161375dd06f75b1e0489331230625"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::SPEC",
+          "rust_hosts": {
+            "SPEC_validate": "valid",
+            "SPEC_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::SPEC\", {dialect: \"layout\", name: \"spec\", params: [], kind: library::Kind::Data(), validate: <foreign main::SPEC_validate>, carrier: <foreign main::SPEC_carrier>})"
+        },
+        {
+          "binding": "constructors::TYPE",
+          "rust_hosts": {
+            "TYPE_validate": "valid",
+            "TYPE_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::TYPE\", {dialect: \"layout\", name: \"type\", params: [], kind: library::Kind::Data(), validate: <foreign main::TYPE_validate>, carrier: <foreign main::TYPE_carrier>})"
+        },
+        {
+          "binding": "constructors::FIELDS",
+          "rust_hosts": {
+            "FIELDS_validate": "valid",
+            "FIELDS_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::FIELDS\", {dialect: \"layout\", name: \"fields\", params: [], kind: library::Kind::Data(), validate: <foreign main::FIELDS_validate>, carrier: <foreign main::FIELDS_carrier>})"
+        },
+        {
+          "binding": "constructors::ALIGN_TO",
+          "rust_hosts": {
+            "ALIGN_TO_validate": "valid",
+            "ALIGN_TO_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::ALIGN_TO\", {dialect: \"nat\", name: \"align_to\", params: [{name: \"a\", param: library::Param::One(library::Kind::Nat())}, {name: \"b\", param: library::Param::One(library::Kind::Nat())}], kind: library::Kind::Nat(), validate: <foreign main::ALIGN_TO_validate>, carrier: <foreign main::ALIGN_TO_carrier>})"
+        },
+        {
+          "binding": "constructors::MIN",
+          "rust_hosts": {
+            "MIN_validate": "valid",
+            "MIN_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::MIN\", {dialect: \"nat\", name: \"min\", params: [{name: \"a\", param: library::Param::One(library::Kind::Nat())}, {name: \"b\", param: library::Param::One(library::Kind::Nat())}], kind: library::Kind::Nat(), validate: <foreign main::MIN_validate>, carrier: <foreign main::MIN_carrier>})"
+        },
+        {
+          "binding": "constructors::MAX",
+          "rust_hosts": {
+            "MAX_validate": "valid",
+            "MAX_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::MAX\", {dialect: \"nat\", name: \"max\", params: [{name: \"a\", param: library::Param::One(library::Kind::Nat())}, {name: \"b\", param: library::Param::One(library::Kind::Nat())}], kind: library::Kind::Nat(), validate: <foreign main::MAX_validate>, carrier: <foreign main::MAX_carrier>})"
+        },
+        {
+          "binding": "constructors::POW2_CEIL",
+          "rust_hosts": {
+            "POW2_CEIL_validate": "valid",
+            "POW2_CEIL_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::POW2_CEIL\", {dialect: \"nat\", name: \"pow2_ceil\", params: [{name: \"a\", param: library::Param::One(library::Kind::Nat())}], kind: library::Kind::Nat(), validate: <foreign main::POW2_CEIL_validate>, carrier: <foreign main::POW2_CEIL_carrier>})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/ptr/mod.rs",
+      "source_sha256": "39f8d560f96451586761040ceda66f5cad2922b1c6d1f35e39c74c5f97d7f337",
+      "canonical_sha256": "39f8d560f96451586761040ceda66f5cad2922b1c6d1f35e39c74c5f97d7f337",
+      "cdsl": "core_src_dialects_ptr_mod.cdsl",
+      "preview_sha256": "11185f8b3f61970e6a788edaf22f3e9bfc70a394475bd30fd079fa63c648ec55",
+      "spans": [
+        {
+          "start": 1520,
+          "end": 1687,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_ptr_mod.cdsl\", binding: constructors::PTR, hosts: { PTR_validate => valid, PTR_carrier => no_carrier } }",
+          "payload_sha256": "b619701eeeadb983a3788b29fa26ebc94f4ad92f452a5107947cea4adad046c4"
+        },
+        {
+          "start": 2972,
+          "end": 3991,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_ptr_mod.cdsl\", binding: spellings::PtrType, context: context, hosts: { PtrType_parse => |_, parser, context| {\n                use tir::parse::common::Cursor;\n                if !parser.parse_token(\"<\") {\n                    return Ok(PtrType::opaque(context));\n                }\n                let pointee = parser\n                    .parse_type(context)?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                Ok(PtrType::typed(context, pointee))\n            }, PtrType_print => |spellings, ty, fmt| {\n                fmt.write(\"ptr.p\")?;\n                if let Some(pointee) = spellings.terms().child(ty, 0) {\n                    fmt.write(\"<\")?;\n                    spellings.print(pointee, fmt)?;\n                    fmt.write(\">\")?;\n                }\n                Ok(())\n            }, PtrType_ctor_id => |context| { PTR.id(context) } } }",
+          "payload_sha256": "b15d28d2ced71067b4f239c92384555ea047abf2b27269bbb82d490b24fbe49b"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::PTR",
+          "rust_hosts": {
+            "PTR_validate": "valid",
+            "PTR_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::PTR\", {dialect: \"ptr\", name: \"p\", params: [{name: \"pointee\", param: library::Param::Opt(library::Kind::Data())}], kind: library::Kind::Data(), validate: <foreign main::PTR_validate>, carrier: <foreign main::PTR_carrier>})"
+        },
+        {
+          "binding": "spellings::PtrType",
+          "rust_hosts": {
+            "PtrType_parse": "|_, parser, context| {\n                use tir::parse::common::Cursor;\n                if !parser.parse_token(\"<\") {\n                    return Ok(PtrType::opaque(context));\n                }\n                let pointee = parser\n                    .parse_type(context)?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                Ok(PtrType::typed(context, pointee))\n            }",
+            "PtrType_print": "|spellings, ty, fmt| {\n                fmt.write(\"ptr.p\")?;\n                if let Some(pointee) = spellings.terms().child(ty, 0) {\n                    fmt.write(\"<\")?;\n                    spellings.print(pointee, fmt)?;\n                    fmt.write(\">\")?;\n                }\n                Ok(())\n            }",
+            "PtrType_ctor_id": "|context| { PTR.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::PtrType\", {ctor_id: <foreign main::PtrType_ctor_id>, keys: [\"p\"], parse: <foreign main::PtrType_parse>, print: <foreign main::PtrType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/son.rs",
+      "source_sha256": "d608649eebda20a78cebc46dbba6abb93e8e8fc8266cad4c3c0624c3b9e9b183",
+      "canonical_sha256": "d608649eebda20a78cebc46dbba6abb93e8e8fc8266cad4c3c0624c3b9e9b183",
+      "cdsl": "core_src_dialects_son.cdsl",
+      "preview_sha256": "152187c681c5da20020d0b86d46a1be0cbb75de1d7190401356953f0cefff6bf",
+      "spans": [
+        {
+          "start": 170,
+          "end": 348,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_son.cdsl\", binding: constructors::CONTROL, hosts: { CONTROL_validate => tir_symbolic::term::valid, CONTROL_carrier => tir_symbolic::term::no_carrier } }",
+          "payload_sha256": "d0738fa93ddc03b4b70cd27f26eef5edb909f9fd3de8b4097dd3273dbfc35d1f"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::CONTROL",
+          "rust_hosts": {
+            "CONTROL_validate": "tir_symbolic::term::valid",
+            "CONTROL_carrier": "tir_symbolic::term::no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::CONTROL\", {dialect: \"son\", name: \"control\", params: [], kind: library::Kind::Data(), validate: <foreign main::CONTROL_validate>, carrier: <foreign main::CONTROL_carrier>})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/dialects/vector/mod.rs",
+      "source_sha256": "ee30d525c306f3a1711252384cfb6c16c5408b3d0cf8aaf1e220934274766050",
+      "canonical_sha256": "ee30d525c306f3a1711252384cfb6c16c5408b3d0cf8aaf1e220934274766050",
+      "cdsl": "core_src_dialects_vector_mod.cdsl",
+      "preview_sha256": "f23a626237e6947980470bf83db638f2442eafd26acf22ab9075af654e5e04d1",
+      "spans": [
+        {
+          "start": 921,
+          "end": 1149,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_vector_mod.cdsl\", binding: constructors::VEC, hosts: { VEC_validate => valid, VEC_carrier => no_carrier } }",
+          "payload_sha256": "ff386064a4c6eef3eb711104582f1f09f85fd4544e6634c6f01f53cbf97b57b4"
+        },
+        {
+          "start": 1340,
+          "end": 1475,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_dialects_vector_mod.cdsl\", binding: constructors::VL, hosts: { VL_validate => valid, VL_carrier => no_carrier } }",
+          "payload_sha256": "80749aaa60cc3f571e994d3ee1d93a0025c3d30262a0ec7ce640ebd8d0631038"
+        },
+        {
+          "start": 3301,
+          "end": 4974,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_dialects_vector_mod.cdsl\", binding: spellings::VectorType, context: context, hosts: { VectorType_parse => |_, parser, context| {\n                use tir::parse::common::Cursor;\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                // A leading `N x` gives a static length; its absence means dynamic.\n                let length = if let Some(n) = parser.parse_number() {\n                    if n < 0 || !parser.parse_token(\"x\") {\n                        return Err((parser.span(), Error::ExpectedToken(\"x\")));\n                    }\n                    Some(n as u32)\n                } else {\n                    None\n                };\n                let name = parser\n                    .parse_ident()\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                let element = context\n                    .parse_type_mnemonic(\"builtin\", name)\n                    .map_err(|err| (parser.span(), err))?;\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                Ok(VectorType::new(context, element, length))\n            }, VectorType_print => |spellings, ty, fmt| {\n                let vector = VectorType::view(spellings, ty).expect(\"a vector\");\n                fmt.write(\"vector.vec<\")?;\n                if let Some(length) = vector.length {\n                    fmt.write(format!(\"{length}x\"))?;\n                }\n                spellings.print_body(vector.element, fmt)?;\n                fmt.write(\">\")\n            }, VectorType_ctor_id => |context| { VEC.id(context) } } }",
+          "payload_sha256": "9c14d81118c8bafc4c61b14b46b9fbe5c130d1452d2be750440144dd8f5e04a0"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::VEC",
+          "rust_hosts": {
+            "VEC_validate": "valid",
+            "VEC_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::VEC\", {dialect: \"vector\", name: \"v\", params: [{name: \"length\", param: library::Param::One(library::Kind::Nat())}, {name: \"element\", param: library::Param::One(library::Kind::Data())}], kind: library::Kind::Data(), validate: <foreign main::VEC_validate>, carrier: <foreign main::VEC_carrier>})"
+        },
+        {
+          "binding": "constructors::VL",
+          "rust_hosts": {
+            "VL_validate": "valid",
+            "VL_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::VL\", {dialect: \"vector\", name: \"vl\", params: [], kind: library::Kind::Nat(), validate: <foreign main::VL_validate>, carrier: <foreign main::VL_carrier>})"
+        },
+        {
+          "binding": "spellings::VectorType",
+          "rust_hosts": {
+            "VectorType_parse": "|_, parser, context| {\n                use tir::parse::common::Cursor;\n                if !parser.parse_token(\"<\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"<\")));\n                }\n                // A leading `N x` gives a static length; its absence means dynamic.\n                let length = if let Some(n) = parser.parse_number() {\n                    if n < 0 || !parser.parse_token(\"x\") {\n                        return Err((parser.span(), Error::ExpectedToken(\"x\")));\n                    }\n                    Some(n as u32)\n                } else {\n                    None\n                };\n                let name = parser\n                    .parse_ident()\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                let element = context\n                    .parse_type_mnemonic(\"builtin\", name)\n                    .map_err(|err| (parser.span(), err))?;\n                if !parser.parse_token(\">\") {\n                    return Err((parser.span(), Error::ExpectedToken(\">\")));\n                }\n                Ok(VectorType::new(context, element, length))\n            }",
+            "VectorType_print": "|spellings, ty, fmt| {\n                let vector = VectorType::view(spellings, ty).expect(\"a vector\");\n                fmt.write(\"vector.vec<\")?;\n                if let Some(length) = vector.length {\n                    fmt.write(format!(\"{length}x\"))?;\n                }\n                spellings.print_body(vector.element, fmt)?;\n                fmt.write(\">\")\n            }",
+            "VectorType_ctor_id": "|context| { VEC.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::VectorType\", {ctor_id: <foreign main::VectorType_ctor_id>, keys: [\"vec\"], parse: <foreign main::VectorType_parse>, print: <foreign main::VectorType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "core/src/backend/registers.rs",
+      "source_sha256": "037590fa8fc7cecb85c07a080a5507965c425f37731832050c6682a06c8af33e",
+      "canonical_sha256": "037590fa8fc7cecb85c07a080a5507965c425f37731832050c6682a06c8af33e",
+      "cdsl": "core_src_backend_registers.cdsl",
+      "preview_sha256": "19598fbccc940c0b6ec83ae0e26d757fd225589d00c4cdd2dbb954d17db1f054",
+      "spans": [
+        {
+          "start": 375,
+          "end": 603,
+          "replacement": "::tir::helpers::type_ctor! { file: \"defs/types/core_src_backend_registers.cdsl\", binding: constructors::REG, hosts: { REG_validate => valid, REG_carrier => no_carrier } }",
+          "payload_sha256": "044e2403733edb43de6643e8ab677ee438211f6d99e44a75d647ca0137ab3f2b"
+        },
+        {
+          "start": 2322,
+          "end": 3037,
+          "replacement": "::tir::helpers::type_spelling! { file: \"defs/types/core_src_backend_registers.cdsl\", binding: spellings::RegClassType, context: context, hosts: { RegClassType_parse => |mnemonic, parser, _| {\n                Err((\n                    Span(parser.pos()),\n                    Error::UnknownType(String::new(), mnemonic.to_string()),\n                ))\n            }, RegClassType_print => |spellings, ty, fmt| {\n                let name = |index| match spellings.terms().arg(ty, index) {\n                    Some(TypeArg::Sym(name)) => spellings.terms().name_text(name),\n                    _ => unreachable!(\"a register class names its target and class\"),\n                };\n                fmt.write(format!(\"{}.{}\", name(0), name(1)))\n            }, RegClassType_ctor_id => |context| { REG.id(context) } } }",
+          "payload_sha256": "d4f4b0404572dfe54ac6eee683faa10ec48e6365066d4b7c8a6a852f2287d5d9"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::REG",
+          "rust_hosts": {
+            "REG_validate": "valid",
+            "REG_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::REG\", {dialect: \"backend\", name: \"reg\", params: [{name: \"target\", param: library::Param::One(library::Kind::Sym())}, {name: \"class\", param: library::Param::One(library::Kind::Sym())}], kind: library::Kind::Data(), validate: <foreign main::REG_validate>, carrier: <foreign main::REG_carrier>})"
+        },
+        {
+          "binding": "spellings::RegClassType",
+          "rust_hosts": {
+            "RegClassType_parse": "|mnemonic, parser, _| {\n                Err((\n                    Span(parser.pos()),\n                    Error::UnknownType(String::new(), mnemonic.to_string()),\n                ))\n            }",
+            "RegClassType_print": "|spellings, ty, fmt| {\n                let name = |index| match spellings.terms().arg(ty, index) {\n                    Some(TypeArg::Sym(name)) => spellings.terms().name_text(name),\n                    _ => unreachable!(\"a register class names its target and class\"),\n                };\n                fmt.write(format!(\"{}.{}\", name(0), name(1)))\n            }",
+            "RegClassType_ctor_id": "|context| { REG.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::RegClassType\", {ctor_id: <foreign main::RegClassType_ctor_id>, keys: [], parse: <foreign main::RegClassType_parse>, print: <foreign main::RegClassType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "fcc/src/cir.rs",
+      "source_sha256": "290b4c03177853998e14fb87c284d42ca30bce61af011bfcbc6876066af66770",
+      "canonical_sha256": "290b4c03177853998e14fb87c284d42ca30bce61af011bfcbc6876066af66770",
+      "cdsl": "fcc_src_cir.cdsl",
+      "preview_sha256": "28a69d1a0c61322063210b4f80c8a4c7108a07f137db41d0aa8ba133c6c3dd9f",
+      "spans": [
+        {
+          "start": 866,
+          "end": 1004,
+          "replacement": "::tir::helpers::type_ctor! { file: \"../core/defs/types/fcc_src_cir.cdsl\", binding: constructors::VARARGS, hosts: { VARARGS_validate => valid, VARARGS_carrier => no_carrier } }",
+          "payload_sha256": "825e2fac5fb8a67f38f8bd3f724a7b419df3e9fe21933cbfdb3ac7b85a263510"
+        },
+        {
+          "start": 1561,
+          "end": 1818,
+          "replacement": "::tir::helpers::type_spelling! { file: \"../core/defs/types/fcc_src_cir.cdsl\", binding: spellings::VarArgsType, context: context, hosts: { VarArgsType_parse => |_, _, context| Ok(VarArgsType::new(context)), VarArgsType_print => |_, _, fmt| fmt.write(concat!(\"cir.\", \"varargs\")), VarArgsType_ctor_id => |context| { VARARGS.id(context) } } }",
+          "payload_sha256": "23190bd50ee48b8be334afc510741b2dfad17633c10f3f2b22d99602121d3a43"
+        },
+        {
+          "start": 1860,
+          "end": 1998,
+          "replacement": "::tir::helpers::type_ctor! { file: \"../core/defs/types/fcc_src_cir.cdsl\", binding: constructors::VA_LIST, hosts: { VA_LIST_validate => valid, VA_LIST_carrier => no_carrier } }",
+          "payload_sha256": "63204b9ce153c6d31968e0cbf5a6ce32f251ef419ccf9740604123ac49447156"
+        },
+        {
+          "start": 2534,
+          "end": 2792,
+          "replacement": "::tir::helpers::type_spelling! { file: \"../core/defs/types/fcc_src_cir.cdsl\", binding: spellings::VaListType, context: context, hosts: { VaListType_parse => |_, _, context| Ok(VaListType::new(context)), VaListType_print => |_, _, fmt| fmt.write(concat!(\"cir.\", \"va_list\")), VaListType_ctor_id => |context| { VA_LIST.id(context) } } }",
+          "payload_sha256": "577287331f09929b8c45d10c64e1ffc7e09e31449434528a0ca9b3a9addcaef2"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::VARARGS",
+          "rust_hosts": {
+            "VARARGS_validate": "valid",
+            "VARARGS_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::VARARGS\", {dialect: \"cir\", name: \"varargs\", params: [], kind: library::Kind::Data(), validate: <foreign main::VARARGS_validate>, carrier: <foreign main::VARARGS_carrier>})"
+        },
+        {
+          "binding": "spellings::VarArgsType",
+          "rust_hosts": {
+            "VarArgsType_parse": "|_, _, context| Ok(VarArgsType::new(context))",
+            "VarArgsType_print": "|_, _, fmt| fmt.write(concat!(\"cir.\", \"varargs\"))",
+            "VarArgsType_ctor_id": "|context| { VARARGS.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::VarArgsType\", {ctor_id: <foreign main::VarArgsType_ctor_id>, keys: [\"varargs\"], parse: <foreign main::VarArgsType_parse>, print: <foreign main::VarArgsType_print>, variadic_tail: true})"
+        },
+        {
+          "binding": "constructors::VA_LIST",
+          "rust_hosts": {
+            "VA_LIST_validate": "valid",
+            "VA_LIST_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::VA_LIST\", {dialect: \"cir\", name: \"va_list\", params: [], kind: library::Kind::Data(), validate: <foreign main::VA_LIST_validate>, carrier: <foreign main::VA_LIST_carrier>})"
+        },
+        {
+          "binding": "spellings::VaListType",
+          "rust_hosts": {
+            "VaListType_parse": "|_, _, context| Ok(VaListType::new(context))",
+            "VaListType_print": "|_, _, fmt| fmt.write(concat!(\"cir.\", \"va_list\"))",
+            "VaListType_ctor_id": "|context| { VA_LIST.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::VaListType\", {ctor_id: <foreign main::VaListType_ctor_id>, keys: [\"va_list\"], parse: <foreign main::VaListType_parse>, print: <foreign main::VaListType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "gpu/src/spirv/types.rs",
+      "source_sha256": "73376f58ea6ce3cfaeb2c9bfc2591e87936d0af3547ddc9082577a2514515066",
+      "canonical_sha256": "73376f58ea6ce3cfaeb2c9bfc2591e87936d0af3547ddc9082577a2514515066",
+      "cdsl": "gpu_src_spirv_types.cdsl",
+      "preview_sha256": "ef7c5a4598722124e153bab6f62d0091bf5de23e0cd45c33517f7e8b526590bc",
+      "spans": [
+        {
+          "start": 1682,
+          "end": 1918,
+          "replacement": "::tir::helpers::type_ctor! { file: \"../core/defs/types/gpu_src_spirv_types.cdsl\", binding: constructors::POINTER, hosts: { POINTER_validate => valid, POINTER_carrier => no_carrier } }",
+          "payload_sha256": "c84f6c2b91086bb6cf4834be0bac20415533e68121fa714f5892f8fd207cb162"
+        },
+        {
+          "start": 3251,
+          "end": 4473,
+          "replacement": "::tir::helpers::type_spelling! { file: \"../core/defs/types/gpu_src_spirv_types.cdsl\", binding: spellings::PointerType, context: context, hosts: { PointerType_parse => |_, parser, context| {\n                use tir::parse::common::Cursor;\n                parser.expect_token(\"<\")?;\n                let pointee = parser\n                    .parse_type(context)?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                parser.expect_token(\",\")?;\n                let storage_name = parser\n                    .parse_ident()\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"storage class\")))?;\n                let storage_class = StorageClass::parse(storage_name)\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"storage class\")))?;\n                parser.expect_token(\">\")?;\n                Ok(PointerType::new(context, pointee, storage_class))\n            }, PointerType_print => |spellings, ty, fmt| {\n                let pointer = PointerType::view(spellings, ty).expect(\"a SPIR-V pointer\");\n                fmt.write(\"spirv.ptr<\")?;\n                spellings.print(pointer.pointee, fmt)?;\n                fmt.write(format!(\", {}>\", pointer.storage_class.name()))\n            }, PointerType_ctor_id => |context| { POINTER.id(context) } } }",
+          "payload_sha256": "bb42c9beab659e963a9c762ff51e8a92d8ba32a4a2f25f6575580257826a1ca0"
+        },
+        {
+          "start": 4522,
+          "end": 4755,
+          "replacement": "::tir::helpers::type_ctor! { file: \"../core/defs/types/gpu_src_spirv_types.cdsl\", binding: constructors::RUNTIME_ARRAY, hosts: { RUNTIME_ARRAY_validate => valid, RUNTIME_ARRAY_carrier => no_carrier } }",
+          "payload_sha256": "2243d3aac70dc3fbb92645e07b181588907f5f91611f02795cabc43f3ab3d0dd"
+        },
+        {
+          "start": 5857,
+          "end": 7177,
+          "replacement": "::tir::helpers::type_spelling! { file: \"../core/defs/types/gpu_src_spirv_types.cdsl\", binding: spellings::RuntimeArrayType, context: context, hosts: { RuntimeArrayType_parse => |_, parser, context| {\n                use tir::parse::common::Cursor;\n                parser.expect_token(\"<\")?;\n                let element = parser\n                    .parse_type(context)?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                parser.expect_token(\",\")?;\n                if parser.parse_ident() != Some(\"stride\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"stride\")));\n                }\n                parser.expect_token(\"=\")?;\n                let stride = parser\n                    .parse_number()\n                    .and_then(|value| u32::try_from(value).ok())\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"array stride\")))?;\n                parser.expect_token(\">\")?;\n                Ok(RuntimeArrayType::new(context, element, stride))\n            }, RuntimeArrayType_print => |spellings, ty, fmt| {\n                let array = RuntimeArrayType::view(spellings, ty).expect(\"a SPIR-V runtime array\");\n                fmt.write(\"spirv.rtarray<\")?;\n                spellings.print(array.element, fmt)?;\n                fmt.write(format!(\", stride={}>\", array.stride))\n            }, RuntimeArrayType_ctor_id => |context| { RUNTIME_ARRAY.id(context) } } }",
+          "payload_sha256": "66359d0168e2c994f37a54c12bfb67fdb27001c20cdcd173b02be8c870d4a752"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::POINTER",
+          "rust_hosts": {
+            "POINTER_validate": "valid",
+            "POINTER_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::POINTER\", {dialect: \"spirv\", name: \"ptr\", params: [{name: \"pointee\", param: library::Param::One(library::Kind::Data())}, {name: \"storage_class\", param: library::Param::One(library::Kind::Sym())}], kind: library::Kind::Data(), validate: <foreign main::POINTER_validate>, carrier: <foreign main::POINTER_carrier>})"
+        },
+        {
+          "binding": "spellings::PointerType",
+          "rust_hosts": {
+            "PointerType_parse": "|_, parser, context| {\n                use tir::parse::common::Cursor;\n                parser.expect_token(\"<\")?;\n                let pointee = parser\n                    .parse_type(context)?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                parser.expect_token(\",\")?;\n                let storage_name = parser\n                    .parse_ident()\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"storage class\")))?;\n                let storage_class = StorageClass::parse(storage_name)\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"storage class\")))?;\n                parser.expect_token(\">\")?;\n                Ok(PointerType::new(context, pointee, storage_class))\n            }",
+            "PointerType_print": "|spellings, ty, fmt| {\n                let pointer = PointerType::view(spellings, ty).expect(\"a SPIR-V pointer\");\n                fmt.write(\"spirv.ptr<\")?;\n                spellings.print(pointer.pointee, fmt)?;\n                fmt.write(format!(\", {}>\", pointer.storage_class.name()))\n            }",
+            "PointerType_ctor_id": "|context| { POINTER.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::PointerType\", {ctor_id: <foreign main::PointerType_ctor_id>, keys: [\"ptr\"], parse: <foreign main::PointerType_parse>, print: <foreign main::PointerType_print>, variadic_tail: false})"
+        },
+        {
+          "binding": "constructors::RUNTIME_ARRAY",
+          "rust_hosts": {
+            "RUNTIME_ARRAY_validate": "valid",
+            "RUNTIME_ARRAY_carrier": "no_carrier"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::constructors::RUNTIME_ARRAY\", {dialect: \"spirv\", name: \"rtarray\", params: [{name: \"element\", param: library::Param::One(library::Kind::Data())}, {name: \"stride\", param: library::Param::One(library::Kind::Nat())}], kind: library::Kind::Data(), validate: <foreign main::RUNTIME_ARRAY_validate>, carrier: <foreign main::RUNTIME_ARRAY_carrier>})"
+        },
+        {
+          "binding": "spellings::RuntimeArrayType",
+          "rust_hosts": {
+            "RuntimeArrayType_parse": "|_, parser, context| {\n                use tir::parse::common::Cursor;\n                parser.expect_token(\"<\")?;\n                let element = parser\n                    .parse_type(context)?\n                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n                parser.expect_token(\",\")?;\n                if parser.parse_ident() != Some(\"stride\") {\n                    return Err((parser.span(), Error::ExpectedToken(\"stride\")));\n                }\n                parser.expect_token(\"=\")?;\n                let stride = parser\n                    .parse_number()\n                    .and_then(|value| u32::try_from(value).ok())\n                    .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"array stride\")))?;\n                parser.expect_token(\">\")?;\n                Ok(RuntimeArrayType::new(context, element, stride))\n            }",
+            "RuntimeArrayType_print": "|spellings, ty, fmt| {\n                let array = RuntimeArrayType::view(spellings, ty).expect(\"a SPIR-V runtime array\");\n                fmt.write(\"spirv.rtarray<\")?;\n                spellings.print(array.element, fmt)?;\n                fmt.write(format!(\", stride={}>\", array.stride))\n            }",
+            "RuntimeArrayType_ctor_id": "|context| { RUNTIME_ARRAY.id(context) }"
+          },
+          "runtime": "::tir",
+          "expected_value": "Named(\"main::spellings::RuntimeArrayType\", {ctor_id: <foreign main::RuntimeArrayType_ctor_id>, keys: [\"rtarray\"], parse: <foreign main::RuntimeArrayType_parse>, print: <foreign main::RuntimeArrayType_print>, variadic_tail: false})"
+        }
+      ]
+    },
+    {
+      "source": "libs/symbolic/src/term.rs",
+      "source_sha256": "34736fe7a2edfd9ab23878038dfe78b55d58f928068d46dea1f03a9d0969ae3a",
+      "canonical_sha256": "34736fe7a2edfd9ab23878038dfe78b55d58f928068d46dea1f03a9d0969ae3a",
+      "cdsl": "libs_symbolic_src_term.cdsl",
+      "preview_sha256": "2e6336c5e7f72cc7d8d58a72fc20577b8bf47a63bc5a33e50c93391fae6a4781",
+      "spans": [
+        {
+          "start": 5475,
+          "end": 5698,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_INT.rs\"))",
+          "payload_sha256": "6439a5802a378c5496ffae3a62245f9f408cc84d2456747366acea33bcd6b905"
+        },
+        {
+          "start": 5708,
+          "end": 6022,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_FLOAT.rs\"))",
+          "payload_sha256": "a8eb201b4d180138c675ee9dce7fee32c7c27d908f9aa1c2d58972142ff2bfea"
+        },
+        {
+          "start": 6032,
+          "end": 6227,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_UNIT.rs\"))",
+          "payload_sha256": "291b5b5b3f791abe31dee679939ef198a37d7b9742956af3aeda71329b7e168f"
+        },
+        {
+          "start": 6237,
+          "end": 6470,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_TUPLE.rs\"))",
+          "payload_sha256": "9670b08b05cc27dafd0bdfd7790596e09ec152edf06c60a2c46fc9b148825cf4"
+        },
+        {
+          "start": 6480,
+          "end": 6712,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_STATE.rs\"))",
+          "payload_sha256": "54636bee5e2b68448a5c43c25837ee16007373cca98710c7dd9c312afd534c2b"
+        },
+        {
+          "start": 6722,
+          "end": 6944,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_NAT_ADD.rs\"))",
+          "payload_sha256": "fdfa59a19743ed424b4c68a5ffe03e9c668895998f9671280346d3ee8ef8595d"
+        },
+        {
+          "start": 6954,
+          "end": 7175,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_RAW.rs\"))",
+          "payload_sha256": "78d3c08edf7d2d5274e7c353cdaac69c16141ab31427815276ded10328d55e0e"
+        },
+        {
+          "start": 7185,
+          "end": 7411,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_ITER.rs\"))",
+          "payload_sha256": "bf9594222a7626593d6cfb9c02da48f432aac66d125cf217193cb66cb17ce9a9"
+        },
+        {
+          "start": 7421,
+          "end": 7614,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_SEM_STATE.rs\"))",
+          "payload_sha256": "b11abeeb0b489149beb005253d103bcbccd6438c96cba5dc0e3789940b6fd6a4"
+        },
+        {
+          "start": 7624,
+          "end": 8043,
+          "replacement": "include!(concat!(env!(\"OUT_DIR\"), \"/cdsl-type-base_NAMED.rs\"))",
+          "payload_sha256": "a8e1cade4f67b8a1563fe4a1ea750788fafd849ebc3c4d4d04d239bb3ed70329"
+        }
+      ],
+      "exports": [
+        {
+          "binding": "constructors::base_INT",
+          "rust_hosts": {
+            "base_INT_validate": "valid",
+            "base_INT_carrier": "first_arg"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_INT\", {dialect: \"builtin\", name: \"i\", params: [{name: \"width\", param: library::Param::One(library::Kind::Nat())}], kind: library::Kind::Data(), validate: <foreign main::base_INT_validate>, carrier: <foreign main::base_INT_carrier>})"
+        },
+        {
+          "binding": "constructors::base_FLOAT",
+          "rust_hosts": {
+            "base_FLOAT_validate": "valid",
+            "base_FLOAT_carrier": "float_carrier"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_FLOAT\", {dialect: \"builtin\", name: \"f\", params: [{name: \"exponent\", param: library::Param::One(library::Kind::Nat())}, {name: \"mantissa\", param: library::Param::One(library::Kind::Nat())}], kind: library::Kind::Data(), validate: <foreign main::base_FLOAT_validate>, carrier: <foreign main::base_FLOAT_carrier>})"
+        },
+        {
+          "binding": "constructors::base_UNIT",
+          "rust_hosts": {
+            "base_UNIT_validate": "valid",
+            "base_UNIT_carrier": "no_carrier"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_UNIT\", {dialect: \"builtin\", name: \"unit\", params: [], kind: library::Kind::Data(), validate: <foreign main::base_UNIT_validate>, carrier: <foreign main::base_UNIT_carrier>})"
+        },
+        {
+          "binding": "constructors::base_TUPLE",
+          "rust_hosts": {
+            "base_TUPLE_validate": "valid",
+            "base_TUPLE_carrier": "no_carrier"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_TUPLE\", {dialect: \"builtin\", name: \"tuple\", params: [{name: \"elements\", param: library::Param::List(library::Kind::Data())}], kind: library::Kind::Data(), validate: <foreign main::base_TUPLE_validate>, carrier: <foreign main::base_TUPLE_carrier>})"
+        },
+        {
+          "binding": "constructors::base_STATE",
+          "rust_hosts": {
+            "base_STATE_validate": "valid",
+            "base_STATE_carrier": "no_carrier"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_STATE\", {dialect: \"builtin\", name: \"state\", params: [{name: \"resource\", param: library::Param::One(library::Kind::Sym())}], kind: library::Kind::Ghost(), validate: <foreign main::base_STATE_validate>, carrier: <foreign main::base_STATE_carrier>})"
+        },
+        {
+          "binding": "constructors::base_NAT_ADD",
+          "rust_hosts": {
+            "base_NAT_ADD_validate": "valid",
+            "base_NAT_ADD_carrier": "no_carrier"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_NAT_ADD\", {dialect: \"nat\", name: \"add\", params: [{name: \"terms\", param: library::Param::List(library::Kind::Nat())}], kind: library::Kind::Nat(), validate: <foreign main::base_NAT_ADD_validate>, carrier: <foreign main::base_NAT_ADD_carrier>})"
+        },
+        {
+          "binding": "constructors::base_RAW",
+          "rust_hosts": {
+            "base_RAW_validate": "valid",
+            "base_RAW_carrier": "first_arg"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_RAW\", {dialect: \"sem\", name: \"raw\", params: [{name: \"width\", param: library::Param::One(library::Kind::Nat())}], kind: library::Kind::Data(), validate: <foreign main::base_RAW_validate>, carrier: <foreign main::base_RAW_carrier>})"
+        },
+        {
+          "binding": "constructors::base_ITER",
+          "rust_hosts": {
+            "base_ITER_validate": "valid",
+            "base_ITER_carrier": "no_carrier"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_ITER\", {dialect: \"sem\", name: \"iter\", params: [{name: \"element\", param: library::Param::One(library::Kind::Data())}], kind: library::Kind::Data(), validate: <foreign main::base_ITER_validate>, carrier: <foreign main::base_ITER_carrier>})"
+        },
+        {
+          "binding": "constructors::base_SEM_STATE",
+          "rust_hosts": {
+            "base_SEM_STATE_validate": "valid",
+            "base_SEM_STATE_carrier": "no_carrier"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_SEM_STATE\", {dialect: \"sem\", name: \"state\", params: [], kind: library::Kind::Ghost(), validate: <foreign main::base_SEM_STATE_validate>, carrier: <foreign main::base_SEM_STATE_carrier>})"
+        },
+        {
+          "binding": "constructors::base_NAMED",
+          "rust_hosts": {
+            "base_NAMED_validate": "|_, args| match args.get(1) {\n                Some(TypeArg::List(_)) => Ok(()),\n                _ => Err(\"type 'type.named' takes a list of arguments\".to_string()),\n            }",
+            "base_NAMED_carrier": "no_carrier"
+          },
+          "runtime": "super",
+          "expected_value": "Named(\"main::constructors::base_NAMED\", {dialect: \"type\", name: \"named\", params: [{name: \"name\", param: library::Param::One(library::Kind::Sym())}, {name: \"args\", param: library::Param::Any()}], kind: library::Kind::Data(), validate: <foreign main::base_NAMED_validate>, carrier: <foreign main::base_NAMED_carrier>})"
+        }
+      ]
+    }
+  ],
+  "constructors": 34,
+  "spellings": 21
+}

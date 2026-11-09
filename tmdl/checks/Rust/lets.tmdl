@@ -5,9 +5,10 @@
 
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/lets.tmdl | filecheck %s
 
-// Selection patterns see through a binding: the op semantics is the underlying
+// Semantic hooks see through a binding: the op semantics is the underlying
 // expression over the operands, not an opaque binding symbol.
-// CHECK: impl tir::sem::AsSemExpr for AddDoubleOp
+// CHECK: pub static ADDDOUBLE: tir::OpDefSpec
+// CHECK: semantic: Some(__tir_adddouble_machine_semantic),
 
 // CHECK: static INFO_ADDDOUBLE: tir::backend::InstrInfo
 // CHECK: tir::backend::exec::Effect::Bind

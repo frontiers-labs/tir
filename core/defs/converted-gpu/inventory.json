@@ -1,0 +1,2289 @@
+{
+  "files": [
+    {
+      "operations": [
+        {
+          "alias": "ModuleOp",
+          "declaration_sha256": "3ad9e4c91701b008046b195d4499ce2b496b0f0c4aa19c58eb334176c214b031",
+          "fields": {
+            "attributes": "A { version : \"Str\" , addressing_model : \"Str\" , memory_model : \"Str\" , }",
+            "dialect": "\"spirv\"",
+            "name": "\"module\"",
+            "regions": "R { body : Region { kind : Blocks , } }",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 6
+        },
+        {
+          "alias": "ModuleEndOp",
+          "declaration_sha256": "4439106e6894547ba5bc90a478d556b8b9c4a9f99e8f3b935330ab0a132705f2",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "interfaces": "[ Terminator ]",
+            "name": "\"module_end\"",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 20
+        },
+        {
+          "alias": "CapabilityOp",
+          "declaration_sha256": "f60d7555cfa583d1578ddf0fa973cbde687fbf815f0496f18e2fd7058c1b7f27",
+          "fields": {
+            "attributes": "A { name : \"Str\" , }",
+            "dialect": "\"spirv\"",
+            "name": "\"Capability\"",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 29
+        },
+        {
+          "alias": "GlobalVariableOp",
+          "declaration_sha256": "b00fa842c2ca64641a92374893447ff5091b28af7b3935c13eea92855cfc0215",
+          "fields": {
+            "attributes": "A { sym_name : \"Str\" , storage_class : \"Str\" , decorations : \"Dict\" , }",
+            "dialect": "\"spirv\"",
+            "name": "\"GlobalVariable\"",
+            "results": "R { result }",
+            "scheme": "\"() -> _\""
+          },
+          "line": 38
+        },
+        {
+          "alias": "EntryPointOp",
+          "declaration_sha256": "bf9a44b80e87d8d4a1e4505f365531a1c91353c71e871dc5bdb47fdf0e69e223",
+          "fields": {
+            "attributes": "A { execution_model : \"Str\" , function : \"Str\" , interfaces : \"Array\" , }",
+            "dialect": "\"spirv\"",
+            "name": "\"EntryPoint\"",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 52
+        },
+        {
+          "alias": "ExecutionModeOp",
+          "declaration_sha256": "d3fd0f423f18ad9bf6e39ffa3f0231cbaf463030edbc3dd1900852492e36448f",
+          "fields": {
+            "attributes": "A { function : \"Str\" , mode : \"Str\" , values : \"Array\" , }",
+            "dialect": "\"spirv\"",
+            "name": "\"ExecutionMode\"",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 65
+        },
+        {
+          "alias": "ConstantOp",
+          "declaration_sha256": "6b89635abf1547559baacd81d9663691730609a42efb65712cdd786e12063dc1",
+          "fields": {
+            "attributes": "A { value : \"any\" , }",
+            "dialect": "\"spirv\"",
+            "name": "\"Constant\"",
+            "results": "R { result }",
+            "scheme": "\"() -> _\""
+          },
+          "line": 78
+        },
+        {
+          "alias": "LoadOp",
+          "declaration_sha256": "82044c2aac2c079728c06f1c8bb55f09bf8ef647c604b588d6416086e5f33ddc",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Load\"",
+            "operands": "O { pointer }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 88
+        },
+        {
+          "alias": "StoreOp",
+          "declaration_sha256": "c6d26fc36e19d6f4fae11f31428eeb2930ada8c4d2444495279da669726a723c",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Store\"",
+            "operands": "O { pointer , value }",
+            "scheme": "\"(_, _) -> ()\""
+          },
+          "line": 98
+        },
+        {
+          "alias": "ControlBarrierOp",
+          "declaration_sha256": "99c759e4579e4a9641658eb61bb08284237425c3c31a0886ed362ace815aae89",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ControlBarrier\"",
+            "operands": "O { execution_scope , memory_scope , memory_semantics }",
+            "scheme": "\"(_, _, _) -> ()\""
+          },
+          "line": 107
+        },
+        {
+          "alias": "MemoryBarrierOp",
+          "declaration_sha256": "b4b90aa311bc9633f231f07b9588d7940a39d136bb7284465e40262f2f157e26",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"MemoryBarrier\"",
+            "operands": "O { memory_scope , memory_semantics }",
+            "scheme": "\"(_, _) -> ()\""
+          },
+          "line": 116
+        },
+        {
+          "alias": "CompositeExtractOp",
+          "declaration_sha256": "d8a010163e11771a52967fc7c8d30ea7d409be2e91d0c3fe8325e4a3ded38574",
+          "fields": {
+            "attributes": "A { indices : \"Array\" , }",
+            "dialect": "\"spirv\"",
+            "name": "\"CompositeExtract\"",
+            "operands": "O { composite }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 125
+        },
+        {
+          "alias": "AccessChainOp",
+          "declaration_sha256": "0c4305e30083125110f419efdff05730b811aeef4c89e11cee7d48537b550f61",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "format": "\"custom\"",
+            "name": "\"AccessChain\"",
+            "operands": "O { base , indices }",
+            "parse_hook": "|parser, context, _definition| access_chain_custom_parse(parser, context)",
+            "print_hook": "access_chain_custom_print",
+            "results": "R { result }",
+            "scheme": "\"(_, _*) -> _\""
+          },
+          "line": 136
+        },
+        {
+          "alias": "ReturnOp",
+          "declaration_sha256": "1a066f93b638b78c13c452b04a86e851460c3a339fa0ffdb8b2f81f14eefeb59",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "interfaces": "[ Terminator ]",
+            "name": "\"Return\"",
+            "operands": "O { value }",
+            "scheme": "\"(_?) -> ()\""
+          },
+          "line": 194
+        }
+      ],
+      "path": "gpu/src/spirv/ops.rs",
+      "source": "use tir::helpers::operation;\nuse tir::{Context, Error, OpHandle, Terminator, ValueId};\n\nuse tir;\n\noperation! {\n    ModuleOp {\n        name: \"module\",\n        dialect: \"spirv\",\n        scheme: \"() -> ()\",\n        attributes: A {\n            version: \"Str\",\n            addressing_model: \"Str\",\n            memory_model: \"Str\",\n        },\n        regions: R { body: Region { kind: Blocks, } }\n    }\n}\n\noperation! {\n    ModuleEndOp {\n        name: \"module_end\",\n        dialect: \"spirv\",\n        scheme: \"() -> ()\",\n        interfaces: [Terminator],\n    }\n}\n\noperation! {\n    CapabilityOp {\n        name: \"Capability\",\n        dialect: \"spirv\",\n        scheme: \"() -> ()\",\n        attributes: A { name: \"Str\", }\n    }\n}\n\noperation! {\n    GlobalVariableOp {\n        name: \"GlobalVariable\",\n        dialect: \"spirv\",\n        scheme: \"() -> _\",\n        attributes: A {\n            sym_name: \"Str\",\n            storage_class: \"Str\",\n            decorations: \"Dict\",\n        },\n        results: R { result }\n    }\n}\n\noperation! {\n    EntryPointOp {\n        name: \"EntryPoint\",\n        dialect: \"spirv\",\n        scheme: \"() -> ()\",\n        attributes: A {\n            execution_model: \"Str\",\n            function: \"Str\",\n            interfaces: \"Array\",\n        }\n    }\n}\n\noperation! {\n    ExecutionModeOp {\n        name: \"ExecutionMode\",\n        dialect: \"spirv\",\n        scheme: \"() -> ()\",\n        attributes: A {\n            function: \"Str\",\n            mode: \"Str\",\n            values: \"Array\",\n        }\n    }\n}\n\noperation! {\n    ConstantOp {\n        name: \"Constant\",\n        dialect: \"spirv\",\n        scheme: \"() -> _\",\n        attributes: A { value: \"any\", },\n        results: R { result }\n    }\n}\n\noperation! {\n    LoadOp {\n        name: \"Load\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { pointer },\n        results: R { result }\n    }\n}\n\noperation! {\n    StoreOp {\n        name: \"Store\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> ()\",\n        operands: O { pointer, value }\n    }\n}\n\noperation! {\n    ControlBarrierOp {\n        name: \"ControlBarrier\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> ()\",\n        operands: O { execution_scope, memory_scope, memory_semantics }\n    }\n}\n\noperation! {\n    MemoryBarrierOp {\n        name: \"MemoryBarrier\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> ()\",\n        operands: O { memory_scope, memory_semantics }\n    }\n}\n\noperation! {\n    CompositeExtractOp {\n        name: \"CompositeExtract\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        attributes: A { indices: \"Array\", },\n        operands: O { composite },\n        results: R { result }\n    }\n}\n\noperation! {\n    AccessChainOp {\n        print_hook: access_chain_custom_print,\n        parse_hook: |parser, context, _definition| access_chain_custom_parse(parser, context),\n        name: \"AccessChain\",\n        dialect: \"spirv\",\n        scheme: \"(_, _*) -> _\",\n        format: \"custom\",\n        operands: O { base, indices },\n        results: R { result }\n    }\n}\n\nfn access_chain_custom_print(\n    operation: &OpHandle,\n    fmt: &mut tir::IRFormatter,\n) -> Result<(), std::fmt::Error> {\n    let context = &operation.context;\n    let operands = operation.operands();\n    fmt.write(format!(\n        \"%{} = spirv.AccessChain %{}\",\n        operation.value_results()[0].number(),\n        operands[0].number()\n    ))?;\n    for index in &operands[1..] {\n        fmt.write(format!(\", %{}\", index.number()))?;\n    }\n    fmt.write(\" : \")?;\n    context.print_type(context.get_value(operation.value_results()[0]).ty(), fmt)?;\n    fmt.write(\"\\n\")\n}\n\nfn access_chain_custom_parse(\n    parser: &mut tir::parse::text::Parser,\n    context: &Context,\n) -> Result<OpHandle, (tir::parse::Span, Error)> {\n    use tir::parse::common::Cursor;\n    let base = parse_value(parser, context)?;\n    let mut indices = Vec::new();\n    while parser.parse_token(\",\") {\n        indices.push(parse_value(parser, context)?);\n    }\n    if !parser.parse_token(\":\") {\n        return Err((parser.span(), Error::ExpectedToken(\":\")));\n    }\n    let result_type = parser\n        .parse_type(context)?\n        .ok_or_else(|| (parser.span(), Error::ExpectedType))?;\n    Ok(r#AccessChain(\n        context,\n        base,\n        indices,\n        result_type,\n        Default::default(),\n        tir::InsertionPoint::Root,\n    ))\n}\n\noperation! {\n    ReturnOp {\n        name: \"Return\",\n        dialect: \"spirv\",\n        scheme: \"(_?) -> ()\",\n        operands: O { value },\n        interfaces: [Terminator],\n    }\n}\n\nfn parse_value(\n    parser: &mut tir::parse::text::Parser<'_>,\n    context: &Context,\n) -> Result<ValueId, (tir::parse::Span, Error)> {\n    use tir::parse::common::Cursor;\n    let name = parser\n        .parse_value_ref()\n        .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;\n    Ok(parser.resolve_value(context, name))\n}\n",
+      "source_sha256": "1ef4da5d1941b2c4bb98346b5c35c7a536e3b300a77afdd0050461e3dce0b095",
+      "spans": [
+        {
+          "end": 398,
+          "replacement": "root",
+          "start": 98
+        },
+        {
+          "end": 554,
+          "replacement": "",
+          "start": 400
+        },
+        {
+          "end": 716,
+          "replacement": "",
+          "start": 556
+        },
+        {
+          "end": 1007,
+          "replacement": "",
+          "start": 718
+        },
+        {
+          "end": 1262,
+          "replacement": "",
+          "start": 1009
+        },
+        {
+          "end": 1508,
+          "replacement": "",
+          "start": 1264
+        },
+        {
+          "end": 1697,
+          "replacement": "",
+          "start": 1510
+        },
+        {
+          "end": 1871,
+          "replacement": "",
+          "start": 1699
+        },
+        {
+          "end": 2027,
+          "replacement": "",
+          "start": 1873
+        },
+        {
+          "end": 2237,
+          "replacement": "",
+          "start": 2029
+        },
+        {
+          "end": 2425,
+          "replacement": "",
+          "start": 2239
+        },
+        {
+          "end": 2670,
+          "replacement": "",
+          "start": 2427
+        },
+        {
+          "end": 3036,
+          "replacement": "",
+          "start": 2672
+        },
+        {
+          "end": 4539,
+          "replacement": "",
+          "start": 4359
+        }
+      ]
+    },
+    {
+      "operations": [
+        {
+          "alias": "LabelOp",
+          "declaration_sha256": "7b0b26ecc22c405961d44877a9be59ac6d5809fb15392f3c5fba41e693c71859",
+          "fields": {
+            "attributes": "A { name : \"Str\" , }",
+            "dialect": "\"ptx\"",
+            "name": "\"label\"",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 15
+        }
+      ],
+      "path": "gpu/src/ptx/mod.rs",
+      "source": "use tir::helpers::{dialect, operation};\n\nmod ptx_asm;\n\ninclude!(concat!(env!(\"OUT_DIR\"), \"/ptx.rs\"));\n\ndialect! {\n    PtxDialect {\n        name: \"ptx\",\n        operations: [LABEL],\n        operation_file: concat!(env!(\"OUT_DIR\"), \"/ptx_ops.rs\"),\n    }\n}\n\noperation! {\n    LabelOp {\n        name: \"label\",\n        dialect: \"ptx\",\n        scheme: \"() -> ()\",\n        attributes: A {\n            name: \"Str\",\n        }\n    }\n}\n\n/// The PTX target, selected via `--march=ptx`. PTX is a text pseudo-ISA: the\n/// front-end in `ptx_asm` parses `.ptx` kernels into a module and prints them\n/// back, so this target implements the `parse_asm_text`/`print_asm_text` hooks\n/// rather than the shared flat assembler.\npub struct PtxTarget;\n\nimpl tir::backend::TargetMachine for PtxTarget {\n    fn name(&self) -> &'static str {\n        \"ptx\"\n    }\n\n    fn register_dialects(&self, context: &tir::Context) {\n        context.register_dialect::<tir::backend::AsmDialect>();\n        context.register_dialect::<PtxDialect>();\n    }\n\n    fn isel_pass(&self, _context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {\n        tir::backend::isel::InstructionSelectPass::new()\n    }\n\n    fn data_layout(&self, context: &tir::Context) -> Option<tir::attributes::AttributeValue> {\n        Some(tir::data_layout_spec(\n            context,\n            tir::Endianness::Little,\n            // PTX has no ABI stack: locals live in `.local` space, and `.param`\n            // space is 8-byte aligned.\n            64,\n            &[\n                (\"i1\", 8, 8),\n                (\"i8\", 8, 8),\n                (\"i16\", 16, 16),\n                (\"i32\", 32, 32),\n                (\"i64\", 64, 64),\n                (\"f32\", 32, 32),\n                (\"f64\", 64, 64),\n                (\"p\", 64, 64),\n            ],\n        ))\n    }\n\n    fn target_env(&self) -> Option<tir::attributes::AttributeValue> {\n        let features: Vec<String> = Feature::ALL\n            .iter()\n            .map(|feature| feature.name().to_ascii_lowercase())\n            .collect();\n        Some(tir::target_env_spec(self.name(), &features))\n    }\n\n    fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {\n        register_info()\n    }\n\n    fn asm_parser(&self, _context: &tir::Context) -> tir::backend::AsmParser {\n        let (parsers, disabled) = get_instruction_parsers(Feature::ALL);\n        tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)\n    }\n\n    fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {\n        machine_model(name, Feature::ALL)\n    }\n\n    fn machines(&self) -> Vec<&'static str> {\n        machines(Feature::ALL)\n    }\n\n    fn isa_params(&self) -> Vec<(&'static str, i64)> {\n        crate::ptx::isa_params(Feature::ALL)\n    }\n\n    fn register_widths(&self) -> Vec<(&'static str, u32)> {\n        crate::ptx::register_widths(Feature::ALL)\n    }\n\n    fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String> {\n        crate::ptx::register_name(class, index, prefer_abi)\n    }\n\n    fn parse_asm_text(\n        &self,\n        context: &tir::Context,\n        text: &str,\n    ) -> Option<Result<tir::OpHandle, String>> {\n        Some(ptx_asm::parse(context, text))\n    }\n\n    fn print_asm_text(\n        &self,\n        context: &tir::Context,\n        module: &tir::OpHandle,\n    ) -> Option<Result<String, String>> {\n        Some(ptx_asm::print(context, module))\n    }\n}\n\nfn select_ptx(\n    march: &str,\n    _mcpu: Option<&str>,\n    _mattr: Option<&str>,\n    _mabi: Option<&str>,\n) -> Result<Option<Box<dyn tir::backend::TargetMachine>>, String> {\n    if !march.trim().eq_ignore_ascii_case(\"ptx\") {\n        return Ok(None);\n    }\n    Ok(Some(Box::new(PtxTarget)))\n}\n\ntir::register_target!(select_ptx, [\"ptx\"]);\n",
+      "source_sha256": "fa3c979b0fbef8bb9b52d6dfa2315d4a83c52c43f7f3ee3492fa4a3a20bfe370",
+      "spans": [
+        {
+          "end": 423,
+          "replacement": "root",
+          "start": 255
+        }
+      ]
+    },
+    {
+      "operations": [
+        {
+          "alias": "ImageTexelPointerOp",
+          "declaration_sha256": "615d676c398763ed04335e5aef84ae38e2a7e1a30694ae32a16b94c2eed346f4",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ImageTexelPointer\"",
+            "operands": "O { image , coordinate , sample }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 8
+        },
+        {
+          "alias": "GenericPtrMemSemanticsOp",
+          "declaration_sha256": "bdf601de41e6e876cc1dd0eb372b7c3c03cd561bbd20d9f82284b05266b72cbb",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"GenericPtrMemSemantics\"",
+            "operands": "O { pointer }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 18
+        },
+        {
+          "alias": "VectorExtractDynamicOp",
+          "declaration_sha256": "5b678d02c0f220a6e5fb5de0c8a4e84e2b68045d2865094bcf64def854e7ce98",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"VectorExtractDynamic\"",
+            "operands": "O { vector , index }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 28
+        },
+        {
+          "alias": "VectorInsertDynamicOp",
+          "declaration_sha256": "acf6d559476491f2832b900cea1b24810c994e70e515e8a5c656148fa8ac2d2f",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"VectorInsertDynamic\"",
+            "operands": "O { vector , component , index }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 38
+        },
+        {
+          "alias": "CopyObjectOp",
+          "declaration_sha256": "9ea88aab63fc2238f43a795997ca490d62ce774b871cd8d7db847b1a6075ad44",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"CopyObject\"",
+            "operands": "O { operand }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 48
+        },
+        {
+          "alias": "TransposeOp",
+          "declaration_sha256": "9ad36d88794356585875172e293ee73121b74fac68c89aeba9f7636e723e9098",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Transpose\"",
+            "operands": "O { matrix }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 58
+        },
+        {
+          "alias": "ConvertFToUOp",
+          "declaration_sha256": "91648f3028dfa4771949aec5336327ea2f8db32b2337df5acb118f278c924425",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ConvertFToU\"",
+            "operands": "O { float_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 68
+        },
+        {
+          "alias": "ConvertFToSOp",
+          "declaration_sha256": "60b04583c9cc96147c7541fba0a9c19f25f3a490627b43df7ec82b84ac15a12e",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ConvertFToS\"",
+            "operands": "O { float_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 78
+        },
+        {
+          "alias": "ConvertSToFOp",
+          "declaration_sha256": "cf8d36b25451c42c77c301d47240319bed2d91c05dfc7b34558cc80c2d5ca5c0",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ConvertSToF\"",
+            "operands": "O { signed_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 88
+        },
+        {
+          "alias": "ConvertUToFOp",
+          "declaration_sha256": "ce42e884cc98be50ac7a777fda86c519193794e7bed7d5415889095a2d1584c6",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ConvertUToF\"",
+            "operands": "O { unsigned_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 98
+        },
+        {
+          "alias": "UConvertOp",
+          "declaration_sha256": "2c4e09b627009c2394d4dbc3490686e134b025dcd74138c45e2b4703ecd78ac6",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"UConvert\"",
+            "operands": "O { unsigned_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 108
+        },
+        {
+          "alias": "SConvertOp",
+          "declaration_sha256": "284e130105baa5b1f94189d7642e98e473b14e55ab6ff3f042f5a7b613a512dd",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SConvert\"",
+            "operands": "O { signed_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 118
+        },
+        {
+          "alias": "FConvertOp",
+          "declaration_sha256": "482c6eec601843bd30a22425e4c4b846f0b43b48d5cb657e97174b279a15a0c4",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FConvert\"",
+            "operands": "O { float_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 128
+        },
+        {
+          "alias": "QuantizeToF16Op",
+          "declaration_sha256": "899607af923ab5bd0b70f6705a29b09cf72ff4b9d2dc27b13add72e4f4d12796",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"QuantizeToF16\"",
+            "operands": "O { value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 138
+        },
+        {
+          "alias": "ConvertPtrToUOp",
+          "declaration_sha256": "abf68e394fdb0eae48c93857f688d6b992e5408b587f346487b932a720b0bf78",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ConvertPtrToU\"",
+            "operands": "O { pointer }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 148
+        },
+        {
+          "alias": "SatConvertSToUOp",
+          "declaration_sha256": "4ed48f00de20a15f8ee44a679179a51d7508ee5f0822796910aa82293ee6bf8d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SatConvertSToU\"",
+            "operands": "O { signed_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 158
+        },
+        {
+          "alias": "SatConvertUToSOp",
+          "declaration_sha256": "11d7084cca44f231a33abdce7d8bfc1e97e4991ea5124235c4c8a9810f56009b",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SatConvertUToS\"",
+            "operands": "O { unsigned_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 168
+        },
+        {
+          "alias": "ConvertUToPtrOp",
+          "declaration_sha256": "998792743e98cc1edac2f7177846263cfad816dd690ab98aef3a91a6e9f16bb0",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ConvertUToPtr\"",
+            "operands": "O { integer_value }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 178
+        },
+        {
+          "alias": "PtrCastToGenericOp",
+          "declaration_sha256": "1721390a85ab84501d7a4e49ddde7927a367c25d8d2d56f5d2851bc69f9d8d7d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"PtrCastToGeneric\"",
+            "operands": "O { pointer }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 188
+        },
+        {
+          "alias": "GenericCastToPtrOp",
+          "declaration_sha256": "96dcffe421ce757d4a9c89475c6b738887e346c14b19a4c0c96634f9dbdc05d8",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"GenericCastToPtr\"",
+            "operands": "O { pointer }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 198
+        },
+        {
+          "alias": "BitcastOp",
+          "declaration_sha256": "8cbe00e6019fa0dfdf5fc6bb9c1080a8d9861596b563c9d2ce9ea89c6985e4f5",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Bitcast\"",
+            "operands": "O { operand }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 208
+        },
+        {
+          "alias": "SNegateOp",
+          "declaration_sha256": "cf13ba43a5c62d9596e588b1245943b547b35f305095ddeb9e4b61f322ac9358",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SNegate\"",
+            "operands": "O { operand }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 218
+        },
+        {
+          "alias": "FNegateOp",
+          "declaration_sha256": "cc04808e6298d4d1c5a33db9351f2cf49ed80cc77a9b87e0f363e4548de466dd",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FNegate\"",
+            "operands": "O { operand }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 228
+        },
+        {
+          "alias": "IAddOp",
+          "declaration_sha256": "09cf2c704210c9f45ea450177b8ce92ab9d88fd8ffe8588888e55488a23839bf",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"IAdd\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 238
+        },
+        {
+          "alias": "FAddOp",
+          "declaration_sha256": "0a9cc7c62b2702bedbe1d6d5587c30e1780ee520494a221fb17406a79b8805e0",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FAdd\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 248
+        },
+        {
+          "alias": "ISubOp",
+          "declaration_sha256": "b53a0d37de5182ffa4cdf4c82a9fdf286386d416677d8716f9cefde21f7a997c",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ISub\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 258
+        },
+        {
+          "alias": "FSubOp",
+          "declaration_sha256": "40879b1e02d7a3a478f801b3510320670efe4b515d8027e194af9ddaaff57ddc",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FSub\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 268
+        },
+        {
+          "alias": "IMulOp",
+          "declaration_sha256": "de11d4c2df92476f77f64e0a2165879634cdcd7b261f9d3da866ce90afa798da",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"IMul\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 278
+        },
+        {
+          "alias": "FMulOp",
+          "declaration_sha256": "5ba9ff2e13f933b0788c628fd96ed2c4c64a98547f83d15fc25d8f0467fd902f",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FMul\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 288
+        },
+        {
+          "alias": "UDivOp",
+          "declaration_sha256": "4bd9f02f58b00e7e185dc238dfb07e6aef0ee9c660b37e3d2a3a033359e60a8c",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"UDiv\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 298
+        },
+        {
+          "alias": "SDivOp",
+          "declaration_sha256": "66aeced8b4b1ce10efb2661aa5a09159a5a2aff1bdad618f0f85d9e5ceb2e636",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SDiv\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 308
+        },
+        {
+          "alias": "FDivOp",
+          "declaration_sha256": "1b98f56f28aa7f95f75cfe0d16bfbb93143857de87e6febac31a9077a2c5e175",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FDiv\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 318
+        },
+        {
+          "alias": "UModOp",
+          "declaration_sha256": "9c0f71155ab871d3033290b27126da1db9bfb04d79db3e612c04a1f8e29e1435",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"UMod\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 328
+        },
+        {
+          "alias": "SRemOp",
+          "declaration_sha256": "0a38a79f6747986ae54c0913c545a9f3c03cdaea57a75d9c6dbaf2f27798defb",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SRem\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 338
+        },
+        {
+          "alias": "SModOp",
+          "declaration_sha256": "7724fe1344b60139abfd3fc7a7c308d06e1efbc6f512e1f667cf64d40f0545c5",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SMod\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 348
+        },
+        {
+          "alias": "FRemOp",
+          "declaration_sha256": "59c0beb115d6ffc1dcf838eba50ac89284383c83b7404b2d3ad2299b7c3dc584",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FRem\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 358
+        },
+        {
+          "alias": "FModOp",
+          "declaration_sha256": "ddc4b4845ae2913b2411415fc73bf753116df0d2fd10f3a7e4f140f10fafa779",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FMod\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 368
+        },
+        {
+          "alias": "VectorTimesScalarOp",
+          "declaration_sha256": "302761abb52adb80bd264ba9c7d707d5311833bd4b11fac87af5e33f48e3046d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"VectorTimesScalar\"",
+            "operands": "O { vector , scalar }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 378
+        },
+        {
+          "alias": "MatrixTimesScalarOp",
+          "declaration_sha256": "da959f1a35b52e5e7f539e623d08a30241501824cee1b5b3f0d266d0fc763331",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"MatrixTimesScalar\"",
+            "operands": "O { matrix , scalar }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 388
+        },
+        {
+          "alias": "VectorTimesMatrixOp",
+          "declaration_sha256": "f05086b498f477fb97de9bed631634a95923364edf554c2301c8832725d3255e",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"VectorTimesMatrix\"",
+            "operands": "O { vector , matrix }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 398
+        },
+        {
+          "alias": "MatrixTimesVectorOp",
+          "declaration_sha256": "38f2bdf88bc17ddf48263c9662707b2ae8810a16ea60dac634b6d79b614323b5",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"MatrixTimesVector\"",
+            "operands": "O { matrix , vector }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 408
+        },
+        {
+          "alias": "MatrixTimesMatrixOp",
+          "declaration_sha256": "2907daadd59a6a8a80697535349c507e9fb3fc07adbe2475f5cc5261883ccfcb",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"MatrixTimesMatrix\"",
+            "operands": "O { leftmatrix , rightmatrix }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 418
+        },
+        {
+          "alias": "OuterProductOp",
+          "declaration_sha256": "58032a0f633879fee11765f168fddd83ce2550fe0db730357047d6b14b15fed3",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"OuterProduct\"",
+            "operands": "O { vector_1 , vector_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 428
+        },
+        {
+          "alias": "DotOp",
+          "declaration_sha256": "6a443ba2265f7214ca353b52a2892d4b471fe197fe333321cb4e343f7f1f13ee",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Dot\"",
+            "operands": "O { vector_1 , vector_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 438
+        },
+        {
+          "alias": "IAddCarryOp",
+          "declaration_sha256": "dca10c0117290db9611db8ee55d45b1bb0544afd0c387887a47d168137076a28",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"IAddCarry\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 448
+        },
+        {
+          "alias": "ISubBorrowOp",
+          "declaration_sha256": "02d357af018a982663ab5c9ce10afe91eb28a5e10fce505c91d8eaad373df0f9",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ISubBorrow\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 458
+        },
+        {
+          "alias": "UMulExtendedOp",
+          "declaration_sha256": "c90ef8f184922e0564557ee410ef751fb2cfda390a2360d64656e47d53ead385",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"UMulExtended\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 468
+        },
+        {
+          "alias": "SMulExtendedOp",
+          "declaration_sha256": "3c11181fe86c23908723559de589df57cf6b1512ef369eb767739c2649059431",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SMulExtended\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 478
+        },
+        {
+          "alias": "AnyOp",
+          "declaration_sha256": "3d2fd42f9f9ca526d6ec1be855d7d81629c80def22c7ff403343b6c960370ad0",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Any\"",
+            "operands": "O { vector }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 488
+        },
+        {
+          "alias": "AllOp",
+          "declaration_sha256": "3e42bf45413b2e6efe24efa05d337debb0fe0bdbc2d85454ec75a4f228a0d940",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"All\"",
+            "operands": "O { vector }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 498
+        },
+        {
+          "alias": "IsNanOp",
+          "declaration_sha256": "4b809e79b606f1788910aed0efe7b158b1482e6e8386fddb4f6d603eed63a8cb",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"IsNan\"",
+            "operands": "O { x }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 508
+        },
+        {
+          "alias": "IsInfOp",
+          "declaration_sha256": "8227a9aaece311905a2bf6ce46524583d08bed8617d569a2959e468ec0ec0b1d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"IsInf\"",
+            "operands": "O { x }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 518
+        },
+        {
+          "alias": "IsFiniteOp",
+          "declaration_sha256": "3cce184e88935d61438b7f9efe8326c9774500a66aac3882883752abac75142f",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"IsFinite\"",
+            "operands": "O { x }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 528
+        },
+        {
+          "alias": "IsNormalOp",
+          "declaration_sha256": "582d05f3eb39e550845c22d69794bd28802b56918932cbec5a2cd5d94760e223",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"IsNormal\"",
+            "operands": "O { x }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 538
+        },
+        {
+          "alias": "SignBitSetOp",
+          "declaration_sha256": "b8bd613e4257dd8ce5aa1efc7ccf125edf51651786edfd3da4e0e4b832d18662",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SignBitSet\"",
+            "operands": "O { x }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 548
+        },
+        {
+          "alias": "LessOrGreaterOp",
+          "declaration_sha256": "222001776fe79515cc88576c40ce8e3eb9e57b649366b5ae57c6c9a64a972d3d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"LessOrGreater\"",
+            "operands": "O { x , y }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 558
+        },
+        {
+          "alias": "OrderedOp",
+          "declaration_sha256": "894f9afcf857a1ae2ea8694b676b1b9e803bb1a637af1df55743ccd8174e2b40",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Ordered\"",
+            "operands": "O { x , y }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 568
+        },
+        {
+          "alias": "UnorderedOp",
+          "declaration_sha256": "78b68c2bc0e760f4feaad10ef4138998c4dc8f369114180284b5db483dee3529",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Unordered\"",
+            "operands": "O { x , y }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 578
+        },
+        {
+          "alias": "LogicalEqualOp",
+          "declaration_sha256": "7096c3715bee1033e4da8777dbde8c3f166643a0fd80843f962d2caaca8c1967",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"LogicalEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 588
+        },
+        {
+          "alias": "LogicalNotEqualOp",
+          "declaration_sha256": "41951772d98c5b4ff6232a2dd98b24fd882c6f44a3ef8a5f91d0fd633448ccda",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"LogicalNotEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 598
+        },
+        {
+          "alias": "LogicalOrOp",
+          "declaration_sha256": "bd0d9b9391cce13aca920d0f0b69c6e67de274519d1dd30e893b4b0095a08a7b",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"LogicalOr\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 608
+        },
+        {
+          "alias": "LogicalAndOp",
+          "declaration_sha256": "f920f507440f495e96fac5f280c819da7f59efe0f451692ef45149b7e242e7cf",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"LogicalAnd\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 618
+        },
+        {
+          "alias": "LogicalNotOp",
+          "declaration_sha256": "059ed8be04dc522f68b45e48aaea01bc95c9ba7081052e10c1bcf318bfdc412b",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"LogicalNot\"",
+            "operands": "O { operand }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 628
+        },
+        {
+          "alias": "SelectOp",
+          "declaration_sha256": "5ff9f5395ba091550552297b8a72f397f0a2f5ac118b4d66906f8d1bb6d542f7",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Select\"",
+            "operands": "O { condition , object_1 , object_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 638
+        },
+        {
+          "alias": "IEqualOp",
+          "declaration_sha256": "abe8211fefc0ab23627c6df3548e702d7ccbb37ff77226dafbcffe1d309181bc",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"IEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 648
+        },
+        {
+          "alias": "INotEqualOp",
+          "declaration_sha256": "c5c18d64ea35558b8e522e010513db58a42d378c57b8192f9df4dc6f3edf0e10",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"INotEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 658
+        },
+        {
+          "alias": "UGreaterThanOp",
+          "declaration_sha256": "ae69a87b6abf6fc35f8410e444e8bc205b6ad50e0725a2a2bb7fb1191f20dabc",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"UGreaterThan\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 668
+        },
+        {
+          "alias": "SGreaterThanOp",
+          "declaration_sha256": "fc7b993505ebf47fd517ec7e7a7d09b62d06f03a7689ca2930a8aca2d5c8c76d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SGreaterThan\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 678
+        },
+        {
+          "alias": "UGreaterThanEqualOp",
+          "declaration_sha256": "3e2be32e1f12a6497d8fd79bbb5c17d348d73d05ec98d61f6ad8ce3ebc873ee2",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"UGreaterThanEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 688
+        },
+        {
+          "alias": "SGreaterThanEqualOp",
+          "declaration_sha256": "e96a7ff0bff5f3ccb03069aae179ad5f42ccbc81fe508c7a359f90cfeaf7c274",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SGreaterThanEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 698
+        },
+        {
+          "alias": "ULessThanOp",
+          "declaration_sha256": "790328ed2feb2d3ea082ae8af5664dee26a55944504c82630e2d9e4be77c9813",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ULessThan\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 708
+        },
+        {
+          "alias": "SLessThanOp",
+          "declaration_sha256": "232aa81b45da91f44bc17cb2fe5641eabf8fff9503103bbd4b4673447994cef5",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SLessThan\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 718
+        },
+        {
+          "alias": "ULessThanEqualOp",
+          "declaration_sha256": "764c8ecfbe915757fc2f35275d0bfb0431da2951b69f745a81cd2b2db47b839d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ULessThanEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 728
+        },
+        {
+          "alias": "SLessThanEqualOp",
+          "declaration_sha256": "044a09dced66cf47add11b771d885e5e4327df44de4587732f1617d13b41555e",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"SLessThanEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 738
+        },
+        {
+          "alias": "FOrdEqualOp",
+          "declaration_sha256": "e3b704e2b5bac426ef815946a5a187d0a95391e3c00063f3efb6f419b9427bef",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FOrdEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 748
+        },
+        {
+          "alias": "FUnordEqualOp",
+          "declaration_sha256": "306b1e2093afa494f923dd7bb7b5605205502858bc8490ad672270891ab83f5c",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FUnordEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 758
+        },
+        {
+          "alias": "FOrdNotEqualOp",
+          "declaration_sha256": "c8169ed41c1b1a986363e57dc8aad32b0cd6a22447222cea0cae82079246e57b",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FOrdNotEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 768
+        },
+        {
+          "alias": "FUnordNotEqualOp",
+          "declaration_sha256": "ee01be23945a445c976d79299e36186eb6ddd7ab85b76e18bbbf768b6970d175",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FUnordNotEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 778
+        },
+        {
+          "alias": "FOrdLessThanOp",
+          "declaration_sha256": "3290a4f9f46878dcaf9d3406a4fd28894493225e3549ccdb4d6bad1b98fdac3e",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FOrdLessThan\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 788
+        },
+        {
+          "alias": "FUnordLessThanOp",
+          "declaration_sha256": "7e0005a6f6779b0fb96bb7e694bc932c9acb8b819db734177b5ce93781e85a1e",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FUnordLessThan\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 798
+        },
+        {
+          "alias": "FOrdGreaterThanOp",
+          "declaration_sha256": "3f9ce66826fc7384d7749da7b0e202cacb33a9096f69183540fbc623b8872c01",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FOrdGreaterThan\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 808
+        },
+        {
+          "alias": "FUnordGreaterThanOp",
+          "declaration_sha256": "2ab42addb0e9bd0f88ac7bb0eb884465a6d2a4a1ea304c583d18f86ce88097e7",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FUnordGreaterThan\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 818
+        },
+        {
+          "alias": "FOrdLessThanEqualOp",
+          "declaration_sha256": "678c9f11a61c52672fc46b80e92c713f6f73e06fc5dcc5b22249deb02d692ab7",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FOrdLessThanEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 828
+        },
+        {
+          "alias": "FUnordLessThanEqualOp",
+          "declaration_sha256": "9635b859dd555ffe39ab557cba63e9d4b34144f6805635a73ec3b88c04881bf2",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FUnordLessThanEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 838
+        },
+        {
+          "alias": "FOrdGreaterThanEqualOp",
+          "declaration_sha256": "07386f076543565cfb542277f7f0654f329aa83b09b1c17ae04f6883c4026295",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FOrdGreaterThanEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 848
+        },
+        {
+          "alias": "FUnordGreaterThanEqualOp",
+          "declaration_sha256": "46bcdfd9e0290da07f0a10ffe096b16e86630fb90e58203700db3567825e9d62",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"FUnordGreaterThanEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 858
+        },
+        {
+          "alias": "ShiftRightLogicalOp",
+          "declaration_sha256": "32fd154e2797b67bda082f42148c9ea68bc135f4f9211b0a6e79bfadb4686071",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ShiftRightLogical\"",
+            "operands": "O { base , shift }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 868
+        },
+        {
+          "alias": "ShiftRightArithmeticOp",
+          "declaration_sha256": "f05e8ec000b4fb4a78cb0a9c03593804ba37a3ca2d5c65e2502c6631cde0b7e7",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ShiftRightArithmetic\"",
+            "operands": "O { base , shift }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 878
+        },
+        {
+          "alias": "ShiftLeftLogicalOp",
+          "declaration_sha256": "ad92896803afc98eb9db711dc387024eb4ce64f008dfe97a0d73351502ae0c8d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"ShiftLeftLogical\"",
+            "operands": "O { base , shift }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 888
+        },
+        {
+          "alias": "BitwiseOrOp",
+          "declaration_sha256": "5eff35f21f162440d638cb7f701bf569c21363cd536f02d7f45807895fd38ed7",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"BitwiseOr\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 898
+        },
+        {
+          "alias": "BitwiseXorOp",
+          "declaration_sha256": "67d1547f862bcac67807c189f54c385fb557c3b004833839ad26f2e917d07067",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"BitwiseXor\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 908
+        },
+        {
+          "alias": "BitwiseAndOp",
+          "declaration_sha256": "83a1c9f60eee8a1bbfebfdaa086e311fa695938a04f3149373f52d7dd0734fdc",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"BitwiseAnd\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 918
+        },
+        {
+          "alias": "NotOp",
+          "declaration_sha256": "b583f9a8c9c08601964f7227959ad872bfd196ae5e39d705c1e9fe9145a7669b",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"Not\"",
+            "operands": "O { operand }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 928
+        },
+        {
+          "alias": "BitFieldInsertOp",
+          "declaration_sha256": "7089c1dd3da6345d69764293be1ed4949896a0c1dd5ef10b533bf0290286433d",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"BitFieldInsert\"",
+            "operands": "O { base , insert , offset , count }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 938
+        },
+        {
+          "alias": "BitFieldSExtractOp",
+          "declaration_sha256": "b3eab3bb2b17d3c5c9c09b3e2c0112f859129e6b1725df6713610d92f6726bfd",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"BitFieldSExtract\"",
+            "operands": "O { base , offset , count }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 948
+        },
+        {
+          "alias": "BitFieldUExtractOp",
+          "declaration_sha256": "9dbfe12ce9cb0ae41fe2f7d6470760749b69f621c9fb156bb566405c040916dc",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"BitFieldUExtract\"",
+            "operands": "O { base , offset , count }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 958
+        },
+        {
+          "alias": "BitReverseOp",
+          "declaration_sha256": "e421330cc6a192663b78a3f99dac84516b6806938cb0c6d8560406014553b952",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"BitReverse\"",
+            "operands": "O { base }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 968
+        },
+        {
+          "alias": "BitCountOp",
+          "declaration_sha256": "10eeffacd3e80d2fd309a8870aa876d1b88a2860f2cb1c3157d0136afcfe5763",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"BitCount\"",
+            "operands": "O { base }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 978
+        },
+        {
+          "alias": "AtomicLoadOp",
+          "declaration_sha256": "f08a6beaa5a89c8554fb6827bf45b012e508c2ffd66d6531b20cfe75a262d9b5",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicLoad\"",
+            "operands": "O { pointer , memory , semantics }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 988
+        },
+        {
+          "alias": "AtomicExchangeOp",
+          "declaration_sha256": "0957ce5df8a14b8bf3f3e6ba4298372d97bb27475fefa5c329702b709f6f888b",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicExchange\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 998
+        },
+        {
+          "alias": "AtomicCompareExchangeOp",
+          "declaration_sha256": "119bfcd3e5736d37d1395375e0cfb1035715476aaa9e03977126d06a67d98b17",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicCompareExchange\"",
+            "operands": "O { pointer , memory , equal , unequal , value , comparator }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _, _, _) -> _\""
+          },
+          "line": 1008
+        },
+        {
+          "alias": "AtomicCompareExchangeWeakOp",
+          "declaration_sha256": "2872bcaf7414dbb34197636466dbea84d0fbeea8cac2bf673be9ebc18850e21a",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicCompareExchangeWeak\"",
+            "operands": "O { pointer , memory , equal , unequal , value , comparator }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _, _, _) -> _\""
+          },
+          "line": 1018
+        },
+        {
+          "alias": "AtomicIIncrementOp",
+          "declaration_sha256": "bbe1acd15f888d09e6f0ecae76442993d4777cd09236feb30ec085e3dc483dc9",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicIIncrement\"",
+            "operands": "O { pointer , memory , semantics }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 1028
+        },
+        {
+          "alias": "AtomicIDecrementOp",
+          "declaration_sha256": "2e6e2b5621688e479542e58fd43e468364ec54bedd3df46fb91bb9927d9ebeda",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicIDecrement\"",
+            "operands": "O { pointer , memory , semantics }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 1038
+        },
+        {
+          "alias": "AtomicIAddOp",
+          "declaration_sha256": "2880f30ee46f69276d3944f64e81a3d65ddf226bc07a7cee64651e57b03a98eb",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicIAdd\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1048
+        },
+        {
+          "alias": "AtomicISubOp",
+          "declaration_sha256": "14ded8bdcbd53ceacf1ac2517d0dccbd36266c924ddef4d434bf81e86e9e087b",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicISub\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1058
+        },
+        {
+          "alias": "AtomicSMinOp",
+          "declaration_sha256": "faa376dab181a0bca2115f5049c86abc00c974bae88f5a187633c5f83855b11b",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicSMin\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1068
+        },
+        {
+          "alias": "AtomicUMinOp",
+          "declaration_sha256": "247d141b7d116db4d68e12636ac607713b83da5e58c58a037a9ce8f355f1343f",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicUMin\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1078
+        },
+        {
+          "alias": "AtomicSMaxOp",
+          "declaration_sha256": "1a0bf366e5ea38811091bd3ea3c4d28c92c7049c51ee5d40f913b4e7941846bc",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicSMax\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1088
+        },
+        {
+          "alias": "AtomicUMaxOp",
+          "declaration_sha256": "f52e1b03f25541086f1b58386600e4fb4b0f016c1a57dc8d2458799c0a1a0866",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicUMax\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1098
+        },
+        {
+          "alias": "AtomicAndOp",
+          "declaration_sha256": "bb853f201b755432b265753aaafbb4e05b3c8060e95f2f88801847c08731b003",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicAnd\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1108
+        },
+        {
+          "alias": "AtomicOrOp",
+          "declaration_sha256": "4d9a172e05c729f015339fcd91592305a62d66bdedff51de1fceacbe89841a95",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicOr\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1118
+        },
+        {
+          "alias": "AtomicXorOp",
+          "declaration_sha256": "1bd2696f5233fb52e77d71278f2385ede3f1b48ce04298b242490c26c804c462",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicXor\"",
+            "operands": "O { pointer , memory , semantics , value }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _, _) -> _\""
+          },
+          "line": 1128
+        },
+        {
+          "alias": "AtomicFlagTestAndSetOp",
+          "declaration_sha256": "821535fdc4affeea62cafffb0ddd8afe759a5e245be2c5c646a36440b1675da7",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"AtomicFlagTestAndSet\"",
+            "operands": "O { pointer , memory , semantics }",
+            "results": "R { result }",
+            "scheme": "\"(_, _, _) -> _\""
+          },
+          "line": 1138
+        },
+        {
+          "alias": "CopyLogicalOp",
+          "declaration_sha256": "8016004d560cf672b8f6f97a99475a7beec62c1b8c24b74e7e63636564484e79",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"CopyLogical\"",
+            "operands": "O { operand }",
+            "results": "R { result }",
+            "scheme": "\"(_) -> _\""
+          },
+          "line": 1148
+        },
+        {
+          "alias": "PtrEqualOp",
+          "declaration_sha256": "a58fd8f846eaddcd43a58d7eed5727a1f8d3b314f5f8009a801531c31117cc3c",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"PtrEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 1158
+        },
+        {
+          "alias": "PtrNotEqualOp",
+          "declaration_sha256": "ee1b1fce2338a85cc7eb0801fc084a16ba25c5827c62785a25d6e8dd3418b36e",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"PtrNotEqual\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 1168
+        },
+        {
+          "alias": "PtrDiffOp",
+          "declaration_sha256": "180b8ef03f5a6b4280fcda47df97a576428e7386c2f5340c9040be63344e5e07",
+          "fields": {
+            "dialect": "\"spirv\"",
+            "name": "\"PtrDiff\"",
+            "operands": "O { operand_1 , operand_2 }",
+            "results": "R { result }",
+            "scheme": "\"(_, _) -> _\""
+          },
+          "line": 1178
+        }
+      ],
+      "path": "gpu/src/spirv/generated.rs",
+      "source": "#![allow(clippy::too_many_arguments)]\n\nuse tir::helpers::operation;\nuse tir::{OpId, TypeId, ValueId};\n\nuse tir;\n\noperation! {\n    ImageTexelPointerOp {\n        name: \"ImageTexelPointer\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { image, coordinate, sample },\n        results: R { result }\n    }\n}\n\noperation! {\n    GenericPtrMemSemanticsOp {\n        name: \"GenericPtrMemSemantics\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { pointer },\n        results: R { result }\n    }\n}\n\noperation! {\n    VectorExtractDynamicOp {\n        name: \"VectorExtractDynamic\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { vector, index },\n        results: R { result }\n    }\n}\n\noperation! {\n    VectorInsertDynamicOp {\n        name: \"VectorInsertDynamic\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { vector, component, index },\n        results: R { result }\n    }\n}\n\noperation! {\n    CopyObjectOp {\n        name: \"CopyObject\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { operand },\n        results: R { result }\n    }\n}\n\noperation! {\n    TransposeOp {\n        name: \"Transpose\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { matrix },\n        results: R { result }\n    }\n}\n\noperation! {\n    ConvertFToUOp {\n        name: \"ConvertFToU\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { float_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    ConvertFToSOp {\n        name: \"ConvertFToS\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { float_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    ConvertSToFOp {\n        name: \"ConvertSToF\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { signed_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    ConvertUToFOp {\n        name: \"ConvertUToF\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { unsigned_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    UConvertOp {\n        name: \"UConvert\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { unsigned_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    SConvertOp {\n        name: \"SConvert\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { signed_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    FConvertOp {\n        name: \"FConvert\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { float_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    QuantizeToF16Op {\n        name: \"QuantizeToF16\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { value },\n        results: R { result }\n    }\n}\n\noperation! {\n    ConvertPtrToUOp {\n        name: \"ConvertPtrToU\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { pointer },\n        results: R { result }\n    }\n}\n\noperation! {\n    SatConvertSToUOp {\n        name: \"SatConvertSToU\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { signed_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    SatConvertUToSOp {\n        name: \"SatConvertUToS\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { unsigned_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    ConvertUToPtrOp {\n        name: \"ConvertUToPtr\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { integer_value },\n        results: R { result }\n    }\n}\n\noperation! {\n    PtrCastToGenericOp {\n        name: \"PtrCastToGeneric\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { pointer },\n        results: R { result }\n    }\n}\n\noperation! {\n    GenericCastToPtrOp {\n        name: \"GenericCastToPtr\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { pointer },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitcastOp {\n        name: \"Bitcast\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { operand },\n        results: R { result }\n    }\n}\n\noperation! {\n    SNegateOp {\n        name: \"SNegate\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { operand },\n        results: R { result }\n    }\n}\n\noperation! {\n    FNegateOp {\n        name: \"FNegate\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { operand },\n        results: R { result }\n    }\n}\n\noperation! {\n    IAddOp {\n        name: \"IAdd\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FAddOp {\n        name: \"FAdd\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    ISubOp {\n        name: \"ISub\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FSubOp {\n        name: \"FSub\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    IMulOp {\n        name: \"IMul\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FMulOp {\n        name: \"FMul\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    UDivOp {\n        name: \"UDiv\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    SDivOp {\n        name: \"SDiv\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FDivOp {\n        name: \"FDiv\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    UModOp {\n        name: \"UMod\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    SRemOp {\n        name: \"SRem\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    SModOp {\n        name: \"SMod\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FRemOp {\n        name: \"FRem\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FModOp {\n        name: \"FMod\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    VectorTimesScalarOp {\n        name: \"VectorTimesScalar\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { vector, scalar },\n        results: R { result }\n    }\n}\n\noperation! {\n    MatrixTimesScalarOp {\n        name: \"MatrixTimesScalar\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { matrix, scalar },\n        results: R { result }\n    }\n}\n\noperation! {\n    VectorTimesMatrixOp {\n        name: \"VectorTimesMatrix\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { vector, matrix },\n        results: R { result }\n    }\n}\n\noperation! {\n    MatrixTimesVectorOp {\n        name: \"MatrixTimesVector\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { matrix, vector },\n        results: R { result }\n    }\n}\n\noperation! {\n    MatrixTimesMatrixOp {\n        name: \"MatrixTimesMatrix\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { leftmatrix, rightmatrix },\n        results: R { result }\n    }\n}\n\noperation! {\n    OuterProductOp {\n        name: \"OuterProduct\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { vector_1, vector_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    DotOp {\n        name: \"Dot\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { vector_1, vector_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    IAddCarryOp {\n        name: \"IAddCarry\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    ISubBorrowOp {\n        name: \"ISubBorrow\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    UMulExtendedOp {\n        name: \"UMulExtended\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    SMulExtendedOp {\n        name: \"SMulExtended\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    AnyOp {\n        name: \"Any\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { vector },\n        results: R { result }\n    }\n}\n\noperation! {\n    AllOp {\n        name: \"All\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { vector },\n        results: R { result }\n    }\n}\n\noperation! {\n    IsNanOp {\n        name: \"IsNan\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { x },\n        results: R { result }\n    }\n}\n\noperation! {\n    IsInfOp {\n        name: \"IsInf\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { x },\n        results: R { result }\n    }\n}\n\noperation! {\n    IsFiniteOp {\n        name: \"IsFinite\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { x },\n        results: R { result }\n    }\n}\n\noperation! {\n    IsNormalOp {\n        name: \"IsNormal\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { x },\n        results: R { result }\n    }\n}\n\noperation! {\n    SignBitSetOp {\n        name: \"SignBitSet\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { x },\n        results: R { result }\n    }\n}\n\noperation! {\n    LessOrGreaterOp {\n        name: \"LessOrGreater\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { x, y },\n        results: R { result }\n    }\n}\n\noperation! {\n    OrderedOp {\n        name: \"Ordered\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { x, y },\n        results: R { result }\n    }\n}\n\noperation! {\n    UnorderedOp {\n        name: \"Unordered\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { x, y },\n        results: R { result }\n    }\n}\n\noperation! {\n    LogicalEqualOp {\n        name: \"LogicalEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    LogicalNotEqualOp {\n        name: \"LogicalNotEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    LogicalOrOp {\n        name: \"LogicalOr\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    LogicalAndOp {\n        name: \"LogicalAnd\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    LogicalNotOp {\n        name: \"LogicalNot\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { operand },\n        results: R { result }\n    }\n}\n\noperation! {\n    SelectOp {\n        name: \"Select\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { condition, object_1, object_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    IEqualOp {\n        name: \"IEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    INotEqualOp {\n        name: \"INotEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    UGreaterThanOp {\n        name: \"UGreaterThan\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    SGreaterThanOp {\n        name: \"SGreaterThan\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    UGreaterThanEqualOp {\n        name: \"UGreaterThanEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    SGreaterThanEqualOp {\n        name: \"SGreaterThanEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    ULessThanOp {\n        name: \"ULessThan\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    SLessThanOp {\n        name: \"SLessThan\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    ULessThanEqualOp {\n        name: \"ULessThanEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    SLessThanEqualOp {\n        name: \"SLessThanEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FOrdEqualOp {\n        name: \"FOrdEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FUnordEqualOp {\n        name: \"FUnordEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FOrdNotEqualOp {\n        name: \"FOrdNotEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FUnordNotEqualOp {\n        name: \"FUnordNotEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FOrdLessThanOp {\n        name: \"FOrdLessThan\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FUnordLessThanOp {\n        name: \"FUnordLessThan\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FOrdGreaterThanOp {\n        name: \"FOrdGreaterThan\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FUnordGreaterThanOp {\n        name: \"FUnordGreaterThan\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FOrdLessThanEqualOp {\n        name: \"FOrdLessThanEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FUnordLessThanEqualOp {\n        name: \"FUnordLessThanEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FOrdGreaterThanEqualOp {\n        name: \"FOrdGreaterThanEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    FUnordGreaterThanEqualOp {\n        name: \"FUnordGreaterThanEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    ShiftRightLogicalOp {\n        name: \"ShiftRightLogical\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { base, shift },\n        results: R { result }\n    }\n}\n\noperation! {\n    ShiftRightArithmeticOp {\n        name: \"ShiftRightArithmetic\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { base, shift },\n        results: R { result }\n    }\n}\n\noperation! {\n    ShiftLeftLogicalOp {\n        name: \"ShiftLeftLogical\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { base, shift },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitwiseOrOp {\n        name: \"BitwiseOr\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitwiseXorOp {\n        name: \"BitwiseXor\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitwiseAndOp {\n        name: \"BitwiseAnd\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    NotOp {\n        name: \"Not\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { operand },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitFieldInsertOp {\n        name: \"BitFieldInsert\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { base, insert, offset, count },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitFieldSExtractOp {\n        name: \"BitFieldSExtract\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { base, offset, count },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitFieldUExtractOp {\n        name: \"BitFieldUExtract\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { base, offset, count },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitReverseOp {\n        name: \"BitReverse\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { base },\n        results: R { result }\n    }\n}\n\noperation! {\n    BitCountOp {\n        name: \"BitCount\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { base },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicLoadOp {\n        name: \"AtomicLoad\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { pointer, memory, semantics },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicExchangeOp {\n        name: \"AtomicExchange\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicCompareExchangeOp {\n        name: \"AtomicCompareExchange\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _, _, _) -> _\",\n        operands: O { pointer, memory, equal, unequal, value, comparator },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicCompareExchangeWeakOp {\n        name: \"AtomicCompareExchangeWeak\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _, _, _) -> _\",\n        operands: O { pointer, memory, equal, unequal, value, comparator },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicIIncrementOp {\n        name: \"AtomicIIncrement\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { pointer, memory, semantics },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicIDecrementOp {\n        name: \"AtomicIDecrement\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { pointer, memory, semantics },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicIAddOp {\n        name: \"AtomicIAdd\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicISubOp {\n        name: \"AtomicISub\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicSMinOp {\n        name: \"AtomicSMin\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicUMinOp {\n        name: \"AtomicUMin\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicSMaxOp {\n        name: \"AtomicSMax\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicUMaxOp {\n        name: \"AtomicUMax\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicAndOp {\n        name: \"AtomicAnd\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicOrOp {\n        name: \"AtomicOr\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicXorOp {\n        name: \"AtomicXor\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _, _) -> _\",\n        operands: O { pointer, memory, semantics, value },\n        results: R { result }\n    }\n}\n\noperation! {\n    AtomicFlagTestAndSetOp {\n        name: \"AtomicFlagTestAndSet\",\n        dialect: \"spirv\",\n        scheme: \"(_, _, _) -> _\",\n        operands: O { pointer, memory, semantics },\n        results: R { result }\n    }\n}\n\noperation! {\n    CopyLogicalOp {\n        name: \"CopyLogical\",\n        dialect: \"spirv\",\n        scheme: \"(_) -> _\",\n        operands: O { operand },\n        results: R { result }\n    }\n}\n\noperation! {\n    PtrEqualOp {\n        name: \"PtrEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    PtrNotEqualOp {\n        name: \"PtrNotEqual\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\noperation! {\n    PtrDiffOp {\n        name: \"PtrDiff\",\n        dialect: \"spirv\",\n        scheme: \"(_, _) -> _\",\n        operands: O { operand_1, operand_2 },\n        results: R { result }\n    }\n}\n\n/// Every generated op: its SPIR-V opcode, its name in the `spirv` dialect, and\n/// how many id operands follow the result type and result id.\nstatic GENERATED: &[(u16, &str, usize)] = &[\n    (60, \"ImageTexelPointer\", 3),\n    (69, \"GenericPtrMemSemantics\", 1),\n    (77, \"VectorExtractDynamic\", 2),\n    (78, \"VectorInsertDynamic\", 3),\n    (83, \"CopyObject\", 1),\n    (84, \"Transpose\", 1),\n    (109, \"ConvertFToU\", 1),\n    (110, \"ConvertFToS\", 1),\n    (111, \"ConvertSToF\", 1),\n    (112, \"ConvertUToF\", 1),\n    (113, \"UConvert\", 1),\n    (114, \"SConvert\", 1),\n    (115, \"FConvert\", 1),\n    (116, \"QuantizeToF16\", 1),\n    (117, \"ConvertPtrToU\", 1),\n    (118, \"SatConvertSToU\", 1),\n    (119, \"SatConvertUToS\", 1),\n    (120, \"ConvertUToPtr\", 1),\n    (121, \"PtrCastToGeneric\", 1),\n    (122, \"GenericCastToPtr\", 1),\n    (124, \"Bitcast\", 1),\n    (126, \"SNegate\", 1),\n    (127, \"FNegate\", 1),\n    (128, \"IAdd\", 2),\n    (129, \"FAdd\", 2),\n    (130, \"ISub\", 2),\n    (131, \"FSub\", 2),\n    (132, \"IMul\", 2),\n    (133, \"FMul\", 2),\n    (134, \"UDiv\", 2),\n    (135, \"SDiv\", 2),\n    (136, \"FDiv\", 2),\n    (137, \"UMod\", 2),\n    (138, \"SRem\", 2),\n    (139, \"SMod\", 2),\n    (140, \"FRem\", 2),\n    (141, \"FMod\", 2),\n    (142, \"VectorTimesScalar\", 2),\n    (143, \"MatrixTimesScalar\", 2),\n    (144, \"VectorTimesMatrix\", 2),\n    (145, \"MatrixTimesVector\", 2),\n    (146, \"MatrixTimesMatrix\", 2),\n    (147, \"OuterProduct\", 2),\n    (148, \"Dot\", 2),\n    (149, \"IAddCarry\", 2),\n    (150, \"ISubBorrow\", 2),\n    (151, \"UMulExtended\", 2),\n    (152, \"SMulExtended\", 2),\n    (154, \"Any\", 1),\n    (155, \"All\", 1),\n    (156, \"IsNan\", 1),\n    (157, \"IsInf\", 1),\n    (158, \"IsFinite\", 1),\n    (159, \"IsNormal\", 1),\n    (160, \"SignBitSet\", 1),\n    (161, \"LessOrGreater\", 2),\n    (162, \"Ordered\", 2),\n    (163, \"Unordered\", 2),\n    (164, \"LogicalEqual\", 2),\n    (165, \"LogicalNotEqual\", 2),\n    (166, \"LogicalOr\", 2),\n    (167, \"LogicalAnd\", 2),\n    (168, \"LogicalNot\", 1),\n    (169, \"Select\", 3),\n    (170, \"IEqual\", 2),\n    (171, \"INotEqual\", 2),\n    (172, \"UGreaterThan\", 2),\n    (173, \"SGreaterThan\", 2),\n    (174, \"UGreaterThanEqual\", 2),\n    (175, \"SGreaterThanEqual\", 2),\n    (176, \"ULessThan\", 2),\n    (177, \"SLessThan\", 2),\n    (178, \"ULessThanEqual\", 2),\n    (179, \"SLessThanEqual\", 2),\n    (180, \"FOrdEqual\", 2),\n    (181, \"FUnordEqual\", 2),\n    (182, \"FOrdNotEqual\", 2),\n    (183, \"FUnordNotEqual\", 2),\n    (184, \"FOrdLessThan\", 2),\n    (185, \"FUnordLessThan\", 2),\n    (186, \"FOrdGreaterThan\", 2),\n    (187, \"FUnordGreaterThan\", 2),\n    (188, \"FOrdLessThanEqual\", 2),\n    (189, \"FUnordLessThanEqual\", 2),\n    (190, \"FOrdGreaterThanEqual\", 2),\n    (191, \"FUnordGreaterThanEqual\", 2),\n    (194, \"ShiftRightLogical\", 2),\n    (195, \"ShiftRightArithmetic\", 2),\n    (196, \"ShiftLeftLogical\", 2),\n    (197, \"BitwiseOr\", 2),\n    (198, \"BitwiseXor\", 2),\n    (199, \"BitwiseAnd\", 2),\n    (200, \"Not\", 1),\n    (201, \"BitFieldInsert\", 4),\n    (202, \"BitFieldSExtract\", 3),\n    (203, \"BitFieldUExtract\", 3),\n    (204, \"BitReverse\", 1),\n    (205, \"BitCount\", 1),\n    (227, \"AtomicLoad\", 3),\n    (229, \"AtomicExchange\", 4),\n    (230, \"AtomicCompareExchange\", 6),\n    (231, \"AtomicCompareExchangeWeak\", 6),\n    (232, \"AtomicIIncrement\", 3),\n    (233, \"AtomicIDecrement\", 3),\n    (234, \"AtomicIAdd\", 4),\n    (235, \"AtomicISub\", 4),\n    (236, \"AtomicSMin\", 4),\n    (237, \"AtomicUMin\", 4),\n    (238, \"AtomicSMax\", 4),\n    (239, \"AtomicUMax\", 4),\n    (240, \"AtomicAnd\", 4),\n    (241, \"AtomicOr\", 4),\n    (242, \"AtomicXor\", 4),\n    (318, \"AtomicFlagTestAndSet\", 3),\n    (400, \"CopyLogical\", 1),\n    (401, \"PtrEqual\", 2),\n    (402, \"PtrNotEqual\", 2),\n    (403, \"PtrDiff\", 2),\n];\n\npub(crate) fn build_generated(\n    context: &tir::Context,\n    opcode: u16,\n    operands: &[ValueId],\n    result_type: TypeId,\n    insertion: tir::InsertionPoint,\n) -> Option<(OpId, ValueId)> {\n    let &(_, name, arity) = GENERATED.iter().find(|&&(code, _, _)| code == opcode)?;\n    if operands.len() != arity {\n        return None;\n    }\n    let result = context.create_value(result_type, None).id();\n    let instance = tir::NewOp::new_dynamic(\n        (\"spirv\", name),\n        context.clone(),\n        operands.to_vec(),\n        vec![result],\n        vec![],\n        vec![],\n    );\n    let op = context.add_operation(insertion, instance);\n    Some((op.id, result))\n}\n",
+      "source_sha256": "0b03a5d1f14cc65dc3c94fd52ee819cedad34c901af26e96391b05e1a07ec12f",
+      "spans": [
+        {
+          "end": 335,
+          "replacement": "root",
+          "start": 113
+        },
+        {
+          "end": 545,
+          "replacement": "",
+          "start": 337
+        },
+        {
+          "end": 760,
+          "replacement": "",
+          "start": 547
+        },
+        {
+          "end": 987,
+          "replacement": "",
+          "start": 762
+        },
+        {
+          "end": 1173,
+          "replacement": "",
+          "start": 989
+        },
+        {
+          "end": 1356,
+          "replacement": "",
+          "start": 1175
+        },
+        {
+          "end": 1548,
+          "replacement": "",
+          "start": 1358
+        },
+        {
+          "end": 1740,
+          "replacement": "",
+          "start": 1550
+        },
+        {
+          "end": 1933,
+          "replacement": "",
+          "start": 1742
+        },
+        {
+          "end": 2128,
+          "replacement": "",
+          "start": 1935
+        },
+        {
+          "end": 2317,
+          "replacement": "",
+          "start": 2130
+        },
+        {
+          "end": 2504,
+          "replacement": "",
+          "start": 2319
+        },
+        {
+          "end": 2690,
+          "replacement": "",
+          "start": 2506
+        },
+        {
+          "end": 2880,
+          "replacement": "",
+          "start": 2692
+        },
+        {
+          "end": 3072,
+          "replacement": "",
+          "start": 2882
+        },
+        {
+          "end": 3271,
+          "replacement": "",
+          "start": 3074
+        },
+        {
+          "end": 3472,
+          "replacement": "",
+          "start": 3273
+        },
+        {
+          "end": 3670,
+          "replacement": "",
+          "start": 3474
+        },
+        {
+          "end": 3868,
+          "replacement": "",
+          "start": 3672
+        },
+        {
+          "end": 4066,
+          "replacement": "",
+          "start": 3870
+        },
+        {
+          "end": 4246,
+          "replacement": "",
+          "start": 4068
+        },
+        {
+          "end": 4426,
+          "replacement": "",
+          "start": 4248
+        },
+        {
+          "end": 4606,
+          "replacement": "",
+          "start": 4428
+        },
+        {
+          "end": 4796,
+          "replacement": "",
+          "start": 4608
+        },
+        {
+          "end": 4986,
+          "replacement": "",
+          "start": 4798
+        },
+        {
+          "end": 5176,
+          "replacement": "",
+          "start": 4988
+        },
+        {
+          "end": 5366,
+          "replacement": "",
+          "start": 5178
+        },
+        {
+          "end": 5556,
+          "replacement": "",
+          "start": 5368
+        },
+        {
+          "end": 5746,
+          "replacement": "",
+          "start": 5558
+        },
+        {
+          "end": 5936,
+          "replacement": "",
+          "start": 5748
+        },
+        {
+          "end": 6126,
+          "replacement": "",
+          "start": 5938
+        },
+        {
+          "end": 6316,
+          "replacement": "",
+          "start": 6128
+        },
+        {
+          "end": 6506,
+          "replacement": "",
+          "start": 6318
+        },
+        {
+          "end": 6696,
+          "replacement": "",
+          "start": 6508
+        },
+        {
+          "end": 6886,
+          "replacement": "",
+          "start": 6698
+        },
+        {
+          "end": 7076,
+          "replacement": "",
+          "start": 6888
+        },
+        {
+          "end": 7266,
+          "replacement": "",
+          "start": 7078
+        },
+        {
+          "end": 7476,
+          "replacement": "",
+          "start": 7268
+        },
+        {
+          "end": 7686,
+          "replacement": "",
+          "start": 7478
+        },
+        {
+          "end": 7896,
+          "replacement": "",
+          "start": 7688
+        },
+        {
+          "end": 8106,
+          "replacement": "",
+          "start": 7898
+        },
+        {
+          "end": 8325,
+          "replacement": "",
+          "start": 8108
+        },
+        {
+          "end": 8529,
+          "replacement": "",
+          "start": 8327
+        },
+        {
+          "end": 8715,
+          "replacement": "",
+          "start": 8531
+        },
+        {
+          "end": 8915,
+          "replacement": "",
+          "start": 8717
+        },
+        {
+          "end": 9117,
+          "replacement": "",
+          "start": 8917
+        },
+        {
+          "end": 9323,
+          "replacement": "",
+          "start": 9119
+        },
+        {
+          "end": 9529,
+          "replacement": "",
+          "start": 9325
+        },
+        {
+          "end": 9700,
+          "replacement": "",
+          "start": 9531
+        },
+        {
+          "end": 9871,
+          "replacement": "",
+          "start": 9702
+        },
+        {
+          "end": 10041,
+          "replacement": "",
+          "start": 9873
+        },
+        {
+          "end": 10211,
+          "replacement": "",
+          "start": 10043
+        },
+        {
+          "end": 10387,
+          "replacement": "",
+          "start": 10213
+        },
+        {
+          "end": 10563,
+          "replacement": "",
+          "start": 10389
+        },
+        {
+          "end": 10743,
+          "replacement": "",
+          "start": 10565
+        },
+        {
+          "end": 10935,
+          "replacement": "",
+          "start": 10745
+        },
+        {
+          "end": 11115,
+          "replacement": "",
+          "start": 10937
+        },
+        {
+          "end": 11299,
+          "replacement": "",
+          "start": 11117
+        },
+        {
+          "end": 11505,
+          "replacement": "",
+          "start": 11301
+        },
+        {
+          "end": 11717,
+          "replacement": "",
+          "start": 11507
+        },
+        {
+          "end": 11917,
+          "replacement": "",
+          "start": 11719
+        },
+        {
+          "end": 12119,
+          "replacement": "",
+          "start": 11919
+        },
+        {
+          "end": 12305,
+          "replacement": "",
+          "start": 12121
+        },
+        {
+          "end": 12511,
+          "replacement": "",
+          "start": 12307
+        },
+        {
+          "end": 12705,
+          "replacement": "",
+          "start": 12513
+        },
+        {
+          "end": 12905,
+          "replacement": "",
+          "start": 12707
+        },
+        {
+          "end": 13111,
+          "replacement": "",
+          "start": 12907
+        },
+        {
+          "end": 13317,
+          "replacement": "",
+          "start": 13113
+        },
+        {
+          "end": 13533,
+          "replacement": "",
+          "start": 13319
+        },
+        {
+          "end": 13749,
+          "replacement": "",
+          "start": 13535
+        },
+        {
+          "end": 13949,
+          "replacement": "",
+          "start": 13751
+        },
+        {
+          "end": 14149,
+          "replacement": "",
+          "start": 13951
+        },
+        {
+          "end": 14359,
+          "replacement": "",
+          "start": 14151
+        },
+        {
+          "end": 14569,
+          "replacement": "",
+          "start": 14361
+        },
+        {
+          "end": 14769,
+          "replacement": "",
+          "start": 14571
+        },
+        {
+          "end": 14973,
+          "replacement": "",
+          "start": 14771
+        },
+        {
+          "end": 15179,
+          "replacement": "",
+          "start": 14975
+        },
+        {
+          "end": 15389,
+          "replacement": "",
+          "start": 15181
+        },
+        {
+          "end": 15595,
+          "replacement": "",
+          "start": 15391
+        },
+        {
+          "end": 15805,
+          "replacement": "",
+          "start": 15597
+        },
+        {
+          "end": 16017,
+          "replacement": "",
+          "start": 15807
+        },
+        {
+          "end": 16233,
+          "replacement": "",
+          "start": 16019
+        },
+        {
+          "end": 16449,
+          "replacement": "",
+          "start": 16235
+        },
+        {
+          "end": 16669,
+          "replacement": "",
+          "start": 16451
+        },
+        {
+          "end": 16891,
+          "replacement": "",
+          "start": 16671
+        },
+        {
+          "end": 17117,
+          "replacement": "",
+          "start": 16893
+        },
+        {
+          "end": 17324,
+          "replacement": "",
+          "start": 17119
+        },
+        {
+          "end": 17537,
+          "replacement": "",
+          "start": 17326
+        },
+        {
+          "end": 17742,
+          "replacement": "",
+          "start": 17539
+        },
+        {
+          "end": 17942,
+          "replacement": "",
+          "start": 17744
+        },
+        {
+          "end": 18144,
+          "replacement": "",
+          "start": 17944
+        },
+        {
+          "end": 18346,
+          "replacement": "",
+          "start": 18146
+        },
+        {
+          "end": 18518,
+          "replacement": "",
+          "start": 18348
+        },
+        {
+          "end": 18741,
+          "replacement": "",
+          "start": 18520
+        },
+        {
+          "end": 18957,
+          "replacement": "",
+          "start": 18743
+        },
+        {
+          "end": 19173,
+          "replacement": "",
+          "start": 18959
+        },
+        {
+          "end": 19356,
+          "replacement": "",
+          "start": 19175
+        },
+        {
+          "end": 19535,
+          "replacement": "",
+          "start": 19358
+        },
+        {
+          "end": 19746,
+          "replacement": "",
+          "start": 19537
+        },
+        {
+          "end": 19975,
+          "replacement": "",
+          "start": 19748
+        },
+        {
+          "end": 20241,
+          "replacement": "",
+          "start": 19977
+        },
+        {
+          "end": 20515,
+          "replacement": "",
+          "start": 20243
+        },
+        {
+          "end": 20738,
+          "replacement": "",
+          "start": 20517
+        },
+        {
+          "end": 20961,
+          "replacement": "",
+          "start": 20740
+        },
+        {
+          "end": 21182,
+          "replacement": "",
+          "start": 20963
+        },
+        {
+          "end": 21403,
+          "replacement": "",
+          "start": 21184
+        },
+        {
+          "end": 21624,
+          "replacement": "",
+          "start": 21405
+        },
+        {
+          "end": 21845,
+          "replacement": "",
+          "start": 21626
+        },
+        {
+          "end": 22066,
+          "replacement": "",
+          "start": 21847
+        },
+        {
+          "end": 22287,
+          "replacement": "",
+          "start": 22068
+        },
+        {
+          "end": 22506,
+          "replacement": "",
+          "start": 22289
+        },
+        {
+          "end": 22723,
+          "replacement": "",
+          "start": 22508
+        },
+        {
+          "end": 22942,
+          "replacement": "",
+          "start": 22725
+        },
+        {
+          "end": 23173,
+          "replacement": "",
+          "start": 22944
+        },
+        {
+          "end": 23361,
+          "replacement": "",
+          "start": 23175
+        },
+        {
+          "end": 23559,
+          "replacement": "",
+          "start": 23363
+        },
+        {
+          "end": 23763,
+          "replacement": "",
+          "start": 23561
+        },
+        {
+          "end": 23959,
+          "replacement": "",
+          "start": 23765
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

@@ -11,14 +11,10 @@ use std::collections::HashMap;
 use tir_adt::{APFloat, APInt, RoundingMode};
 
 use crate::{
-    BlockId, ConstantLike, Context, CountedLoop, DataLayout, Gamma, OpId, Operation, RegionId,
-    Symbol, Theta, ValueId,
-    builtin::{ConstantOp, FloatType, IntegerType, MakeTupleOp, TupleGetOp, UnitType},
-    func::{CallOp, FuncOp, ReturnOp},
-    ptr::{AllocaOp, LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp},
-    scf::{OrderedForOp, YieldOp},
+    BlockId, Context, DataLayout, Gamma, OpId, Operation, RegionId, Theta, ValueId,
+    builtin::{FloatType, IntegerType, UnitType},
+    ptr::PtrType,
     sem,
-    state::{EntryStateOp, JoinOp, SplitOp},
 };
 
 /// A concrete interpreter value: integers of explicit width, floats, tuples,
@@ -212,6 +208,7 @@ impl Memory {
 /// Concrete evaluation of one leaf operation: `operands[i]` is the value of
 /// value operand `i`; the returned values bind to the op's value results in
 /// order. Dependencies carry nothing and are neither passed nor returned.
+#[tir_macros::operation_interface]
 pub trait Interp {
     fn evaluate(&self, operands: &[Value], state: &mut ExecutionState) -> Result<Vec<Value>>;
 }
@@ -413,24 +410,26 @@ impl Interpreter<'_, '_> {
                 op_id.number()
             );
         }
-        if instance.is::<YieldOp>() {
+        if instance.is_operation(&crate::scf::YIELD) {
             // A loop's back edge yields what the next iteration carries.
             return Ok(Some(Flow::Values(self.operand_values(&instance)?)));
         }
-        if instance.is::<ReturnOp>() || instance.is::<crate::layout::ResultOp>() {
+        if instance.is_operation(&crate::func::RETURN)
+            || instance.is_operation(&crate::layout::RESULT)
+        {
             return Ok(Some(Flow::Return(self.operand_values(&instance)?)));
         }
         // A counted loop whose body is still a block list has no declared
         // binding, so it is driven off its own shape.
-        if instance.is::<OrderedForOp>() {
+        if instance.is_operation(&crate::scf::ORDERED_FOR) {
             let flow = self.exec_ordered_for(op_id)?;
             return self.exec_value_flow(op_id, flow);
         }
-        if instance.is::<CallOp>() {
+        if instance.is_operation(&crate::func::CALL) {
             let flow = self.exec_call(op_id)?;
             return self.exec_value_flow(op_id, flow);
         }
-        if instance.is::<crate::fp::ops::RoundOp>() {
+        if instance.is_operation(&crate::fp::ops::ROUND) {
             let flow = self.exec_round(&instance)?;
             return self.exec_value_flow(op_id, flow);
         }
@@ -442,9 +441,9 @@ impl Interpreter<'_, '_> {
             let flow = self.exec_gamma(&instance, gamma.as_ref())?;
             return self.exec_value_flow(op_id, flow);
         }
-        if instance.is::<crate::cfg::BranchOp>()
-            || instance.is::<crate::cfg::CondBranchOp>()
-            || instance.is::<crate::cfg::SwitchOp>()
+        if instance.is_operation(&crate::cfg::BR)
+            || instance.is_operation(&crate::cfg::COND_BR)
+            || instance.is_operation(&crate::cfg::SWITCH)
         {
             return Ok(Some(self.exec_branch(&instance)?));
         }
@@ -469,7 +468,7 @@ impl Interpreter<'_, '_> {
             .as_interface::<dyn crate::BranchTerminator>()
             .expect("checked by exec_control");
         let edges = terminator.successor_operands();
-        let (dest, arg_ids) = if instance.is::<crate::cfg::CondBranchOp>() {
+        let (dest, arg_ids) = if instance.is_operation(&crate::cfg::COND_BR) {
             let condition = self.decided_by(instance.operands()[0])?;
             let taken = condition.to_i64().unwrap_or_default() != 0;
             edges[if taken { 0 } else { 1 }].clone()
@@ -506,10 +505,10 @@ impl Interpreter<'_, '_> {
     }
 
     fn exec_ordered_for(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = OrderedForOp::from_op_instance(self.context.get_op(op_id));
-        let lower = self.counter_bound(op.lower_bound())?;
-        let upper = self.counter_bound(op.upper_bound())?;
-        let step = self.counter_bound(op.step())?;
+        let op = self.context.get_op(op_id);
+        let lower = self.counter_bound(crate::scf::ordered_for_countedloop_lower_bound(&op))?;
+        let upper = self.counter_bound(crate::scf::ordered_for_countedloop_upper_bound(&op))?;
+        let step = self.counter_bound(crate::scf::ordered_for_countedloop_step(&op))?;
 
         let instance = op.handle();
         let body_region = instance.regions()[0];
@@ -522,7 +521,7 @@ impl Interpreter<'_, '_> {
             .collect();
         let mut carried: Vec<Value> = self
             .context
-            .values_among(&op.inits())
+            .values_among(&crate::scf::ordered_for_inits(&op))
             .iter()
             .map(|&init| self.value_of(init))
             .collect::<Result<_>>()?;
@@ -617,14 +616,13 @@ impl Interpreter<'_, '_> {
     }
 
     fn exec_call(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = CallOp::from_op_instance(self.context.get_op(op_id));
-        let Value::Function(definition) = self.value_of(op.callee())? else {
+        let op = self.context.get_op(op_id);
+        let Value::Function(definition) = self.value_of(crate::func::call_callee(&op))? else {
             return Err(InterpError::Unsupported(
                 "a call whose callee is not a definition".into(),
             ));
         };
-        let arguments = op
-            .args()
+        let arguments = crate::func::call_args(&op)
             .iter()
             .map(|&arg| self.value_of(arg))
             .collect::<Result<_>>()?;
@@ -632,13 +630,13 @@ impl Interpreter<'_, '_> {
     }
 
     fn exec_round(&mut self, instance: &crate::OpHandle) -> Result<Flow> {
-        let op = crate::fp::ops::RoundOp::from_op_instance(instance.clone());
-        if !op.contract().reference_is_admissible() {
+        let op = instance.clone();
+        if !crate::fp::round_contract(&op).reference_is_admissible() {
             return Err(InterpError::Unsupported(
                 "fp.round reference does not satisfy its accuracy requirement".into(),
             ));
         }
-        let reference = op.reference_region();
+        let reference = crate::fp::round_reference_region(&op);
         for (port, capture) in reference.ports().iter().zip(instance.operands()) {
             if self.context.is_state_type(port.ty()) {
                 continue;
@@ -649,13 +647,13 @@ impl Interpreter<'_, '_> {
     }
 
     fn call_function(&mut self, function: OpId, arguments: Vec<Value>) -> Result<Vec<Value>> {
-        let func = FuncOp::from_op_instance(self.context.get_op(function));
+        let func = self.context.get_op(function);
         let body_region = function_region(self.context, function, 0);
         let params = region_arguments(self.context, body_region);
         if params.len() != arguments.len() {
             return Err(InterpError::Message(format!(
                 "@{} takes {} arguments, got {}",
-                func.symbol_name(),
+                crate::func::func_symbol_symbol_name(&func),
                 params.len(),
                 arguments.len()
             )));
@@ -676,7 +674,7 @@ impl Interpreter<'_, '_> {
             Flow::Values(values) if nodes => Ok(values),
             other => Err(InterpError::Message(format!(
                 "@{} ended without func.return ({other:?})",
-                func.symbol_name()
+                crate::func::func_symbol_symbol_name(&func)
             ))),
         };
         for (param, value) in saved {
@@ -715,7 +713,7 @@ impl Interpreter<'_, '_> {
         let definition = self.context.get_value(value).defining_op()?;
         self.context
             .get_op(definition)
-            .is::<FuncOp>()
+            .is_operation(&crate::func::FUNC)
             .then_some(Value::Function(definition))
     }
 
@@ -733,8 +731,9 @@ impl Interpreter<'_, '_> {
             )));
         }
         // A freeze reads poison, and so does a store of it: its address may not be.
-        let reads_poison = instance.is::<crate::builtin::FreezeOp>()
-            || (instance.is::<StoreOp>() && !matches!(operands.get(1), Some(Value::Poison)));
+        let reads_poison = instance.is_operation(&crate::builtin::FREEZE)
+            || (instance.is_operation(&crate::ptr::STORE)
+                && !matches!(operands.get(1), Some(Value::Poison)));
         if poisoned && !reads_poison {
             let accesses = instance.has_interface::<dyn crate::MemoryRead>()
                 || instance.has_interface::<dyn crate::MemoryWrite>()
@@ -761,10 +760,10 @@ impl Interpreter<'_, '_> {
         &self,
         instance: &crate::OpHandle,
         operands: &[Value],
-        condition: fn(&dyn Operation, &mut sem::SemGraph) -> Option<crate::NodeId>,
+        condition: fn(&crate::OpHandle, &mut sem::SemGraph) -> Option<crate::NodeId>,
     ) -> Result<Option<bool>> {
         let mut graph = sem::SemGraph::new();
-        if condition(instance.clone().as_dyn_op().as_ref(), &mut graph).is_none() {
+        if condition(instance, &mut graph).is_none() {
             return Ok(None);
         }
         if operands.iter().any(|value| matches!(value, Value::Poison)) {
@@ -786,12 +785,7 @@ impl Interpreter<'_, '_> {
     fn eval_semantic(&self, instance: &crate::OpHandle, operands: &[Value]) -> Result<Vec<Value>> {
         let spelled = format!("{}.{}", instance.dialect(), instance.name());
         let mut graph = sem::SemGraph::new();
-        if instance
-            .clone()
-            .as_dyn_op()
-            .semantic_expr(&mut graph)
-            .is_none()
-        {
+        if instance.semantic_expr(&mut graph).is_none() {
             return Err(InterpError::Unsupported(spelled));
         }
         let pointer_width = pointer_width(self.context, instance);
@@ -923,151 +917,273 @@ fn widen_int_to_type(
 
 // ── Leaf op implementations ────────────────────────────────────────────────
 
-impl Interp for ConstantOp {
-    fn evaluate(&self, _operands: &[Value], _state: &mut ExecutionState) -> Result<Vec<Value>> {
-        Ok(vec![Value::Int(self.constant_value())])
-    }
+pub(crate) fn constant_interp_evaluate(
+    operation: &tir::OpHandle,
+    _operands: &[Value],
+    _state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    Ok(vec![Value::Int(
+        crate::builtin::constant_constantlike_constant_value(operation),
+    )])
 }
 
-impl Interp for MakeTupleOp {
-    fn evaluate(&self, operands: &[Value], _state: &mut ExecutionState) -> Result<Vec<Value>> {
-        Ok(vec![Value::Tuple(operands.to_vec())])
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_ConstantOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::constant_interp_evaluate,
+    };
+
+pub(crate) fn make_tuple_interp_evaluate(
+    ______operation: &tir::OpHandle,
+    operands: &[Value],
+    _state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    Ok(vec![Value::Tuple(operands.to_vec())])
 }
 
-impl Interp for TupleGetOp {
-    fn evaluate(&self, operands: &[Value], _state: &mut ExecutionState) -> Result<Vec<Value>> {
-        let Value::Tuple(elements) = &operands[0] else {
-            return Err(InterpError::Message(
-                "tuple_get operand must be a tuple".into(),
-            ));
-        };
-        let element = elements.get(self.index() as usize).ok_or_else(|| {
-            InterpError::Message(format!("tuple_get index {} out of bounds", self.index()))
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_MakeTupleOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::make_tuple_interp_evaluate,
+    };
+
+pub(crate) fn tuple_get_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    _state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let Value::Tuple(elements) = &operands[0] else {
+        return Err(InterpError::Message(
+            "tuple_get operand must be a tuple".into(),
+        ));
+    };
+    let element = elements
+        .get(crate::builtin::tuple_get_index(operation) as usize)
+        .ok_or_else(|| {
+            InterpError::Message(format!(
+                "tuple_get index {} out of bounds",
+                crate::builtin::tuple_get_index(operation)
+            ))
         })?;
-        Ok(vec![element.clone()])
-    }
+    Ok(vec![element.clone()])
 }
 
-impl Interp for EntryStateOp {
-    fn evaluate(&self, _operands: &[Value], _state: &mut ExecutionState) -> Result<Vec<Value>> {
-        Ok(Vec::new())
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_TupleGetOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::tuple_get_interp_evaluate,
+    };
+
+pub(crate) fn entry_state_interp_evaluate(
+    ______operation: &tir::OpHandle,
+    _operands: &[Value],
+    _state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    Ok(Vec::new())
 }
 
-impl Interp for JoinOp {
-    fn evaluate(&self, _operands: &[Value], _state: &mut ExecutionState) -> Result<Vec<Value>> {
-        Ok(Vec::new())
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_EntryStateOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::entry_state_interp_evaluate,
+    };
+
+pub(crate) fn join_interp_evaluate(
+    ______operation: &tir::OpHandle,
+    _operands: &[Value],
+    _state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    Ok(Vec::new())
 }
 
-impl Interp for SplitOp {
-    fn evaluate(&self, _operands: &[Value], _state: &mut ExecutionState) -> Result<Vec<Value>> {
-        Ok(Vec::new())
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_JoinOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::join_interp_evaluate,
+    };
+
+pub(crate) fn split_interp_evaluate(
+    ______operation: &tir::OpHandle,
+    _operands: &[Value],
+    _state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    Ok(Vec::new())
 }
 
-impl Interp for AllocaOp {
-    fn evaluate(&self, _operands: &[Value], state: &mut ExecutionState) -> Result<Vec<Value>> {
-        let address = state.memory.alloc(self.size(), self.align());
-        Ok(vec![Value::Ptr(address)])
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_SplitOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::split_interp_evaluate,
+    };
+
+pub(crate) fn alloca_interp_evaluate(
+    operation: &tir::OpHandle,
+    _operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let address = state.memory.alloc(
+        crate::ptr::alloca_size(operation),
+        crate::ptr::alloca_align(operation),
+    );
+    Ok(vec![Value::Ptr(address)])
 }
 
-impl Interp for LoadOp {
-    fn evaluate(&self, operands: &[Value], state: &mut ExecutionState) -> Result<Vec<Value>> {
-        let context = self.handle().context.clone();
-        let Value::Ptr(address) = &operands[0] else {
-            return Err(InterpError::Message(
-                "ptr.load operand must be a pointer".into(),
-            ));
-        };
-        let ty = context.get_value(self.result()).ty();
-        let value = read_typed(&context, &state.memory, ty, *address)?;
-        Ok(vec![value])
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_AllocaOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::alloca_interp_evaluate,
+    };
+
+pub(crate) fn load_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let context = operation.handle().context.clone();
+    let Value::Ptr(address) = &operands[0] else {
+        return Err(InterpError::Message(
+            "ptr.load operand must be a pointer".into(),
+        ));
+    };
+    let ty = context.get_value(crate::ptr::load_result(operation)).ty();
+    let value = read_typed(&context, &state.memory, ty, *address)?;
+    Ok(vec![value])
 }
 
-impl Interp for StoreOp {
-    fn evaluate(&self, operands: &[Value], state: &mut ExecutionState) -> Result<Vec<Value>> {
-        let context = self.handle().context.clone();
-        let Value::Ptr(address) = &operands[1] else {
-            return Err(InterpError::Message(
-                "ptr.store destination must be a pointer".into(),
-            ));
-        };
-        let ty = context.get_value(self.operands()[0]).ty();
-        write_typed(&context, &mut state.memory, ty, *address, &operands[0])?;
-        Ok(Vec::new())
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_LoadOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::load_interp_evaluate,
+    };
+
+pub(crate) fn store_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let context = operation.handle().context.clone();
+    let Value::Ptr(address) = &operands[1] else {
+        return Err(InterpError::Message(
+            "ptr.store destination must be a pointer".into(),
+        ));
+    };
+    let ty = context.get_value(operation.operands()[0]).ty();
+    write_typed(&context, &mut state.memory, ty, *address, &operands[0])?;
+    Ok(Vec::new())
 }
 
-impl Interp for MemcpyOp {
-    fn evaluate(&self, operands: &[Value], state: &mut ExecutionState) -> Result<Vec<Value>> {
-        let Value::Ptr(destination) = &operands[0] else {
-            return Err(InterpError::Message(
-                "memcpy destination must be a pointer".into(),
-            ));
-        };
-        let Value::Ptr(source) = &operands[1] else {
-            return Err(InterpError::Message(
-                "memcpy source must be a pointer".into(),
-            ));
-        };
-        let size = operands[2].to_i64().unwrap_or_default() as u64;
-        state.memory.copy(*destination, *source, size)?;
-        Ok(Vec::new())
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_StoreOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::store_interp_evaluate,
+    };
+
+pub(crate) fn memcpy_interp_evaluate(
+    ______operation: &tir::OpHandle,
+    operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let Value::Ptr(destination) = &operands[0] else {
+        return Err(InterpError::Message(
+            "memcpy destination must be a pointer".into(),
+        ));
+    };
+    let Value::Ptr(source) = &operands[1] else {
+        return Err(InterpError::Message(
+            "memcpy source must be a pointer".into(),
+        ));
+    };
+    let size = operands[2].to_i64().unwrap_or_default() as u64;
+    state.memory.copy(*destination, *source, size)?;
+    Ok(Vec::new())
 }
 
-impl Interp for crate::ptr::FieldOp {
-    fn evaluate(&self, operands: &[Value], _: &mut ExecutionState) -> Result<Vec<Value>> {
-        let Value::Ptr(base) = &operands[0] else {
-            return Err(InterpError::Message(
-                "ptr.field base must be a pointer".into(),
-            ));
-        };
-        let offset = DataLayout::for_op(&self.handle().context, self.id())
-            .and_then(|layout| layout.offset_in_bits(self.ty(), &self.field()))
-            .ok_or_else(|| {
-                InterpError::Message(format!("no offset for field '{}'", self.field()))
-            })?;
-        Ok(vec![Value::Ptr(base.wrapping_add(offset / 8))])
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_MemcpyOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::memcpy_interp_evaluate,
+    };
+
+pub(crate) fn field_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    _: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let Value::Ptr(base) = &operands[0] else {
+        return Err(InterpError::Message(
+            "ptr.field base must be a pointer".into(),
+        ));
+    };
+    let offset = DataLayout::for_op(&operation.handle().context, operation.id())
+        .and_then(|layout| {
+            layout.offset_in_bits(
+                crate::ptr::field_ty(operation),
+                &crate::ptr::field_field(operation),
+            )
+        })
+        .ok_or_else(|| {
+            InterpError::Message(format!(
+                "no offset for field '{}'",
+                crate::ptr::field_field(operation)
+            ))
+        })?;
+    Ok(vec![Value::Ptr(base.wrapping_add(offset / 8))])
 }
 
-impl Interp for crate::ptr::CopyOp {
-    fn evaluate(&self, operands: &[Value], state: &mut ExecutionState) -> Result<Vec<Value>> {
-        let (Value::Ptr(destination), Value::Ptr(source)) = (&operands[0], &operands[1]) else {
-            return Err(InterpError::Message(
-                "ptr.copy operands must be pointers".into(),
-            ));
-        };
-        let bits = DataLayout::for_op(&self.handle().context, self.id())
-            .and_then(|layout| layout.size_in_bits(self.ty()))
-            .ok_or_else(|| InterpError::Message("ptr.copy of a type with no layout".into()))?;
-        state
-            .memory
-            .copy(*destination, *source, u64::from(bits) / 8)?;
-        Ok(Vec::new())
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_FieldOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::field_interp_evaluate,
+    };
+
+pub(crate) fn copy_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let (Value::Ptr(destination), Value::Ptr(source)) = (&operands[0], &operands[1]) else {
+        return Err(InterpError::Message(
+            "ptr.copy operands must be pointers".into(),
+        ));
+    };
+    let bits = DataLayout::for_op(&operation.handle().context, operation.id())
+        .and_then(|layout| layout.size_in_bits(crate::ptr::copy_ty(operation)))
+        .ok_or_else(|| InterpError::Message("ptr.copy of a type with no layout".into()))?;
+    state
+        .memory
+        .copy(*destination, *source, u64::from(bits) / 8)?;
+    Ok(Vec::new())
 }
 
-impl Interp for MemsetOp {
-    fn evaluate(&self, operands: &[Value], state: &mut ExecutionState) -> Result<Vec<Value>> {
-        let Value::Ptr(destination) = &operands[0] else {
-            return Err(InterpError::Message(
-                "memset destination must be a pointer".into(),
-            ));
-        };
-        let fill = operands[1].to_i64().unwrap_or_default() as u8;
-        let size = operands[2].to_i64().unwrap_or_default() as u64;
-        state
-            .memory
-            .write(*destination, &vec![fill; size as usize])?;
-        Ok(Vec::new())
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_CopyOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::copy_interp_evaluate,
+    };
+
+pub(crate) fn memset_interp_evaluate(
+    ______operation: &tir::OpHandle,
+    operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let Value::Ptr(destination) = &operands[0] else {
+        return Err(InterpError::Message(
+            "memset destination must be a pointer".into(),
+        ));
+    };
+    let fill = operands[1].to_i64().unwrap_or_default() as u8;
+    let size = operands[2].to_i64().unwrap_or_default() as u64;
+    state
+        .memory
+        .write(*destination, &vec![fill; size as usize])?;
+    Ok(Vec::new())
 }
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_MemsetOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::interp::memset_interp_evaluate,
+    };
 
 fn read_typed(
     context: &Context,

@@ -1,7 +1,7 @@
 //! Unit tests for the `tir-x86_64` backend's public API.
 
 use tir::backend::abi::ValueKind;
-use tir::backend::{symbol_body_blocks, SectionOp, SymbolOp};
+use tir::backend::{symbol_body_blocks, SECTION, SYMBOL};
 use tir::{Context, Operation};
 use tir_x86_64::{Feature, TargetConfig};
 
@@ -56,12 +56,12 @@ fn zero_count_shift_reads_prior_carry() {
         )
         .unwrap();
     let section = context
-        .get_op(module.body().op_ids()[0])
-        .as_op::<SectionOp>()
+        .get_op(tir::builtin::module_body(&module).op_ids()[0])
+        .as_operation(&SECTION)
         .unwrap();
     let symbol = context
-        .get_op(section.body().op_ids()[0])
-        .as_op::<SymbolOp>()
+        .get_op(tir::backend::section_body(&section).op_ids()[0])
+        .as_operation(&SYMBOL)
         .unwrap();
     let ops: Vec<_> = symbol_body_blocks(&context, &context.get_op(symbol.id()))
         .into_iter()

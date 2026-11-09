@@ -2,7 +2,7 @@
 
 use tir::{
     builtin::{ops, IntegerType},
-    sem::{AsSemExpr, SemGraph, SymKind, SymPayload},
+    sem::{SemGraph, SymKind, SymPayload},
     Context, Operation,
 };
 
@@ -118,7 +118,10 @@ fn binary_ops_convert_to_their_sem_kind() {
                         Default::default(),
                         tir::InsertionPoint::Root,
                     );
-                    (op.convert(g), op.id())
+                    (
+                        op.semantic_expr(g).expect("operation has semantics"),
+                        op.id(),
+                    )
                 }) as Convert,
                 stringify!($name),
             )
@@ -159,14 +162,16 @@ fn binary_ops_convert_to_their_sem_kind() {
 }
 
 // The cast's sem root and each child's kind with its constant value, if any.
-fn cast_sem<O: AsSemExpr>(
+fn cast_sem(
     from: u64,
-    cast: impl FnOnce(&Context, tir::ValueId) -> O,
+    cast: impl FnOnce(&Context, tir::ValueId) -> tir::OpHandle,
 ) -> (SymKind, Vec<(SymKind, Option<u64>)>) {
     let context = Context::with_default_dialects();
     let input = context.create_value(IntegerType::new(&context, from), None);
     let mut g = SemGraph::new();
-    let root = cast(&context, input.id()).convert(&mut g);
+    let root = cast(&context, input.id())
+        .semantic_expr(&mut g)
+        .expect("cast has semantics");
     let children = g
         .children(root)
         .map(|child| match g.get_leaf_data(child) {
@@ -244,8 +249,7 @@ fn trunci_sem_expr_is_low_bit_extract() {
 mod predicate {
     use tir::{
         attributes::{AttributeValue, Predicate},
-        builtin::ModuleOp,
-        parse::ir::parse_ir,
+        parse::ir::parse_operation,
         verify_op_tree, Context, Operation,
     };
 
@@ -259,8 +263,9 @@ mod predicate {
         )
     }
 
-    fn parse(context: &Context, body: &str) -> Result<ModuleOp, String> {
-        parse_ir::<ModuleOp>(context, &module(body)).map_err(|(_, error)| error.to_string())
+    fn parse(context: &Context, body: &str) -> Result<tir::OpHandle, String> {
+        parse_operation(context, &module(body), &tir::builtin::MODULE)
+            .map_err(|(_, error)| error.to_string())
     }
 
     fn verify(body: &str) -> Result<(), String> {
@@ -269,7 +274,7 @@ mod predicate {
         verify_op_tree(&context, module.id()).map_err(|error| error.to_string())
     }
 
-    fn compare(context: &Context, module: &ModuleOp) -> tir::OpHandle {
+    fn compare(context: &Context, module: &tir::OpHandle) -> tir::OpHandle {
         let body = |op| {
             context
                 .get_region(context.get_op(op).regions()[0])

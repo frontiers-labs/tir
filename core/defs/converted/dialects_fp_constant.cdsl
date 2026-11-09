@@ -1,0 +1,18 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type fp = Dialect;
+
+type constant_attributes = Record<{ bits: AttrUInt }>;
+extern fn constant_verifier(operation: Operation, context: Context) -> Validation;
+extern let constant_iface_ConstantLike: Interface;
+extern let constant_iface_Interp: Interface;
+extern let constant_iface_Speculatable: Interface;
+
+pub let fp::constant = {
+    signature: () -> AnyFloat,
+    attributes: { bits: { ty: AttrUInt, codec: uint_codec } },
+    verify: constant_verifier,
+    interfaces: [constant_iface_ConstantLike, constant_iface_Interp, constant_iface_Speculatable],
+};

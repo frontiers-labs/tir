@@ -10,21 +10,20 @@ mod intrinsics;
 
 use tir_symbolic::term::{no_carrier, valid};
 
-use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
+use crate::ty::{Ctor, Terms, TypeArg, TypeSpelling};
 use crate::{
-    Context, Error, MemoryRead, MemoryWrite, Operation, PromotableAllocation, ResourceAccess,
-    ResourceEffect, ResourceEffects, TypeId,
+    Context, Error, MemoryWrite, PromotableAllocation, ResourceAccess, ResourceEffect,
+    ResourceEffects, TypeId,
     attributes::{AttributeValue, Predicate},
-    dialect, operation,
+    dialect,
 };
 
 use crate as tir;
 
 pub mod ops {
     pub use super::{
-        AllocaOp, CmpOp, CopyOp, DisjointOp, FieldOp, LoadOp, MemcpyOp, MemsetOp, NullOp, PtrAddOp,
-        PtrDiffOp, StoreOp, alloca, cmp, copy, disjoint, field, load, memcpy, memset, null, ptradd,
-        ptrdiff, store,
+        ALLOCA, CMP, COPY, DISJOINT, FIELD, LOAD, MEMCPY, MEMSET, NULL, PTRADD, PTRDIFF, STORE,
+        alloca, cmp, copy, disjoint, field, load, memcpy, memset, null, ptradd, ptrdiff, store,
     };
 }
 
@@ -32,31 +31,26 @@ dialect! {
     PtrDialect {
         name: "ptr",
         operations: [
-            AllocaOp,
-            CmpOp,
-            NullOp,
-            PtrAddOp,
-            PtrDiffOp,
-            DisjointOp,
-            LoadOp,
-            StoreOp,
-            MemcpyOp,
-            MemsetOp,
-            FieldOp,
-            CopyOp,
+            ALLOCA,
+            CMP,
+            NULL,
+            PTRADD,
+            PTRDIFF,
+            DISJOINT,
+            LOAD,
+            STORE,
+            MEMCPY,
+            MEMSET,
+            FIELD,
+            COPY,
         ],
         types: [PtrType],
     }
 }
 
-static PTR: Ctor = Ctor::new(TypeCtor {
-    dialect: "ptr",
-    name: "p",
-    params: &[("pointee", Param::Opt(Kind::Data))],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static PTR: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_ptr_mod.cdsl", binding: constructors::PTR, hosts: { PTR_validate => valid, PTR_carrier => no_carrier } },
+);
 
 /// A pointer type, written `!ptr.p` (opaque) or `!ptr.p<!i32>` (typed). A typed
 /// pointer remembers its pointee so loads can recover their result type; an
@@ -99,13 +93,11 @@ impl PtrType {
     }
 
     pub fn spelling(context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: PTR.id(context),
-            keys: &["p"],
-            parse: |_, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |_, parser, context| {
                 use tir::parse::common::Cursor;
                 if !parser.parse_token("<") {
-                    return Ok(Self::opaque(context));
+                    return Ok(PtrType::opaque(context));
                 }
                 let pointee = parser
                     .parse_type(context)?
@@ -113,9 +105,9 @@ impl PtrType {
                 if !parser.parse_token(">") {
                     return Err((parser.span(), Error::ExpectedToken(">")));
                 }
-                Ok(Self::typed(context, pointee))
-            },
-            print: |spellings, ty, fmt| {
+                Ok(PtrType::typed(context, pointee))
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
                 fmt.write("ptr.p")?;
                 if let Some(pointee) = spellings.terms().child(ty, 0) {
                     fmt.write("<")?;
@@ -123,84 +115,174 @@ impl PtrType {
                     fmt.write(">")?;
                 }
                 Ok(())
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| PTR.id(context);
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_ptr_mod.cdsl", binding: spellings::PtrType, context: context, hosts: { PtrType_parse => __TIR_TYPE_PARSE, PtrType_print => __TIR_TYPE_PRINT, PtrType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
 
-operation! {
-    AllocaOp {
-        name: "alloca",
-        dialect: "ptr",
-        scheme: "() -> ptr.p<_>",
-        attributes: A {
-            size: "UInt",
-            align: "UInt",
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_ptr_mod.cdsl",
+    hosts: {
+        alloca_iface_PromotableAllocation => (PromotableAllocation, &crate::ptr::__TIR_IFACE_AllocaOp_PromotableAllocation),
+        alloca_iface_Interp => (crate :: interp :: Interp, &crate::interp::__TIR_IFACE_AllocaOp_Interp),
+        null_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("null_address")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "null_address" => (crate::ptr::null_null_address)(operation, graph),
+                    _ => None,
+                },
+            )
         },
-        results: R { result },
-        interfaces: [PromotableAllocation, crate::interp::Interp],
-        state: "out",
-    }
-}
-
-operation! {
-    NullOp {
-        name: "null",
-        dialect: "ptr",
-        scheme: "() -> ptr.p<_>",
-        results: R { result },
-        interfaces: [crate::ConstantLike],
-        sem: "(set result $null_address)",
-    }
-}
-
-impl crate::ConstantLike for NullOp {
-    fn constant_value(&self) -> tir::utils::APInt {
-        let context = self.0.context.clone();
-        let layout = crate::DataLayout::for_instance(&context, &self.0);
-        let width = layout.and_then(|layout| layout.pointer_size());
-        tir::utils::APInt::new(u64::from(width.unwrap_or(64)), 0)
-    }
-}
-
-impl NullOp {
-    fn null_address(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-        let context = self.0.context.clone();
-        let width = crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
-        let node = g.add_node(tir::sem::SymKind::Constant);
-        g.set_leaf_data(
-            node,
-            tir::sem::SymPayload::Int(tir::utils::APInt::new(u64::from(width), 0)),
-        );
-        Some(node)
-    }
-}
-
-operation! {
-    CmpOp {
-        name: "cmp",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, ptr.p<_>) -> int<1>",
-        attributes: A {
-            predicate: "Predicate in POINTER",
+        null_iface_ConstantLike => (crate :: ConstantLike, &crate::ptr::__TIR_IFACE_NullOp_ConstantLike),
+        cmp_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("cmp_expr")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "cmp_expr" => (crate::ptr::cmp_cmp_expr)(operation, graph),
+                    _ => None,
+                },
+            )
         },
-        operands: O { lhs, rhs },
-        results: R { result },
-        sem: "(set result $cmp_expr)",
-    }
+        ptradd_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[
+                    tir::sem::SemRecipeStep::Operand(0),
+                    tir::sem::SemRecipeStep::Operand(1),
+                    tir::sem::SemRecipeStep::Apply {
+                        kind: tir::sem::SymKind::Add,
+                        arguments: &[0, 1],
+                    },
+                ],
+                root: 2,
+            };
+            tir::sem::build_defined_recipe(operation, graph, &RECIPE)
+        },
+        ptradd_verifier => crate::ptr::ptradd_verify_impl,
+        ptradd_iface_Additive => (crate :: Additive, &crate::AdditiveCallbacks::DEFAULT),
+        ptrdiff_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[
+                    tir::sem::SemRecipeStep::Operand(0),
+                    tir::sem::SemRecipeStep::Operand(1),
+                    tir::sem::SemRecipeStep::Apply {
+                        kind: tir::sem::SymKind::Sub,
+                        arguments: &[0, 1],
+                    },
+                ],
+                root: 2,
+            };
+            tir::sem::build_defined_recipe(operation, graph, &RECIPE)
+        },
+        ptrdiff_verifier => crate::ptr::ptrdiff_verify_impl,
+        ptrdiff_iface_Subtractive => (crate :: Subtractive, &crate::SubtractiveCallbacks::DEFAULT),
+        disjoint_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[
+                    tir::sem::SemRecipeStep::Operand(0),
+                    tir::sem::SemRecipeStep::Operand(1),
+                    tir::sem::SemRecipeStep::Apply {
+                        kind: tir::sem::SymKind::Add,
+                        arguments: &[0, 1],
+                    },
+                    tir::sem::SemRecipeStep::Operand(2),
+                    tir::sem::SemRecipeStep::Apply {
+                        kind: tir::sem::SymKind::ULe,
+                        arguments: &[2, 3],
+                    },
+                    tir::sem::SemRecipeStep::Operand(2),
+                    tir::sem::SemRecipeStep::Operand(3),
+                    tir::sem::SemRecipeStep::Apply {
+                        kind: tir::sem::SymKind::Add,
+                        arguments: &[5, 6],
+                    },
+                    tir::sem::SemRecipeStep::Operand(0),
+                    tir::sem::SemRecipeStep::Apply {
+                        kind: tir::sem::SymKind::ULe,
+                        arguments: &[7, 8],
+                    },
+                    tir::sem::SemRecipeStep::Apply {
+                        kind: tir::sem::SymKind::Or,
+                        arguments: &[4, 9],
+                    },
+                ],
+                root: 10,
+            };
+            tir::sem::build_defined_recipe(operation, graph, &RECIPE)
+        },
+        disjoint_verifier => crate::ptr::disjoint_verify_impl,
+        store_verifier => crate::ptr::store_verify_impl,
+        store_iface_MemoryWrite => (MemoryWrite, &crate::ptr::__TIR_IFACE_StoreOp_MemoryWrite),
+        store_iface_ResourceEffects => (ResourceEffects, &crate::ptr::__TIR_IFACE_StoreOp_ResourceEffects),
+        store_iface_Interp => (crate :: interp :: Interp, &crate::interp::__TIR_IFACE_StoreOp_Interp),
+        memcpy_iface_ResourceEffects => (ResourceEffects, &crate::ptr::__TIR_IFACE_MemcpyOp_ResourceEffects),
+        memcpy_iface_Interp => (crate :: interp :: Interp, &crate::interp::__TIR_IFACE_MemcpyOp_Interp),
+        memcpy_iface_Intrinsic => (crate :: Intrinsic, &crate::ptr::intrinsics::__TIR_IFACE_MemcpyOp_Intrinsic),
+        memset_iface_MemoryWrite => (MemoryWrite, &crate::ptr::__TIR_IFACE_MemsetOp_MemoryWrite),
+        memset_iface_ResourceEffects => (ResourceEffects, &crate::ptr::__TIR_IFACE_MemsetOp_ResourceEffects),
+        memset_iface_Interp => (crate :: interp :: Interp, &crate::interp::__TIR_IFACE_MemsetOp_Interp),
+        memset_iface_Intrinsic => (crate :: Intrinsic, &crate::ptr::intrinsics::__TIR_IFACE_MemsetOp_Intrinsic),
+        field_iface_Interp => (crate :: interp :: Interp, &crate::interp::__TIR_IFACE_FieldOp_Interp),
+        field_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        copy_iface_ResourceEffects => (ResourceEffects, &crate::ptr::__TIR_IFACE_CopyOp_ResourceEffects),
+        copy_iface_Congruent => (crate :: Congruent, &crate::CongruentCallbacks::DEFAULT),
+        copy_iface_Interp => (crate :: interp :: Interp, &crate::interp::__TIR_IFACE_CopyOp_Interp),
+    },
 }
 
-impl CmpOp {
-    fn cmp_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-        let context = self.0.context.clone();
-        crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
-
-        crate::builtin::compare_expr(g, predicate(self)?, true)
-    }
+pub(crate) fn null_constantlike_constant_value(operation: &tir::OpHandle) -> tir::utils::APInt {
+    let context = operation.context.clone();
+    let layout = crate::DataLayout::for_instance(&context, operation);
+    let width = layout.and_then(|layout| layout.pointer_size());
+    tir::utils::APInt::new(u64::from(width.unwrap_or(64)), 0)
 }
 
-fn predicate(op: &impl Operation) -> Option<Predicate> {
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_NullOp_ConstantLike: crate::ConstantLikeCallbacks =
+    crate::ConstantLikeCallbacks {
+        constant_value: crate::ptr::null_constantlike_constant_value,
+    };
+
+pub(crate) fn null_null_address(
+    operation: &tir::OpHandle,
+    g: &mut tir::sem::SemGraph,
+) -> Option<tir::NodeId> {
+    let context = operation.context.clone();
+    let width = crate::DataLayout::for_instance(&context, operation)?.pointer_size()?;
+    let node = g.add_node(tir::sem::SymKind::Constant);
+    g.set_leaf_data(
+        node,
+        tir::sem::SymPayload::Int(tir::utils::APInt::new(u64::from(width), 0)),
+    );
+    Some(node)
+}
+
+pub(crate) fn cmp_cmp_expr(
+    operation: &tir::OpHandle,
+    g: &mut tir::sem::SemGraph,
+) -> Option<tir::NodeId> {
+    let context = operation.context.clone();
+    crate::DataLayout::for_instance(&context, operation)?.pointer_size()?;
+
+    crate::builtin::compare_expr(g, predicate(operation)?, true)
+}
+
+fn predicate(op: &tir::OpHandle) -> Option<Predicate> {
     match op.attr("predicate")? {
         AttributeValue::Predicate(value) => Some(value),
         _ => None,
@@ -210,48 +292,27 @@ fn predicate(op: &impl Operation) -> Option<Predicate> {
 // `base + offset` modulo 2^W, W the pointer width. The offset is exactly W bits
 // wide: a narrower or wider index is sign- or zero-extended or truncated by an
 // op of its own, so the IR spells which one the source language means.
-operation! {
-    PtrAddOp {
-        name: "ptradd",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, int<_>) -> ptr.p<_>",
-        verifier: "true",
-        operands: O { base, offset },
-        results: R { result },
-        interfaces: [crate::Additive],
-        sem: "(set result (add base offset))",
-    }
-}
-
-impl crate::Additive for PtrAddOp {}
 
 // `lhs - rhs` modulo 2^W, as a W-bit integer, W the pointer width. A narrower
 // or wider result is a truncation or extension of its own.
-operation! {
-    PtrDiffOp {
-        name: "ptrdiff",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, ptr.p<_>) -> int<_>",
-        verifier: "true",
-        operands: O { lhs, rhs },
-        results: R { result },
-        interfaces: [crate::Subtractive],
-        sem: "(set result (sub lhs rhs))",
-    }
+
+pub(crate) fn ptradd_verify_impl(
+    operation: &tir::OpHandle,
+    context: &Context,
+) -> Result<(), Error> {
+    pointer_sized(context, operation, &[operation.operands()[1]], "offset")
 }
 
-impl crate::Subtractive for PtrDiffOp {}
-
-impl tir::Verifiable for PtrAddOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        pointer_sized(context, &self.0, &[self.operands()[1]], "offset")
-    }
-}
-
-impl tir::Verifiable for PtrDiffOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        pointer_sized(context, &self.0, &[self.result()], "result")
-    }
+pub(crate) fn ptrdiff_verify_impl(
+    operation: &tir::OpHandle,
+    context: &Context,
+) -> Result<(), Error> {
+    pointer_sized(
+        context,
+        operation,
+        &[crate::ptr::ptrdiff_result(operation)],
+        "result",
+    )
 }
 
 /// The integer type of a pointer offset at `op`: as wide as the pointer the
@@ -299,66 +360,37 @@ fn pointer_sized(
 // runtime range check guarding a copy of a loop — emits this op, and the alias
 // analysis reads it by name rather than pattern-matching a tree of compares.
 // It reads addresses, not memory, so it is pure and takes no state.
-operation! {
-    DisjointOp {
-        name: "disjoint",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, int<_>, ptr.p<_>, int<_>) -> int<1>",
-        verifier: "true",
-        operands: O { lhs, lhs_size, rhs, rhs_size },
-        results: R { result },
-        sem: "(set result (or (ule (add lhs lhs_size) rhs) (ule (add rhs rhs_size) lhs)))",
+
+pub(crate) fn disjoint_verify_impl(
+    operation: &tir::OpHandle,
+    context: &Context,
+) -> Result<(), Error> {
+    let operands = operation.operands();
+    let (lhs_size, rhs_size) = (operands[1], operands[3]);
+    if context.get_value(lhs_size).ty() != context.get_value(rhs_size).ty() {
+        return Err(Error::VerificationError(
+            "ptr.disjoint sizes must have one type".to_string(),
+        ));
     }
+    pointer_sized(context, operation, &[lhs_size, rhs_size], "size")
 }
 
-impl tir::Verifiable for DisjointOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let operands = self.operands();
-        let (lhs_size, rhs_size) = (operands[1], operands[3]);
-        if context.get_value(lhs_size).ty() != context.get_value(rhs_size).ty() {
-            return Err(Error::VerificationError(
-                "ptr.disjoint sizes must have one type".to_string(),
-            ));
-        }
-        pointer_sized(context, &self.0, &[lhs_size, rhs_size], "size")
-    }
+tir::helpers::op_def! {
+    file: "defs/ptr-load.cdsl",
+    hosts: {
+        load_verifier => crate::ptr::load_verify_impl,
+        ops::MemoryRead => (crate::MemoryRead, &crate::ptr::__TIR_IFACE_LoadOp_MemoryRead),
+        ops::ResourceEffects => (crate::ResourceEffects, &crate::ptr::__TIR_IFACE_LoadOp_ResourceEffects),
+        ops::Interp => (crate::interp::Interp, &crate::interp::__TIR_IFACE_LoadOp_Interp),
+    },
 }
 
-operation! {
-    LoadOp {
-        name: "load",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>) -> _",
-        verifier: "true",
-        operands: O { ptr },
-        results: R { result },
-        interfaces: [MemoryRead, ResourceEffects, crate::interp::Interp],
-        state: "in_out",
-    }
+pub(crate) fn load_verify_impl(operation: &tir::OpHandle, context: &Context) -> Result<(), Error> {
+    reject_function_value(context, crate::ptr::load_result(operation), "load")
 }
 
-operation! {
-    StoreOp {
-        name: "store",
-        dialect: "ptr",
-        scheme: "(_, ptr.p<_>) -> ()",
-        verifier: "true",
-        operands: O { value, ptr },
-        interfaces: [MemoryWrite, ResourceEffects, crate::interp::Interp],
-        state: "in_out",
-    }
-}
-
-impl tir::Verifiable for LoadOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        reject_function_value(context, self.result(), "load")
-    }
-}
-
-impl tir::Verifiable for StoreOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        reject_function_value(context, self.operands()[0], "store")
-    }
+pub(crate) fn store_verify_impl(operation: &tir::OpHandle, context: &Context) -> Result<(), Error> {
+    reject_function_value(context, operation.operands()[0], "store")
 }
 
 fn reject_function_value(context: &Context, value: crate::ValueId, op: &str) -> Result<(), Error> {
@@ -372,106 +404,81 @@ fn reject_function_value(context: &Context, value: crate::ValueId, op: &str) -> 
 
 // Copy exactly `size` bytes between non-overlapping ranges. A zero-sized copy
 // accesses neither pointer. This operation has no volatile or atomic semantics.
-operation! {
-    MemcpyOp {
-        name: "memcpy",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, ptr.p<_>, int<64>) -> ()",
-        operands: O { destination, source, size },
-        interfaces: [ResourceEffects, crate::interp::Interp, crate::Intrinsic],
-        state: "in_out",
-    }
-}
-
-operation! {
-    MemsetOp {
-        name: "memset",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, int<8>, int<64>) -> ()",
-        operands: O { destination, value, size },
-        interfaces: [MemoryWrite, ResourceEffects, crate::interp::Interp, crate::Intrinsic],
-        state: "in_out",
-    }
-}
 
 // The address of field `field` of the `ty` that `base` points at: a field by
 // name, never a byte offset, which the layout in scope gives.
-operation! {
-    FieldOp {
-        name: "field",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>) -> ptr.p<_>",
-        attributes: A {
-            ty: "Type",
-            field: "Str",
-        },
-        operands: O { base },
-        results: R { result },
-        interfaces: [crate::interp::Interp, crate::Speculatable],
-    }
-}
-
-impl crate::Speculatable for FieldOp {}
 
 // Copy one `ty` from `source` to `destination`: a struct assignment, as many
 // bytes as the layout in scope gives `ty`.
-operation! {
-    CopyOp {
-        name: "copy",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, ptr.p<_>) -> ()",
-        attributes: A {
-            ty: "Type",
-        },
-        operands: O { destination, source },
-        interfaces: [ResourceEffects, crate::Congruent, crate::interp::Interp],
-        state: "in_out",
-    }
+
+pub(crate) fn copy_resourceeffects_resource_effects(
+    operation: &tir::OpHandle,
+) -> Vec<ResourceEffect> {
+    memory_effect(operation, ResourceAccess::Change)
 }
 
-impl crate::Congruent for CopyOp {}
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_CopyOp_ResourceEffects: crate::ResourceEffectsCallbacks =
+    crate::ResourceEffectsCallbacks {
+        resource_effects: crate::ptr::copy_resourceeffects_resource_effects,
+    };
 
-impl ResourceEffects for CopyOp {
-    fn resource_effects(&self) -> Vec<ResourceEffect> {
-        memory_effect(&self.0, ResourceAccess::Change)
-    }
+pub(crate) fn alloca_promotableallocation_promoted_location(
+    operation: &tir::OpHandle,
+) -> tir::ValueId {
+    crate::ptr::alloca_result(operation)
 }
 
-impl PromotableAllocation for AllocaOp {
-    fn promoted_location(&self) -> tir::ValueId {
-        self.result()
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_AllocaOp_PromotableAllocation: crate::PromotableAllocationCallbacks =
+    crate::PromotableAllocationCallbacks {
+        promoted_location: crate::ptr::alloca_promotableallocation_promoted_location,
+    };
+
+pub(crate) fn load_memoryread_read_location(operation: &tir::OpHandle) -> tir::ValueId {
+    operation.operands()[0]
 }
 
-impl MemoryRead for LoadOp {
-    fn read_location(&self) -> tir::ValueId {
-        self.operands()[0]
-    }
-
-    fn read_value(&self) -> tir::ValueId {
-        self.result()
-    }
+pub(crate) fn load_memoryread_read_value(operation: &tir::OpHandle) -> tir::ValueId {
+    crate::ptr::load_result(operation)
 }
 
-impl MemoryWrite for StoreOp {
-    fn write_location(&self) -> tir::ValueId {
-        self.operands()[1]
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_LoadOp_MemoryRead: crate::MemoryReadCallbacks =
+    crate::MemoryReadCallbacks {
+        read_location: crate::ptr::load_memoryread_read_location,
+        read_value: crate::ptr::load_memoryread_read_value,
+    };
 
-    fn written_value(&self) -> tir::ValueId {
-        self.operands()[0]
-    }
+pub(crate) fn store_memorywrite_write_location(operation: &tir::OpHandle) -> tir::ValueId {
+    operation.operands()[1]
 }
 
-impl MemoryWrite for MemsetOp {
-    fn write_location(&self) -> tir::ValueId {
-        self.operands()[0]
-    }
-
-    fn written_value(&self) -> tir::ValueId {
-        self.operands()[1]
-    }
+pub(crate) fn store_memorywrite_written_value(operation: &tir::OpHandle) -> tir::ValueId {
+    operation.operands()[0]
 }
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_StoreOp_MemoryWrite: crate::MemoryWriteCallbacks =
+    crate::MemoryWriteCallbacks {
+        write_location: crate::ptr::store_memorywrite_write_location,
+        written_value: crate::ptr::store_memorywrite_written_value,
+    };
+
+pub(crate) fn memset_memorywrite_write_location(operation: &tir::OpHandle) -> tir::ValueId {
+    operation.operands()[0]
+}
+
+pub(crate) fn memset_memorywrite_written_value(operation: &tir::OpHandle) -> tir::ValueId {
+    operation.operands()[1]
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_MemsetOp_MemoryWrite: crate::MemoryWriteCallbacks =
+    crate::MemoryWriteCallbacks {
+        write_location: crate::ptr::memset_memorywrite_write_location,
+        written_value: crate::ptr::memset_memorywrite_written_value,
+    };
 
 fn memory_effect(op: &tir::OpHandle, access: ResourceAccess) -> Vec<ResourceEffect> {
     vec![ResourceEffect {
@@ -482,26 +489,50 @@ fn memory_effect(op: &tir::OpHandle, access: ResourceAccess) -> Vec<ResourceEffe
     }]
 }
 
-impl ResourceEffects for LoadOp {
-    fn resource_effects(&self) -> Vec<ResourceEffect> {
-        memory_effect(&self.0, ResourceAccess::Read)
-    }
+pub(crate) fn load_resourceeffects_resource_effects(
+    operation: &tir::OpHandle,
+) -> Vec<ResourceEffect> {
+    memory_effect(operation, ResourceAccess::Read)
 }
 
-impl ResourceEffects for StoreOp {
-    fn resource_effects(&self) -> Vec<ResourceEffect> {
-        memory_effect(&self.0, ResourceAccess::Change)
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_LoadOp_ResourceEffects: crate::ResourceEffectsCallbacks =
+    crate::ResourceEffectsCallbacks {
+        resource_effects: crate::ptr::load_resourceeffects_resource_effects,
+    };
+
+pub(crate) fn store_resourceeffects_resource_effects(
+    operation: &tir::OpHandle,
+) -> Vec<ResourceEffect> {
+    memory_effect(operation, ResourceAccess::Change)
 }
 
-impl ResourceEffects for MemcpyOp {
-    fn resource_effects(&self) -> Vec<ResourceEffect> {
-        memory_effect(&self.0, ResourceAccess::Change)
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_StoreOp_ResourceEffects: crate::ResourceEffectsCallbacks =
+    crate::ResourceEffectsCallbacks {
+        resource_effects: crate::ptr::store_resourceeffects_resource_effects,
+    };
+
+pub(crate) fn memcpy_resourceeffects_resource_effects(
+    operation: &tir::OpHandle,
+) -> Vec<ResourceEffect> {
+    memory_effect(operation, ResourceAccess::Change)
 }
 
-impl ResourceEffects for MemsetOp {
-    fn resource_effects(&self) -> Vec<ResourceEffect> {
-        memory_effect(&self.0, ResourceAccess::Change)
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_MemcpyOp_ResourceEffects: crate::ResourceEffectsCallbacks =
+    crate::ResourceEffectsCallbacks {
+        resource_effects: crate::ptr::memcpy_resourceeffects_resource_effects,
+    };
+
+pub(crate) fn memset_resourceeffects_resource_effects(
+    operation: &tir::OpHandle,
+) -> Vec<ResourceEffect> {
+    memory_effect(operation, ResourceAccess::Change)
 }
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_MemsetOp_ResourceEffects: crate::ResourceEffectsCallbacks =
+    crate::ResourceEffectsCallbacks {
+        resource_effects: crate::ptr::memset_resourceeffects_resource_effects,
+    };

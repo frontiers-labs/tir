@@ -2157,6 +2157,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+ "tir-cdsl",
  "tir-symbolic",
 ]
 
@@ -2181,7 +2182,9 @@ version = "0.1.0"
 dependencies = [
  "chumsky",
  "smallvec",
+ "syn 2.0.118",
  "tir-adt",
+ "tir-cdsl",
  "tir-egglog",
  "tir-ir-schema",
 ]
@@ -2250,6 +2253,7 @@ dependencies = [
  "syn 2.0.118",
  "tir-adt",
  "tir-bench",
+ "tir-cdsl",
  "tir-symbolic",
 ]
 

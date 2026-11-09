@@ -2,15 +2,13 @@
 //! placing an op by its operands.
 
 use tir::{
-    builtin::{self, ops, ModuleOp},
-    interp,
-    scf::{LoopOp, SwitchOp},
-    Context, ExitTarget, NonLocalExit, OpId, Operation, RegionId, Terminator, ValueId,
+    builtin::{self, ops},
+    interp, Context, ExitTarget, NonLocalExit, OpId, Operation, RegionId, Terminator,
 };
 
 use super::fixtures::{self, module_ops};
 
-fn function(context: &Context, module: &ModuleOp) -> OpId {
+fn function(context: &Context, module: &tir::OpHandle) -> OpId {
     module_ops(context, module.id())[0]
 }
 
@@ -18,12 +16,12 @@ fn body_of(context: &Context, function: OpId) -> RegionId {
     context.get_op(function).regions()[0]
 }
 
-fn find<T: Operation>(context: &Context, region: RegionId) -> OpId {
+fn find(context: &Context, region: RegionId, descriptor: &tir::OpDefSpec) -> OpId {
     context
         .get_region(region)
         .op_ids()
         .into_iter()
-        .find(|&op| context.get_op(op).is::<T>())
+        .find(|&op| context.get_op(op).is_operation(descriptor))
         .expect("the region holds the op")
 }
 
@@ -53,7 +51,7 @@ fn growing_a_loop_port_extends_every_aligned_range() {
     let (context, module) = fixtures::parse(LOOP);
     let function = function(&context, &module);
     let body = body_of(&context, function);
-    let loop_op = find::<LoopOp>(&context, body);
+    let loop_op = find(&context, body, &tir::scf::LOOP);
     let init = context.get_region(body).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
@@ -89,15 +87,15 @@ fn growing_a_loop_state_port_keeps_the_carried_shape() {
     let (context, module) = fixtures::parse(LOOP);
     let function = function(&context, &module);
     let body = body_of(&context, function);
-    let loop_op = find::<LoopOp>(&context, body);
-    let entry = tir::state::EntryStateOp::new(
+    let loop_op = find(&context, body, &tir::scf::LOOP);
+    let entry = tir::state::r#entry_state(
         &context,
         vec![tir::builtin::StateType::memory(&context)],
         Default::default(),
         tir::InsertionPoint::Root,
     );
     context.insert(tir::InsertionPoint::Region(body), entry.id());
-    let chain = entry.result();
+    let chain = entry.state_results()[0];
 
     let state_type = context.get_value(chain).ty();
     let result = context.grow_port(loop_op, state_type, Some(chain), |_, port| port);
@@ -134,7 +132,7 @@ fn growing_a_gamma_port_forwards_to_and_joins_every_arm() {
     let (context, module) = fixtures::parse(SWITCH);
     let function = function(&context, &module);
     let body = body_of(&context, function);
-    let switch = find::<SwitchOp>(&context, body);
+    let switch = find(&context, body, &tir::scf::SWITCH);
     let input = context.get_region(body).ports()[1].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
@@ -154,63 +152,50 @@ fn growing_a_gamma_port_forwards_to_and_joins_every_arm() {
     tir::verify_op_tree(&context, module.id()).expect("the grown gamma verifies");
 }
 
-tir::helpers::operation! {
-    ExitOp {
-        name: "exit",
-        dialect: "test",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { values },
-        interfaces: [Terminator, NonLocalExit],
-    }
+tir::helpers::op_def! {
+    file: "../../core/defs/converted-tests/src_core_edits.cdsl",
+    hosts: {
+        exit_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        exit_iface_NonLocalExit => (NonLocalExit, &tir::NonLocalExitCallbacks { target: |_| ExitTarget::InnermostLoop, values: |operation| operation.operands().to_vec(), }),
+        exit_printer => exit_custom_print,
+        exit_parser => |parser, context, _definition| exit_custom_parse(parser, context),
+    },
 }
 
-impl ExitOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        fmt.write("test.exit\n")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
-        let _ = parser;
-        Ok(Box::new(ExitOp::new(
-            context,
-            vec![],
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
-    }
+fn exit_custom_print(
+    _operation: &tir::OpHandle,
+    fmt: &mut tir::IRFormatter,
+) -> Result<(), std::fmt::Error> {
+    fmt.write("test.exit\n")
 }
 
-impl Terminator for ExitOp {}
-
-impl NonLocalExit for ExitOp {
-    fn target(&self) -> ExitTarget {
-        ExitTarget::InnermostLoop
-    }
-
-    fn values(&self) -> Vec<ValueId> {
-        self.operands().to_vec()
-    }
+fn exit_custom_parse(
+    _parser: &mut tir::parse::text::Parser,
+    context: &Context,
+) -> Result<tir::OpHandle, (tir::parse::Span, tir::Error)> {
+    Ok(r#exit(
+        context,
+        vec![],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    ))
 }
 
 fn loop_with_exit() -> (Context, OpId, OpId) {
     let (context, module) = fixtures::parse(LOOP);
-    ExitOp::register_interfaces(&context);
+    context.register_operation(&EXIT);
     let function = function(&context, &module);
-    let loop_op = find::<LoopOp>(&context, body_of(&context, function));
+    let loop_op = find(&context, body_of(&context, function), &tir::scf::LOOP);
     let body = context.get_op(loop_op).regions()[0];
     let predicate = context.get_region(body).results()[0];
-    let exit = ExitOp::new(
+    let exit = r#exit(
         &context,
         vec![],
         Default::default(),
         tir::InsertionPoint::Root,
     );
     let arm = |ops: Vec<OpId>| context.create_nodes_region(vec![], ops, vec![]).id();
-    let conditional = tir::scf::SwitchOp::new(
+    let conditional = tir::scf::r#switch(
         &context,
         predicate,
         vec![],
@@ -265,7 +250,9 @@ fn add_auto_places_an_op_where_its_operands_meet() {
     let (context, module) = fixtures::parse(NESTED);
     let function = function(&context, &module);
     let outer = body_of(&context, function);
-    let inner = context.get_op(find::<LoopOp>(&context, outer)).regions()[0];
+    let inner = context
+        .get_op(find(&context, outer, &tir::scf::LOOP))
+        .regions()[0];
     let argument = context.get_region(outer).ports()[0].id();
     let port = context.get_region(inner).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
@@ -297,7 +284,7 @@ fn add_auto_pins_an_op_to_its_state() {
     let (context, module) = fixtures::parse(NESTED);
     let function = function(&context, &module);
     let outer = body_of(&context, function);
-    let loop_op = find::<LoopOp>(&context, outer);
+    let loop_op = find(&context, outer, &tir::scf::LOOP);
     let chain = context.grow_port(
         loop_op,
         tir::builtin::StateType::memory(&context),
@@ -351,7 +338,7 @@ fn growing_a_counted_loop_port_lands_before_its_bounds() {
     let (context, module) = fixtures::parse(COUNTED);
     let function = function(&context, &module);
     let body = body_of(&context, function);
-    let for_op = find::<tir::scf::ForOp>(&context, body);
+    let for_op = find(&context, body, &tir::scf::FOR);
     let ports = context.get_region(body).ports();
     let (lb, ub, step) = (ports[0].id(), ports[1].id(), ports[2].id());
     let i32_ty = builtin::IntegerType::new(&context, 32);

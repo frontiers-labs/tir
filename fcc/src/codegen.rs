@@ -16,9 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tir::NodeId;
 use tir::attributes::AttributeValue;
-use tir::builtin::{
-    FloatType, FnType, IntegerType, ModuleOp, NamedType, TupleType, UnitType, ops as b,
-};
+use tir::builtin::{FloatType, FnType, IntegerType, NamedType, TupleType, UnitType, ops as b};
 use tir::func::ops as func_ops;
 use tir::ptr::PtrType;
 use tir::{Context, Operation, TypeId, ValueId};
@@ -124,9 +122,9 @@ impl Symbols {
         value
     }
 
-    fn bind(self, context: &Context, module: &ModuleOp) {
+    fn bind(self, context: &Context, module: &tir::OpHandle) {
         let mut defined = HashMap::new();
-        for op in module.body().iter(context.clone()) {
+        for op in b::module_body(module).iter(context.clone()) {
             let Some(symbol) = op.clone().as_interface::<dyn tir::Symbol>() else {
                 continue;
             };
@@ -147,12 +145,16 @@ impl Symbols {
                     ret,
                     &params,
                     Default::default(),
-                    module.body().end(),
+                    b::module_body(module).end(),
                 )
                 .id(),
-                None => {
-                    b::global_external(context, &name, Default::default(), module.body().end()).id()
-                }
+                None => b::global_external(
+                    context,
+                    &name,
+                    Default::default(),
+                    b::module_body(module).end(),
+                )
+                .id(),
             };
             bindings.insert(placeholder, context.get_op(declaration).results()[0]);
         }
@@ -199,12 +201,9 @@ struct FnCodegen<'a> {
     values: HashMap<NodeId, LoweredExpr>,
 }
 
-pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnostic> {
+pub fn codegen(context: &Context, typed: &TypedAst) -> Result<tir::OpHandle, Diagnostic> {
     let ast = typed.ast();
-    let module = context
-        .get_op(typed.layouts().module().id())
-        .as_op::<ModuleOp>()
-        .expect("sema's module is a module");
+    let module = context.get_op(typed.layouts().module().id());
 
     let root = ast.root().ok_or_else(EmptyTranslationUnit::new)?;
     let mut items = Vec::new();
@@ -309,7 +308,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     ),
                 ],
             },
-            module.body().end(),
+            b::module_body(&module).end(),
         );
     }
 
@@ -333,7 +332,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     sig.ret.ty,
                     &sig.argument_types(context),
                     Default::default(),
-                    module.body().end(),
+                    b::module_body(&module).end(),
                 );
             }
             AstKind::Function => {
@@ -345,7 +344,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     &globals,
                     &global_strings,
                     &mut symbols,
-                    module.body().end(),
+                    b::module_body(&module).end(),
                 )?;
                 if internal_functions.contains(&node_entity(typed, item)) {
                     let mut attributes = func_op.attributes().to_vec();
@@ -375,7 +374,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                             context,
                             &global.name,
                             Default::default(),
-                            module.body().end(),
+                            b::module_body(&module).end(),
                         );
                         continue;
                     }
@@ -395,7 +394,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                             size,
                             align,
                             parts,
-                            module.body().end(),
+                            b::module_body(&module).end(),
                         );
                     }
                     continue;
@@ -459,7 +458,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     data.bytes,
                     align,
                     parts,
-                    module.body().end(),
+                    b::module_body(&module).end(),
                 );
             }
             AstKind::RecordDecl | AstKind::EnumDecl | AstKind::Typedef | AstKind::Attribute => {}
@@ -467,7 +466,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
         }
     }
     symbols.bind(context, &module);
-    b::module_end(context, Default::default(), module.body().end());
+    b::module_end(context, Default::default(), b::module_body(&module).end());
     Ok(module)
 }
 
@@ -645,7 +644,7 @@ fn lower_function(
         symbols,
         typed,
         ast,
-        builder: func_op.body(),
+        builder: func_ops::func_body(&func_op),
         locals: HashMap::new(),
         globals,
         strings,

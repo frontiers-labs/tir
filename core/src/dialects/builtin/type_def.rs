@@ -12,50 +12,30 @@ use tir_symbolic::term::{ctor, no_carrier, valid};
 
 use crate::attributes::AttributeValue;
 use crate::parse::common::Cursor;
-use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
-use crate::{
-    Context, Error, IRFormatter, Operation, Symbol, TypeId, Visibility, dialect, operation,
-};
+use crate::ty::{Ctor, Terms, TypeArg, TypeSpelling};
+use crate::{Context, Error, IRFormatter, Symbol, TypeId, Visibility, dialect};
 
 use crate as tir;
 
 dialect! {
     TypeDialect {
         name: "type",
-        operations: [TypeDefOp],
+        operations: [DEF],
         types: [],
     }
 }
 
-static STRUCT: Ctor = Ctor::new(TypeCtor {
-    dialect: "type",
-    name: "struct",
-    params: &[
-        ("fields", Param::Fields),
-        ("packed", Param::Opt(Kind::Bool)),
-    ],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static STRUCT: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_builtin_type_def.cdsl", binding: constructors::STRUCT, hosts: { STRUCT_validate => valid, STRUCT_carrier => no_carrier } },
+);
 
-static UNION: Ctor = Ctor::new(TypeCtor {
-    dialect: "type",
-    name: "union",
-    params: &[("fields", Param::Fields)],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static UNION: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_builtin_type_def.cdsl", binding: constructors::UNION, hosts: { UNION_validate => valid, UNION_carrier => no_carrier } },
+);
 
-static VARIANT: Ctor = Ctor::new(TypeCtor {
-    dialect: "type",
-    name: "variant",
-    params: &[("fields", Param::Fields), ("tag", Param::Opt(Kind::Data))],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static VARIANT: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_builtin_type_def.cdsl", binding: constructors::VARIANT, hosts: { VARIANT_validate => valid, VARIANT_carrier => no_carrier } },
+);
 
 /// `!Name` or `!Name<args>`: the type a `type.def` of the enclosing module
 /// declares.
@@ -107,13 +87,11 @@ impl NamedType {
     }
 
     pub fn spelling(_context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: ctor::NAMED,
-            // The parser reads a name no spelling claims as a named type.
-            keys: &[],
-            parse: |_, parser, _| Err((parser.span(), Error::ExpectedType)),
-            print: |spellings, ty, fmt| {
-                let named = Self::view(spellings, ty).expect("a named type");
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser =
+                |_, parser, _| Err((parser.span(), Error::ExpectedType));
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
+                let named = NamedType::view(spellings, ty).expect("a named type");
                 fmt.write(&named.name)?;
                 if named.args.is_empty() {
                     return Ok(());
@@ -126,8 +104,9 @@ impl NamedType {
                     spellings.print_arg(arg, fmt)?;
                 }
                 fmt.write(">")
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId = |_context| ctor::NAMED;
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_type_def.cdsl", binding: spellings::NamedType, context: _context, hosts: { NamedType_parse => __TIR_TYPE_PARSE, NamedType_print => __TIR_TYPE_PRINT, NamedType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
@@ -235,10 +214,8 @@ impl AggregateType {
     }
 
     pub fn spelling(context: &Context, kind: AggregateKind) -> TypeSpelling {
-        TypeSpelling {
-            ctor: kind.ctor().id(context),
-            keys: kind.keys(),
-            parse: |mnemonic, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |mnemonic, parser, context| {
                 let kind = match mnemonic {
                     "struct" => AggregateKind::Struct,
                     "union" => AggregateKind::Union,
@@ -292,9 +269,9 @@ impl AggregateType {
                     .terms()
                     .intern(kind.ctor().id(context), args)
                     .map_err(|message| (parser.span(), Error::VerificationError(message)))
-            },
-            print: |spellings, ty, fmt| {
-                let Some(aggregate) = Self::view(spellings, ty) else {
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
+                let Some(aggregate) = AggregateType::view(spellings, ty) else {
                     return spellings.print_generic(ty, fmt);
                 };
                 fmt.write(format!("{}<{{", aggregate.kind.keys()[0]))?;
@@ -321,8 +298,24 @@ impl AggregateType {
                     }
                 }
                 fmt.write(">")
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID_STRUCT: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| STRUCT.id(context);
+            const __TIR_TYPE_CTOR_ID_UNION: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| UNION.id(context);
+            const __TIR_TYPE_CTOR_ID_VARIANT: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| VARIANT.id(context);
+            match kind {
+                AggregateKind::Struct => {
+                    ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_type_def.cdsl", binding: spellings::AggregateType_Struct, context: context, hosts: { AggregateType_parse => __TIR_TYPE_PARSE, AggregateType_print => __TIR_TYPE_PRINT, AggregateType_Struct_ctor_id => __TIR_TYPE_CTOR_ID_STRUCT } }
+                }
+                AggregateKind::Union => {
+                    ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_type_def.cdsl", binding: spellings::AggregateType_Union, context: context, hosts: { AggregateType_parse => __TIR_TYPE_PARSE, AggregateType_print => __TIR_TYPE_PRINT, AggregateType_Union_ctor_id => __TIR_TYPE_CTOR_ID_UNION } }
+                }
+                AggregateKind::Variant => {
+                    ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_type_def.cdsl", binding: spellings::AggregateType_Variant, context: context, hosts: { AggregateType_parse => __TIR_TYPE_PARSE, AggregateType_print => __TIR_TYPE_PRINT, AggregateType_Variant_ctor_id => __TIR_TYPE_CTOR_ID_VARIANT } }
+                }
+            }
         }
     }
 }
@@ -417,30 +410,14 @@ const PARAM_KINDS: [&str; 4] = ["fields", "data", "nat", "bool"];
 // A definition with no body is incomplete: a pointer can point at it, nothing
 // can hold it. The core type definitions, named after the
 // aggregate constructors, give their layout regions.
-operation! {
-    TypeDefOp {
-        name: "def",
-        dialect: "type",
-        scheme: "() -> ()",
-        format: "custom",
-        verifier: "true",
-        interfaces: [Symbol],
-        attributes: A {
-            sym_name: "Str",
-            // [[name, kind]] or [[name, kind, default]]; absent when ground.
-            params: "?Array",
-            // `packed`, `align` (bits).
-            layout: "?Dict",
-            // Absent: an incomplete type, pointers only.
-            body: "?Type",
-        },
-        regions: R {
-            region: Region {
-                kind: Blocks,
-                variadic: true,
-            }
-        },
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_builtin_type_def.cdsl",
+    hosts: {
+        def_verifier => crate::builtin::def_verify_impl,
+        def_iface_Symbol => (Symbol, &crate::builtin::__TIR_IFACE_TypeDefOp_Symbol),
+        def_printer => crate::builtin::def_custom_print,
+        def_parser => |parser, context, _definition| crate::builtin::def_custom_parse(parser, context),
+    },
 }
 
 /// A `type.def` of `name` with `body`, or an incomplete one.
@@ -450,7 +427,7 @@ pub fn type_def(
     body: Option<TypeId>,
     mut parts: tir::NewOpParts,
     insertion: tir::InsertionPoint,
-) -> TypeDefOp {
+) -> crate::OpHandle {
     if let Some(body) = body {
         define(context, name, body);
         parts.attributes.insert(
@@ -458,7 +435,7 @@ pub fn type_def(
             context.named_attribute("body", AttributeValue::Type(body)),
         );
     }
-    TypeDefOp::new(context, name, vec![], parts, insertion)
+    r#def(context, name, vec![], parts, insertion)
 }
 
 pub(crate) fn define(context: &Context, name: &str, body: TypeId) {
@@ -466,333 +443,337 @@ pub(crate) fn define(context: &Context, name: &str, body: TypeId) {
     terms.define(terms.name(name), terms.kind(body));
 }
 
-impl Symbol for TypeDefOp {
-    // A type's symbol is spelled with its `!`, so types and values never
-    // share a name.
-    fn symbol_name(&self) -> String {
-        format!("!{}", self.sym_name())
-    }
+pub(crate) fn def_symbol_symbol_name(operation: &tir::OpHandle) -> String {
+    format!("!{}", crate::builtin::def_sym_name(operation))
+}
 
-    fn symbol_signature(&self) -> Option<Vec<TypeId>> {
-        None
-    }
+pub(crate) fn def_symbol_symbol_signature(___operation: &tir::OpHandle) -> Option<Vec<TypeId>> {
+    None
+}
 
-    fn symbol_result_type(&self) -> Option<TypeId> {
-        None
-    }
+pub(crate) fn def_symbol_symbol_result_type(___operation: &tir::OpHandle) -> Option<TypeId> {
+    None
+}
 
-    fn symbol_visibility(&self) -> Visibility {
-        Visibility::Public
-    }
+pub(crate) fn def_symbol_symbol_visibility(___operation: &tir::OpHandle) -> Visibility {
+    Visibility::Public
+}
 
-    fn is_definition(&self) -> bool {
-        self.body().is_some()
+pub(crate) fn def_symbol_is_definition(operation: &tir::OpHandle) -> bool {
+    crate::builtin::def_body(operation).is_some()
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_TypeDefOp_Symbol: crate::SymbolCallbacks = crate::SymbolCallbacks {
+    symbol_name: crate::builtin::def_symbol_symbol_name,
+    symbol_signature: crate::builtin::def_symbol_symbol_signature,
+    symbol_result_type: crate::builtin::def_symbol_symbol_result_type,
+    symbol_visibility: crate::builtin::def_symbol_symbol_visibility,
+    is_definition: crate::builtin::def_symbol_is_definition,
+};
+
+/// The generic parameters as `(name, kind)`.
+pub fn def_params(operation: &tir::OpHandle) -> Vec<(String, String)> {
+    let Some(AttributeValue::Array(params)) = operation.attr("params") else {
+        return vec![];
+    };
+    params
+        .iter()
+        .filter_map(|param| match param {
+            AttributeValue::Array(param) => match &**param {
+                [AttributeValue::Str(name), AttributeValue::Str(kind), ..] => {
+                    Some((name.to_string(), kind.to_string()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// The default of parameter `index`, for a constructor's optional one.
+pub fn def_param_default(operation: &tir::OpHandle, index: usize) -> Option<AttributeValue> {
+    let Some(AttributeValue::Array(params)) = operation.attr("params") else {
+        return None;
+    };
+    match params.get(index)? {
+        AttributeValue::Array(param) => param.get(2).cloned(),
+        _ => None,
     }
 }
 
-impl TypeDefOp {
-    /// The generic parameters as `(name, kind)`.
-    pub fn params(&self) -> Vec<(String, String)> {
-        let Some(AttributeValue::Array(params)) = self.attr("params") else {
-            return vec![];
-        };
-        params
-            .iter()
-            .filter_map(|param| match param {
-                AttributeValue::Array(param) => match &**param {
-                    [AttributeValue::Str(name), AttributeValue::Str(kind), ..] => {
-                        Some((name.to_string(), kind.to_string()))
-                    }
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect()
+/// The `layout {..}` options.
+pub fn def_layout_options(operation: &tir::OpHandle) -> BTreeMap<String, AttributeValue> {
+    match operation.attr("layout") {
+        Some(AttributeValue::Dict(options)) => *options,
+        _ => BTreeMap::new(),
     }
+}
 
-    /// The default of parameter `index`, for a constructor's optional one.
-    pub fn param_default(&self, index: usize) -> Option<AttributeValue> {
-        let Some(AttributeValue::Array(params)) = self.attr("params") else {
-            return None;
-        };
-        match params.get(index)? {
-            AttributeValue::Array(param) => param.get(2).cloned(),
-            _ => None,
-        }
+pub fn def_packed(operation: &tir::OpHandle) -> bool {
+    crate::builtin::def_layout_options(operation).get("packed") == Some(&AttributeValue::Bool(true))
+}
+
+/// The alignment the options raise the definition to, in bits.
+pub fn def_align(operation: &tir::OpHandle) -> Option<u64> {
+    crate::builtin::def_layout_options(operation)
+        .get("align")?
+        .as_int()?
+        .try_into()
+        .ok()
+}
+
+/// The region computing the layout, when the definition has its own.
+pub fn def_layout_region(operation: &tir::OpHandle) -> Option<tir::RegionId> {
+    operation.regions().first().copied()
+}
+
+/// The body with `args` for the parameters: what `!Name<args>` stands for.
+pub fn def_expand(operation: &tir::OpHandle, args: &[TypeArg]) -> Option<TypeId> {
+    let body = crate::builtin::def_body(operation)?;
+    if args.is_empty() {
+        return Some(body);
     }
+    substitute(&operation.context, &TypeArg::Type(body), args)
+        .ok()?
+        .as_type()
+}
 
-    /// The `layout {..}` options.
-    pub fn layout_options(&self) -> BTreeMap<String, AttributeValue> {
-        match self.attr("layout") {
-            Some(AttributeValue::Dict(options)) => *options,
-            _ => BTreeMap::new(),
-        }
-    }
-
-    pub fn packed(&self) -> bool {
-        self.layout_options().get("packed") == Some(&AttributeValue::Bool(true))
-    }
-
-    /// The alignment the options raise the definition to, in bits.
-    pub fn align(&self) -> Option<u64> {
-        self.layout_options()
-            .get("align")?
-            .as_int()?
-            .try_into()
-            .ok()
-    }
-
-    /// The region computing the layout, when the definition has its own.
-    pub fn layout_region(&self) -> Option<tir::RegionId> {
-        self.0.regions().first().copied()
-    }
-
-    /// The body with `args` for the parameters: what `!Name<args>` stands for.
-    pub fn expand(&self, args: &[TypeArg]) -> Option<TypeId> {
-        let body = self.body()?;
-        if args.is_empty() {
-            return Some(body);
-        }
-        substitute(&self.0.context, &TypeArg::Type(body), args)
-            .ok()?
-            .as_type()
-    }
-
-    fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.clone();
-        fmt.write(format!("type.def !{}", self.sym_name()))?;
-        let params = self.params();
-        if !params.is_empty() {
-            fmt.write("<")?;
-            for (index, (name, kind)) in params.iter().enumerate() {
-                if index > 0 {
-                    fmt.write(", ")?;
-                }
-                fmt.write(format!("{name}: {kind}"))?;
-                if let Some(default) = self.param_default(index) {
-                    fmt.write(" = ")?;
-                    default.print(fmt, &context)?;
-                }
-            }
-            fmt.write(">")?;
-        }
-        let options = self.layout_options();
-        if !options.is_empty() {
-            fmt.write(" layout {")?;
-            for (index, (key, value)) in options.iter().enumerate() {
-                if index > 0 {
-                    fmt.write(", ")?;
-                }
-                fmt.write(key)?;
-                if *value != AttributeValue::Bool(true) {
-                    fmt.write(" = ")?;
-                    value.print(fmt, &context)?;
-                }
-            }
-            fmt.write("}")?;
-        }
-        fmt.set_type_params(params.into_iter().map(|(name, _)| name).collect());
-        if let Some(body) = self.body() {
-            fmt.write(" = ")?;
-            context.print_type(body, fmt)?;
-        }
-        fmt.set_type_params(vec![]);
-        let Some(region) = self.layout_region() else {
-            return fmt.write("\n");
-        };
-        fmt.write(" layout (")?;
-        let arguments = context.get_region(region).value_arguments();
-        for (index, argument) in arguments.iter().enumerate() {
+pub(crate) fn def_custom_print(
+    operation: &tir::OpHandle,
+    fmt: &mut IRFormatter,
+) -> Result<(), std::fmt::Error> {
+    let context = operation.context.clone();
+    fmt.write(format!(
+        "type.def !{}",
+        crate::builtin::def_sym_name(operation)
+    ))?;
+    let params = crate::builtin::def_params(operation);
+    if !params.is_empty() {
+        fmt.write("<")?;
+        for (index, (name, kind)) in params.iter().enumerate() {
             if index > 0 {
                 fmt.write(", ")?;
             }
-            fmt.write(format!("%{}: ", argument.id().number()))?;
-            context.print_type(argument.ty(), fmt)?;
+            fmt.write(format!("{name}: {kind}"))?;
+            if let Some(default) = crate::builtin::def_param_default(operation, index) {
+                fmt.write(" = ")?;
+                default.print(fmt, &context)?;
+            }
         }
-        fmt.write(")")?;
-        tir::region_format::print_op_region(fmt, &context, self, 0)
+        fmt.write(">")?;
+    }
+    let options = crate::builtin::def_layout_options(operation);
+    if !options.is_empty() {
+        fmt.write(" layout {")?;
+        for (index, (key, value)) in options.iter().enumerate() {
+            if index > 0 {
+                fmt.write(", ")?;
+            }
+            fmt.write(key)?;
+            if *value != AttributeValue::Bool(true) {
+                fmt.write(" = ")?;
+                value.print(fmt, &context)?;
+            }
+        }
+        fmt.write("}")?;
+    }
+    fmt.set_type_params(params.into_iter().map(|(name, _)| name).collect());
+    if let Some(body) = crate::builtin::def_body(operation) {
+        fmt.write(" = ")?;
+        context.print_type(body, fmt)?;
+    }
+    fmt.set_type_params(vec![]);
+    let Some(region) = crate::builtin::def_layout_region(operation) else {
+        return fmt.write("\n");
+    };
+    fmt.write(" layout (")?;
+    let arguments = context.get_region(region).value_arguments();
+    for (index, argument) in arguments.iter().enumerate() {
+        if index > 0 {
+            fmt.write(", ")?;
+        }
+        fmt.write(format!("%{}: ", argument.id().number()))?;
+        context.print_type(argument.ty(), fmt)?;
+    }
+    fmt.write(")")?;
+    tir::region_format::print_op_region(fmt, &context, operation, 0)
+}
+
+pub(crate) fn def_custom_parse(
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+) -> Result<tir::OpHandle, (tir::parse::Span, Error)> {
+    if !parser.parse_token("!") {
+        return Err((parser.span(), Error::ExpectedToken("!")));
+    }
+    let name = parser
+        .parse_ident()
+        .ok_or_else(|| (parser.span(), Error::ExpectedToken("type name")))?
+        .to_string();
+    let name = parser.parse_renamed(&name).unwrap_or(name);
+    let params = parser
+        .parse_delimited("<", ">", |parser| {
+            let name = parser
+                .parse_ident()
+                .ok_or_else(|| (parser.span(), Error::ExpectedToken("parameter name")))?
+                .to_string();
+            if !parser.parse_token(":") {
+                return Err((parser.span(), Error::ExpectedToken(":")));
+            }
+            let kind = parser
+                .parse_ident()
+                .ok_or_else(|| (parser.span(), Error::ExpectedToken("parameter kind")))?
+                .to_string();
+            let default = match parser.parse_token("=") {
+                true => Some(
+                    parser
+                        .parse_attribute_value(context)?
+                        .ok_or_else(|| (parser.span(), Error::ExpectedToken("a default")))?,
+                ),
+                false => None,
+            };
+            Ok((name, kind, default))
+        })?
+        .unwrap_or_default();
+    parser.type_defs.insert(name.clone());
+    let mut parts = tir::NewOpParts::default();
+    let mut regions = vec![];
+    if !params.is_empty() {
+        let params: Vec<AttributeValue> = params
+            .iter()
+            .map(|(name, kind, default)| {
+                let mut param = vec![
+                    AttributeValue::from(name.as_str()),
+                    AttributeValue::from(kind.as_str()),
+                ];
+                param.extend(default.clone());
+                AttributeValue::Array(param.into())
+            })
+            .collect();
+        parts
+            .attributes
+            .push(context.named_attribute("params", AttributeValue::Array(params.into())));
     }
 
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        if !parser.parse_token("!") {
-            return Err((parser.span(), Error::ExpectedToken("!")));
-        }
-        let name = parser
-            .parse_ident()
-            .ok_or_else(|| (parser.span(), Error::ExpectedToken("type name")))?
-            .to_string();
-        let name = parser.parse_renamed(&name).unwrap_or(name);
-        let params = parser
-            .parse_delimited("<", ">", |parser| {
+    let mark = parser.pos();
+    if parser.parse_token("layout")
+        && let Some(options) = parser.parse_delimited("{", "}", |parser| {
+            let key = parser
+                .parse_ident()
+                .ok_or_else(|| (parser.span(), Error::ExpectedToken("layout option")))?
+                .to_string();
+            let value = match parser.parse_token("=") {
+                true => parser
+                    .parse_attribute_value(context)?
+                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("attribute")))?,
+                false => AttributeValue::Bool(true),
+            };
+            Ok((key, value))
+        })?
+    {
+        parts.attributes.push(context.named_attribute(
+            "layout",
+            AttributeValue::Dict(Box::new(options.into_iter().collect())),
+        ));
+    } else {
+        parser.set_pos(mark);
+    }
+
+    let enclosing = std::mem::replace(
+        &mut parser.type_params,
+        params.into_iter().map(|(name, ..)| name).collect(),
+    );
+    let body = match parser.parse_token("=") {
+        true => Some(
+            parser
+                .parse_type(context)
+                .and_then(|body| body.ok_or_else(|| (parser.span(), Error::ExpectedType))),
+        ),
+        false => None,
+    };
+    parser.type_params = enclosing;
+    if let Some(body) = body {
+        let body = body?;
+        define(context, &name, body);
+        parts
+            .attributes
+            .push(context.named_attribute("body", AttributeValue::Type(body)));
+    }
+
+    if parser.parse_token("layout") {
+        let arguments = parser
+            .parse_delimited("(", ")", |parser| {
                 let name = parser
-                    .parse_ident()
-                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("parameter name")))?
+                    .parse_value_ref()
+                    .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
                     .to_string();
                 if !parser.parse_token(":") {
                     return Err((parser.span(), Error::ExpectedToken(":")));
                 }
-                let kind = parser
-                    .parse_ident()
-                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("parameter kind")))?
-                    .to_string();
-                let default = match parser.parse_token("=") {
-                    true => Some(
-                        parser
-                            .parse_attribute_value(context)?
-                            .ok_or_else(|| (parser.span(), Error::ExpectedToken("a default")))?,
-                    ),
-                    false => None,
-                };
-                Ok((name, kind, default))
+                let ty = parser
+                    .parse_type(context)?
+                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
+                let value = context.create_value(ty, None);
+                parser.define_value(&name, value.id());
+                Ok(value)
             })?
-            .unwrap_or_default();
-        parser.type_defs.insert(name.clone());
-        let mut parts = tir::NewOpParts::default();
-        let mut regions = vec![];
-        if !params.is_empty() {
-            let params: Vec<AttributeValue> = params
-                .iter()
-                .map(|(name, kind, default)| {
-                    let mut param = vec![
-                        AttributeValue::from(name.as_str()),
-                        AttributeValue::from(kind.as_str()),
-                    ];
-                    param.extend(default.clone());
-                    AttributeValue::Array(param.into())
-                })
-                .collect();
-            parts
-                .attributes
-                .push(context.named_attribute("params", AttributeValue::Array(params.into())));
-        }
+            .ok_or_else(|| (parser.span(), Error::ExpectedToken("(")))?;
+        let region = parser.parse_region_with_entry_args(context, arguments)?;
+        regions.push(region.id());
+    }
+    Ok(r#def(
+        context,
+        name.as_str(),
+        regions,
+        parts,
+        tir::InsertionPoint::Root,
+    ))
+}
 
-        let mark = parser.pos();
-        if parser.parse_token("layout")
-            && let Some(options) = parser.parse_delimited("{", "}", |parser| {
-                let key = parser
-                    .parse_ident()
-                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("layout option")))?
-                    .to_string();
-                let value = match parser.parse_token("=") {
-                    true => parser
-                        .parse_attribute_value(context)?
-                        .ok_or_else(|| (parser.span(), Error::ExpectedToken("attribute")))?,
-                    false => AttributeValue::Bool(true),
-                };
-                Ok((key, value))
-            })?
-        {
-            parts.attributes.push(context.named_attribute(
-                "layout",
-                AttributeValue::Dict(Box::new(options.into_iter().collect())),
-            ));
-        } else {
-            parser.set_pos(mark);
-        }
+/// Whether `name` spells a type the core defines, which no other
+/// `type.def` may take.
+pub fn def_is_core_type_name(context: &Context, name: &str) -> bool {
+    let terms = context.terms();
+    context.get_type_parser("builtin", name).is_ok()
+        || terms.ctor_named("builtin", name).is_some()
+        || terms.ctor_named("type", name).is_some()
+        || context
+            .core_type_names()
+            .is_some_and(|names| names.contains(&name))
+}
 
-        let enclosing = std::mem::replace(
-            &mut parser.type_params,
-            params.into_iter().map(|(name, ..)| name).collect(),
+pub(crate) fn def_verify_impl(operation: &tir::OpHandle, context: &Context) -> Result<(), Error> {
+    let name = crate::builtin::def_sym_name(operation);
+    let holder = context.parent_op(operation.id);
+    if let Some(holder) = holder
+        && !context.get_op(holder).is_operation(&crate::builtin::MODULE)
+    {
+        let inside = enclosing_symbol(context, holder).map_or_else(
+            || "a nested region".to_string(),
+            |name| format!("function `@{name}`"),
         );
-        let body = match parser.parse_token("=") {
-            true => Some(
-                parser
-                    .parse_type(context)
-                    .and_then(|body| body.ok_or_else(|| (parser.span(), Error::ExpectedType))),
-            ),
-            false => None,
-        };
-        parser.type_params = enclosing;
-        if let Some(body) = body {
-            let body = body?;
-            define(context, &name, body);
-            parts
-                .attributes
-                .push(context.named_attribute("body", AttributeValue::Type(body)));
-        }
-
-        if parser.parse_token("layout") {
-            let arguments = parser
-                .parse_delimited("(", ")", |parser| {
-                    let name = parser
-                        .parse_value_ref()
-                        .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
-                        .to_string();
-                    if !parser.parse_token(":") {
-                        return Err((parser.span(), Error::ExpectedToken(":")));
-                    }
-                    let ty = parser
-                        .parse_type(context)?
-                        .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-                    let value = context.create_value(ty, None);
-                    parser.define_value(&name, value.id());
-                    Ok(value)
-                })?
-                .ok_or_else(|| (parser.span(), Error::ExpectedToken("(")))?;
-            let region = parser.parse_region_with_entry_args(context, arguments)?;
-            regions.push(region.id());
-        }
-        Ok(Box::new(TypeDefOp::new(
-            context,
-            name.as_str(),
-            regions,
-            parts,
-            tir::InsertionPoint::Root,
-        )))
+        return Err(Error::VerificationError(format!(
+            "type definition `!{name}` inside {inside}; move it to module scope"
+        )));
     }
-}
-
-impl TypeDefOp {
-    /// Whether `name` spells a type the core defines, which no other
-    /// `type.def` may take.
-    pub fn is_core_type_name(context: &Context, name: &str) -> bool {
-        let terms = context.terms();
-        context.get_type_parser("builtin", name).is_ok()
-            || terms.ctor_named("builtin", name).is_some()
-            || terms.ctor_named("type", name).is_some()
-            || context
-                .core_type_names()
-                .is_some_and(|names| names.contains(&name))
+    // The core type definitions define the constructors, so only there is a
+    // definition spelled like one.
+    if crate::builtin::def_is_core_type_name(context, &name) && !context.defines_types() {
+        return Err(Error::VerificationError(format!(
+            "type name `!{name}` is spelled like a builtin type"
+        )));
     }
-}
-
-impl tir::Verifiable for TypeDefOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let name = self.sym_name();
-        let holder = context.parent_op(self.0.id);
-        if let Some(holder) = holder
-            && !context.get_op(holder).is::<crate::builtin::ModuleOp>()
-        {
-            let inside = enclosing_symbol(context, holder).map_or_else(
-                || "a nested region".to_string(),
-                |name| format!("function `@{name}`"),
-            );
-            return Err(Error::VerificationError(format!(
-                "type definition `!{name}` inside {inside}; move it to module scope"
-            )));
-        }
-        // The core type definitions define the constructors, so only there is a
-        // definition spelled like one.
-        if Self::is_core_type_name(context, &name) && !context.defines_types() {
-            return Err(Error::VerificationError(format!(
-                "type name `!{name}` is spelled like a builtin type"
-            )));
-        }
-        if let Some((param, kind)) = self
-            .params()
-            .into_iter()
-            .find(|(_, kind)| !PARAM_KINDS.contains(&kind.as_str()))
-        {
-            return Err(Error::VerificationError(format!(
-                "parameter `{param}` of `!{name}` has unknown kind `{kind}` (expected one of {})",
-                PARAM_KINDS.join(", ")
-            )));
-        }
-        Ok(())
+    if let Some((param, kind)) = crate::builtin::def_params(operation)
+        .into_iter()
+        .find(|(_, kind)| !PARAM_KINDS.contains(&kind.as_str()))
+    {
+        return Err(Error::VerificationError(format!(
+            "parameter `{param}` of `!{name}` has unknown kind `{kind}` (expected one of {})",
+            PARAM_KINDS.join(", ")
+        )));
     }
+    Ok(())
 }
 
 fn enclosing_symbol(context: &Context, op: tir::OpId) -> Option<String> {

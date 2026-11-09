@@ -1,0 +1,15 @@
+mod ops;
+use ops::*;
+extern type builtin = Dialect;
+extern fn module_verifier(operation: Operation, context: Context) -> Validation;
+
+pub let builtin::module = {
+    signature: () -> (),
+    regions: { body: { kind: RegionKind::Blocks() } },
+    verify: module_verifier,
+};
+
+pub let builtin::module_end = {
+    signature: () -> (),
+    interfaces: [Terminator],
+};

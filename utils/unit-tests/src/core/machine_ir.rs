@@ -7,7 +7,7 @@
 use tir::attributes::AttributeValue;
 use tir::backend::regalloc::RegClassId;
 use tir::backend::{
-    phys_attr, verify_machine_ir, RegAssignment, RegClassType, SymbolOp, ASSIGNMENT_ATTR, PINS_ATTR,
+    phys_attr, verify_machine_ir, RegAssignment, RegClassType, ASSIGNMENT_ATTR, PINS_ATTR,
 };
 use tir::{Context, Operation, ValueId};
 
@@ -22,15 +22,12 @@ static ADD_IMPLICIT: [tir::attributes::ImplicitReg; 1] = [tir::attributes::Impli
     role: tir::attributes::AttributeRole::Def,
 }];
 
-tir::operation! {
-    AddTestOp {
-        name: "add", dialect: "test", scheme: "(_?) -> _?",
-        operands: O { rs }, results: R { rd },
-        attributes: A { rd: "?Register", rs: "?Register" },
-        interfaces: [tir::backend::MachineInstruction],
-    }
+tir::helpers::op_def! {
+    file: "../../core/defs/converted-tests/src_core_machine_ir.cdsl",
+    hosts: {
+        add_iface_MachineInstruction => (tir :: backend :: MachineInstruction, &super::fixtures::instr_info!("add", &ADD_IMPLICIT)),
+    },
 }
-super::fixtures::instr_info!(AddTestOp, "add", &ADD_IMPLICIT);
 
 fn value_of(context: &Context, class: RegClassId) -> ValueId {
     context
@@ -42,15 +39,15 @@ fn value_of(context: &Context, class: RegClassId) -> ValueId {
 /// caller asks for.
 struct Function {
     context: Context,
-    symbol: tir::backend::SymbolOp,
+    symbol: tir::OpHandle,
     add: tir::OpHandle,
 }
 
-fn function(build: impl FnOnce(&Context) -> AddTestOp) -> Function {
+fn function(build: impl FnOnce(&Context) -> tir::OpHandle) -> Function {
     let context = Context::with_default_dialects();
-    AddTestOp::register_interfaces(&context);
+    context.register_operation(&ADD);
     let add = build(&context);
-    let handle = add.get_handle();
+    let handle = add.clone();
     let (symbol, _) = asm_symbol(&context, &[add.id()]);
     Function {
         context,
@@ -59,17 +56,11 @@ fn function(build: impl FnOnce(&Context) -> AddTestOp) -> Function {
     }
 }
 
-impl AddTestOp {
-    fn get_handle(&self) -> tir::OpHandle {
-        self.0.clone()
-    }
-}
-
 #[test]
 fn def_use_reads_ports_and_leaves_physical_registers_out() {
     let f = function(|context| {
         let source = value_of(context, r());
-        AddTestOp::new(
+        r#add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -86,7 +77,7 @@ fn def_use_reads_ports_and_leaves_physical_registers_out() {
     // The same instruction reading a register it names directly: no operand,
     // one physical read.
     let f = function(|context| {
-        AddTestOp::new(
+        r#add(
             context,
             tir::Operand::none(),
             vec![RegClassType::new(context, r())],
@@ -109,7 +100,7 @@ fn def_use_reads_ports_and_leaves_physical_registers_out() {
 fn data_values_are_not_physical_register_views() {
     let f = function(|context| {
         let source = value_of(context, r_high());
-        AddTestOp::new(
+        r#add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -127,7 +118,7 @@ fn scalar_values_need_no_register_class() {
         let source = context
             .create_value(tir::builtin::IntegerType::new(context, 32), None)
             .id();
-        AddTestOp::new(
+        r#add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -142,7 +133,7 @@ fn scalar_values_need_no_register_class() {
 fn a_result_without_a_port_is_rejected() {
     let f = function(|context| {
         let source = value_of(context, r());
-        AddTestOp::new(
+        r#add(
             context,
             source,
             vec![
@@ -161,7 +152,7 @@ fn a_result_without_a_port_is_rejected() {
 fn assignment_missing_a_value_is_rejected() {
     let f = function(|context| {
         let source = value_of(context, r());
-        AddTestOp::new(
+        r#add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -199,7 +190,7 @@ fn assignment_missing_a_value_is_rejected() {
 fn cross_view_pin_is_rejected() {
     let f = function(|context| {
         let source = value_of(context, r());
-        AddTestOp::new(
+        r#add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -226,7 +217,7 @@ fn cross_view_pin_is_rejected() {
 #[test]
 fn a_slot_holding_nothing_is_rejected() {
     let f = function(|context| {
-        AddTestOp::new(
+        r#add(
             context,
             tir::Operand::none(),
             vec![],
@@ -262,7 +253,7 @@ fn the_assignment_round_trips_through_the_text_form() {
         .parse_attribute_value(&context)
         .expect("parses")
         .expect("an attribute");
-    let symbol = SymbolOp::new(
+    let symbol = tir::backend::symbol(
         &context,
         None,
         tir::NewOpParts {
@@ -273,6 +264,6 @@ fn the_assignment_round_trips_through_the_text_form() {
         },
         tir::InsertionPoint::Root,
     );
-    let read_back = RegAssignment::of_op(symbol.handle(), ASSIGNMENT_ATTR);
+    let read_back = RegAssignment::of_op(&symbol, ASSIGNMENT_ATTR);
     assert_eq!(read_back, assignment);
 }

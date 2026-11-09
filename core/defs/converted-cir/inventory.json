@@ -1,0 +1,199 @@
+{
+  "files": [
+    {
+      "operations": [
+        {
+          "alias": "VaStartOp",
+          "declaration_sha256": "0069f1ed75d04972d2063f3585d50cf3c20651a43cec44f377c57228186e5c78",
+          "fields": {
+            "dialect": "\"cir\"",
+            "name": "\"va_start\"",
+            "results": "R { result }",
+            "scheme": "\"() -> cir.va_list\""
+          },
+          "line": 90
+        },
+        {
+          "alias": "VaArgOp",
+          "declaration_sha256": "7081c58721cef18a9912e0c128a866224a8f96074dbb1990f1ec0eeb11e6eb49",
+          "fields": {
+            "dialect": "\"cir\"",
+            "name": "\"va_arg\"",
+            "operands": "O { list }",
+            "results": "R { result }",
+            "scheme": "\"(cir.va_list) -> _\""
+          },
+          "line": 99
+        },
+        {
+          "alias": "VaEndOp",
+          "declaration_sha256": "db866f7a835aa7f737bf08316e988b8f533315d978a0e766748d227d6e60e91a",
+          "fields": {
+            "dialect": "\"cir\"",
+            "name": "\"va_end\"",
+            "operands": "O { list }",
+            "scheme": "\"(cir.va_list) -> ()\""
+          },
+          "line": 109
+        },
+        {
+          "alias": "ForOp",
+          "declaration_sha256": "093da2d722d82cac8324b234565ae4e948c67309e02d45dfa7ec45c9502fb774",
+          "fields": {
+            "dialect": "\"cir\"",
+            "format": "\"custom\"",
+            "interface_callbacks": "[(ExitScope, &CIR_LOOP_EXIT_SCOPE)]",
+            "interfaces": "[ ExitScope ]",
+            "name": "\"for\"",
+            "parse_hook": "for_parse",
+            "print_hook": "for_print",
+            "regions": "R { condition_region : Region { } , step_region : Region { } , body_region : Region { } , }",
+            "scheme": "\"() -> ()\"",
+            "verifier": "\"true\"",
+            "verify_hook": "for_verify"
+          },
+          "line": 124
+        },
+        {
+          "alias": "WhileOp",
+          "declaration_sha256": "51c649df2eae037b4f40c98d3e6561e0719c6369e690270f2187b56f6be31fb9",
+          "fields": {
+            "dialect": "\"cir\"",
+            "format": "\"custom\"",
+            "interface_callbacks": "[(ExitScope, &CIR_LOOP_EXIT_SCOPE)]",
+            "interfaces": "[ ExitScope ]",
+            "name": "\"while\"",
+            "parse_hook": "while_parse",
+            "print_hook": "while_print",
+            "regions": "R { condition_region : Region { } , body_region : Region { } , }",
+            "scheme": "\"() -> ()\"",
+            "verifier": "\"true\"",
+            "verify_hook": "while_verify"
+          },
+          "line": 183
+        },
+        {
+          "alias": "DoOp",
+          "declaration_sha256": "10254fe4f31484608eeac84210cf107ee7eb65ac1779eac210f9e80cda58cfe1",
+          "fields": {
+            "dialect": "\"cir\"",
+            "format": "\"custom\"",
+            "interface_callbacks": "[(ExitScope, &CIR_LOOP_EXIT_SCOPE)]",
+            "interfaces": "[ ExitScope ]",
+            "name": "\"do\"",
+            "parse_hook": "do_parse",
+            "print_hook": "do_print",
+            "regions": "R { body_region : Region { } , condition_region : Region { } , }",
+            "scheme": "\"() -> ()\"",
+            "verifier": "\"true\"",
+            "verify_hook": "do_verify"
+          },
+          "line": 238
+        },
+        {
+          "alias": "ConditionOp",
+          "declaration_sha256": "dbf1e60f31e003f15477f34a771391f6e81633ac9e597381f6c2e6322a3442b4",
+          "fields": {
+            "dialect": "\"cir\"",
+            "interfaces": "[ Terminator ]",
+            "name": "\"condition\"",
+            "operands": "O { condition }",
+            "scheme": "\"(int<1>) -> ()\""
+          },
+          "line": 293
+        },
+        {
+          "alias": "YieldOp",
+          "declaration_sha256": "f4727892533d7270ccbca8f0b7e3d8966741fdb221ed353dd6ea9a34dbe2d164",
+          "fields": {
+            "dialect": "\"cir\"",
+            "interfaces": "[ Terminator ]",
+            "name": "\"yield\"",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 303
+        },
+        {
+          "alias": "BreakOp",
+          "declaration_sha256": "b28bafbd1fe4d77945dec7ea2f2c9079253ed1297d3d24d2b15578e49d29f3f8",
+          "fields": {
+            "dialect": "\"cir\"",
+            "interface_callbacks": "[(NonLocalExit, &CIR_NON_LOCAL_EXIT)]",
+            "interfaces": "[ Terminator , NonLocalExit ]",
+            "name": "\"break\"",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 312
+        },
+        {
+          "alias": "ContinueOp",
+          "declaration_sha256": "a6168ac020fd95879ce9c65d3ede2ff953215054a0be0b78bbd5dd21da150e7d",
+          "fields": {
+            "dialect": "\"cir\"",
+            "interface_callbacks": "[(NonLocalExit, &CIR_NON_LOCAL_EXIT)]",
+            "interfaces": "[ Terminator , NonLocalExit ]",
+            "name": "\"continue\"",
+            "scheme": "\"() -> ()\""
+          },
+          "line": 322
+        }
+      ],
+      "path": "fcc/src/cir.rs",
+      "source": "use tir::parse::common::Cursor;\nuse tir::{\n    Context, Ctor, Error, ExitScope, ExitScopeKind, ExitTarget, IRFormatter, Kind, NonLocalExit,\n    OpHandle, Terminator, Terms, TypeCtor, TypeId, TypeSpelling, dialect, operation, parse::Span,\n};\nuse tir_symbolic::term::{no_carrier, valid};\n\npub mod ops {\n    pub use super::{\n        BREAK, CONDITION, CONTINUE, DO, FOR, VA_ARG, VA_END, VA_START, WHILE, YIELD, r#break,\n        condition, r#continue, r#do, r#for, va_arg, va_end, va_start, r#while, r#yield,\n    };\n}\n\ndialect! {\n    CirDialect {\n        name: \"cir\",\n        operations: [\n            VA_START,\n            VA_ARG,\n            VA_END,\n            FOR,\n            WHILE,\n            DO,\n            CONDITION,\n            YIELD,\n            BREAK,\n            CONTINUE,\n        ],\n        types: [VarArgsType, VaListType],\n    }\n}\n\nmacro_rules! unit_type {\n    ($name:ident, $ctor:ident, $mnemonic:literal, $variadic_tail:literal, $doc:literal) => {\n        static $ctor: Ctor = Ctor::new(TypeCtor {\n            dialect: \"cir\",\n            name: $mnemonic,\n            params: &[],\n            kind: Kind::Data,\n            validate: valid,\n            carrier: no_carrier,\n        });\n\n        #[doc = $doc]\n        #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n        pub struct $name;\n\n        impl $name {\n            #[allow(clippy::new_ret_no_self)]\n            pub fn new(context: &Context) -> TypeId {\n                context\n                    .terms()\n                    .intern($ctor.id(context), vec![])\n                    .expect($mnemonic)\n            }\n\n            pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {\n                $ctor.is(terms, ty).then_some(Self)\n            }\n\n            pub fn spelling(context: &Context) -> TypeSpelling {\n                TypeSpelling {\n                    ctor: $ctor.id(context),\n                    keys: &[$mnemonic],\n                    parse: |_, _, context| Ok(Self::new(context)),\n                    print: |_, _, fmt| fmt.write(concat!(\"cir.\", $mnemonic)),\n                    variadic_tail: $variadic_tail,\n                }\n            }\n        }\n    };\n}\n\nunit_type!(\n    VarArgsType,\n    VARARGS,\n    \"varargs\",\n    true,\n    \"The tail of a variadic signature, written `!cir.varargs`.\"\n);\nunit_type!(\n    VaListType,\n    VA_LIST,\n    \"va_list\",\n    false,\n    \"A C `va_list`, written `!cir.va_list`.\"\n);\n\noperation! {\n    VaStartOp {\n        name: \"va_start\",\n        dialect: \"cir\",\n        scheme: \"() -> cir.va_list\",\n        results: R { result },\n    }\n}\n\noperation! {\n    VaArgOp {\n        name: \"va_arg\",\n        dialect: \"cir\",\n        scheme: \"(cir.va_list) -> _\",\n        operands: O { list },\n        results: R { result },\n    }\n}\n\noperation! {\n    VaEndOp {\n        name: \"va_end\",\n        dialect: \"cir\",\n        scheme: \"(cir.va_list) -> ()\",\n        operands: O { list },\n    }\n}\n\n// C's loop statements, captured as they are written. The regions are CFG-form and\n// carry no ports: dataflow stays in the stack slots codegen emits, so what these ops\n// add is structure \u2014 which region is the condition, which the step, which the body \u2014\n// for the `raise-loops` pass to reason about. Every loop it refuses is flattened to\n// the same blocks and branches codegen used to emit directly.\n\noperation! {\n    ForOp {\n        verify_hook: for_verify,\n        print_hook: for_print,\n        parse_hook: for_parse,\n        interface_callbacks: [(ExitScope, &CIR_LOOP_EXIT_SCOPE)],\n        name: \"for\",\n        dialect: \"cir\",\n        scheme: \"() -> ()\",\n        format: \"custom\",\n        verifier: \"true\",\n        regions: R {\n            condition_region: Region {},\n            step_region: Region {},\n            body_region: Region {},\n        },\n        interfaces: [ExitScope],\n    }\n}\n\nfn for_verify(operation: &OpHandle, context: &Context) -> Result<(), Error> {\n    verify_loop_region(\n        context,\n        operation,\n        0,\n        RegionRole::Condition,\n        \"cir.for condition\",\n    )?;\n    verify_loop_region(context, operation, 1, RegionRole::Step, \"cir.for step\")?;\n    verify_loop_region(context, operation, 2, RegionRole::Body, \"cir.for body\")\n}\n\nfn for_print(operation: &OpHandle, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {\n    print_loop_regions(fmt, operation, \"cir.for\", &[\"cond\", \"step\", \"body\"])\n}\n\nfn for_parse(\n    parser: &mut tir::parse::text::Parser,\n    context: &Context,\n    _definition: &'static tir::OpDefSpec,\n) -> Result<OpHandle, (Span, Error)> {\n    let label = parse_loop_label(parser)?;\n    let condition = parse_loop_region(parser, context, \"cond\")?;\n    let step = parse_loop_region(parser, context, \"step\")?;\n    let body = parse_loop_region(parser, context, \"body\")?;\n    let attributes = label_attribute(label)\n        .map(|label| context.named_attribute(\"label\", label))\n        .into_iter()\n        .collect();\n    Ok(r#for(\n        context,\n        Some(condition),\n        Some(step),\n        Some(body),\n        tir::NewOpParts { attributes },\n        tir::InsertionPoint::Root,\n    ))\n}\n\noperation! {\n    WhileOp {\n        verify_hook: while_verify,\n        print_hook: while_print,\n        parse_hook: while_parse,\n        interface_callbacks: [(ExitScope, &CIR_LOOP_EXIT_SCOPE)],\n        name: \"while\",\n        dialect: \"cir\",\n        scheme: \"() -> ()\",\n        format: \"custom\",\n        verifier: \"true\",\n        regions: R {\n            condition_region: Region {},\n            body_region: Region {},\n        },\n        interfaces: [ExitScope],\n    }\n}\n\nfn while_verify(operation: &OpHandle, context: &Context) -> Result<(), Error> {\n    verify_loop_region(\n        context,\n        operation,\n        0,\n        RegionRole::Condition,\n        \"cir.while condition\",\n    )?;\n    verify_loop_region(context, operation, 1, RegionRole::Body, \"cir.while body\")\n}\n\nfn while_print(operation: &OpHandle, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {\n    print_loop_regions(fmt, operation, \"cir.while\", &[\"cond\", \"body\"])\n}\n\nfn while_parse(\n    parser: &mut tir::parse::text::Parser,\n    context: &Context,\n    _definition: &'static tir::OpDefSpec,\n) -> Result<OpHandle, (Span, Error)> {\n    let label = parse_loop_label(parser)?;\n    let condition = parse_loop_region(parser, context, \"cond\")?;\n    let body = parse_loop_region(parser, context, \"body\")?;\n    let attributes = label_attribute(label)\n        .map(|label| context.named_attribute(\"label\", label))\n        .into_iter()\n        .collect();\n    Ok(r#while(\n        context,\n        Some(condition),\n        Some(body),\n        tir::NewOpParts { attributes },\n        tir::InsertionPoint::Root,\n    ))\n}\n\noperation! {\n    DoOp {\n        verify_hook: do_verify,\n        print_hook: do_print,\n        parse_hook: do_parse,\n        interface_callbacks: [(ExitScope, &CIR_LOOP_EXIT_SCOPE)],\n        name: \"do\",\n        dialect: \"cir\",\n        scheme: \"() -> ()\",\n        format: \"custom\",\n        verifier: \"true\",\n        regions: R {\n            body_region: Region {},\n            condition_region: Region {},\n        },\n        interfaces: [ExitScope],\n    }\n}\n\nfn do_verify(operation: &OpHandle, context: &Context) -> Result<(), Error> {\n    verify_loop_region(context, operation, 0, RegionRole::Body, \"cir.do body\")?;\n    verify_loop_region(\n        context,\n        operation,\n        1,\n        RegionRole::Condition,\n        \"cir.do condition\",\n    )\n}\n\nfn do_print(operation: &OpHandle, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {\n    print_loop_regions(fmt, operation, \"cir.do\", &[\"body\", \"cond\"])\n}\n\nfn do_parse(\n    parser: &mut tir::parse::text::Parser,\n    context: &Context,\n    _definition: &'static tir::OpDefSpec,\n) -> Result<OpHandle, (Span, Error)> {\n    let label = parse_loop_label(parser)?;\n    let body = parse_loop_region(parser, context, \"body\")?;\n    let condition = parse_loop_region(parser, context, \"cond\")?;\n    let attributes = label_attribute(label)\n        .map(|label| context.named_attribute(\"label\", label))\n        .into_iter()\n        .collect();\n    Ok(r#do(\n        context,\n        Some(body),\n        Some(condition),\n        tir::NewOpParts { attributes },\n        tir::InsertionPoint::Root,\n    ))\n}\n\noperation! {\n    ConditionOp {\n        name: \"condition\",\n        dialect: \"cir\",\n        scheme: \"(int<1>) -> ()\",\n        operands: O { condition },\n        interfaces: [Terminator],\n    }\n}\n\noperation! {\n    YieldOp {\n        name: \"yield\",\n        dialect: \"cir\",\n        scheme: \"() -> ()\",\n        interfaces: [Terminator],\n    }\n}\n\noperation! {\n    BreakOp {\n        interface_callbacks: [(NonLocalExit, &CIR_NON_LOCAL_EXIT)],\n        name: \"break\",\n        dialect: \"cir\",\n        scheme: \"() -> ()\",\n        interfaces: [Terminator, NonLocalExit],\n    }\n}\n\noperation! {\n    ContinueOp {\n        interface_callbacks: [(NonLocalExit, &CIR_NON_LOCAL_EXIT)],\n        name: \"continue\",\n        dialect: \"cir\",\n        scheme: \"() -> ()\",\n        interfaces: [Terminator, NonLocalExit],\n    }\n}\n\n/// A `cir.break` leaves the innermost loop, or the loop carrying its `label`;\n/// a `switch` break is a plain branch, so no `cir.break` names a switch. C\n/// keeps its dataflow in stack slots, so an exit carries no values.\nconst CIR_NON_LOCAL_EXIT: tir::NonLocalExitCallbacks = tir::NonLocalExitCallbacks {\n    target: exit_target,\n    values: |_| Vec::new(),\n};\n\nconst CIR_LOOP_EXIT_SCOPE: tir::ExitScopeCallbacks = tir::ExitScopeCallbacks {\n    exit_scope: |_| ExitScopeKind::Loop,\n    label: Some(loop_label),\n};\n\nfn loop_label(op: &OpHandle) -> Option<String> {\n    match op.attr(\"label\")? {\n        tir::attributes::AttributeValue::Str(label) => Some(label.to_string()),\n        _ => None,\n    }\n}\n\nfn exit_target(op: &OpHandle) -> ExitTarget {\n    match loop_label(op) {\n        Some(label) => ExitTarget::Label(label),\n        None => ExitTarget::InnermostLoop,\n    }\n}\n\n/// What a region of a `cir` loop is, and so which terminators may leave it.\n#[derive(Clone, Copy, PartialEq, Eq)]\nenum RegionRole {\n    /// Decides whether the next iteration runs; leaves through `cir.condition`.\n    Condition,\n    /// Runs between iterations; falls through to the condition.\n    Step,\n    /// Leaves through a fallthrough, or through `break`/`continue`.\n    Body,\n}\n\nimpl RegionRole {\n    fn admits(self, exit: &tir::OpHandle) -> bool {\n        match self {\n            RegionRole::Condition => exit.is_operation(&CONDITION),\n            RegionRole::Step => exit.is_operation(&YIELD),\n            RegionRole::Body => {\n                exit.is_operation(&YIELD)\n                    || exit.is_operation(&BREAK)\n                    || exit.is_operation(&CONTINUE)\n            }\n        }\n    }\n\n    fn expected(self) -> &'static str {\n        match self {\n            RegionRole::Condition => \"cir.condition\",\n            RegionRole::Step => \"cir.yield\",\n            RegionRole::Body => \"cir.yield, cir.break or cir.continue\",\n        }\n    }\n}\n\nfn verify_loop_region(\n    context: &Context,\n    op: &OpHandle,\n    index: usize,\n    role: RegionRole,\n    label: &str,\n) -> Result<(), Error> {\n    let region = context.get_region(op.regions()[index]);\n    let mut exits = 0;\n    for block in region.iter(context.clone()) {\n        let Some(&last) = block.op_ids().last() else {\n            return Err(Error::VerificationError(format!(\n                \"{label} has a block with no terminator\"\n            )));\n        };\n        let last = context.get_op(last);\n        if last\n            .clone()\n            .as_interface::<dyn tir::BranchTerminator>()\n            .is_some()\n        {\n            continue;\n        }\n        if !role.admits(&last) {\n            return Err(Error::VerificationError(format!(\n                \"{label} must leave through {}\",\n                role.expected()\n            )));\n        }\n        exits += 1;\n    }\n    if exits == 0 {\n        return Err(Error::VerificationError(format!(\n            \"{label} must leave through {}\",\n            role.expected()\n        )));\n    }\n    Ok(())\n}\n\nfn print_loop_regions(\n    fmt: &mut IRFormatter,\n    op: &OpHandle,\n    mnemonic: &str,\n    keywords: &[&str],\n) -> Result<(), std::fmt::Error> {\n    let context = op.context.clone();\n    fmt.write(mnemonic)?;\n    if let Some(label) = loop_label(op) {\n        fmt.write(format!(\" {{label = \\\"{label}\\\"}}\"))?;\n    }\n    for (index, keyword) in keywords.iter().enumerate() {\n        fmt.write(format!(\" {keyword}\"))?;\n        tir::region_format::print_op_region(fmt, &context, op, index)?;\n    }\n    Ok(())\n}\n\nfn parse_loop_label(\n    parser: &mut tir::parse::text::Parser,\n) -> Result<Option<String>, (Span, Error)> {\n    if !parser.parse_token(\"{\") {\n        return Ok(None);\n    }\n    if parser.parse_ident() != Some(\"label\") || !parser.parse_token(\"=\") {\n        return Err((parser.span(), Error::ExpectedToken(\"label\")));\n    }\n    let label = parser\n        .parse_string()\n        .ok_or_else(|| (parser.span(), Error::ExpectedToken(\"label\")))?\n        .to_string();\n    if !parser.parse_token(\"}\") {\n        return Err((parser.span(), Error::ExpectedToken(\"}\")));\n    }\n    Ok(Some(label))\n}\n\nfn label_attribute(label: Option<String>) -> Option<tir::attributes::AttributeValue> {\n    label.map(|label| tir::attributes::AttributeValue::Str(label.into()))\n}\n\nfn parse_loop_region(\n    parser: &mut tir::parse::text::Parser,\n    context: &Context,\n    keyword: &'static str,\n) -> Result<tir::RegionId, (Span, Error)> {\n    if !parser.parse_token(keyword) {\n        return Err((parser.span(), Error::ExpectedToken(keyword)));\n    }\n    Ok(parser.parse_region(context)?.id())\n}\n",
+      "source_sha256": "859e0a1288af80a6c478d371865ca5ca7263bb0c34f28172c6f0c56d68261372",
+      "spans": [
+        {
+          "end": 2565,
+          "replacement": "root",
+          "start": 2411
+        },
+        {
+          "end": 2748,
+          "replacement": "",
+          "start": 2567
+        },
+        {
+          "end": 2901,
+          "replacement": "",
+          "start": 2750
+        },
+        {
+          "end": 3803,
+          "replacement": "",
+          "start": 3307
+        },
+        {
+          "end": 5545,
+          "replacement": "",
+          "start": 5075
+        },
+        {
+          "end": 7116,
+          "replacement": "",
+          "start": 6661
+        },
+        {
+          "end": 8403,
+          "replacement": "",
+          "start": 8211
+        },
+        {
+          "end": 8548,
+          "replacement": "",
+          "start": 8405
+        },
+        {
+          "end": 8775,
+          "replacement": "",
+          "start": 8550
+        },
+        {
+          "end": 9008,
+          "replacement": "",
+          "start": 8777
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

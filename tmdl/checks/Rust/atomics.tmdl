@@ -1,9 +1,8 @@
 // Atomics codegen: LR/SC/AMO/fence lower to the new `SymKind`s and behaviors
 // execute against the shared `MachineMemory` adapter, which forwards to the
 // `MachineContext` reservation methods, so the executor reaches the hart's
-// reservation logic. Atomic behaviors are excluded from instruction selection
-// and op-sem pattern generation; a plain ordered load/store is still
-// selection-eligible.
+// reservation logic. Atomic behaviors have no symbolic semantic hook; a plain
+// ordered load/store keeps one.
 
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/atomics.tmdl | filecheck %s
 
@@ -11,25 +10,36 @@
 // store with an explicit ordering packs the ordering code into its inert
 // metadata operand; both live in the sem blob (tmdl/tests/sem_blob.rs).
 
-// A discarded atomic RMW remains an executed stateful memory operation.
-// CHECK: impl tir::backend::MachineInstruction for AmoXorWDiscardOp
+// Atomic instructions have no symbolic semantic hook.
+// CHECK-LABEL: pub static LR_W: tir::OpDefSpec
+// CHECK: semantic: None,
+// CHECK-LABEL: pub static SC_W: tir::OpDefSpec
+// CHECK: semantic: None,
+// CHECK-LABEL: pub static AMOADD_W: tir::OpDefSpec
+// CHECK: semantic: None,
+// CHECK-LABEL: pub static AMOXOR_W_DISCARD: tir::OpDefSpec
+// CHECK: semantic: None,
+// CHECK-LABEL: pub static FENCE: tir::OpDefSpec
+// CHECK: semantic: None,
+// CHECK-LABEL: pub static FENCE_I: tir::OpDefSpec
+// CHECK: semantic: None,
 
-// An ordered plain store keeps its selection rule.
-// CHECK: impl tir::sem::AsSemExpr for StRelOp
+// Ordered plain memory operations keep their semantic hooks.
+// CHECK-LABEL: pub static ST_REL: tir::OpDefSpec
+// CHECK: semantic: Some(__tir_st_rel_machine_semantic),
+// CHECK-LABEL: pub static LD_ACQ: tir::OpDefSpec
+// CHECK: semantic: Some(__tir_ld_acq_machine_semantic),
 
 // Behaviors execute against the shared adapter inside the exec engine (its
 // forwarding to the MachineContext reservation methods is covered in core), so
 // the executor's reservation state is consulted.
+// CHECK: static INFO_LRW: tir::backend::InstrInfo
 // CHECK: tir::backend::exec::Program::Effects
 
 // The memory the behavior touches is a field of the opcode's record.
 // CHECK: effects: tir::backend::MemoryEffects
 
-// Atomic instructions get neither an op-sem pattern nor a selection rule.
-// CHECK-NOT: AsSemExpr for LrWOp
-// CHECK-NOT: AsSemExpr for ScWOp
-// CHECK-NOT: AsSemExpr for AmoAddWOp
-// CHECK-NOT: isel_pattern_lrw
-// CHECK-NOT: isel_pattern_scw
-// CHECK-NOT: isel_pattern_amoaddw
-// CHECK-NOT: isel_pattern_fenceinst
+// A discarded atomic RMW remains an executed stateful memory operation.
+// CHECK-LABEL: static INFO_AMOXORWDISCARD: tir::backend::InstrInfo
+// CHECK: tir::backend::exec::Program::Effects
+// CHECK: dest: tir::backend::exec::Dest::Discard,

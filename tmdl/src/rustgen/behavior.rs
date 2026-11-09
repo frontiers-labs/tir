@@ -1,25 +1,23 @@
 use super::*;
 
-pub(super) fn emit_as_sem_expr_impl(
+pub(super) fn emit_semantic_hook(
     rhs: &ast::Expr,
-    name_ident: &proc_macro2::Ident,
+    prefix: &str,
     numeric_params: &HashMap<String, i64>,
     isa_param_values: &HashMap<String, i64>,
 ) -> Option<proc_macro2::TokenStream> {
     let mut dag = tir_symbolic::sem::SemGraph::<()>::new();
     let lowering = rhs.lower_to_sema(&mut dag, numeric_params, isa_param_values)?;
-    // The AsSemExpr impl carries no type annotations (the program-graph builder
-    // infers them), so pass no widths.
+    // Machine semantics leave type inference to the program-graph builder.
     let root_expr = emit_dag_as_code(&dag, lowering.root, &[]);
+    let hook_ident = format_ident!("__tir_{}_machine_semantic", prefix);
 
     Some(quote! {
-        impl tir::sem::AsSemExpr for #name_ident {
-            fn convert(
-                &self,
-                g: &mut tir::sem::SemGraph,
-            ) -> tir::NodeId {
-                #root_expr
-            }
+        fn #hook_ident(
+            _op: &tir::OpHandle,
+            g: &mut tir::sem::SemGraph,
+        ) -> Option<tir::NodeId> {
+            Some(#root_expr)
         }
     })
 }

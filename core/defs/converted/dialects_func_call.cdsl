@@ -1,0 +1,18 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type func = Dialect;
+
+extern fn call_verifier(operation: Operation, context: Context) -> Validation;
+extern let call_iface_Apply: Interface;
+extern let call_iface_ResourceEffects: Interface;
+extern fn call_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn call_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let func::call<StateResources> = {
+    signature: (callee: AnyFn, args: Many<Any>, state: States<StateResources>) -> (result: Any, state: States<StateResources>,),
+    verify: call_verifier,
+    interfaces: [call_iface_Apply, call_iface_ResourceEffects],
+    assembly: { print: call_printer, parse: call_parser },
+};

@@ -2,107 +2,122 @@
 
 use crate::analysis::effects::{observed_state, produced_state};
 use crate::attributes::AttributeValue;
-use crate::builtin::{FnType, IntegerType, ModuleOp, StateResource, ops as b};
+use crate::builtin::{FnType, IntegerType, StateResource, ops as b};
 use crate::func::ops as func_ops;
-use crate::ptr::{LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp, ops as p};
+use crate::ptr::{PtrType, ops as p};
 use crate::{
-    ConstantLike, Context, Intrinsic, Operation, OperationRef, PassError, Symbol, TargetEnv,
-    TypeId, ValueId,
+    ConstantLike, Context, Operation, OperationRef, PassError, Symbol, TargetEnv, TypeId, ValueId,
 };
 
-impl Intrinsic for MemcpyOp {
-    fn expand(&self, context: &Context, env: Option<&TargetEnv>) -> Result<(), PassError> {
-        let operation = OperationRef::new(context.get_op(self.id()));
-        let [destination, source, size] = self.operands()[..3] else {
-            unreachable!()
-        };
-        if let Some(chunks) = inline_chunks(context, size, env, true)? {
-            let mut state = observed_state(operation.op());
-            for Chunk { offset, bytes } in chunks {
-                let ty = IntegerType::new(context, u64::from(bytes) * 8);
-                let src = address(context, &operation, source, offset)?;
-                let dst = address(context, &operation, destination, offset)?;
-                let load = LoadOp::new(
-                    context,
-                    src,
-                    ty,
-                    state.into_iter().collect(),
-                    state
-                        .map(|s| context.get_value(s).ty())
-                        .into_iter()
-                        .collect(),
-                    Default::default(),
-                    context.insertion_point(operation.op().id),
-                );
-                state = produced_state(&context.get_op(load.id()));
-                state = store(context, &operation, dst, load.result(), state)?;
-            }
-            finish(context, &operation, state)?;
-            return Ok(());
+pub(crate) fn memcpy_intrinsic_expand(
+    operation: &tir::OpHandle,
+    context: &Context,
+    env: Option<&TargetEnv>,
+) -> Result<(), PassError> {
+    let operation = OperationRef::new(context.get_op(operation.id()));
+    let [destination, source, size] = operation.op().operands()[..3] else {
+        unreachable!()
+    };
+    if let Some(chunks) = inline_chunks(context, size, env, true)? {
+        let mut state = observed_state(operation.op());
+        for Chunk { offset, bytes } in chunks {
+            let ty = IntegerType::new(context, u64::from(bytes) * 8);
+            let src = address(context, &operation, source, offset)?;
+            let dst = address(context, &operation, destination, offset)?;
+            let load = crate::ptr::r#load(
+                context,
+                src,
+                ty,
+                state.into_iter().collect(),
+                state
+                    .map(|s| context.get_value(s).ty())
+                    .into_iter()
+                    .collect(),
+                Default::default(),
+                context.insertion_point(operation.op().id),
+            );
+            state = produced_state(&context.get_op(load.id()));
+            state = store(context, &operation, dst, load.results()[0], state)?;
         }
-        library_call(
-            context,
-            &operation,
-            "memcpy",
-            vec![destination, source, size],
-        )
+        finish(context, &operation, state)?;
+        return Ok(());
     }
+    library_call(
+        context,
+        &operation,
+        "memcpy",
+        vec![destination, source, size],
+    )
 }
 
-impl Intrinsic for MemsetOp {
-    fn expand(&self, context: &Context, env: Option<&TargetEnv>) -> Result<(), PassError> {
-        let operation = OperationRef::new(context.get_op(self.id()));
-        let [destination, value, size] = self.operands()[..3] else {
-            unreachable!()
-        };
-        if let Some(chunks) = inline_chunks(context, size, env, false)? {
-            let mut state = observed_state(operation.op());
-            for Chunk { offset, bytes } in chunks {
-                let dst = address(context, &operation, destination, offset)?;
-                let mut fill = value;
-                if bytes > 1 {
-                    let ty = IntegerType::new(context, u64::from(bytes) * 8);
-                    let extended = b::extui(
-                        context,
-                        value,
-                        ty,
-                        Default::default(),
-                        tir::InsertionPoint::Root,
-                    );
-                    context.insert(context.insertion_point(operation.op().id), extended.id());
-                    let pattern = (0..bytes).fold(0u64, |bits, byte| bits | (1 << (byte * 8)));
-                    let repeated = b::constant(
-                        context,
-                        pattern as i64,
-                        ty,
-                        Default::default(),
-                        tir::InsertionPoint::Root,
-                    );
-                    context.insert(context.insertion_point(operation.op().id), repeated.id());
-                    let product = b::muli(
-                        context,
-                        extended.result(),
-                        repeated.result(),
-                        ty,
-                        Default::default(),
-                        tir::InsertionPoint::Root,
-                    );
-                    context.insert(context.insertion_point(operation.op().id), product.id());
-                    fill = product.result();
-                }
-                state = store(context, &operation, dst, fill, state)?;
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_MemcpyOp_Intrinsic: crate::IntrinsicCallbacks =
+    crate::IntrinsicCallbacks {
+        expand: crate::ptr::intrinsics::memcpy_intrinsic_expand,
+    };
+
+pub(crate) fn memset_intrinsic_expand(
+    operation: &tir::OpHandle,
+    context: &Context,
+    env: Option<&TargetEnv>,
+) -> Result<(), PassError> {
+    let operation = OperationRef::new(context.get_op(operation.id()));
+    let [destination, value, size] = operation.op().operands()[..3] else {
+        unreachable!()
+    };
+    if let Some(chunks) = inline_chunks(context, size, env, false)? {
+        let mut state = observed_state(operation.op());
+        for Chunk { offset, bytes } in chunks {
+            let dst = address(context, &operation, destination, offset)?;
+            let mut fill = value;
+            if bytes > 1 {
+                let ty = IntegerType::new(context, u64::from(bytes) * 8);
+                let extended = b::extui(
+                    context,
+                    value,
+                    ty,
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                );
+                context.insert(context.insertion_point(operation.op().id), extended.id());
+                let pattern = (0..bytes).fold(0u64, |bits, byte| bits | (1 << (byte * 8)));
+                let repeated = b::constant(
+                    context,
+                    pattern as i64,
+                    ty,
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                );
+                context.insert(context.insertion_point(operation.op().id), repeated.id());
+                let product = b::muli(
+                    context,
+                    extended.results()[0],
+                    repeated.results()[0],
+                    ty,
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                );
+                context.insert(context.insertion_point(operation.op().id), product.id());
+                fill = product.results()[0];
             }
-            finish(context, &operation, state)?;
-            return Ok(());
+            state = store(context, &operation, dst, fill, state)?;
         }
-        library_call(
-            context,
-            &operation,
-            "memset",
-            vec![destination, value, size],
-        )
+        finish(context, &operation, state)?;
+        return Ok(());
     }
+    library_call(
+        context,
+        &operation,
+        "memset",
+        vec![destination, value, size],
+    )
 }
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_MemsetOp_Intrinsic: crate::IntrinsicCallbacks =
+    crate::IntrinsicCallbacks {
+        expand: crate::ptr::intrinsics::memset_intrinsic_expand,
+    };
 
 struct Chunk {
     offset: u64,
@@ -228,13 +243,13 @@ fn address(
     let address = p::ptradd(
         context,
         base,
-        index.result(),
+        index.results()[0],
         context.get_value(base).ty(),
         Default::default(),
         tir::InsertionPoint::Root,
     );
     context.insert(context.insertion_point(before.op().id), address.id());
-    Ok(address.result())
+    Ok(address.results()[0])
 }
 
 fn store(
@@ -244,7 +259,7 @@ fn store(
     value: ValueId,
     state: Option<ValueId>,
 ) -> Result<Option<ValueId>, PassError> {
-    let store = StoreOp::new(
+    let store = crate::ptr::r#store(
         context,
         value,
         ptr,
@@ -284,7 +299,7 @@ fn library_call(
     let module = loop {
         let id =
             parent.ok_or_else(|| invalid("intrinsic runtime call requires an enclosing module"))?;
-        if let Some(module) = context.get_op(id).as_op::<ModuleOp>() {
+        if let Some(module) = context.get_op(id).as_operation(&crate::builtin::MODULE) {
             break module;
         }
         parent = context.parent_op(id);
@@ -307,7 +322,7 @@ fn library_call(
             tir::InsertionPoint::Root,
         );
         context.insert(context.insertion_point(operation.op().id), extended.id());
-        args[1] = extended.result();
+        args[1] = extended.results()[0];
     }
     let call = threaded_call(
         context,
@@ -332,8 +347,8 @@ fn threaded_call(
     result_type: TypeId,
     state: Option<ValueId>,
     insertion: tir::InsertionPoint,
-) -> impl Operation {
-    func_ops::CallOp::new(
+) -> tir::OpHandle {
+    crate::func::r#call(
         context,
         callee,
         args,
@@ -357,19 +372,22 @@ fn threaded_call(
 
 fn ensure_lambda(
     context: &Context,
-    module: &ModuleOp,
+    module: &crate::OpHandle,
     name: &str,
     return_type: TypeId,
     argument_types: &[TypeId],
 ) -> Result<ValueId, PassError> {
     let expected = FnType::new(context, argument_types, return_type);
-    let existing = module.body().op_ids().into_iter().find_map(|operation| {
-        let instance = context.get_op(operation);
-        let symbol = instance.clone().as_interface::<dyn Symbol>()?;
-        (symbol.symbol_name() == name)
-            .then(|| instance.results().first().copied())
-            .flatten()
-    });
+    let existing = crate::builtin::module_body(module)
+        .op_ids()
+        .into_iter()
+        .find_map(|operation| {
+            let instance = context.get_op(operation);
+            let symbol = instance.clone().as_interface::<dyn Symbol>()?;
+            (symbol.symbol_name() == name)
+                .then(|| instance.results().first().copied())
+                .flatten()
+        });
     if let Some(value) = existing {
         if context.get_value(value).ty() != expected {
             return Err(PassError::InvalidRuleSet(format!(
@@ -385,10 +403,10 @@ fn ensure_lambda(
         argument_types,
         Default::default(),
         tir::InsertionPoint::Block {
-            block: module.body().id(),
+            block: crate::builtin::module_body(module).id(),
             position: 0,
         },
     );
-    let value = declaration.fn_value();
+    let value = crate::func::declare_fn_value(&declaration);
     Ok(value)
 }

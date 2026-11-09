@@ -1,0 +1,189 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type builtin = Dialect;
+
+type constant_attributes = Record<{ value: AttrInt }>;
+extern let constant_iface_ConstantLike: Interface;
+extern let constant_iface_Interp: Interface;
+extern let constant_iface_Speculatable: Interface;
+type subi_attributes = Record<{ nsw: Optional<Bool>, nuw: Optional<Bool> }>;
+extern fn subi_exec_model<W: Nat>(self: subi_attributes, lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern fn subi_poison_model<W: Nat>(self: subi_attributes, lhs: Int<W>, rhs: Int<W>) -> Bool;
+extern let subi_iface_Subtractive: Interface;
+extern let subi_iface_SameOperandAndResultType: Interface;
+extern let subi_iface_IntegerArithmetic: Interface;
+extern let subi_iface_Speculatable: Interface;
+extern fn muli_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern let muli_iface_Commutative: Interface;
+extern let muli_iface_SameOperandAndResultType: Interface;
+extern let muli_iface_IntegerArithmetic: Interface;
+extern let muli_iface_Speculatable: Interface;
+extern let muli_iface_OpCost: Interface;
+extern fn divsi_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern fn divsi_requires_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+extern let divsi_iface_SameOperandAndResultType: Interface;
+extern let divsi_iface_IntegerArithmetic: Interface;
+extern fn remsi_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern fn remsi_requires_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+extern let remsi_iface_SameOperandAndResultType: Interface;
+extern let remsi_iface_IntegerArithmetic: Interface;
+extern fn remui_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern fn remui_requires_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+extern let remui_iface_SameOperandAndResultType: Interface;
+extern let remui_iface_IntegerArithmetic: Interface;
+extern fn andi_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern let andi_iface_Commutative: Interface;
+extern let andi_iface_SameOperandAndResultType: Interface;
+extern let andi_iface_IntegerArithmetic: Interface;
+extern let andi_iface_Speculatable: Interface;
+extern fn ori_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern let ori_iface_Commutative: Interface;
+extern let ori_iface_SameOperandAndResultType: Interface;
+extern let ori_iface_IntegerArithmetic: Interface;
+extern let ori_iface_Speculatable: Interface;
+extern fn xori_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern let xori_iface_Commutative: Interface;
+extern let xori_iface_SameOperandAndResultType: Interface;
+extern let xori_iface_IntegerArithmetic: Interface;
+extern let xori_iface_Speculatable: Interface;
+extern fn shli_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern fn shli_poison_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+extern let shli_iface_SameOperandAndResultType: Interface;
+extern let shli_iface_IntegerArithmetic: Interface;
+extern let shli_iface_Speculatable: Interface;
+extern fn shrui_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern fn shrui_poison_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+extern let shrui_iface_SameOperandAndResultType: Interface;
+extern let shrui_iface_IntegerArithmetic: Interface;
+extern let shrui_iface_Speculatable: Interface;
+extern fn shrsi_exec_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+extern fn shrsi_poison_model<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+extern let shrsi_iface_SameOperandAndResultType: Interface;
+extern let shrsi_iface_IntegerArithmetic: Interface;
+extern let shrsi_iface_Speculatable: Interface;
+type cmpi_attributes = Record<{ predicate: AttrPredicate }>;
+extern fn cmpi_exec_model<W: Nat>(self: cmpi_attributes, lhs: Int<W>, rhs: Int<W>) -> Int<1>;
+extern let cmpi_iface_Speculatable: Interface;
+extern fn extsi_exec_model(input: AnyInt) -> AnyInt;
+extern let extsi_iface_Speculatable: Interface;
+extern fn extui_exec_model(input: AnyInt) -> AnyInt;
+extern let extui_iface_Speculatable: Interface;
+extern fn trunci_exec_model(input: AnyInt) -> AnyInt;
+extern let trunci_iface_Speculatable: Interface;
+extern fn bitcast_exec_model(input: Any) -> Any;
+extern fn bitcast_verifier(operation: Operation, context: Context) -> Validation;
+extern let bitcast_iface_Speculatable: Interface;
+
+pub let builtin::constant = {
+    signature: () -> AnyInt,
+    attributes: { value: { ty: AttrInt, codec: int_codec } },
+    interfaces: [constant_iface_ConstantLike, constant_iface_Interp, constant_iface_Speculatable],
+};
+
+pub let builtin::subi<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    attributes: { nsw: { ty: Optional<Bool>, codec: _flag_codec }, nuw: { ty: Optional<Bool>, codec: _flag_codec } },
+    exec: subi_exec_model<W>,
+    poison: subi_poison_model<W>,
+    interfaces: [subi_iface_Subtractive, subi_iface_SameOperandAndResultType, subi_iface_IntegerArithmetic, subi_iface_Speculatable],
+};
+
+pub let builtin::muli<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: muli_exec_model<W>,
+    interfaces: [muli_iface_Commutative, muli_iface_SameOperandAndResultType, muli_iface_IntegerArithmetic, muli_iface_Speculatable, muli_iface_OpCost],
+};
+
+pub let builtin::divsi<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: divsi_exec_model<W>,
+    requires: divsi_requires_model<W>,
+    interfaces: [divsi_iface_SameOperandAndResultType, divsi_iface_IntegerArithmetic],
+};
+
+pub let builtin::remsi<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: remsi_exec_model<W>,
+    requires: remsi_requires_model<W>,
+    interfaces: [remsi_iface_SameOperandAndResultType, remsi_iface_IntegerArithmetic],
+};
+
+pub let builtin::remui<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: remui_exec_model<W>,
+    requires: remui_requires_model<W>,
+    interfaces: [remui_iface_SameOperandAndResultType, remui_iface_IntegerArithmetic],
+};
+
+pub let builtin::andi<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: andi_exec_model<W>,
+    interfaces: [andi_iface_Commutative, andi_iface_SameOperandAndResultType, andi_iface_IntegerArithmetic, andi_iface_Speculatable],
+};
+
+pub let builtin::ori<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: ori_exec_model<W>,
+    interfaces: [ori_iface_Commutative, ori_iface_SameOperandAndResultType, ori_iface_IntegerArithmetic, ori_iface_Speculatable],
+};
+
+pub let builtin::xori<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: xori_exec_model<W>,
+    interfaces: [xori_iface_Commutative, xori_iface_SameOperandAndResultType, xori_iface_IntegerArithmetic, xori_iface_Speculatable],
+};
+
+pub let builtin::shli<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: shli_exec_model<W>,
+    poison: shli_poison_model<W>,
+    interfaces: [shli_iface_SameOperandAndResultType, shli_iface_IntegerArithmetic, shli_iface_Speculatable],
+};
+
+pub let builtin::shrui<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: shrui_exec_model<W>,
+    poison: shrui_poison_model<W>,
+    interfaces: [shrui_iface_SameOperandAndResultType, shrui_iface_IntegerArithmetic, shrui_iface_Speculatable],
+};
+
+pub let builtin::shrsi<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: shrsi_exec_model<W>,
+    poison: shrsi_poison_model<W>,
+    interfaces: [shrsi_iface_SameOperandAndResultType, shrsi_iface_IntegerArithmetic, shrsi_iface_Speculatable],
+};
+
+pub let builtin::cmpi<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<1>,
+    attributes: { predicate: { ty: AttrPredicate, codec: predicate_codec, vocabulary: "INTEGER" } },
+    exec: cmpi_exec_model<W>,
+    interfaces: [cmpi_iface_Speculatable],
+};
+
+pub let builtin::extsi = {
+    signature: (input: AnyInt) -> AnyInt,
+    exec: extsi_exec_model,
+    interfaces: [extsi_iface_Speculatable],
+};
+
+pub let builtin::extui = {
+    signature: (input: AnyInt) -> AnyInt,
+    exec: extui_exec_model,
+    interfaces: [extui_iface_Speculatable],
+};
+
+pub let builtin::trunci = {
+    signature: (input: AnyInt) -> AnyInt,
+    exec: trunci_exec_model,
+    interfaces: [trunci_iface_Speculatable],
+};
+
+pub let builtin::bitcast = {
+    signature: (input: Any) -> Any,
+    exec: bitcast_exec_model,
+    verify: bitcast_verifier,
+    interfaces: [bitcast_iface_Speculatable],
+};

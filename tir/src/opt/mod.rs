@@ -1,7 +1,7 @@
 use std::{error::Error, ffi::OsString};
 
 use clap::Args;
-use tir::{Context, IRFormatter, Operation, builtin::ModuleOp};
+use tir::{Context, IRFormatter, Operation};
 
 use crate::common::{read_input, write_output};
 
@@ -44,14 +44,16 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
 
     let context = Context::with_default_dialects();
     context.register_dialect::<tir_gpu::spirv::SpirvDialect>();
-    let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, &input)
+    let module = tir::parse::ir::parse_operation(&context, &input, &tir::builtin::MODULE)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0))?;
     crate::common::attach_declared_data_layout(&context, &module)?;
     if let Some(path) = &args.merge {
-        let other = tir::parse::ir::parse_ir::<ModuleOp>(&context, &read_input(Some(path))?)
-            .map_err(|(span, err)| {
-                format!("failed to parse {path:?} at byte {}: {err:?}", span.0)
-            })?;
+        let other = tir::parse::ir::parse_operation(
+            &context,
+            &read_input(Some(path))?,
+            &tir::builtin::MODULE,
+        )
+        .map_err(|(span, err)| format!("failed to parse {path:?} at byte {}: {err:?}", span.0))?;
         tir::symbol_table::merge_modules(&context, module.id(), other.id())?;
     }
 

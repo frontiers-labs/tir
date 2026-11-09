@@ -32,5 +32,5 @@ instruction RegSplice for [Arch] {
     behavior { dst = dst; }
 }
 
-// CHECK-DAG: ImmSpliceOp
-// CHECK-DAG: RegSpliceOp
+// CHECK-DAG: pub static IMMSPLICE: tir::OpDefSpec
+// CHECK-DAG: pub static REGSPLICE: tir::OpDefSpec

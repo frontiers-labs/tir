@@ -7,8 +7,8 @@ pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), E
     let mut worklist = vec![op_id];
     while let Some(op_id) = worklist.pop() {
         let instance = context.get_op(op_id);
-        let exports =
-            instance.is::<crate::func::ReturnOp>() || instance.is::<crate::scf::YieldOp>();
+        let exports = instance.is_operation(&crate::func::RETURN)
+            || instance.is_operation(&crate::scf::YIELD);
         for operand in instance.state_operands() {
             let resource = context
                 .state_resource(context.get_value(operand).ty())

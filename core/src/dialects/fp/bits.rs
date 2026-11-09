@@ -1,72 +1,37 @@
 use tir_adt::{APFloat, APInt, FloatClass, FloatWidth, classify_float};
 
 use super::arithmetic::{float_parts, width_of_float};
-use crate::{SameOperandAndResultType, Speculatable, operation};
+use crate::{SameOperandAndResultType, Speculatable};
 
 use crate as tir;
 
-operation! {
-    NegOp {
-        name: "neg", dialect: "fp", scheme: "forall E: nat, M: nat. (float<E, M>) -> float<E, M>",
-        operands: O { input },
-        results: R { result },
-        interfaces: [SameOperandAndResultType, Speculatable, crate::interp::Interp],
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_fp_bits.cdsl",
+    hosts: {
+        neg_iface_SameOperandAndResultType => (SameOperandAndResultType, &crate::SameOperandAndResultTypeCallbacks::DEFAULT),
+        neg_iface_Speculatable => (Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        neg_iface_Interp => (crate :: interp :: Interp, &crate::interp::InterpCallbacks { evaluate: |_operation, operands, _state| unary_bits_evaluate(operands, |bits, sign| bits ^ sign) }),
+        abs_iface_SameOperandAndResultType => (SameOperandAndResultType, &crate::SameOperandAndResultTypeCallbacks::DEFAULT),
+        abs_iface_Speculatable => (Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        abs_iface_Interp => (crate :: interp :: Interp, &crate::interp::InterpCallbacks { evaluate: |_operation, operands, _state| unary_bits_evaluate(operands, |bits, sign| bits & !sign) }),
+        copysign_iface_SameOperandAndResultType => (SameOperandAndResultType, &crate::SameOperandAndResultTypeCallbacks::DEFAULT),
+        copysign_iface_Speculatable => (Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        copysign_iface_Interp => (crate :: interp :: Interp, &crate::fp::__TIR_IFACE_CopySignOp_Interp),
+        signbit_iface_Speculatable => (Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        signbit_iface_Interp => (crate :: interp :: Interp, &crate::fp::__TIR_IFACE_SignBitOp_Interp),
+        classify_verifier => crate::fp::classify_verify_impl,
+        classify_iface_Speculatable => (Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        classify_iface_Interp => (crate :: interp :: Interp, &crate::fp::__TIR_IFACE_ClassifyOp_Interp),
+    },
 }
 
-operation! {
-    AbsOp {
-        name: "abs", dialect: "fp", scheme: "forall E: nat, M: nat. (float<E, M>) -> float<E, M>",
-        operands: O { input },
-        results: R { result },
-        interfaces: [SameOperandAndResultType, Speculatable, crate::interp::Interp],
-    }
-}
-
-operation! {
-    CopySignOp {
-        name: "copysign", dialect: "fp", scheme: "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
-        operands: O { magnitude, sign },
-        results: R { result },
-        interfaces: [SameOperandAndResultType, Speculatable, crate::interp::Interp],
-    }
-}
-
-operation! {
-    SignBitOp {
-        name: "signbit", dialect: "fp", scheme: "(float<_, _>) -> int<1>",
-        operands: O { input },
-        results: R { result },
-        interfaces: [Speculatable, crate::interp::Interp],
-    }
-}
-
-operation! {
-    ClassifyOp {
-        name: "classify", dialect: "fp", scheme: "(float<_, _>) -> int<1>",
-        operands: O { input },
-        attributes: A { class: "Str" },
-        results: R { result },
-        interfaces: [Speculatable, crate::interp::Interp],
-        verifier: "true",
-    }
-}
-
-impl SameOperandAndResultType for NegOp {}
-impl SameOperandAndResultType for AbsOp {}
-impl SameOperandAndResultType for CopySignOp {}
-impl Speculatable for NegOp {}
-impl Speculatable for AbsOp {}
-impl Speculatable for CopySignOp {}
-impl Speculatable for SignBitOp {}
-impl Speculatable for ClassifyOp {}
-
-impl tir::Verifiable for ClassifyOp {
-    fn verify_impl(&self, _: &tir::Context) -> Result<(), tir::Error> {
-        parse_class(&self.class())
-            .ok_or_else(|| tir::Error::VerificationError("unknown floating-point class".into()))?;
-        Ok(())
-    }
+pub(crate) fn classify_verify_impl(
+    operation: &tir::OpHandle,
+    _: &tir::Context,
+) -> Result<(), tir::Error> {
+    parse_class(&crate::fp::classify_class(operation))
+        .ok_or_else(|| tir::Error::VerificationError("unknown floating-point class".into()))?;
+    Ok(())
 }
 
 fn parse_class(name: &str) -> Option<FloatClass> {
@@ -106,75 +71,77 @@ fn from_bits(width: FloatWidth, bits: u64) -> crate::interp::Value {
     crate::interp::Value::Float(APFloat::from_bits(exponent, mantissa, false, bits as u128))
 }
 
-macro_rules! unary_bits {
-    ($op:ident, $apply:expr) => {
-        impl crate::interp::Interp for $op {
-            fn evaluate(
-                &self,
-                operands: &[crate::interp::Value],
-                _: &mut crate::interp::ExecutionState,
-            ) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
-                let value = float(&operands[0])?;
-                let width = width_of_float(value)?;
-                Ok(vec![from_bits(
-                    width,
-                    $apply(value.to_bits() as u64, sign_mask(width)),
-                )])
-            }
-        }
+fn unary_bits_evaluate(
+    operands: &[crate::interp::Value],
+    apply: fn(u64, u64) -> u64,
+) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
+    let value = float(&operands[0])?;
+    let width = width_of_float(value)?;
+    Ok(vec![from_bits(
+        width,
+        apply(value.to_bits() as u64, sign_mask(width)),
+    )])
+}
+
+pub(crate) fn copysign_interp_evaluate(
+    __operation: &tir::OpHandle,
+    operands: &[crate::interp::Value],
+    _: &mut crate::interp::ExecutionState,
+) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
+    let magnitude = float(&operands[0])?;
+    let sign = float(&operands[1])?;
+    let width = width_of_float(magnitude)?;
+    if width_of_float(sign)? != width {
+        return Err(crate::interp::InterpError::Message(
+            "fp.copysign operands have different formats".into(),
+        ));
+    }
+    let mask = sign_mask(width);
+    let bits = (magnitude.to_bits() as u64 & !mask) | (sign.to_bits() as u64 & mask);
+    Ok(vec![from_bits(width, bits)])
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_CopySignOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::fp::copysign_interp_evaluate,
     };
+
+pub(crate) fn signbit_interp_evaluate(
+    __operation: &tir::OpHandle,
+    operands: &[crate::interp::Value],
+    _: &mut crate::interp::ExecutionState,
+) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
+    let value = float(&operands[0])?;
+    let width = width_of_float(value)?;
+    Ok(vec![crate::interp::Value::Int(APInt::new(
+        1,
+        u64::from(value.to_bits() as u64 & sign_mask(width) != 0),
+    ))])
 }
 
-unary_bits!(NegOp, |bits: u64, sign: u64| bits ^ sign);
-unary_bits!(AbsOp, |bits: u64, sign: u64| bits & !sign);
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_SignBitOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::fp::signbit_interp_evaluate,
+    };
 
-impl crate::interp::Interp for CopySignOp {
-    fn evaluate(
-        &self,
-        operands: &[crate::interp::Value],
-        _: &mut crate::interp::ExecutionState,
-    ) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
-        let magnitude = float(&operands[0])?;
-        let sign = float(&operands[1])?;
-        let width = width_of_float(magnitude)?;
-        if width_of_float(sign)? != width {
-            return Err(crate::interp::InterpError::Message(
-                "fp.copysign operands have different formats".into(),
-            ));
-        }
-        let mask = sign_mask(width);
-        let bits = (magnitude.to_bits() as u64 & !mask) | (sign.to_bits() as u64 & mask);
-        Ok(vec![from_bits(width, bits)])
-    }
+pub(crate) fn classify_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[crate::interp::Value],
+    _: &mut crate::interp::ExecutionState,
+) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
+    let value = float(&operands[0])?;
+    let width = width_of_float(value)?;
+    let class = parse_class(&crate::fp::classify_class(operation)).expect("verified class");
+    Ok(vec![crate::interp::Value::Int(APInt::new(
+        1,
+        u64::from(classify_float(width, value.to_bits() as u64) == class),
+    ))])
 }
 
-impl crate::interp::Interp for SignBitOp {
-    fn evaluate(
-        &self,
-        operands: &[crate::interp::Value],
-        _: &mut crate::interp::ExecutionState,
-    ) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
-        let value = float(&operands[0])?;
-        let width = width_of_float(value)?;
-        Ok(vec![crate::interp::Value::Int(APInt::new(
-            1,
-            u64::from(value.to_bits() as u64 & sign_mask(width) != 0),
-        ))])
-    }
-}
-
-impl crate::interp::Interp for ClassifyOp {
-    fn evaluate(
-        &self,
-        operands: &[crate::interp::Value],
-        _: &mut crate::interp::ExecutionState,
-    ) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
-        let value = float(&operands[0])?;
-        let width = width_of_float(value)?;
-        let class = parse_class(&self.class()).expect("verified class");
-        Ok(vec![crate::interp::Value::Int(APInt::new(
-            1,
-            u64::from(classify_float(width, value.to_bits() as u64) == class),
-        ))])
-    }
-}
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_ClassifyOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::fp::classify_interp_evaluate,
+    };

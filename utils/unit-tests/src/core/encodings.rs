@@ -8,9 +8,9 @@ use tir::backend::binary::{
 };
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
 use tir::backend::{RegAssignment, RegClassType};
-use tir::{Context, NewOp, OpHandle, Operation};
+use tir::{Context, NewOp, OpHandle};
 
-use super::fixtures::{machine_op, r, reg_class};
+use super::fixtures::{r, reg_class};
 
 fn phys(index: u16) -> AttributeValue {
     AttributeValue::Register(RegisterAttr::Physical { class: r(), index })
@@ -67,7 +67,12 @@ fn enc(op: &OpHandle, spec: &EncodeSpec) -> Option<EncodedInst> {
     encode_with(op, spec, &RegAssignment::default()).ok()
 }
 
-machine_op!(TestInstOp, "test", "inst", &[]);
+tir::helpers::op_def! {
+    file: "../../core/defs/converted-tests/src_core_encodings.cdsl",
+    hosts: {
+        inst_iface_MachineInstruction => (tir :: backend :: MachineInstruction, & super :: fixtures :: instr_info ! ( "inst" , & [ ] )),
+    },
+}
 
 fn op_with(attrs: Vec<(&str, AttributeValue)>) -> (Context, tir::OpHandle) {
     let context = Context::with_default_dialects();
@@ -80,7 +85,7 @@ fn build(
     attrs: Vec<(&str, AttributeValue)>,
     results: Vec<tir::ValueId>,
 ) -> tir::OpHandle {
-    TestInstOp::register_interfaces(context);
+    context.register_operation(&INST);
     let attributes = attrs
         .into_iter()
         .map(|(name, value)| context.named_attribute(name, value))

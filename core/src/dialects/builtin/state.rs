@@ -67,10 +67,8 @@ impl StateType {
     }
 
     pub fn spelling(_context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: ctor::STATE,
-            keys: &["state"],
-            parse: |_, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |_, parser, context| {
                 if !parser.parse_token("<") {
                     return Err((parser.span(), Error::ExpectedToken("<")));
                 }
@@ -81,13 +79,15 @@ impl StateType {
                 if !parser.parse_token(">") {
                     return Err((parser.span(), Error::ExpectedToken(">")));
                 }
-                Ok(Self::new(context, resource))
-            },
-            print: |spellings, ty, fmt| match Self::view(ty) {
-                Some(state) => fmt.write(format!("state<{}>", state.resource.name())),
-                None => spellings.print_generic(ty, fmt),
-            },
-            variadic_tail: false,
+                Ok(StateType::new(context, resource))
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter =
+                |spellings, ty, fmt| match StateType::view(ty) {
+                    Some(state) => fmt.write(format!("state<{}>", state.resource.name())),
+                    None => spellings.print_generic(ty, fmt),
+                };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId = |_context| ctor::STATE;
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_state.cdsl", binding: spellings::StateType, context: _context, hosts: { StateType_parse => __TIR_TYPE_PARSE, StateType_print => __TIR_TYPE_PRINT, StateType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }

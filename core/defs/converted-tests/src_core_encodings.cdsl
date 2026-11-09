@@ -1,0 +1,14 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type test = Dialect;
+
+type inst_attributes = Record<{ rd: Optional<AttrRegister> }>;
+extern let inst_iface_MachineInstruction: Interface;
+
+pub let test::inst = {
+    signature: () -> (rd: Many<AnyReg>,),
+    attributes: { rd: { ty: Optional<AttrRegister>, codec: _register_codec } },
+    interfaces: [inst_iface_MachineInstruction],
+};

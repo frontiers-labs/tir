@@ -1,0 +1,10 @@
+mod ops;
+use ops::*;
+extern type ptr = Dialect;
+extern fn load_verifier(operation: Operation, context: Context) -> Validation;
+
+pub let ptr::load<T, P, R> = {
+    signature: (ptr: Ptr<P>, state: States<R>) -> (result: T, state: States<R>),
+    verify: load_verifier,
+    interfaces: [MemoryRead, ResourceEffects, Interp],
+};

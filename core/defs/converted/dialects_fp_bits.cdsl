@@ -1,0 +1,48 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type fp = Dialect;
+
+extern let neg_iface_SameOperandAndResultType: Interface;
+extern let neg_iface_Speculatable: Interface;
+extern let neg_iface_Interp: Interface;
+extern let abs_iface_SameOperandAndResultType: Interface;
+extern let abs_iface_Speculatable: Interface;
+extern let abs_iface_Interp: Interface;
+extern let copysign_iface_SameOperandAndResultType: Interface;
+extern let copysign_iface_Speculatable: Interface;
+extern let copysign_iface_Interp: Interface;
+extern let signbit_iface_Speculatable: Interface;
+extern let signbit_iface_Interp: Interface;
+type classify_attributes = Record<{ class: String }>;
+extern fn classify_verifier(operation: Operation, context: Context) -> Validation;
+extern let classify_iface_Speculatable: Interface;
+extern let classify_iface_Interp: Interface;
+
+pub let fp::neg<E: Nat, M: Nat> = {
+    signature: (input: Float<E, M>) -> Float<E, M>,
+    interfaces: [neg_iface_SameOperandAndResultType, neg_iface_Speculatable, neg_iface_Interp],
+};
+
+pub let fp::abs<E: Nat, M: Nat> = {
+    signature: (input: Float<E, M>) -> Float<E, M>,
+    interfaces: [abs_iface_SameOperandAndResultType, abs_iface_Speculatable, abs_iface_Interp],
+};
+
+pub let fp::copysign<E: Nat, M: Nat> = {
+    signature: (magnitude: Float<E, M>, sign: Float<E, M>) -> Float<E, M>,
+    interfaces: [copysign_iface_SameOperandAndResultType, copysign_iface_Speculatable, copysign_iface_Interp],
+};
+
+pub let fp::signbit = {
+    signature: (input: AnyFloat) -> Int<1>,
+    interfaces: [signbit_iface_Speculatable, signbit_iface_Interp],
+};
+
+pub let fp::classify = {
+    signature: (input: AnyFloat) -> Int<1>,
+    attributes: { class: { ty: String, codec: str_codec } },
+    verify: classify_verifier,
+    interfaces: [classify_iface_Speculatable, classify_iface_Interp],
+};

@@ -17,7 +17,7 @@ use tir::fp::{
 };
 use tir::func::ops as func_ops;
 use tir::ptr::{PtrType, ops as pops};
-use tir::{Context, Operand, Operation, Symbol, TypeId, ValueId};
+use tir::{Context, OpHandle, Operand, Operation, TypeId, ValueId};
 
 use crate::ast::{self, BinOp, CastOp, Inst, Type};
 use crate::error::Error;
@@ -28,9 +28,9 @@ pub fn import(
     context: &Context,
     module: &ast::Module,
     data_layout: Option<&AttributeValue>,
-) -> Result<builtin::ModuleOp, Error> {
+) -> Result<OpHandle, Error> {
     let m = bops::module(context, None, Default::default(), tir::InsertionPoint::Root);
-    let builder = m.body();
+    let builder = bops::module_body(&m);
     let mut callees = Callees::default();
     let layout = Layout {
         named: module.named_types.iter().cloned().collect(),
@@ -117,13 +117,16 @@ impl Callees {
     fn bind(
         self,
         context: &Context,
-        module: &builtin::ModuleOp,
+        module: &OpHandle,
         body: &BlockHandle,
     ) -> HashMap<ValueId, ValueId> {
         let mut defined = HashMap::new();
-        for op in module.body().iter(context.clone()) {
-            if let Some(func) = op.as_op::<tir::func::FuncOp>() {
-                defined.insert(func.symbol_name(), func.fn_value());
+        for op in bops::module_body(module).iter(context.clone()) {
+            if let Some(func) = op.as_operation(&tir::func::FUNC) {
+                defined.insert(
+                    func_ops::func_sym_name(&func),
+                    func_ops::func_fn_value(&func),
+                );
             }
         }
         self.placeholders
@@ -134,14 +137,14 @@ impl Callees {
                 }
                 let signature = FnType::view(context, context.get_value(placeholder).ty())
                     .expect("a callee placeholder has a function type");
-                let declaration = tir::func::DeclareOp::new(
+                let declaration = tir::func::r#declare(
                     context,
                     AttributeValue::Str(name.into()),
                     FnType::new(context, &signature.params(), signature.ret()),
                     Default::default(),
                     body.end(),
                 );
-                (placeholder, declaration.fn_value())
+                (placeholder, func_ops::declare_fn_value(&declaration))
             })
             .collect()
     }
@@ -289,7 +292,7 @@ fn lower_globals(
                 )
             }
         };
-        values.insert(global.name.clone(), op.address());
+        values.insert(global.name.clone(), bops::global_address(&op));
     }
     Ok(values)
 }
@@ -360,7 +363,7 @@ fn lower_function(
     layout: &Layout,
     function_types: &HashMap<String, (Vec<Type>, Type, bool)>,
     insertion: tir::InsertionPoint,
-) -> Result<tir::func::FuncOp, Error> {
+) -> Result<OpHandle, Error> {
     // The function's rows share chunks with no other function's.
 
     let region = context.create_region();
@@ -604,24 +607,24 @@ fn lower_operand(
             .ok_or_else(|| Error::UndefinedValue(name.clone()))?,
         ast::Operand::ConstInt(v) => match ty {
             Type::Float(32) => {
-                let op = fp::ConstantOp::new(
+                let op = fp::r#constant(
                     context,
                     tir::attributes::AttributeValue::UInt((*v as f32).to_bits() as u64),
                     FloatType::f32(context),
                     Default::default(),
                     body.end(),
                 );
-                op.result()
+                op.value_results()[0]
             }
             Type::Float(64) => {
-                let op = fp::ConstantOp::new(
+                let op = fp::r#constant(
                     context,
                     tir::attributes::AttributeValue::UInt((*v as f64).to_bits()),
                     FloatType::f64(context),
                     Default::default(),
                     body.end(),
                 );
-                op.result()
+                op.value_results()[0]
             }
             _ => {
                 let c = bops::constant(
@@ -631,7 +634,7 @@ fn lower_operand(
                     Default::default(),
                     body.end(),
                 );
-                c.result()
+                c.value_results()[0]
             }
         },
         ast::Operand::ConstFloat(value) => float_constant(context, body, *value, ty)?,
@@ -657,7 +660,7 @@ fn lower_operand(
                     Default::default(),
                     body.end(),
                 );
-                op.result()
+                op.value_results()[0]
             }
         },
         ast::Operand::Null => {
@@ -667,7 +670,7 @@ fn lower_operand(
                 Default::default(),
                 body.end(),
             );
-            o.result()
+            o.value_results()[0]
         }
         ast::Operand::Undef => match ty {
             Type::Ptr(_) => {
@@ -677,17 +680,17 @@ fn lower_operand(
                     Default::default(),
                     body.end(),
                 );
-                op.result()
+                op.value_results()[0]
             }
             Type::Float(32) | Type::Float(64) => {
-                let op = fp::ConstantOp::new(
+                let op = fp::r#constant(
                     context,
                     tir::attributes::AttributeValue::UInt(0),
                     lower_type(context, ty)?,
                     Default::default(),
                     body.end(),
                 );
-                op.result()
+                op.value_results()[0]
             }
             _ => constant(context, body, 0, lower_type(context, ty)?),
         },
@@ -773,11 +776,11 @@ fn lower_inst(
             };
             let bits_ty = IntegerType::new(context, u64::from(width));
             // LLVM fneg flips the sign bit, including for zero and NaN.
-            let bits =
-                bops::bitcast(context, input, bits_ty, Default::default(), body.end()).result();
+            let bits = bops::bitcast(context, input, bits_ty, Default::default(), body.end())
+                .value_results()[0];
             let sign = constant(context, body, 1_i64 << (width - 1), bits_ty);
-            let negated =
-                bops::xori(context, bits, sign, bits_ty, Default::default(), body.end()).result();
+            let negated = bops::xori(context, bits, sign, bits_ty, Default::default(), body.end())
+                .value_results()[0];
             let op = bops::bitcast(
                 context,
                 negated,
@@ -785,7 +788,7 @@ fn lower_inst(
                 Default::default(),
                 body.end(),
             );
-            values.insert(result.clone(), op.result());
+            values.insert(result.clone(), op.value_results()[0]);
         }
         Inst::ICmp {
             result,
@@ -813,7 +816,7 @@ fn lower_inst(
                 Predicate::FLOAT,
                 "fcmp",
             )?;
-            let op = fp::CmpOp::new(
+            let op = fp::r#cmp(
                 context,
                 lhs,
                 rhs,
@@ -825,7 +828,7 @@ fn lower_inst(
                 Default::default(),
                 body.end(),
             );
-            let comparison = op.result();
+            let comparison = op.value_results()[0];
 
             let value = if pred == "ult" {
                 let one = constant(context, body, 1, IntegerType::new(context, 1));
@@ -837,7 +840,7 @@ fn lower_inst(
                     Default::default(),
                     body.end(),
                 )
-                .result()
+                .value_results()[0]
             } else {
                 comparison
             };
@@ -886,7 +889,7 @@ fn lower_inst(
                 Default::default(),
                 body.end(),
             );
-            values.insert(result.clone(), o.result());
+            values.insert(result.clone(), o.value_results()[0]);
         }
         Inst::Load { result, ty, ptr } => {
             let p = val!(ptr, &Type::Ptr(None));
@@ -899,7 +902,7 @@ fn lower_inst(
                 Default::default(),
                 body.end(),
             );
-            values.insert(result.clone(), o.result());
+            values.insert(result.clone(), o.value_results()[0]);
         }
         Inst::Store { ty, value, ptr } => {
             let v = val!(value, ty);
@@ -1065,7 +1068,7 @@ fn lower_inst(
                         Default::default(),
                         body.end(),
                     );
-                    op.result()
+                    op.value_results()[0]
                 }
                 _ => return Err(Error::Unsupported("invalid call target".into())),
             };
@@ -1080,7 +1083,7 @@ fn lower_inst(
                 body.end(),
             );
             if let Some(name) = result {
-                values.insert(name.clone(), o.result());
+                values.insert(name.clone(), o.value_results()[0]);
             }
         }
         Inst::Unsupported(opcode) => return Err(Error::Unsupported(opcode.clone())),
@@ -1096,9 +1099,9 @@ fn lower_binary(
     ty: TypeId,
 ) -> ValueId {
     macro_rules! integer {
-        ($constructor:path) => {{ $constructor(context, lhs, rhs, ty, Default::default(), body.end()).result() }};
+        ($constructor:path) => {{ $constructor(context, lhs, rhs, ty, Default::default(), body.end()).value_results()[0] }};
     }
-    let operation: Box<dyn Operation> = match kind {
+    let operation: OpHandle = match kind {
         BinOp::Add => return integer!(bops::addi),
         BinOp::Sub => return integer!(bops::subi),
         BinOp::Mul => return integer!(bops::muli),
@@ -1115,7 +1118,7 @@ fn lower_binary(
         kind => {
             let semantics = arithmetic_semantics(context);
             match kind {
-                BinOp::FAdd => Box::new(fp::AddOp::new(
+                BinOp::FAdd => fp::r#add(
                     context,
                     lhs,
                     rhs,
@@ -1125,8 +1128,8 @@ fn lower_binary(
                     vec![],
                     Default::default(),
                     body.end(),
-                )),
-                BinOp::FSub => Box::new(fp::SubOp::new(
+                ),
+                BinOp::FSub => fp::r#sub(
                     context,
                     lhs,
                     rhs,
@@ -1136,8 +1139,8 @@ fn lower_binary(
                     vec![],
                     Default::default(),
                     body.end(),
-                )),
-                BinOp::FMul => Box::new(fp::MulOp::new(
+                ),
+                BinOp::FMul => fp::r#mul(
                     context,
                     lhs,
                     rhs,
@@ -1147,8 +1150,8 @@ fn lower_binary(
                     vec![],
                     Default::default(),
                     body.end(),
-                )),
-                BinOp::FDiv => Box::new(fp::DivOp::new(
+                ),
+                BinOp::FDiv => fp::r#div(
                     context,
                     lhs,
                     rhs,
@@ -1158,7 +1161,7 @@ fn lower_binary(
                     vec![],
                     Default::default(),
                     body.end(),
-                )),
+                ),
                 _ => unreachable!(),
             }
         }
@@ -1245,7 +1248,7 @@ fn lower_switch(
         })
         .collect::<Result<Vec<_>, Error>>()?;
     let default = successor(default)?;
-    tir::cfg::SwitchOp::with_successors(
+    tir::cfg::switch_with_successors(
         context,
         selector,
         cases,
@@ -1313,7 +1316,7 @@ fn lower_intrinsic(
             Default::default(),
             body.end(),
         )
-        .result();
+        .value_results()[0];
         let relative = pops::load(
             context,
             address,
@@ -1323,7 +1326,7 @@ fn lower_intrinsic(
             Default::default(),
             body.end(),
         )
-        .result();
+        .value_results()[0];
         let relative = resize_signed(context, body, relative, offset_ty);
         return Ok(Some(
             pops::ptradd(
@@ -1334,7 +1337,7 @@ fn lower_intrinsic(
                 Default::default(),
                 body.end(),
             )
-            .result(),
+            .value_results()[0],
         ));
     }
     Err(Error::Unsupported(format!("intrinsic {name}")))
@@ -1358,13 +1361,13 @@ fn resize_integer(
     let width = |ty| IntegerType::view(context, ty).map(|integer| integer.width());
     match width(context.get_value(value).ty()).cmp(&width(ty)) {
         std::cmp::Ordering::Less if signed => {
-            bops::extsi(context, value, ty, Default::default(), body.end()).result()
+            bops::extsi(context, value, ty, Default::default(), body.end()).value_results()[0]
         }
         std::cmp::Ordering::Less => {
-            bops::extui(context, value, ty, Default::default(), body.end()).result()
+            bops::extui(context, value, ty, Default::default(), body.end()).value_results()[0]
         }
         std::cmp::Ordering::Greater => {
-            bops::trunci(context, value, ty, Default::default(), body.end()).result()
+            bops::trunci(context, value, ty, Default::default(), body.end()).value_results()[0]
         }
         std::cmp::Ordering::Equal => value,
     }
@@ -1372,7 +1375,7 @@ fn resize_integer(
 
 fn constant(context: &Context, body: &BlockHandle, value: i64, ty: TypeId) -> ValueId {
     let op = bops::constant(context, value, ty, Default::default(), body.end());
-    op.result()
+    op.value_results()[0]
 }
 
 fn float_constant(
@@ -1390,14 +1393,14 @@ fn float_constant(
             ));
         }
     };
-    let op = fp::ConstantOp::new(
+    let op = fp::r#constant(
         context,
         tir::attributes::AttributeValue::UInt(bits),
         ty,
         Default::default(),
         body.end(),
     );
-    Ok(op.result())
+    Ok(op.value_results()[0])
 }
 
 fn lower_select(
@@ -1422,29 +1425,29 @@ fn lower_select(
             if_true = pops::ptrdiff(
                 context,
                 if_true,
-                null.result(),
+                null.value_results()[0],
                 int_ty,
                 Default::default(),
                 body.end(),
             )
-            .result();
+            .value_results()[0];
             if_false = pops::ptrdiff(
                 context,
                 if_false,
-                null.result(),
+                null.value_results()[0],
                 int_ty,
                 Default::default(),
                 body.end(),
             )
-            .result();
+            .value_results()[0];
             int_ty
         }
         Type::Float(width) => {
             let int_ty = IntegerType::new(context, u64::from(*width));
-            if_true =
-                bops::bitcast(context, if_true, int_ty, Default::default(), body.end()).result();
-            if_false =
-                bops::bitcast(context, if_false, int_ty, Default::default(), body.end()).result();
+            if_true = bops::bitcast(context, if_true, int_ty, Default::default(), body.end())
+                .value_results()[0];
+            if_false = bops::bitcast(context, if_false, int_ty, Default::default(), body.end())
+                .value_results()[0];
             int_ty
         }
         Type::Int(_) => result_ty,
@@ -1453,7 +1456,7 @@ fn lower_select(
     let mask = if context.get_value(cond).ty() == work_ty {
         cond
     } else {
-        bops::extsi(context, cond, work_ty, Default::default(), body.end()).result()
+        bops::extsi(context, cond, work_ty, Default::default(), body.end()).value_results()[0]
     };
     let selected_true = bops::andi(
         context,
@@ -1463,7 +1466,7 @@ fn lower_select(
         Default::default(),
         body.end(),
     )
-    .result();
+    .value_results()[0];
     let all_ones = constant(context, body, -1, work_ty);
     let inverted = bops::xori(
         context,
@@ -1473,7 +1476,7 @@ fn lower_select(
         Default::default(),
         body.end(),
     )
-    .result();
+    .value_results()[0];
     let selected_false = bops::andi(
         context,
         if_false,
@@ -1482,7 +1485,7 @@ fn lower_select(
         Default::default(),
         body.end(),
     )
-    .result();
+    .value_results()[0];
     let selected = bops::ori(
         context,
         selected_true,
@@ -1491,7 +1494,7 @@ fn lower_select(
         Default::default(),
         body.end(),
     )
-    .result();
+    .value_results()[0];
     Ok(match ty {
         Type::Ptr(_) => {
             let null = pops::null(
@@ -1502,16 +1505,17 @@ fn lower_select(
             );
             pops::ptradd(
                 context,
-                null.result(),
+                null.value_results()[0],
                 selected,
                 result_ty,
                 Default::default(),
                 body.end(),
             )
-            .result()
+            .value_results()[0]
         }
         Type::Float(_) => {
-            bops::bitcast(context, selected, result_ty, Default::default(), body.end()).result()
+            bops::bitcast(context, selected, result_ty, Default::default(), body.end())
+                .value_results()[0]
         }
         _ => selected,
     })
@@ -1528,7 +1532,7 @@ fn lower_icmp(
     let result_ty = IntegerType::new(context, 1);
     let predicate = parse_predicate(predicate, Predicate::INTEGER, "pointer icmp")?;
     Ok(if matches!(ty, Type::Ptr(_)) {
-        pops::CmpOp::new(
+        pops::cmp(
             context,
             lhs,
             rhs,
@@ -1537,9 +1541,9 @@ fn lower_icmp(
             Default::default(),
             body.end(),
         )
-        .result()
+        .value_results()[0]
     } else {
-        bops::CmpIOp::new(
+        bops::cmpi(
             context,
             lhs,
             rhs,
@@ -1548,7 +1552,7 @@ fn lower_icmp(
             Default::default(),
             body.end(),
         )
-        .result()
+        .value_results()[0]
     })
 }
 
@@ -1562,15 +1566,12 @@ fn lower_cast(
     layout: &Layout,
 ) -> ValueId {
     match cast {
-        CastOp::SExt => {
-            bops::extsi(context, input, result_ty, Default::default(), body.end()).result()
-        }
-        CastOp::ZExt => {
-            bops::extui(context, input, result_ty, Default::default(), body.end()).result()
-        }
-        CastOp::Trunc => {
-            bops::trunci(context, input, result_ty, Default::default(), body.end()).result()
-        }
+        CastOp::SExt => bops::extsi(context, input, result_ty, Default::default(), body.end())
+            .value_results()[0],
+        CastOp::ZExt => bops::extui(context, input, result_ty, Default::default(), body.end())
+            .value_results()[0],
+        CastOp::Trunc => bops::trunci(context, input, result_ty, Default::default(), body.end())
+            .value_results()[0],
         // Both casts zero-extend or truncate between the integer and the
         // pointer-sized address, which `ptr.ptrdiff` and `ptr.ptradd` take.
         CastOp::PtrToInt => {
@@ -1580,7 +1581,7 @@ fn lower_cast(
                 Default::default(),
                 body.end(),
             )
-            .result();
+            .value_results()[0];
             let address_ty = IntegerType::new(context, u64::from(layout.pointer_width));
             let address = pops::ptrdiff(
                 context,
@@ -1590,7 +1591,7 @@ fn lower_cast(
                 Default::default(),
                 body.end(),
             )
-            .result();
+            .value_results()[0];
             resize_unsigned(context, body, address, result_ty)
         }
         CastOp::IntToPtr => {
@@ -1602,7 +1603,7 @@ fn lower_cast(
                 Default::default(),
                 body.end(),
             )
-            .result();
+            .value_results()[0];
             pops::ptradd(
                 context,
                 null,
@@ -1611,12 +1612,12 @@ fn lower_cast(
                 Default::default(),
                 body.end(),
             )
-            .result()
+            .value_results()[0]
         }
         CastOp::SIToFP | CastOp::UIToFP => {
             let semantics = arithmetic_semantics(context);
-            let op: Box<dyn Operation> = if cast == CastOp::SIToFP || non_negative {
-                Box::new(fp::FromSiOp::new(
+            let op: OpHandle = if cast == CastOp::SIToFP || non_negative {
+                fp::r#from_si(
                     context,
                     input,
                     tir::attributes::AttributeValue::FpSemantics(semantics),
@@ -1625,9 +1626,9 @@ fn lower_cast(
                     vec![],
                     Default::default(),
                     body.end(),
-                ))
+                )
             } else {
-                Box::new(fp::FromUiOp::new(
+                fp::r#from_ui(
                     context,
                     input,
                     tir::attributes::AttributeValue::FpSemantics(semantics),
@@ -1636,7 +1637,7 @@ fn lower_cast(
                     vec![],
                     Default::default(),
                     body.end(),
-                ))
+                )
             };
             op.value_results()[0]
         }
@@ -1645,7 +1646,7 @@ fn lower_cast(
             let result_width = IntegerType::view(context, result_ty).map(|integer| integer.width());
             if cast == CastOp::FPToUI && result_width.is_some_and(|width| width < 64) {
                 let wide_ty = IntegerType::new(context, 64);
-                let wide = fp::ToSiOp::new(
+                let wide = fp::r#to_si(
                     context,
                     input,
                     tir::attributes::AttributeValue::FpSemantics(semantics),
@@ -1655,12 +1656,12 @@ fn lower_cast(
                     Default::default(),
                     body.end(),
                 )
-                .result();
+                .value_results()[0];
                 return bops::trunci(context, wide, result_ty, Default::default(), body.end())
-                    .result();
+                    .value_results()[0];
             }
-            let op: Box<dyn Operation> = if cast == CastOp::FPToSI {
-                Box::new(fp::ToSiOp::new(
+            let op: OpHandle = if cast == CastOp::FPToSI {
+                fp::r#to_si(
                     context,
                     input,
                     tir::attributes::AttributeValue::FpSemantics(semantics),
@@ -1669,9 +1670,9 @@ fn lower_cast(
                     vec![],
                     Default::default(),
                     body.end(),
-                ))
+                )
             } else {
-                Box::new(fp::ToUiOp::new(
+                fp::r#to_ui(
                     context,
                     input,
                     tir::attributes::AttributeValue::FpSemantics(semantics),
@@ -1680,11 +1681,11 @@ fn lower_cast(
                     vec![],
                     Default::default(),
                     body.end(),
-                ))
+                )
             };
             op.value_results()[0]
         }
-        CastOp::FPExt | CastOp::FPTrunc => fp::ConvertOp::new(
+        CastOp::FPExt | CastOp::FPTrunc => fp::r#convert(
             context,
             input,
             tir::attributes::AttributeValue::FpSemantics(arithmetic_semantics(context)),
@@ -1694,7 +1695,7 @@ fn lower_cast(
             Default::default(),
             body.end(),
         )
-        .result(),
+        .value_results()[0],
     }
 }
 
@@ -1740,7 +1741,7 @@ fn phi_arguments(
                         Default::default(),
                         body.end(),
                     );
-                    Ok(op.result())
+                    Ok(op.value_results()[0])
                 }
                 ast::Operand::Global(name) => globals
                     .get(name)
@@ -1819,7 +1820,7 @@ fn lower_gep(
                 Default::default(),
                 body.end(),
             );
-            product.result()
+            product.value_results()[0]
         };
         offset = Some(match offset {
             Some(offset) => {
@@ -1831,7 +1832,7 @@ fn lower_gep(
                     Default::default(),
                     body.end(),
                 );
-                add.result()
+                add.value_results()[0]
             }
             None => term,
         });
@@ -1841,10 +1842,10 @@ fn lower_gep(
     // A previously lowered GEP leaves its literal byte displacement outermost.
     // Combine that displacement here so the next dynamic index precedes it.
     if let Some(definition) = context.get_value(base).defining_op()
-        && let Some(add) = context.get_op(definition).as_op::<tir::ptr::PtrAddOp>()
+        && let Some(add) = context.get_op(definition).as_operation(&tir::ptr::PTRADD)
         && context.get_value(add.operands()[1]).ty() == offset_ty
         && let Some(definition) = context.get_value(add.operands()[1]).defining_op()
-        && let Some(literal) = context.get_op(definition).as_op::<builtin::ConstantOp>()
+        && let Some(literal) = context.get_op(definition).as_operation(&builtin::CONSTANT)
         && let Some(AttributeValue::Int(value)) = literal.attr("value")
     {
         address = add.operands()[0];
@@ -1859,7 +1860,7 @@ fn lower_gep(
             Default::default(),
             body.end(),
         )
-        .result();
+        .value_results()[0];
     }
     if literal_offset != 0 {
         let literal = constant(context, body, literal_offset, offset_ty);
@@ -1871,7 +1872,7 @@ fn lower_gep(
             Default::default(),
             body.end(),
         )
-        .result();
+        .value_results()[0];
     }
     Ok(address)
 }

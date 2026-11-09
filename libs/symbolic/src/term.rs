@@ -148,9 +148,7 @@ fn float_carrier(terms: &Terms, args: &[TypeArg]) -> Option<TypeArg> {
 /// The constructors the semantic layer reads, registered first and in this
 /// order, so their ids are constants.
 pub mod ctor {
-    use super::{
-        CtorId, Kind, Param, TypeArg, TypeCtor, first_arg, float_carrier, no_carrier, valid,
-    };
+    use super::{CtorId, TypeArg, TypeCtor, first_arg, float_carrier, no_carrier, valid};
 
     /// `builtin.i<W>`: a bit vector of `W` bits, any width.
     pub const INT: CtorId = CtorId(0);
@@ -174,91 +172,22 @@ pub mod ctor {
     pub const NAMED: CtorId = CtorId(9);
 
     pub(super) const BASE: [TypeCtor; 10] = [
-        TypeCtor {
-            dialect: "builtin",
-            name: "i",
-            params: &[("width", Param::One(Kind::Nat))],
-            kind: Kind::Data,
-            validate: valid,
-            carrier: first_arg,
-        },
-        TypeCtor {
-            dialect: "builtin",
-            name: "f",
-            params: &[
-                ("exponent", Param::One(Kind::Nat)),
-                ("mantissa", Param::One(Kind::Nat)),
-            ],
-            kind: Kind::Data,
-            validate: valid,
-            carrier: float_carrier,
-        },
-        TypeCtor {
-            dialect: "builtin",
-            name: "unit",
-            params: &[],
-            kind: Kind::Data,
-            validate: valid,
-            carrier: no_carrier,
-        },
-        TypeCtor {
-            dialect: "builtin",
-            name: "tuple",
-            params: &[("elements", Param::List(Kind::Data))],
-            kind: Kind::Data,
-            validate: valid,
-            carrier: no_carrier,
-        },
-        TypeCtor {
-            dialect: "builtin",
-            name: "state",
-            params: &[("resource", Param::One(Kind::Sym))],
-            kind: Kind::Ghost,
-            validate: valid,
-            carrier: no_carrier,
-        },
-        TypeCtor {
-            dialect: "nat",
-            name: "add",
-            params: &[("terms", Param::List(Kind::Nat))],
-            kind: Kind::Nat,
-            validate: valid,
-            carrier: no_carrier,
-        },
-        TypeCtor {
-            dialect: "sem",
-            name: "raw",
-            params: &[("width", Param::One(Kind::Nat))],
-            kind: Kind::Data,
-            validate: valid,
-            carrier: first_arg,
-        },
-        TypeCtor {
-            dialect: "sem",
-            name: "iter",
-            params: &[("element", Param::One(Kind::Data))],
-            kind: Kind::Data,
-            validate: valid,
-            carrier: no_carrier,
-        },
-        TypeCtor {
-            dialect: "sem",
-            name: "state",
-            params: &[],
-            kind: Kind::Ghost,
-            validate: valid,
-            carrier: no_carrier,
-        },
-        TypeCtor {
-            dialect: "type",
-            name: "named",
-            params: &[("name", Param::One(Kind::Sym)), ("args", Param::Any)],
-            kind: Kind::Data,
-            validate: |_, args| match args.get(1) {
-                Some(TypeArg::List(_)) => Ok(()),
-                _ => Err("type 'type.named' takes a list of arguments".to_string()),
-            },
-            carrier: no_carrier,
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_INT.rs")),
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_FLOAT.rs")),
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_UNIT.rs")),
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_TUPLE.rs")),
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_STATE.rs")),
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_NAT_ADD.rs")),
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_RAW.rs")),
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_ITER.rs")),
+        include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_SEM_STATE.rs")),
+        {
+            const __TIR_TYPE_VALIDATE: fn(&super::Terms, &[super::TypeArg]) -> Result<(), String> =
+                |_, args| match args.get(1) {
+                    Some(TypeArg::List(_)) => Ok(()),
+                    _ => Err("type 'type.named' takes a list of arguments".to_string()),
+                };
+            include!(concat!(env!("OUT_DIR"), "/cdsl-type-base_NAMED.rs"))
         },
     ];
 }

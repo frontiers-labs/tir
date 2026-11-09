@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::io::{self, Read, Write};
 
 use clap::Args;
-use tir::{Context, IRFormatter, Operation, builtin::ModuleOp};
+use tir::{Context, IRFormatter, Operation};
 
 use crate::common::read_input;
 
@@ -32,7 +32,7 @@ pub fn export(args: ExportArgs) -> Result<(), Box<dyn Error>> {
     let input = read_input(args.input.as_ref())?;
     let context = Context::with_default_dialects();
     context.register_dialect::<tir_gpu::spirv::SpirvDialect>();
-    let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, &input)
+    let module = tir::parse::ir::parse_operation(&context, &input, &tir::builtin::MODULE)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0))?;
     crate::common::attach_declared_data_layout(&context, &module)?;
     let binary = tir_gpu::spirv::write_binary(&context, &module)

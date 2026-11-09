@@ -1,6 +1,9 @@
 use std::hash::{Hash, Hasher};
 
-use crate::fp::ops::{AddOp, FmaOp, MulOp, RoundOp, SubOp};
+use crate::OpHandle;
+#[cfg(test)]
+use crate::fp::ROUND;
+use crate::fp::{self, ADD, FMA, MUL, SUB};
 use crate::fp::{Exceptions, IntermediateExceptions};
 use crate::{Context, OpId, ValueId};
 
@@ -36,7 +39,7 @@ pub struct ContractionProposal {
 
 pub fn contraction_proposals(
     context: &Context,
-    round: &RoundOp,
+    round: &OpHandle,
 ) -> Result<Vec<ContractionProposal>, RefinementError> {
     graph::contraction_proposals(context, round)
 }
@@ -72,7 +75,7 @@ impl RefinementWitness {
     pub fn validate(
         &self,
         context: &Context,
-        round: &RoundOp,
+        round: &OpHandle,
         candidate: &ContractionCandidate,
     ) -> Result<(), RefinementError> {
         let current = check_contraction(context, round, candidate)?;
@@ -89,14 +92,14 @@ impl RefinementWitness {
 
 pub fn check_contraction(
     context: &Context,
-    round: &RoundOp,
+    round: &OpHandle,
     candidate: &ContractionCandidate,
 ) -> Result<RefinementWitness, RefinementError> {
-    if !round.contract().permissions.expression_contraction {
+    if !fp::round_contract(round).permissions.expression_contraction {
         return Err(RefinementError::ContractForbidsContraction);
     }
     if !matches!(
-        round.contract().accuracy,
+        fp::round_contract(round).accuracy,
         crate::fp::AccuracyRequirement::Reference
     ) {
         return Err(RefinementError::UnsupportedAccuracy);
@@ -124,55 +127,54 @@ pub fn check_contraction(
     }
     let mul = mul_handle
         .clone()
-        .as_op::<MulOp>()
+        .as_operation(&MUL)
         .ok_or(RefinementError::UnsupportedForm)?;
     let implementation = implementation_handle
         .clone()
-        .as_op::<FmaOp>()
+        .as_operation(&FMA)
         .ok_or(RefinementError::UnsupportedForm)?;
     if !direct_state_chain(context, &mul_handle, &consumer_handle) {
         return Err(RefinementError::DisconnectedGroup);
     }
-    let reference = round.reference_region().id();
+    let reference = fp::round_reference_region(round).id();
     for handle in [&mul_handle, &consumer_handle] {
         if context.parent_nodes_region(handle.id) != Some(reference) {
             return Err(RefinementError::OutsideReference);
         }
     }
-    let mul_semantics_attr = mul.semantics();
+    let mul_semantics_attr = fp::mul_semantics(&mul);
     let mul_semantics = mul_semantics_attr
         .arithmetic()
         .map_err(|_| RefinementError::IncompatibleSemantics)?;
-    let consumer_semantics = if let Some(add) = consumer_handle.clone().as_op::<AddOp>() {
-        *add.semantics()
+    let consumer_semantics = if let Some(add) = consumer_handle.clone().as_operation(&ADD) {
+        *fp::add_semantics(&add)
             .arithmetic()
             .map_err(|_| RefinementError::IncompatibleSemantics)?
     } else {
-        *consumer_handle
+        let sub = consumer_handle
             .clone()
-            .as_op::<SubOp>()
-            .ok_or(RefinementError::UnsupportedForm)?
-            .semantics()
+            .as_operation(&SUB)
+            .ok_or(RefinementError::UnsupportedForm)?;
+        *fp::sub_semantics(&sub)
             .arithmetic()
             .map_err(|_| RefinementError::IncompatibleSemantics)?
     };
-    let implementation_semantics = *implementation
-        .semantics()
+    let implementation_semantics = *fp::fma_semantics(&implementation)
         .arithmetic()
         .map_err(|_| RefinementError::IncompatibleSemantics)?;
-    if *mul_semantics != round.contract().arithmetic
-        || consumer_semantics != round.contract().arithmetic
-        || implementation_semantics != round.contract().arithmetic
+    if *mul_semantics != fp::round_contract(round).arithmetic
+        || consumer_semantics != fp::round_contract(round).arithmetic
+        || implementation_semantics != fp::round_contract(round).arithmetic
     {
         return Err(RefinementError::IncompatibleSemantics);
     }
-    if round.contract().arithmetic.exceptions != Exceptions::Ignore
-        && round.contract().intermediate_exceptions
+    if fp::round_contract(round).arithmetic.exceptions != Exceptions::Ignore
+        && fp::round_contract(round).intermediate_exceptions
             != IntermediateExceptions::AllowContractedGroupRemoval
     {
         return Err(RefinementError::IntermediateExceptionsObserved);
     }
-    let yielded = round.reference_region().results();
+    let yielded = fp::round_reference_region(round).results();
     if candidate.result_mapping.len() != yielded.len()
         || candidate
             .result_mapping
@@ -192,7 +194,7 @@ pub fn check_contraction(
     {
         return Err(RefinementError::IncompleteResultMapping);
     }
-    let contract = ContractSnapshot::capture(context, &round.contract())?;
+    let contract = ContractSnapshot::capture(context, &fp::round_contract(round))?;
     let (reference, site) = ReferenceSnapshot::capture_contraction(context, round, candidate)?;
     let candidate_snapshot = CandidateSnapshot::capture(context, round, candidate)?;
     if !candidate_snapshot.is_contraction_of(&reference, site) {
@@ -303,7 +305,7 @@ module {
         (context, module)
     }
 
-    fn candidate(context: &Context, root: OpId, round: &RoundOp) -> ContractionCandidate {
+    fn candidate(context: &Context, root: OpId, round: &OpHandle) -> ContractionCandidate {
         let mul = find_op::<MulOp>(context, root);
         let add = find_op::<AddOp>(context, root);
         let fma = find_op::<FmaOp>(context, root);
@@ -312,13 +314,13 @@ module {
             add_or_sub: add,
             implementation: fma,
             fused_operands: [
-                round.reference_region().ports()[0].id(),
-                round.reference_region().ports()[1].id(),
-                round.reference_region().ports()[2].id(),
+                fp::round_reference_region(round).ports()[0].id(),
+                fp::round_reference_region(round).ports()[1].id(),
+                fp::round_reference_region(round).ports()[2].id(),
             ],
             form: FusedForm::MulAdd,
             result_mapping: vec![(
-                round.reference_region().results()[0],
+                fp::round_reference_region(round).results()[0],
                 context.get_op(fma).results()[0],
             )],
         }
@@ -340,13 +342,13 @@ module {
             .find_map(|child| find_op_under::<T>(context, child))
     }
 
-    fn find_round(context: &Context, root: OpId) -> RoundOp {
+    fn find_round(context: &Context, root: OpId) -> OpHandle {
         find_round_under(context, root).expect("module contains fp.round")
     }
 
-    fn find_round_under(context: &Context, root: OpId) -> Option<RoundOp> {
+    fn find_round_under(context: &Context, root: OpId) -> Option<OpHandle> {
         let operation = context.get_op(root);
-        if let Some(round) = operation.clone().as_op::<RoundOp>() {
+        if let Some(round) = operation.clone().as_operation(&ROUND) {
             return Some(round);
         }
         operation

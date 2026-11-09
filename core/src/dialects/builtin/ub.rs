@@ -1,103 +1,114 @@
 //! Undefined behavior the program states: an assumption, a freeze of
 //! poison, and a refinement the solver checks.
 
-use crate::interp::{ExecutionState, Interp, InterpError, Value};
-use crate::{Operation, operation};
+use crate::Operation;
+use crate::interp::{ExecutionState, InterpError, Value};
 
 use crate as tir;
 
-operation! {
-    AssumeOp {
-        name: "assume",
-        dialect: "builtin",
-        scheme: "(int<1>) -> ()",
-        operands: O { condition },
-        requires: "condition",
-        interfaces: [crate::interp::Interp],
-    }
-}
-
-operation! {
-    FreezeOp {
-        name: "freeze",
-        dialect: "builtin",
-        scheme: "forall T. (T) -> T",
-        operands: O { input },
-        results: R { result },
-        sem: "(set result (freeze input))",
-        interfaces: [crate::interp::Interp, crate::Speculatable],
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_builtin_ub.cdsl",
+    hosts: {
+        assume_requires_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Operand(0)],
+                root: 0,
+            };
+            tir::sem::build_defined_recipe(operation, graph, &RECIPE)
+        },
+        assume_iface_Interp => (crate :: interp :: Interp, &crate::builtin::__TIR_IFACE_AssumeOp_Interp),
+        freeze_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[
+                    tir::sem::SemRecipeStep::Operand(0),
+                    tir::sem::SemRecipeStep::Apply {
+                        kind: tir::sem::SymKind::Freeze,
+                        arguments: &[0],
+                    },
+                ],
+                root: 1,
+            };
+            tir::sem::build_defined_recipe(operation, graph, &RECIPE)
+        },
+        freeze_iface_Interp => (crate :: interp :: Interp, &crate::builtin::__TIR_IFACE_FreezeOp_Interp),
+        freeze_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        refine_iface_Congruent => (crate :: Congruent, &crate::CongruentCallbacks::DEFAULT),
+        refine_iface_Interp => (crate :: interp :: Interp, &crate::builtin::__TIR_IFACE_RefineOp_Interp),
+    },
 }
 
 // `%r = refine %x, %p`: `%r` is `%x`, and `%p` holds wherever `%x` is
 // defined. The verifier proves it; see the semantic refinement checker.
-operation! {
-    RefineOp {
-        name: "refine",
-        dialect: "builtin",
-        scheme: "forall T. (T, int<1>) -> T",
-        operands: O { input, predicate },
-        results: R { result },
-        interfaces: [crate::Congruent, crate::interp::Interp],
-    }
-}
 
 // Not speculatable: the fact holds where it was proved.
-impl crate::Congruent for RefineOp {}
 
-impl RefineOp {
-    /// The value refined.
-    pub fn input(&self) -> crate::ValueId {
-        self.0.operands()[0]
-    }
-
-    /// What holds of it.
-    pub fn predicate(&self) -> crate::ValueId {
-        self.0.operands()[1]
-    }
+/// The value refined.
+pub fn refine_input(operation: &tir::OpHandle) -> crate::ValueId {
+    operation.operands()[0]
 }
 
-impl crate::Speculatable for FreezeOp {}
-
-impl Interp for AssumeOp {
-    fn evaluate(&self, _: &[Value], _: &mut ExecutionState) -> Result<Vec<Value>, InterpError> {
-        Ok(Vec::new())
-    }
+/// What holds of it.
+pub fn refine_predicate(operation: &tir::OpHandle) -> crate::ValueId {
+    operation.operands()[1]
 }
 
-impl Interp for FreezeOp {
-    fn evaluate(
-        &self,
-        operands: &[Value],
-        _: &mut ExecutionState,
-    ) -> Result<Vec<Value>, InterpError> {
-        let Value::Poison = operands[0] else {
-            return Ok(operands.to_vec());
-        };
-        // Any value will do; this interpreter picks zero.
-        let context = &self.handle().context;
-        let ty = context.get_value(self.result()).ty();
-        let int = |width| Value::Int(tir_adt::APInt::new(width, 0));
-        if let Some(integer) = crate::builtin::IntegerType::view(context, ty) {
-            return Ok(vec![int(integer.width())]);
-        }
-        if let Some(float) = crate::builtin::FloatType::view(context, ty) {
-            let zero = tir_adt::APFloat::from_bits(float.exp_width(), float.mant_width(), false, 0);
-            return Ok(vec![Value::Float(zero)]);
-        }
-        Err(InterpError::Message(format!(
-            "builtin.freeze of poison {}",
-            self.handle().context.type_to_string(ty)
-        )))
-    }
+pub(crate) fn assume_interp_evaluate(
+    __operation: &tir::OpHandle,
+    _: &[Value],
+    _: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    Ok(Vec::new())
 }
 
-impl Interp for RefineOp {
-    fn evaluate(
-        &self,
-        operands: &[Value],
-        _: &mut ExecutionState,
-    ) -> Result<Vec<Value>, InterpError> {
-        Ok(vec![operands[0].clone()])
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_AssumeOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::builtin::assume_interp_evaluate,
+    };
+
+pub(crate) fn freeze_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    _: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    let Value::Poison = operands[0] else {
+        return Ok(operands.to_vec());
+    };
+    // Any value will do; this interpreter picks zero.
+    let context = &operation.handle().context;
+    let ty = context
+        .get_value(crate::builtin::freeze_result(operation))
+        .ty();
+    let int = |width| Value::Int(tir_adt::APInt::new(width, 0));
+    if let Some(integer) = crate::builtin::IntegerType::view(context, ty) {
+        return Ok(vec![int(integer.width())]);
     }
+    if let Some(float) = crate::builtin::FloatType::view(context, ty) {
+        let zero = tir_adt::APFloat::from_bits(float.exp_width(), float.mant_width(), false, 0);
+        return Ok(vec![Value::Float(zero)]);
+    }
+    Err(InterpError::Message(format!(
+        "builtin.freeze of poison {}",
+        operation.handle().context.type_to_string(ty)
+    )))
 }
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_FreezeOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::builtin::freeze_interp_evaluate,
+    };
+
+pub(crate) fn refine_interp_evaluate(
+    __operation: &tir::OpHandle,
+    operands: &[Value],
+    _: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    Ok(vec![operands[0].clone()])
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_RefineOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::builtin::refine_interp_evaluate,
+    };

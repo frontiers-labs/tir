@@ -27,8 +27,6 @@ use std::ffi::c_void;
 use std::fmt;
 
 use tir::backend::pipeline::{StopAfter, build_pipeline};
-use tir::builtin::ModuleOp;
-use tir::func::FuncOp;
 use tir::{Context, Operation, PassManager};
 
 /// A JIT compiler for a single target.
@@ -78,7 +76,7 @@ impl Jit {
     /// Compile a TIR IR module (textual form) into executable memory.
     pub fn compile(&self, ir: &str) -> Result<Module, JitError> {
         let context = self.context()?;
-        let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, ir)
+        let module = tir::parse::ir::parse_operation(&context, ir, &tir::builtin::MODULE)
             .map_err(|(span, err)| JitError::Parse(format!("at byte {}: {err:?}", span.0)))?;
         self.compile_module(&context, &module)
     }
@@ -86,7 +84,11 @@ impl Jit {
     /// Compile a module already built in `context`, which must come from
     /// [`Jit::context`]. The module is consumed in place: the pipeline rewrites
     /// it into machine IR.
-    pub fn compile_module(&self, context: &Context, module: &ModuleOp) -> Result<Module, JitError> {
+    pub fn compile_module(
+        &self,
+        context: &Context,
+        module: &tir::OpHandle,
+    ) -> Result<Module, JitError> {
         let target = tir::backend::select_target(&self.march, self.mcpu.as_deref(), None)
             .map_err(JitError::UnknownTarget)?;
         let module_op = module.id();
@@ -95,7 +97,7 @@ impl Jit {
         // frontend pipeline: the memory order restructuring leaves is the one
         // the backend keeps.
         let mut pm = PassManager::new();
-        let function_pipeline = pm.nest::<FuncOp>();
+        let function_pipeline = pm.nest(&tir::func::FUNC);
         function_pipeline.add_pass(tir::passes::RestructureNodesPass::new());
         function_pipeline.add_pass(tir::passes::InstCombineNodesPass::new());
         pm.run(context, module_op)

@@ -108,7 +108,7 @@ pub struct InstrDesc {
 /// Parse an instruction body (the tokens after its mnemonic) per `desc`, build
 /// the op from the parsed attributes and insert it.
 #[allow(clippy::result_unit_err)]
-pub fn parse_and_insert<'src, T: Operation, F: FnOnce(Vec<NamedAttribute>) -> T>(
+pub fn parse_and_insert<'src, F: FnOnce(Vec<NamedAttribute>) -> OpHandle>(
     context: &Context,
     desc: &InstrDesc,
     parser: &mut Parser<'src, Token<'src>>,

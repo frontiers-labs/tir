@@ -1,0 +1,82 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let SPEC_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let SPEC_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let TYPE_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let TYPE_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let FIELDS_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let FIELDS_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let ALIGN_TO_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let ALIGN_TO_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let MIN_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let MIN_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let MAX_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let MAX_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let POW2_CEIL_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let POW2_CEIL_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+
+pub let constructors::SPEC: ConstructorSpec = {
+    dialect: "layout",
+    name: "spec",
+    params: [],
+    kind: Kind::Data(),
+    validate: SPEC_validate,
+    carrier: SPEC_carrier,
+};
+
+pub let constructors::TYPE: ConstructorSpec = {
+    dialect: "layout",
+    name: "type",
+    params: [],
+    kind: Kind::Data(),
+    validate: TYPE_validate,
+    carrier: TYPE_carrier,
+};
+
+pub let constructors::FIELDS: ConstructorSpec = {
+    dialect: "layout",
+    name: "fields",
+    params: [],
+    kind: Kind::Data(),
+    validate: FIELDS_validate,
+    carrier: FIELDS_carrier,
+};
+
+pub let constructors::ALIGN_TO: ConstructorSpec = {
+    dialect: "nat",
+    name: "align_to",
+    params: [{ name: "a", param: Param::One(Kind::Nat()) }, { name: "b", param: Param::One(Kind::Nat()) }],
+    kind: Kind::Nat(),
+    validate: ALIGN_TO_validate,
+    carrier: ALIGN_TO_carrier,
+};
+
+pub let constructors::MIN: ConstructorSpec = {
+    dialect: "nat",
+    name: "min",
+    params: [{ name: "a", param: Param::One(Kind::Nat()) }, { name: "b", param: Param::One(Kind::Nat()) }],
+    kind: Kind::Nat(),
+    validate: MIN_validate,
+    carrier: MIN_carrier,
+};
+
+pub let constructors::MAX: ConstructorSpec = {
+    dialect: "nat",
+    name: "max",
+    params: [{ name: "a", param: Param::One(Kind::Nat()) }, { name: "b", param: Param::One(Kind::Nat()) }],
+    kind: Kind::Nat(),
+    validate: MAX_validate,
+    carrier: MAX_carrier,
+};
+
+pub let constructors::POW2_CEIL: ConstructorSpec = {
+    dialect: "nat",
+    name: "pow2_ceil",
+    params: [{ name: "a", param: Param::One(Kind::Nat()) }],
+    kind: Kind::Nat(),
+    validate: POW2_CEIL_validate,
+    carrier: POW2_CEIL_carrier,
+};

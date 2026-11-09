@@ -43,40 +43,49 @@ def field_name(name, index):
     return value
 
 
-def generate(grammar_path, output_dir):
+def generate(grammar_path, output_dir, cdsl_output_dir):
     grammar = json.loads(grammar_path.read_text())
     operations = list(core_value_operations(grammar))
     rust = [
         "#![allow(clippy::too_many_arguments)]",
         "",
-        "use tir::helpers::operation;",
         "use tir::{OpId, TypeId, ValueId};",
         "",
         "use tir;",
         "",
     ]
+    cdsl = [
+        "pub mod ops;",
+        "mod library;",
+        "use ops::*;",
+        "use library::*;",
+        "extern type spirv = Dialect;",
+        "",
+        "",
+        "",
+    ]
     op_names = []
     for instruction in operations:
         op_name = instruction["opname"][2:]
-        type_name = f"{op_name}Op"
-        op_names.append(type_name)
+        op_names.append(op_name)
         fields = [
             field_name(operand.get("name"), index)
             for index, operand in enumerate(instruction["operands"][2:])
         ]
-        rust.extend([
-            "operation! {",
-            f"    {type_name} {{",
-            f'        name: "{op_name}",',
-            '        dialect: "spirv",',
-            '        scheme: "(' + ", ".join("_" for _ in fields) + ') -> _",',
-            "        operands: O { " + ", ".join(fields) + " },",
-            "        results: R { result }",
-            "    }",
-            "}",
+        cdsl.extend([
+            f"pub let spirv::{op_name} = {{",
+            "    signature: (" + ", ".join(f"{field}: Any" for field in fields) + ") -> Any,",
+            "};",
             "",
         ])
     rust.extend([
+        "tir::helpers::op_def! {",
+        '    file: "../core/defs/converted-gpu/spirv_generated.cdsl",',
+        "    hosts: {",
+        "",
+        "    },",
+        "}",
+        "",
         "/// Every generated op: its SPIR-V opcode, its name in the `spirv` dialect, and",
         "/// how many id operands follow the result type and result id.",
         "static GENERATED: &[(u16, &str, usize)] = &[",
@@ -113,20 +122,22 @@ def generate(grammar_path, output_dir):
         "",
     ])
     output_dir.mkdir(parents=True, exist_ok=True)
+    cdsl_output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "generated.rs").write_text("\n".join(rust))
+    (cdsl_output_dir / "spirv_generated.cdsl").write_text("\n".join(cdsl))
     manual_ops = [
-        "ModuleOp", "ModuleEndOp", "CapabilityOp", "GlobalVariableOp",
-        "EntryPointOp", "ExecutionModeOp", "ConstantOp", "LoadOp", "StoreOp",
-        "ControlBarrierOp", "MemoryBarrierOp",
-        "CompositeExtractOp", "AccessChainOp", "ReturnOp",
+        "module", "module_end", "Capability", "GlobalVariable",
+        "EntryPoint", "ExecutionMode", "Constant", "Load", "Store",
+        "ControlBarrier", "MemoryBarrier",
+        "CompositeExtract", "AccessChain", "Return",
     ]
     operation_list = "[\n" + "\n".join(
-        f"    {name}," for name in manual_ops + op_names
+        f"    {name.upper()}," for name in manual_ops + op_names
     ) + "\n]\n"
     (output_dir / "generated_ops.rs").write_text(operation_list)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: generate_spirv.py GRAMMAR_JSON OUTPUT_DIR")
-    generate(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]))
+    if len(sys.argv) != 4:
+        raise SystemExit("usage: generate_spirv.py GRAMMAR_JSON RUST_OUTPUT_DIR CDSL_OUTPUT_DIR")
+    generate(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]))

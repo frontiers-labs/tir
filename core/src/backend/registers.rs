@@ -1,24 +1,16 @@
 use std::collections::HashMap;
 
 use tir::attributes::{AttributeValue, RegisterAttr};
-use tir::ty::{Ctor, Kind, Param, TypeArg, TypeCtor, TypeSpelling};
+use tir::ty::{Ctor, TypeArg, TypeSpelling};
 use tir::{Context, Error, OpHandle, TypeId, ValueId, parse::Span};
 use tir_symbolic::term::{no_carrier, valid};
 
 use crate::analysis::defuse::PhysReg;
 use crate::backend::regalloc::RegClassId;
 
-static REG: Ctor = Ctor::new(TypeCtor {
-    dialect: "backend",
-    name: "reg",
-    params: &[
-        ("target", Param::One(Kind::Sym)),
-        ("class", Param::One(Kind::Sym)),
-    ],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static REG: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_backend_registers.cdsl", binding: constructors::REG, hosts: { REG_validate => valid, REG_carrier => no_carrier } },
+);
 
 /// The type of a virtual register: its register class, the term
 /// `backend.reg<target, class>` written `!<dialect>.<class>` (`!x86_64.GPR`).
@@ -63,23 +55,23 @@ impl RegClassType {
     /// Prints `target.class`; a target parses its classes through
     /// [`reg_class_type_parser`], so the spelling lists no keys.
     pub fn spelling(context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: REG.id(context),
-            keys: &[],
-            parse: |mnemonic, parser, _| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |mnemonic, parser, _| {
                 Err((
                     Span(parser.pos()),
                     Error::UnknownType(String::new(), mnemonic.to_string()),
                 ))
-            },
-            print: |spellings, ty, fmt| {
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
                 let name = |index| match spellings.terms().arg(ty, index) {
                     Some(TypeArg::Sym(name)) => spellings.terms().name_text(name),
                     _ => unreachable!("a register class names its target and class"),
                 };
                 fmt.write(format!("{}.{}", name(0), name(1)))
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| REG.id(context);
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_backend_registers.cdsl", binding: spellings::RegClassType, context: context, hosts: { RegClassType_parse => __TIR_TYPE_PARSE, RegClassType_print => __TIR_TYPE_PRINT, RegClassType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }

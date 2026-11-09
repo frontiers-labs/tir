@@ -36,5 +36,5 @@ instruction VAdd for [Test] {
     }
 }
 
-// CHECK-DAG: DoubleOp
-// CHECK-DAG: VAddOp
+// CHECK-DAG: pub static DOUBLE: tir::OpDefSpec
+// CHECK-DAG: pub static VADD_VV: tir::OpDefSpec

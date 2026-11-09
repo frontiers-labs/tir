@@ -1,0 +1,21 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type fp = Dialect;
+
+type cmp_attributes = Record<{ predicate: AttrPredicate, semantics: AttrFpSemantics }>;
+extern fn cmp_exec_model<E: Nat, M: Nat, StateResources>(self: cmp_attributes, lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Int<1>, state: States<StateResources>,);
+extern fn cmp_verifier(operation: Operation, context: Context) -> Validation;
+extern let cmp_iface_ResourceEffects: Interface;
+extern let cmp_iface_HasResourceSemantics: Interface;
+extern let cmp_iface_Speculatable: Interface;
+extern let cmp_iface_Interp: Interface;
+
+pub let fp::cmp<E: Nat, M: Nat, StateResources> = {
+    signature: (lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Int<1>, state: States<StateResources>,),
+    attributes: { predicate: { ty: AttrPredicate, codec: predicate_codec, vocabulary: "FLOAT" }, semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: cmp_exec_model<E, M, StateResources>,
+    verify: cmp_verifier,
+    interfaces: [cmp_iface_ResourceEffects, cmp_iface_HasResourceSemantics, cmp_iface_Speculatable, cmp_iface_Interp],
+};

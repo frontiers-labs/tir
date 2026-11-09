@@ -1,0 +1,25 @@
+mod ops;
+use ops::*;
+extern type builtin = Dialect;
+
+pub let builtin::addi<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    attributes: { nsw: flag(false), nuw: flag(false) },
+    exec: fn(self, lhs: Int<W>, rhs: Int<W>) -> Int<W> {
+        add<W>(lhs, rhs)
+    },
+    poison: fn(self, lhs: Int<W>, rhs: Int<W>) -> Bool {
+        (self.nsw && slt<W>(
+            bit_and<W>(bit_xor<W>(add<W>(lhs, rhs), lhs), bit_xor<W>(add<W>(lhs, rhs), rhs)),
+            zero<W>(),
+        )) || (self.nuw && ult<W>(add<W>(lhs, rhs), lhs))
+    },
+    interfaces: [Additive, Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable],
+};
+
+pub let builtin::divui<W: Nat> = {
+    signature: (lhs: Int<W>, rhs: Int<W>) -> Int<W>,
+    exec: fn(lhs: Int<W>, rhs: Int<W>) -> Int<W> { udiv<W>(lhs, rhs) },
+    requires: fn(lhs: Int<W>, rhs: Int<W>) -> Bool { ne<W>(rhs, zero<W>()) },
+    interfaces: [SameOperandAndResultType, IntegerArithmetic],
+};

@@ -2,24 +2,25 @@
 //! these modules are invisible to the generic `tir` tool and cannot be LIT
 //! checks.
 
-use tir::{builtin::ModuleOp, parse::ir::parse_ir, verify_op_tree, Context, Operation};
+use tir::{parse::ir::parse_operation, verify_op_tree, Context, Operation};
 
 use super::support::{fcc_context, print_ir};
 
 fn verify(module: &str) -> Result<(), tir::Error> {
     let context = fcc_context();
-    let module = parse_ir::<ModuleOp>(&context, module).expect("parse module");
+    let module = parse_operation(&context, module, &tir::builtin::MODULE).expect("parse module");
     verify_op_tree(&context, module.id())
 }
 
 fn roundtrip(module: &str) -> String {
     let context = fcc_context();
-    let parsed = parse_ir::<ModuleOp>(&context, module).expect("parse module");
+    let parsed = parse_operation(&context, module, &tir::builtin::MODULE).expect("parse module");
     verify_op_tree(&context, parsed.id()).expect("verify module");
     let printed = print_ir(&parsed);
 
     let context = fcc_context();
-    let reparsed = parse_ir::<ModuleOp>(&context, &printed).expect("parse printed module");
+    let reparsed =
+        parse_operation(&context, &printed, &tir::builtin::MODULE).expect("parse printed module");
     assert_eq!(printed, print_ir(&reparsed), "printing is not stable");
     printed
 }
@@ -195,33 +196,34 @@ fn subtree(context: &Context, op: tir::OpId) -> Vec<tir::OpId> {
     found
 }
 
-fn find<T: Operation>(context: &Context, module: &ModuleOp) -> tir::OpId {
+fn find(context: &Context, module: &tir::OpHandle, definition: &tir::OpDefSpec) -> tir::OpId {
     subtree(context, module.id())
         .into_iter()
-        .find(|&op| context.get_op(op).is::<T>())
+        .find(|&op| context.get_op(op).is_operation(definition))
         .expect("the module holds the op")
 }
 
 #[test]
 fn a_break_leaves_the_innermost_loop_and_a_labeled_continue_its_label() {
     let context = fcc_context();
-    let module = parse_ir::<ModuleOp>(&context, LABELED_LOOPS).expect("parse module");
+    let module =
+        parse_operation(&context, LABELED_LOOPS, &tir::builtin::MODULE).expect("parse module");
     let resolve = |exit| tir::analysis::exits::resolve_exit_target(&context, exit);
 
     assert_eq!(
-        resolve(find::<fcc::cir::BreakOp>(&context, &module)).ok(),
-        Some(find::<fcc::cir::ForOp>(&context, &module))
+        resolve(find(&context, &module, &fcc::cir::BREAK)).ok(),
+        Some(find(&context, &module, &fcc::cir::FOR))
     );
     assert_eq!(
-        resolve(find::<fcc::cir::ContinueOp>(&context, &module)).ok(),
-        Some(find::<fcc::cir::WhileOp>(&context, &module))
+        resolve(find(&context, &module, &fcc::cir::CONTINUE)).ok(),
+        Some(find(&context, &module, &fcc::cir::WHILE))
     );
 }
 
 #[test]
 fn an_exit_with_no_loop_to_leave_is_an_error() {
     let context = fcc_context();
-    let module = parse_ir::<ModuleOp>(
+    let module = parse_operation(
         &context,
         r#"module {
   %fn_main = func.func @main() {
@@ -229,12 +231,13 @@ fn an_exit_with_no_loop_to_leave_is_an_error() {
   }
   module_end
 }"#,
+        &tir::builtin::MODULE,
     )
     .expect("parse module");
 
     let error = tir::analysis::exits::resolve_exit_target(
         &context,
-        find::<fcc::cir::BreakOp>(&context, &module),
+        find(&context, &module, &fcc::cir::BREAK),
     )
     .expect_err("nothing carries the label");
     assert!(
@@ -292,14 +295,15 @@ const LABELED_BREAK_OUT: &str = r#"module {
 #[ignore = "IR migration: the CIR flattening pass is a registered no-op"]
 fn flattening_resolves_a_labeled_break_to_the_loop_it_names() {
     let context = fcc_context();
-    let module = parse_ir::<ModuleOp>(&context, LABELED_BREAK_OUT).expect("parse module");
+    let module =
+        parse_operation(&context, LABELED_BREAK_OUT, &tir::builtin::MODULE).expect("parse module");
     let mut pm = tir::PassManager::new();
-    pm.nest::<tir::func::FuncOp>()
+    pm.nest(&tir::func::FUNC)
         .add_pass(fcc::passes::RaiseLoopsPass::new());
     pm.run(&context, module.id()).expect("loops flatten");
     verify_op_tree(&context, module.id()).expect("flattened module verifies");
 
-    let main = find::<tir::func::FuncOp>(&context, &module);
+    let main = find(&context, &module, &tir::func::FUNC);
     let result = tir::interp::run_function(&context, main, vec![]).expect("runs");
     assert_eq!(result[0].to_i64(), Some(10));
 }

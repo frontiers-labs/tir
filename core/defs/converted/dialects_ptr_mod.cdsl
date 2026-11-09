@@ -1,0 +1,105 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type ptr = Dialect;
+
+type alloca_attributes = Record<{ size: AttrUInt, align: AttrUInt }>;
+extern let alloca_iface_PromotableAllocation: Interface;
+extern let alloca_iface_Interp: Interface;
+extern fn null_exec_model() -> AnyPtr;
+extern let null_iface_ConstantLike: Interface;
+type cmp_attributes = Record<{ predicate: AttrPredicate }>;
+extern fn cmp_exec_model(self: cmp_attributes, lhs: AnyPtr, rhs: AnyPtr) -> Int<1>;
+extern fn ptradd_exec_model(base: AnyPtr, offset: AnyInt) -> AnyPtr;
+extern fn ptradd_verifier(operation: Operation, context: Context) -> Validation;
+extern let ptradd_iface_Additive: Interface;
+extern fn ptrdiff_exec_model(lhs: AnyPtr, rhs: AnyPtr) -> AnyInt;
+extern fn ptrdiff_verifier(operation: Operation, context: Context) -> Validation;
+extern let ptrdiff_iface_Subtractive: Interface;
+extern fn disjoint_exec_model(lhs: AnyPtr, lhs_size: AnyInt, rhs: AnyPtr, rhs_size: AnyInt) -> Int<1>;
+extern fn disjoint_verifier(operation: Operation, context: Context) -> Validation;
+extern fn store_verifier(operation: Operation, context: Context) -> Validation;
+extern let store_iface_MemoryWrite: Interface;
+extern let store_iface_ResourceEffects: Interface;
+extern let store_iface_Interp: Interface;
+extern let memcpy_iface_ResourceEffects: Interface;
+extern let memcpy_iface_Interp: Interface;
+extern let memcpy_iface_Intrinsic: Interface;
+extern let memset_iface_MemoryWrite: Interface;
+extern let memset_iface_ResourceEffects: Interface;
+extern let memset_iface_Interp: Interface;
+extern let memset_iface_Intrinsic: Interface;
+type field_attributes = Record<{ ty: AttrType, field: String }>;
+extern let field_iface_Interp: Interface;
+extern let field_iface_Speculatable: Interface;
+type copy_attributes = Record<{ ty: AttrType }>;
+extern let copy_iface_ResourceEffects: Interface;
+extern let copy_iface_Congruent: Interface;
+extern let copy_iface_Interp: Interface;
+
+pub let ptr::alloca<StateResources> = {
+    signature: () -> (result: AnyPtr, state: States<StateResources>,),
+    attributes: { size: { ty: AttrUInt, codec: uint_codec }, align: { ty: AttrUInt, codec: uint_codec } },
+    interfaces: [alloca_iface_PromotableAllocation, alloca_iface_Interp],
+};
+
+pub let ptr::null = {
+    signature: () -> AnyPtr,
+    exec: null_exec_model,
+    interfaces: [null_iface_ConstantLike],
+};
+
+pub let ptr::cmp = {
+    signature: (lhs: AnyPtr, rhs: AnyPtr) -> Int<1>,
+    attributes: { predicate: { ty: AttrPredicate, codec: predicate_codec, vocabulary: "POINTER" } },
+    exec: cmp_exec_model,
+};
+
+pub let ptr::ptradd = {
+    signature: (base: AnyPtr, offset: AnyInt) -> AnyPtr,
+    exec: ptradd_exec_model,
+    verify: ptradd_verifier,
+    interfaces: [ptradd_iface_Additive],
+};
+
+pub let ptr::ptrdiff = {
+    signature: (lhs: AnyPtr, rhs: AnyPtr) -> AnyInt,
+    exec: ptrdiff_exec_model,
+    verify: ptrdiff_verifier,
+    interfaces: [ptrdiff_iface_Subtractive],
+};
+
+pub let ptr::disjoint = {
+    signature: (lhs: AnyPtr, lhs_size: AnyInt, rhs: AnyPtr, rhs_size: AnyInt) -> Int<1>,
+    exec: disjoint_exec_model,
+    verify: disjoint_verifier,
+};
+
+pub let ptr::store<StateResources> = {
+    signature: (value: Any, ptr: AnyPtr, state: States<StateResources>) -> (state: States<StateResources>,),
+    verify: store_verifier,
+    interfaces: [store_iface_MemoryWrite, store_iface_ResourceEffects, store_iface_Interp],
+};
+
+pub let ptr::memcpy<StateResources> = {
+    signature: (destination: AnyPtr, source: AnyPtr, size: Int<64>, state: States<StateResources>) -> (state: States<StateResources>,),
+    interfaces: [memcpy_iface_ResourceEffects, memcpy_iface_Interp, memcpy_iface_Intrinsic],
+};
+
+pub let ptr::memset<StateResources> = {
+    signature: (destination: AnyPtr, value: Int<8>, size: Int<64>, state: States<StateResources>) -> (state: States<StateResources>,),
+    interfaces: [memset_iface_MemoryWrite, memset_iface_ResourceEffects, memset_iface_Interp, memset_iface_Intrinsic],
+};
+
+pub let ptr::field = {
+    signature: (base: AnyPtr) -> AnyPtr,
+    attributes: { ty: { ty: AttrType, codec: type_codec }, field: { ty: String, codec: str_codec } },
+    interfaces: [field_iface_Interp, field_iface_Speculatable],
+};
+
+pub let ptr::copy<StateResources> = {
+    signature: (destination: AnyPtr, source: AnyPtr, state: States<StateResources>) -> (state: States<StateResources>,),
+    attributes: { ty: { ty: AttrType, codec: type_codec } },
+    interfaces: [copy_iface_ResourceEffects, copy_iface_Congruent, copy_iface_Interp],
+};

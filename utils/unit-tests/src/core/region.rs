@@ -21,8 +21,8 @@ fn quad(context: &Context) -> (OpId, OpId) {
     );
     let quad = ops::addi(
         context,
-        double.result(),
-        double.result(),
+        double.value_results()[0],
+        double.value_results()[0],
         i32_ty,
         Default::default(),
         tir::InsertionPoint::Root,
@@ -30,7 +30,7 @@ fn quad(context: &Context) -> (OpId, OpId) {
     let body = context.create_nodes_region(
         vec![port],
         vec![double.id(), quad.id()],
-        vec![quad.result()],
+        vec![quad.value_results()[0]],
     );
     let function = func::ops::lambda(
         context,
@@ -41,10 +41,14 @@ fn quad(context: &Context) -> (OpId, OpId) {
         tir::InsertionPoint::Root,
     );
     let module = builtin::ops::module(context, None, Default::default(), tir::InsertionPoint::Root);
-    (module.body())
+    (tir::builtin::module_body(&module))
         .context
-        .insert(module.body().end(), function.id());
-    builtin::ModuleEndOp::new(context, Default::default(), module.body().end());
+        .insert(tir::builtin::module_body(&module).end(), function.id());
+    builtin::r#module_end(
+        context,
+        Default::default(),
+        tir::builtin::module_body(&module).end(),
+    );
     (module.id(), function.id())
 }
 

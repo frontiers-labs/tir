@@ -56,7 +56,7 @@ fn each_atomic_construct_lowers_to_its_dedicated_kind() {
     // A plain store with an explicit ordering packs the ordering code into the
     // inert metadata operand (`seq_cst` = 4 -> bits 3:1 -> value 8, width 4).
     assert!(generated
-        .program_after("impl tir::sem::AsSemExpr for StRelOp")
+        .program_after("fn __tir_st_rel_machine_semantic(")
         .contains("8:4"));
 }
 

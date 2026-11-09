@@ -12,4 +12,4 @@ instruction Foo for [TestIsa] {
     behavior { tmp = imm; }
 }
 
-// CHECK: FooOp
+// CHECK: pub static FOO: tir::OpDefSpec

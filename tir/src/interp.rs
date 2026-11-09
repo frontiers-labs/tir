@@ -2,9 +2,8 @@ use std::{error::Error, ffi::OsString};
 
 use clap::Args;
 use tir::{
-    Context, Operation, Symbol,
-    builtin::{IntegerType, ModuleOp},
-    func::FuncOp,
+    Context, Operation,
+    builtin::IntegerType,
     interp::{self, Value},
     utils::{APFloat, APInt},
 };
@@ -34,7 +33,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     let input = read_input(args.input.as_ref())?;
 
     let context = Context::with_default_dialects();
-    let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, &input)
+    let module = tir::parse::ir::parse_operation(&context, &input, &tir::builtin::MODULE)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0))?;
     crate::common::attach_declared_data_layout(&context, &module)?;
 
@@ -86,10 +85,10 @@ fn find_function(context: &Context, module: tir::OpId, name: &str) -> Result<tir
         for block in context.get_region(region).iter(context.clone()) {
             for op in block.op_ids() {
                 let candidate = context.get_op(op);
-                if !candidate.is::<FuncOp>() {
+                if !candidate.is_operation(&tir::func::FUNC) {
                     continue;
                 }
-                if FuncOp::from_op_instance(candidate).symbol_name() == name {
+                if tir::func::func_sym_name(&candidate) == name {
                     return Ok(op);
                 }
             }
@@ -99,8 +98,8 @@ fn find_function(context: &Context, module: tir::OpId, name: &str) -> Result<tir
 }
 
 fn return_types(context: &Context, function: tir::OpId) -> Vec<tir::TypeId> {
-    let func = FuncOp::from_op_instance(context.get_op(function));
-    let ret_type = func.ret_type();
+    let func = context.get_op(function);
+    let ret_type = tir::func::func_ret_type(&func);
     if ret_type == tir::builtin::UnitType::new(context) {
         vec![]
     } else {

@@ -1,0 +1,60 @@
+{
+  "count": 9,
+  "operations": [
+    {
+      "declaration_sha256": "4f13d61264dea8137475eef95031e245b07c784b2466c32367ebfde4205da6b7",
+      "fields_sha256": "a83b26517ce80b9b09da0c363d683fa86060a7395f8672f60ab9ee80ff53e8e9",
+      "file": "utils/unit-tests/src/core/binding.rs",
+      "identity": "test.theta"
+    },
+    {
+      "declaration_sha256": "b3357c51acc10d12767470f5e10e293e3135b8cfaaeae1265cf622648fa1359b",
+      "fields_sha256": "9328b3c3416900d5af079ba3e2bcd1093799e7a8f588576fc20b0fcb25888554",
+      "file": "utils/unit-tests/src/core/binding.rs",
+      "identity": "test.gamma"
+    },
+    {
+      "declaration_sha256": "9a71b95a04527f909035b6afd6cca4470d8f0285caeedd50b4c6a76d00ed6aad",
+      "fields_sha256": "69daaa0029d7cc533cc2c7572907ac068d6e9835be6e63fd19553f8c6f1d4004",
+      "file": "utils/unit-tests/src/core/edits.rs",
+      "identity": "test.exit"
+    },
+    {
+      "declaration_sha256": "88d3204d859e19b7f4a77eb0559fa71a9f1101e47837dc9c4004391153ca01ed",
+      "fields_sha256": "63dba8701b16ff7e3545a4dbf3c6406e173b1326b359285d4a394c63da8343cc",
+      "file": "utils/unit-tests/src/core/machine_ir.rs",
+      "identity": "test.add"
+    },
+    {
+      "declaration_sha256": "c43d5afd56b03fbb0452fe25bd88e025fd12631e174b96dfe50b366e7e0aa5bf",
+      "fields_sha256": "ff40bf42f8f19d0a5e3955876c6a58dde2e17e8445b18378d0705e85e25d0764",
+      "file": "utils/unit-tests/src/core/dependence.rs",
+      "identity": "dep.def"
+    },
+    {
+      "declaration_sha256": "e6f3f4e179591069487edc536422203dbdb988aa4f54438766fc92afb00f8cc0",
+      "fields_sha256": "f99c16bbabe6cdbc4fb2197383bd6f1726bbac75d3f054542014515570553882",
+      "file": "utils/unit-tests/src/core/dependence.rs",
+      "identity": "dep.update_param"
+    },
+    {
+      "declaration_sha256": "cfcca6b6fd32596b5816affef9c395dcd55087ebf7c26c7e4202782f0b450ea7",
+      "fields_sha256": "c80621e2a2fbfc5fec30020b9f93458af458dfdfba781511ac8cb1108250e71e",
+      "file": "utils/unit-tests/src/core/dependence.rs",
+      "identity": "dep.set_flags"
+    },
+    {
+      "declaration_sha256": "b3d33dfa57dd8b27932bdd2d3c3fa40c212a311d0cfc0568b45cf815df3b4e1b",
+      "fields_sha256": "712254197285e74786f1adb52e704112c48ba664aec37b7786bfd5831af2b9d7",
+      "file": "utils/unit-tests/src/core/dependence.rs",
+      "identity": "dep.read_flags"
+    },
+    {
+      "declaration_sha256": "1e6be691b9ca154e615b021b0ccd7ab97c4dad96528af9bca60f4557347052f2",
+      "fields_sha256": "f6384514e056dd6a05bc1d7e6be5c7c5ae073945e0d87af7a25b12f553ccf59e",
+      "file": "utils/unit-tests/src/core/encodings.rs",
+      "identity": "test.inst"
+    }
+  ],
+  "source_contract": "Every source field captured verbatim in inventory; generated signatures, codecs, callbacks, recipes, regions and binding data are derived from that payload."
+}

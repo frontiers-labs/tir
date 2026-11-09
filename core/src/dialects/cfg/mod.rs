@@ -1,7 +1,6 @@
 use crate::attributes::AttributeValue;
 use crate::{
-    BlockId, BranchGuard, BranchTerminator, CaseGuard, Context, Error, Operation, Terminator,
-    ValueId, dialect, operation,
+    BlockId, BranchGuard, BranchTerminator, CaseGuard, Context, Error, Terminator, ValueId, dialect,
 };
 
 use crate as tir;
@@ -13,180 +12,244 @@ pub mod ops {
 dialect! {
     CfgDialect {
         name: "cfg",
-        operations: [BranchOp, CondBranchOp, SwitchOp],
+        operations: [BR, COND_BR, SWITCH],
         types: [],
     }
 }
 
-operation! {
-    BranchOp {
-        name: "br",
-        dialect: "cfg",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { dest_args },
-        attributes: A {
-            dest: "Block",
-        },
-        interfaces: [Terminator, BranchTerminator],
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_cfg_mod.cdsl",
+    hosts: {
+        br_iface_Terminator => (Terminator, &crate::cfg::__TIR_IFACE_BranchOp_Terminator),
+        br_iface_BranchTerminator => (BranchTerminator, &crate::cfg::__TIR_IFACE_BranchOp_BranchTerminator),
+        br_printer => crate::cfg::br_custom_print,
+        br_parser => |parser, context, _definition| crate::cfg::br_custom_parse(parser, context),
+        cond_br_iface_Terminator => (Terminator, &crate::cfg::__TIR_IFACE_CondBranchOp_Terminator),
+        cond_br_iface_BranchTerminator => (BranchTerminator, &crate::cfg::__TIR_IFACE_CondBranchOp_BranchTerminator),
+        cond_br_iface_BranchGuard => (BranchGuard, &crate::cfg::__TIR_IFACE_CondBranchOp_BranchGuard),
+        cond_br_printer => crate::cfg::cond_br_custom_print,
+        cond_br_parser => |parser, context, _definition| crate::cfg::cond_br_custom_parse(parser, context),
+        switch_verifier => crate::cfg::switch_verify_impl,
+        switch_iface_Terminator => (Terminator, &crate::cfg::__TIR_IFACE_SwitchOp_Terminator),
+        switch_iface_BranchTerminator => (BranchTerminator, &crate::cfg::__TIR_IFACE_SwitchOp_BranchTerminator),
+        switch_iface_CaseGuard => (CaseGuard, &crate::cfg::__TIR_IFACE_SwitchOp_CaseGuard),
+        switch_printer => crate::cfg::switch_custom_print,
+        switch_parser => |parser, context, _definition| crate::cfg::switch_custom_parse(parser, context),
+    },
 }
 
-impl Terminator for BranchOp {
-    fn successors(&self) -> Vec<BlockId> {
-        vec![self.dest()]
-    }
+pub(crate) fn br_terminator_successors(operation: &tir::OpHandle) -> Vec<BlockId> {
+    vec![crate::cfg::br_dest(operation)]
 }
 
-impl BranchTerminator for BranchOp {
-    fn successor_operand_slots(&self) -> Vec<(BlockId, Vec<usize>)> {
-        vec![(self.dest(), (0..self.operands().len()).collect())]
-    }
-    fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
-        vec![(self.dest(), self.dest_args())]
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_BranchOp_Terminator: crate::TerminatorCallbacks =
+    crate::TerminatorCallbacks {
+        successors: Some(crate::cfg::br_terminator_successors),
+    };
+
+pub(crate) fn br_branchterminator_successor_operand_slots(
+    operation: &tir::OpHandle,
+) -> Vec<(BlockId, Vec<usize>)> {
+    vec![(
+        crate::cfg::br_dest(operation),
+        (0..operation.operands().len()).collect(),
+    )]
 }
 
-impl BranchOp {
-    /// The values forwarded to the destination block's arguments.
-    pub fn dest_args(&self) -> Vec<ValueId> {
-        self.operands().to_vec()
-    }
-
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.clone();
-        fmt.write("cfg.br ")?;
-        print_successor(fmt, &context, self.dest(), &self.dest_args())?;
-        fmt.write("\n")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let (dest, dest_args) = parse_successor(parser, context)?;
-        let op = BranchOp::new(
-            context,
-            dest_args,
-            tir::attributes::AttributeValue::Block(dest),
-            Default::default(),
-            tir::InsertionPoint::Root,
-        );
-        Ok(Box::new(op))
-    }
+pub(crate) fn br_branchterminator_successor_operands(
+    operation: &tir::OpHandle,
+) -> Vec<(BlockId, Vec<ValueId>)> {
+    vec![(
+        crate::cfg::br_dest(operation),
+        crate::cfg::br_dest_args(operation),
+    )]
 }
 
-operation! {
-    CondBranchOp {
-        name: "cond_br",
-        dialect: "cfg",
-        scheme: "(int<1>, _*, _*) -> ()",
-        format: "custom",
-        operands: O { condition, true_args, false_args },
-        attributes: A {
-            true_dest: "Block",
-            false_dest: "Block",
-        },
-        interfaces: [Terminator, BranchTerminator, BranchGuard],
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_BranchOp_BranchTerminator: crate::BranchTerminatorCallbacks =
+    crate::BranchTerminatorCallbacks {
+        successor_operands: crate::cfg::br_branchterminator_successor_operands,
+        successor_operand_slots: crate::cfg::br_branchterminator_successor_operand_slots,
+    };
+
+/// The values forwarded to the destination block's arguments.
+pub fn br_dest_args(operation: &tir::OpHandle) -> Vec<ValueId> {
+    operation.operands().to_vec()
 }
 
-impl Terminator for CondBranchOp {
-    fn successors(&self) -> Vec<BlockId> {
-        vec![self.true_dest(), self.false_dest()]
-    }
+pub(crate) fn br_custom_print(
+    operation: &tir::OpHandle,
+    fmt: &mut tir::IRFormatter,
+) -> Result<(), std::fmt::Error> {
+    let context = operation.context.clone();
+    fmt.write("cfg.br ")?;
+    print_successor(
+        fmt,
+        &context,
+        crate::cfg::br_dest(operation),
+        &crate::cfg::br_dest_args(operation),
+    )?;
+    fmt.write("\n")
 }
 
-impl BranchTerminator for CondBranchOp {
-    fn successor_operand_slots(&self) -> Vec<(BlockId, Vec<usize>)> {
-        vec![
-            (self.true_dest(), self.args_range(1).collect()),
-            (self.false_dest(), self.args_range(2).collect()),
-        ]
-    }
-    fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
-        vec![
-            (self.true_dest(), self.true_args()),
-            (self.false_dest(), self.false_args()),
-        ]
-    }
+pub(crate) fn br_custom_parse(
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+) -> Result<tir::OpHandle, (tir::parse::Span, Error)> {
+    let (dest, dest_args) = parse_successor(parser, context)?;
+    let op = r#br(
+        context,
+        dest_args,
+        tir::attributes::AttributeValue::Block(dest),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    Ok(op)
 }
 
-impl BranchGuard for CondBranchOp {
-    fn guarded_successors(&self) -> Vec<(BlockId, ValueId, bool)> {
-        vec![
-            (self.true_dest(), self.condition(), true),
-            (self.false_dest(), self.condition(), false),
-        ]
-    }
+pub(crate) fn cond_br_terminator_successors(operation: &tir::OpHandle) -> Vec<BlockId> {
+    vec![
+        crate::cfg::cond_br_true_dest(operation),
+        crate::cfg::cond_br_false_dest(operation),
+    ]
 }
 
-impl CondBranchOp {
-    pub fn condition(&self) -> ValueId {
-        self.operands()[0]
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_CondBranchOp_Terminator: crate::TerminatorCallbacks =
+    crate::TerminatorCallbacks {
+        successors: Some(crate::cfg::cond_br_terminator_successors),
+    };
 
-    /// The values forwarded to the true successor's block arguments, the
-    /// states among them last.
-    pub fn true_args(&self) -> Vec<ValueId> {
-        self.operands()[self.args_range(1)].to_vec()
-    }
-
-    /// The values forwarded to the false successor's block arguments, the
-    /// states among them last.
-    pub fn false_args(&self) -> Vec<ValueId> {
-        self.operands()[self.args_range(2)].to_vec()
-    }
-
-    // Operand layout is [condition, true_args.., false_args..], one declared
-    // operand group each.
-    fn args_range(&self, group: usize) -> std::ops::Range<usize> {
-        tir::binding::operand_segments(&self.0, 3)[group].clone()
-    }
-
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.clone();
-        fmt.write(format!("cfg.cond_br %{}, ", self.condition().number()))?;
-        print_successor(fmt, &context, self.true_dest(), &self.true_args())?;
-        fmt.write(", ")?;
-        print_successor(fmt, &context, self.false_dest(), &self.false_args())?;
-        fmt.write("\n")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let condition = parse_value_id(parser, context)?;
-        parser.expect_token(",")?;
-        let (true_dest, true_args) = parse_successor(parser, context)?;
-        parser.expect_token(",")?;
-        let (false_dest, false_args) = parse_successor(parser, context)?;
-
-        let op = CondBranchOp::new(
-            context,
-            condition,
-            true_args,
-            false_args,
-            tir::attributes::AttributeValue::Block(true_dest),
-            tir::attributes::AttributeValue::Block(false_dest),
-            Default::default(),
-            tir::InsertionPoint::Root,
-        );
-        Ok(Box::new(op))
-    }
+pub(crate) fn cond_br_branchterminator_successor_operand_slots(
+    operation: &tir::OpHandle,
+) -> Vec<(BlockId, Vec<usize>)> {
+    vec![
+        (
+            crate::cfg::cond_br_true_dest(operation),
+            crate::cfg::cond_br_args_range(operation, 1).collect(),
+        ),
+        (
+            crate::cfg::cond_br_false_dest(operation),
+            crate::cfg::cond_br_args_range(operation, 2).collect(),
+        ),
+    ]
 }
 
-operation! {
-    SwitchOp {
-        name: "switch",
-        dialect: "cfg",
-        scheme: "(int<_>, _*) -> ()",
-        format: "custom",
-        verifier: "true",
-        operands: O { selector, args },
-        interfaces: [Terminator, BranchTerminator, CaseGuard],
-    }
+pub(crate) fn cond_br_branchterminator_successor_operands(
+    operation: &tir::OpHandle,
+) -> Vec<(BlockId, Vec<ValueId>)> {
+    vec![
+        (
+            crate::cfg::cond_br_true_dest(operation),
+            crate::cfg::cond_br_true_args(operation),
+        ),
+        (
+            crate::cfg::cond_br_false_dest(operation),
+            crate::cfg::cond_br_false_args(operation),
+        ),
+    ]
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_CondBranchOp_BranchTerminator: crate::BranchTerminatorCallbacks =
+    crate::BranchTerminatorCallbacks {
+        successor_operands: crate::cfg::cond_br_branchterminator_successor_operands,
+        successor_operand_slots: crate::cfg::cond_br_branchterminator_successor_operand_slots,
+    };
+
+pub(crate) fn cond_br_branchguard_guarded_successors(
+    operation: &tir::OpHandle,
+) -> Vec<(BlockId, ValueId, bool)> {
+    vec![
+        (
+            crate::cfg::cond_br_true_dest(operation),
+            crate::cfg::cond_br_condition(operation),
+            true,
+        ),
+        (
+            crate::cfg::cond_br_false_dest(operation),
+            crate::cfg::cond_br_condition(operation),
+            false,
+        ),
+    ]
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_CondBranchOp_BranchGuard: crate::BranchGuardCallbacks =
+    crate::BranchGuardCallbacks {
+        guarded_successors: crate::cfg::cond_br_branchguard_guarded_successors,
+    };
+
+pub fn cond_br_condition(operation: &tir::OpHandle) -> ValueId {
+    operation.operands()[0]
+}
+
+/// The values forwarded to the true successor's block arguments, the
+/// states among them last.
+pub fn cond_br_true_args(operation: &tir::OpHandle) -> Vec<ValueId> {
+    operation.operands()[crate::cfg::cond_br_args_range(operation, 1)].to_vec()
+}
+
+/// The values forwarded to the false successor's block arguments, the
+/// states among them last.
+pub fn cond_br_false_args(operation: &tir::OpHandle) -> Vec<ValueId> {
+    operation.operands()[crate::cfg::cond_br_args_range(operation, 2)].to_vec()
+}
+
+pub(crate) fn cond_br_args_range(
+    operation: &tir::OpHandle,
+    group: usize,
+) -> std::ops::Range<usize> {
+    tir::binding::operand_segments(operation, 3)[group].clone()
+}
+
+pub(crate) fn cond_br_custom_print(
+    operation: &tir::OpHandle,
+    fmt: &mut tir::IRFormatter,
+) -> Result<(), std::fmt::Error> {
+    let context = operation.context.clone();
+    fmt.write(format!(
+        "cfg.cond_br %{}, ",
+        crate::cfg::cond_br_condition(operation).number()
+    ))?;
+    print_successor(
+        fmt,
+        &context,
+        crate::cfg::cond_br_true_dest(operation),
+        &crate::cfg::cond_br_true_args(operation),
+    )?;
+    fmt.write(", ")?;
+    print_successor(
+        fmt,
+        &context,
+        crate::cfg::cond_br_false_dest(operation),
+        &crate::cfg::cond_br_false_args(operation),
+    )?;
+    fmt.write("\n")
+}
+
+pub(crate) fn cond_br_custom_parse(
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+) -> Result<tir::OpHandle, (tir::parse::Span, Error)> {
+    let condition = parse_value_id(parser, context)?;
+    parser.expect_token(",")?;
+    let (true_dest, true_args) = parse_successor(parser, context)?;
+    parser.expect_token(",")?;
+    let (false_dest, false_args) = parse_successor(parser, context)?;
+
+    let op = r#cond_br(
+        context,
+        condition,
+        true_args,
+        false_args,
+        tir::attributes::AttributeValue::Block(true_dest),
+        tir::attributes::AttributeValue::Block(false_dest),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    Ok(op)
 }
 
 /// The successor blocks, one per case and the default last.
@@ -206,224 +269,253 @@ fn unsigned_list(values: impl IntoIterator<Item = u64>) -> AttributeValue {
     )
 }
 
-impl SwitchOp {
-    /// Take `cases[i].1` where the selector's bits are `cases[i].0`, and
-    /// `default` where they are none of them, each entered on its values.
-    pub fn with_successors(
-        context: &Context,
-        selector: ValueId,
-        cases: Vec<(u64, Successor)>,
-        default: Successor,
-        mut parts: tir::NewOpParts,
-        insertion: tir::InsertionPoint,
-    ) -> Self {
-        let (values, edges): (Vec<u64>, Vec<Successor>) = cases.into_iter().unzip();
-        let edges = edges.into_iter().chain([default]).collect::<Vec<_>>();
-        let dests = edges.iter().map(|(dest, _)| AttributeValue::Block(*dest));
-        let counts = edges.iter().map(|(_, args)| args.len() as u64);
-        let args = edges.iter().flat_map(|(_, args)| args.clone()).collect();
-        parts.attributes.splice(
-            ..0,
-            [
-                context.named_attribute(
-                    DESTS,
-                    AttributeValue::Array(dests.collect::<Vec<_>>().into()),
-                ),
-                context.named_attribute(CASES, unsigned_list(values)),
-                context.named_attribute(ARG_COUNTS, unsigned_list(counts)),
-            ],
-        );
-        Self::new(context, selector, args, parts, insertion)
-    }
+/// Take `cases[i].1` where the selector's bits are `cases[i].0`, and
+/// `default` where they are none of them, each entered on its values.
+pub fn switch_with_successors(
+    context: &Context,
+    selector: ValueId,
+    cases: Vec<(u64, Successor)>,
+    default: Successor,
+    mut parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> tir::OpHandle {
+    let (values, edges): (Vec<u64>, Vec<Successor>) = cases.into_iter().unzip();
+    let edges = edges.into_iter().chain([default]).collect::<Vec<_>>();
+    let dests = edges.iter().map(|(dest, _)| AttributeValue::Block(*dest));
+    let counts = edges.iter().map(|(_, args)| args.len() as u64);
+    let args = edges.iter().flat_map(|(_, args)| args.clone()).collect();
+    parts.attributes.splice(
+        ..0,
+        [
+            context.named_attribute(
+                DESTS,
+                AttributeValue::Array(dests.collect::<Vec<_>>().into()),
+            ),
+            context.named_attribute(CASES, unsigned_list(values)),
+            context.named_attribute(ARG_COUNTS, unsigned_list(counts)),
+        ],
+    );
+    crate::cfg::r#switch(context, selector, args, parts, insertion)
 }
 
-impl SwitchOp {
-    pub fn selector(&self) -> ValueId {
-        self.operands()[0]
-    }
+pub fn switch_selector(operation: &tir::OpHandle) -> ValueId {
+    operation.operands()[0]
+}
 
-    fn unsigned(&self, name: &str) -> Vec<u64> {
-        match self.attr(name) {
-            Some(AttributeValue::Array(items)) => items
-                .iter()
-                .map(|item| match item {
-                    AttributeValue::UInt(value) => *value,
-                    _ => 0,
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
-    fn edges(&self) -> Vec<Successor> {
-        let dests = match self.attr(DESTS) {
-            Some(AttributeValue::Array(items)) => items
-                .iter()
-                .filter_map(|item| match item {
-                    AttributeValue::Block(block) => Some(*block),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        let operands = self.operands();
-        let mut start = 1;
-        dests
-            .into_iter()
-            .zip(self.unsigned(ARG_COUNTS))
-            .map(|(dest, count)| {
-                let end = (start + count as usize).min(operands.len());
-                let args = operands[start.min(end)..end].to_vec();
-                start = end;
-                (dest, args)
+pub(crate) fn switch_unsigned(operation: &tir::OpHandle, name: &str) -> Vec<u64> {
+    match operation.attr(name) {
+        Some(AttributeValue::Array(items)) => items
+            .iter()
+            .map(|item| match item {
+                AttributeValue::UInt(value) => *value,
+                _ => 0,
             })
-            .collect()
-    }
-
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.clone();
-        let selector = self.selector();
-        fmt.write(format!("cfg.switch %{} : ", selector.number()))?;
-        context.print_type(context.get_value(selector).ty(), fmt)?;
-        fmt.write(", [\n")?;
-        fmt.push();
-        let mut edges = self.edges();
-        let default = edges.pop();
-        if let Some((dest, args)) = default {
-            fmt.write("default: ")?;
-            print_successor(fmt, &context, dest, &args)?;
-        }
-        let width = context
-            .terms()
-            .bit_width(context.get_value(selector).ty())
-            .map_or(64, |width| width as u32);
-        for (case, (dest, args)) in self.cases().into_iter().zip(edges) {
-            fmt.write(",\n")?;
-            fmt.write(format!("{}: ", crate::binding::signed_bits(case, width)))?;
-            print_successor(fmt, &context, dest, &args)?;
-        }
-        fmt.write("\n")?;
-        fmt.pop();
-        fmt.write("]\n")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        use tir::parse::common::Cursor;
-        let selector = parse_value_id(parser, context)?;
-        parser.expect_token(":")?;
-        let ty = parse_arg_type(parser, context)?;
-        let width = context
-            .terms()
-            .bit_width(ty)
-            .map_or(64, |width| width as u32);
-        parser.expect_token(",")?;
-        parser.expect_token("[")?;
-        parser.expect_token("default")?;
-        parser.expect_token(":")?;
-        let default = parse_successor(parser, context)?;
-        let mut cases = Vec::new();
-        while parser.parse_token(",") {
-            let span = parser.span();
-            let case = parser
-                .parse_number()
-                .ok_or((span, Error::ExpectedToken("case value")))?;
-            parser.expect_token(":")?;
-            let successor = parse_successor(parser, context)?;
-            cases.push((crate::binding::truncate_bits(case, width), successor));
-        }
-        parser.expect_token("]")?;
-        let op = SwitchOp::with_successors(
-            context,
-            selector,
-            cases,
-            default,
-            Default::default(),
-            tir::InsertionPoint::Root,
-        );
-        Ok(Box::new(op))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
-impl tir::Verifiable for SwitchOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let fail = |message: String| Err(Error::VerificationError(format!("cfg.switch {message}")));
-        for name in [CASES, ARG_COUNTS] {
-            if let Some(AttributeValue::Array(items)) = self.attr(name)
-                && items
-                    .iter()
-                    .any(|item| !matches!(item, AttributeValue::UInt(_)))
-            {
-                return fail(format!("{name} must be unsigned integers"));
-            }
+pub(crate) fn switch_edges(operation: &tir::OpHandle) -> Vec<Successor> {
+    let dests = match operation.attr(DESTS) {
+        Some(AttributeValue::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                AttributeValue::Block(block) => Some(*block),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let operands = operation.operands();
+    let mut start = 1;
+    dests
+        .into_iter()
+        .zip(crate::cfg::switch_unsigned(operation, ARG_COUNTS))
+        .map(|(dest, count)| {
+            let end = (start + count as usize).min(operands.len());
+            let args = operands[start.min(end)..end].to_vec();
+            start = end;
+            (dest, args)
+        })
+        .collect()
+}
+
+pub(crate) fn switch_custom_print(
+    operation: &tir::OpHandle,
+    fmt: &mut tir::IRFormatter,
+) -> Result<(), std::fmt::Error> {
+    let context = operation.context.clone();
+    let selector = crate::cfg::switch_selector(operation);
+    fmt.write(format!("cfg.switch %{} : ", selector.number()))?;
+    context.print_type(context.get_value(selector).ty(), fmt)?;
+    fmt.write(", [\n")?;
+    fmt.push();
+    let mut edges = crate::cfg::switch_edges(operation);
+    let default = edges.pop();
+    if let Some((dest, args)) = default {
+        fmt.write("default: ")?;
+        print_successor(fmt, &context, dest, &args)?;
+    }
+    let width = context
+        .terms()
+        .bit_width(context.get_value(selector).ty())
+        .map_or(64, |width| width as u32);
+    for (case, (dest, args)) in crate::cfg::switch_caseguard_cases(operation)
+        .into_iter()
+        .zip(edges)
+    {
+        fmt.write(",\n")?;
+        fmt.write(format!("{}: ", crate::binding::signed_bits(case, width)))?;
+        print_successor(fmt, &context, dest, &args)?;
+    }
+    fmt.write("\n")?;
+    fmt.pop();
+    fmt.write("]\n")
+}
+
+pub(crate) fn switch_custom_parse(
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+) -> Result<tir::OpHandle, (tir::parse::Span, Error)> {
+    use tir::parse::common::Cursor;
+    let selector = parse_value_id(parser, context)?;
+    parser.expect_token(":")?;
+    let ty = parse_arg_type(parser, context)?;
+    let width = context
+        .terms()
+        .bit_width(ty)
+        .map_or(64, |width| width as u32);
+    parser.expect_token(",")?;
+    parser.expect_token("[")?;
+    parser.expect_token("default")?;
+    parser.expect_token(":")?;
+    let default = parse_successor(parser, context)?;
+    let mut cases = Vec::new();
+    while parser.parse_token(",") {
+        let span = parser.span();
+        let case = parser
+            .parse_number()
+            .ok_or((span, Error::ExpectedToken("case value")))?;
+        parser.expect_token(":")?;
+        let successor = parse_successor(parser, context)?;
+        cases.push((crate::binding::truncate_bits(case, width), successor));
+    }
+    parser.expect_token("]")?;
+    let op = crate::cfg::switch_with_successors(
+        context,
+        selector,
+        cases,
+        default,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    Ok(op)
+}
+
+pub(crate) fn switch_verify_impl(
+    operation: &tir::OpHandle,
+    context: &Context,
+) -> Result<(), Error> {
+    let fail = |message: String| Err(Error::VerificationError(format!("cfg.switch {message}")));
+    for name in [CASES, ARG_COUNTS] {
+        if let Some(AttributeValue::Array(items)) = operation.attr(name)
+            && items
+                .iter()
+                .any(|item| !matches!(item, AttributeValue::UInt(_)))
+        {
+            return fail(format!("{name} must be unsigned integers"));
         }
-        let edges = self.edges();
-        let cases = self.cases();
-        let counts = self.unsigned(ARG_COUNTS);
-        if edges.len() != cases.len() + 1 || counts.len() != edges.len() {
+    }
+    let edges = crate::cfg::switch_edges(operation);
+    let cases = crate::cfg::switch_caseguard_cases(operation);
+    let counts = crate::cfg::switch_unsigned(operation, ARG_COUNTS);
+    if edges.len() != cases.len() + 1 || counts.len() != edges.len() {
+        return fail(format!(
+            "names {} successors for {} cases: each case and the default has one",
+            edges.len(),
+            cases.len()
+        ));
+    }
+    if counts.iter().sum::<u64>() as usize + 1 != operation.operands().len() {
+        return fail("forwards values its successors do not take".to_string());
+    }
+    let width = context
+        .terms()
+        .bit_width(
+            context
+                .get_value(crate::cfg::switch_selector(operation))
+                .ty(),
+        )
+        .map_or(64, |width| width as u32);
+    let mut seen = std::collections::HashSet::new();
+    for &case in &cases {
+        if crate::binding::truncate_bits(case as i64, width) != case {
             return fail(format!(
-                "names {} successors for {} cases: each case and the default has one",
-                edges.len(),
-                cases.len()
+                "case {case:#x} does not fit its {width}-bit selector"
             ));
         }
-        if counts.iter().sum::<u64>() as usize + 1 != self.operands().len() {
-            return fail("forwards values its successors do not take".to_string());
+        if !seen.insert(case) {
+            return fail(format!("names case {case:#x} twice"));
         }
-        let width = context
-            .terms()
-            .bit_width(context.get_value(self.selector()).ty())
-            .map_or(64, |width| width as u32);
-        let mut seen = std::collections::HashSet::new();
-        for &case in &cases {
-            if crate::binding::truncate_bits(case as i64, width) != case {
-                return fail(format!(
-                    "case {case:#x} does not fit its {width}-bit selector"
-                ));
-            }
-            if !seen.insert(case) {
-                return fail(format!("names case {case:#x} twice"));
-            }
-        }
-        Ok(())
     }
+    Ok(())
 }
 
-impl Terminator for SwitchOp {
-    fn successors(&self) -> Vec<BlockId> {
-        self.edges().into_iter().map(|(dest, _)| dest).collect()
-    }
+pub(crate) fn switch_terminator_successors(operation: &tir::OpHandle) -> Vec<BlockId> {
+    crate::cfg::switch_edges(operation)
+        .into_iter()
+        .map(|(dest, _)| dest)
+        .collect()
 }
 
-impl BranchTerminator for SwitchOp {
-    fn successor_operand_slots(&self) -> Vec<(BlockId, Vec<usize>)> {
-        let mut start = 1;
-        self.edges()
-            .into_iter()
-            .map(|(dest, args)| {
-                let end = start + args.len();
-                let slots = (start..end).collect();
-                start = end;
-                (dest, slots)
-            })
-            .collect()
-    }
-    fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
-        self.edges()
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_SwitchOp_Terminator: crate::TerminatorCallbacks =
+    crate::TerminatorCallbacks {
+        successors: Some(crate::cfg::switch_terminator_successors),
+    };
+
+pub(crate) fn switch_branchterminator_successor_operand_slots(
+    operation: &tir::OpHandle,
+) -> Vec<(BlockId, Vec<usize>)> {
+    let mut start = 1;
+    crate::cfg::switch_edges(operation)
+        .into_iter()
+        .map(|(dest, args)| {
+            let end = start + args.len();
+            let slots = (start..end).collect();
+            start = end;
+            (dest, slots)
+        })
+        .collect()
 }
 
-impl CaseGuard for SwitchOp {
-    fn selector(&self) -> ValueId {
-        SwitchOp::selector(self)
-    }
-
-    fn cases(&self) -> Vec<u64> {
-        self.unsigned(CASES)
-    }
+pub(crate) fn switch_branchterminator_successor_operands(
+    operation: &tir::OpHandle,
+) -> Vec<(BlockId, Vec<ValueId>)> {
+    crate::cfg::switch_edges(operation)
 }
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_SwitchOp_BranchTerminator: crate::BranchTerminatorCallbacks =
+    crate::BranchTerminatorCallbacks {
+        successor_operands: crate::cfg::switch_branchterminator_successor_operands,
+        successor_operand_slots: crate::cfg::switch_branchterminator_successor_operand_slots,
+    };
+
+pub(crate) fn switch_caseguard_selector(operation: &tir::OpHandle) -> ValueId {
+    crate::cfg::switch_selector(operation)
+}
+
+pub(crate) fn switch_caseguard_cases(operation: &tir::OpHandle) -> Vec<u64> {
+    crate::cfg::switch_unsigned(operation, CASES)
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_SwitchOp_CaseGuard: crate::CaseGuardCallbacks =
+    crate::CaseGuardCallbacks {
+        selector: crate::cfg::switch_caseguard_selector,
+        cases: crate::cfg::switch_caseguard_cases,
+    };
 
 fn print_successor(
     fmt: &mut tir::IRFormatter,

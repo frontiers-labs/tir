@@ -1,7 +1,7 @@
 //! InstCombine as a round of the mid-end pipeline: what it extracts from its
 //! own output must leave that output alone.
 
-use tir::{func::FuncOp, Operation, PassManager};
+use tir::{Operation, PassManager};
 
 use super::fixtures;
 
@@ -41,7 +41,7 @@ fn a_round_of_instcombine_reaches_a_fixpoint() {
 
     let mut raise = PassManager::new();
     raise
-        .nest::<FuncOp>()
+        .nest(&tir::func::FUNC)
         .add_pass(tir::passes::RestructureNodesPass::new());
     raise
         .run(&context, module.id())
@@ -50,7 +50,7 @@ fn a_round_of_instcombine_reaches_a_fixpoint() {
     let mut round = PassManager::new();
     round
         .fixpoint(8)
-        .nest::<FuncOp>()
+        .nest(&tir::func::FUNC)
         .add_pass(tir::passes::InstCombineNodesPass::new());
     round
         .run(&context, module.id())
@@ -58,7 +58,7 @@ fn a_round_of_instcombine_reaches_a_fixpoint() {
     let settled = context.op_version(module.id());
 
     let mut once = PassManager::new();
-    once.nest::<FuncOp>()
+    once.nest(&tir::func::FUNC)
         .add_pass(tir::passes::InstCombineNodesPass::new());
     once.run(&context, module.id())
         .expect("a settled function has nothing left to simplify");
@@ -144,7 +144,7 @@ fn simplified(order: [usize; 4], workers: usize) -> (String, Vec<String>) {
     let (context, module) = fixtures::parse(&format!("module {{\n{functions}  module_end\n}}"));
     let mut pm = PassManager::new();
     pm.set_workers(workers);
-    pm.nest::<FuncOp>()
+    pm.nest(&tir::func::FUNC)
         .add_pass(tir::passes::RestructureNodesPass::new())
         .add_pass(tir::passes::InstCombineNodesPass::new());
     pm.run(&context, module.id())
@@ -156,7 +156,7 @@ fn simplified(order: [usize; 4], workers: usize) -> (String, Vec<String>) {
     };
     let mut functions: Vec<String> = fixtures::module_ops(&context, module.id())
         .into_iter()
-        .filter_map(|op| context.get_op(op).as_op::<FuncOp>())
+        .filter_map(|op| context.get_op(op).as_operation(&tir::func::FUNC))
         .map(|function| {
             renamed(&print(&|fmt| {
                 tir::print_ir(&function, &context, fmt).unwrap()

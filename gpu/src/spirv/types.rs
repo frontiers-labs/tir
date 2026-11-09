@@ -1,4 +1,4 @@
-use tir::{Context, Ctor, Error, Kind, Param, Terms, TypeArg, TypeCtor, TypeId, TypeSpelling};
+use tir::{Context, Ctor, Error, Terms, TypeArg, TypeId, TypeSpelling};
 use tir_symbolic::term::{no_carrier, valid};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,17 +54,9 @@ impl StorageClass {
     }
 }
 
-static POINTER: Ctor = Ctor::new(TypeCtor {
-    dialect: "spirv",
-    name: "ptr",
-    params: &[
-        ("pointee", Param::One(Kind::Data)),
-        ("storage_class", Param::One(Kind::Sym)),
-    ],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static POINTER: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "../core/defs/types/gpu_src_spirv_types.cdsl", binding: constructors::POINTER, hosts: { POINTER_validate => valid, POINTER_carrier => no_carrier } },
+);
 
 /// A pointer into one storage class, written `!spirv.ptr<!pointee, Class>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,10 +103,8 @@ impl PointerType {
     }
 
     pub fn spelling(context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: POINTER.id(context),
-            keys: &["ptr"],
-            parse: |_, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |_, parser, context| {
                 use tir::parse::common::Cursor;
                 parser.expect_token("<")?;
                 let pointee = parser
@@ -127,30 +117,24 @@ impl PointerType {
                 let storage_class = StorageClass::parse(storage_name)
                     .ok_or_else(|| (parser.span(), Error::ExpectedToken("storage class")))?;
                 parser.expect_token(">")?;
-                Ok(Self::new(context, pointee, storage_class))
-            },
-            print: |spellings, ty, fmt| {
-                let pointer = Self::view(spellings, ty).expect("a SPIR-V pointer");
+                Ok(PointerType::new(context, pointee, storage_class))
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
+                let pointer = PointerType::view(spellings, ty).expect("a SPIR-V pointer");
                 fmt.write("spirv.ptr<")?;
                 spellings.print(pointer.pointee, fmt)?;
                 fmt.write(format!(", {}>", pointer.storage_class.name()))
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| POINTER.id(context);
+            ::tir::helpers::type_spelling! { file: "../core/defs/types/gpu_src_spirv_types.cdsl", binding: spellings::PointerType, context: context, hosts: { PointerType_parse => __TIR_TYPE_PARSE, PointerType_print => __TIR_TYPE_PRINT, PointerType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
 
-static RUNTIME_ARRAY: Ctor = Ctor::new(TypeCtor {
-    dialect: "spirv",
-    name: "rtarray",
-    params: &[
-        ("element", Param::One(Kind::Data)),
-        ("stride", Param::One(Kind::Nat)),
-    ],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static RUNTIME_ARRAY: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "../core/defs/types/gpu_src_spirv_types.cdsl", binding: constructors::RUNTIME_ARRAY, hosts: { RUNTIME_ARRAY_validate => valid, RUNTIME_ARRAY_carrier => no_carrier } },
+);
 
 /// An array of unknown length, written `!spirv.rtarray<!element, stride=N>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,10 +175,8 @@ impl RuntimeArrayType {
     }
 
     pub fn spelling(context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: RUNTIME_ARRAY.id(context),
-            keys: &["rtarray"],
-            parse: |_, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |_, parser, context| {
                 use tir::parse::common::Cursor;
                 parser.expect_token("<")?;
                 let element = parser
@@ -210,15 +192,17 @@ impl RuntimeArrayType {
                     .and_then(|value| u32::try_from(value).ok())
                     .ok_or_else(|| (parser.span(), Error::ExpectedToken("array stride")))?;
                 parser.expect_token(">")?;
-                Ok(Self::new(context, element, stride))
-            },
-            print: |spellings, ty, fmt| {
-                let array = Self::view(spellings, ty).expect("a SPIR-V runtime array");
+                Ok(RuntimeArrayType::new(context, element, stride))
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
+                let array = RuntimeArrayType::view(spellings, ty).expect("a SPIR-V runtime array");
                 fmt.write("spirv.rtarray<")?;
                 spellings.print(array.element, fmt)?;
                 fmt.write(format!(", stride={}>", array.stride))
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| RUNTIME_ARRAY.id(context);
+            ::tir::helpers::type_spelling! { file: "../core/defs/types/gpu_src_spirv_types.cdsl", binding: spellings::RuntimeArrayType, context: context, hosts: { RuntimeArrayType_parse => __TIR_TYPE_PARSE, RuntimeArrayType_print => __TIR_TYPE_PRINT, RuntimeArrayType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }

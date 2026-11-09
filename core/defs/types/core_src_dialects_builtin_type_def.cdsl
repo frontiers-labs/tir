@@ -1,0 +1,78 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let STRUCT_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let STRUCT_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let UNION_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let UNION_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let VARIANT_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let VARIANT_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let NamedType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let NamedType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let NamedType_ctor_id: (context: Context) -> CtorId;
+extern let AggregateType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let AggregateType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let AggregateType_Struct_ctor_id: (context: Context) -> CtorId;
+extern let AggregateType_Union_ctor_id: (context: Context) -> CtorId;
+extern let AggregateType_Variant_ctor_id: (context: Context) -> CtorId;
+
+pub let constructors::STRUCT: ConstructorSpec = {
+    dialect: "type",
+    name: "struct",
+    params: [{ name: "fields", param: Param::Fields() }, { name: "packed", param: Param::Opt(Kind::Bool()) }],
+    kind: Kind::Data(),
+    validate: STRUCT_validate,
+    carrier: STRUCT_carrier,
+};
+
+pub let constructors::UNION: ConstructorSpec = {
+    dialect: "type",
+    name: "union",
+    params: [{ name: "fields", param: Param::Fields() }],
+    kind: Kind::Data(),
+    validate: UNION_validate,
+    carrier: UNION_carrier,
+};
+
+pub let constructors::VARIANT: ConstructorSpec = {
+    dialect: "type",
+    name: "variant",
+    params: [{ name: "fields", param: Param::Fields() }, { name: "tag", param: Param::Opt(Kind::Data()) }],
+    kind: Kind::Data(),
+    validate: VARIANT_validate,
+    carrier: VARIANT_carrier,
+};
+
+pub let spellings::NamedType: SpellingSpec = {
+    ctor_id: NamedType_ctor_id,
+    keys: [],
+    parse: NamedType_parse,
+    print: NamedType_print,
+    variadic_tail: false,
+};
+
+pub let spellings::AggregateType_Struct: SpellingSpec = {
+    ctor_id: AggregateType_Struct_ctor_id,
+    keys: ["struct"],
+    parse: AggregateType_parse,
+    print: AggregateType_print,
+    variadic_tail: false,
+};
+
+pub let spellings::AggregateType_Union: SpellingSpec = {
+    ctor_id: AggregateType_Union_ctor_id,
+    keys: ["union"],
+    parse: AggregateType_parse,
+    print: AggregateType_print,
+    variadic_tail: false,
+};
+
+pub let spellings::AggregateType_Variant: SpellingSpec = {
+    ctor_id: AggregateType_Variant_ctor_id,
+    keys: ["variant"],
+    parse: AggregateType_parse,
+    print: AggregateType_print,
+    variadic_tail: false,
+};

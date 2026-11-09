@@ -1,0 +1,49 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let ENV_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let ENV_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let EnvironmentType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let EnvironmentType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let EnvironmentType_ctor_id: (context: Context) -> CtorId;
+extern let ROUNDING_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let ROUNDING_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let RoundingType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let RoundingType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let RoundingType_ctor_id: (context: Context) -> CtorId;
+
+pub let constructors::ENV: ConstructorSpec = {
+    dialect: "fp",
+    name: "env",
+    params: [],
+    kind: Kind::Data(),
+    validate: ENV_validate,
+    carrier: ENV_carrier,
+};
+
+pub let spellings::EnvironmentType: SpellingSpec = {
+    ctor_id: EnvironmentType_ctor_id,
+    keys: ["env"],
+    parse: EnvironmentType_parse,
+    print: EnvironmentType_print,
+    variadic_tail: false,
+};
+
+pub let constructors::ROUNDING: ConstructorSpec = {
+    dialect: "fp",
+    name: "rounding",
+    params: [],
+    kind: Kind::Data(),
+    validate: ROUNDING_validate,
+    carrier: ROUNDING_carrier,
+};
+
+pub let spellings::RoundingType: SpellingSpec = {
+    ctor_id: RoundingType_ctor_id,
+    keys: ["rounding"],
+    parse: RoundingType_parse,
+    print: RoundingType_print,
+    variadic_tail: false,
+};

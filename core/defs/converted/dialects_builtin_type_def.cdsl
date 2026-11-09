@@ -1,0 +1,20 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type r#type = Dialect;
+
+type def_attributes = Record<{ sym_name: String, params: Optional<AttrArray>, layout: Optional<AttrDict>, body: Optional<AttrType> }>;
+extern fn def_verifier(operation: Operation, context: Context) -> Validation;
+extern let def_iface_Symbol: Interface;
+extern fn def_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn def_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let r#type::r#def = {
+    signature: () -> (),
+    attributes: { sym_name: { ty: String, codec: str_codec }, params: { ty: Optional<AttrArray>, codec: _array_codec }, layout: { ty: Optional<AttrDict>, codec: _dict_codec }, body: { ty: Optional<AttrType>, codec: _type_codec } },
+    verify: def_verifier,
+    interfaces: [def_iface_Symbol],
+    regions: { region: { kind: RegionKind::Blocks(), variadic: true } },
+    assembly: { print: def_printer, parse: def_parser },
+};

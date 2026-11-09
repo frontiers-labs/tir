@@ -43,7 +43,7 @@ pub(super) fn lower_to_ir(
     march: Option<&str>,
     mabi: Option<&str>,
     jobs: usize,
-) -> tir::builtin::ModuleOp {
+) -> tir::OpHandle {
     let fail = |error: String| -> ! {
         eprintln!("fcc: error: {error}; pass --march explicitly");
         std::process::exit(1);
@@ -101,7 +101,7 @@ pub(super) fn lower_to_ir(
 
 fn run_pass(
     context: &tir::Context,
-    module: &tir::builtin::ModuleOp,
+    module: &tir::OpHandle,
     label: &str,
     jobs: Option<usize>,
     pass: impl tir::Pass + Clone + 'static,
@@ -112,7 +112,7 @@ fn run_pass(
     match jobs {
         Some(jobs) => {
             pm.set_workers(jobs);
-            pm.nest::<tir::func::FuncOp>().add_pass(pass);
+            pm.nest(&tir::func::FUNC).add_pass(pass);
         }
         None => {
             pm.add_pass(pass);
@@ -126,10 +126,10 @@ fn run_pass(
 
 fn describe_target(
     context: &tir::Context,
-    module: &tir::builtin::ModuleOp,
+    module: &tir::OpHandle,
     machine: &dyn tir::backend::TargetMachine,
     layout: tir::attributes::AttributeValue,
-) -> tir::builtin::ModuleOp {
+) -> tir::OpHandle {
     use tir::Operation;
 
     let mut attributes = context.get_op(module.id()).attributes().to_vec();
@@ -143,10 +143,7 @@ fn describe_target(
         }
     }
     context.set_op_attributes(module.id(), attributes);
-    context
-        .get_op(module.id())
-        .as_op::<tir::builtin::ModuleOp>()
-        .expect("the module keeps its identity")
+    context.get_op(module.id())
 }
 
 pub(super) fn fcc_context() -> tir::Context {
@@ -462,11 +459,11 @@ pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
         // callers select a reduced mid-end pipeline. Without this final
         // cleanup, unfolded address arithmetic can reach instruction
         // selection and change the program's observable behavior.
-        add_instcombine(pm.nest::<tir::func::FuncOp>());
+        add_instcombine(pm.nest(&tir::func::FUNC));
     } else if let Some(rounds) = opts.opt_level.rounds() {
         let fixpoint = pm.fixpoint(rounds.cap);
         fixpoint.add_pass(tir::passes::InlinePass::new(rounds.inline));
-        let round = fixpoint.nest::<tir::func::FuncOp>();
+        let round = fixpoint.nest(&tir::func::FUNC);
         // Inlining is the only thing that makes a slot promotable that was
         // not, so promote follows it inside the round. The chain the
         // conversion built is kept and checked, never drawn again, and the
@@ -486,7 +483,7 @@ pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
         // pipeline needs: instruction selection reads unfolded address
         // arithmetic as a different program, which is a backend defect this
         // level inherits.
-        add_instcombine(pm.nest::<tir::func::FuncOp>());
+        add_instcombine(pm.nest(&tir::func::FUNC));
     }
     pm.set_workers(opts.jobs);
     pm

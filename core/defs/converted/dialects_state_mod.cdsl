@@ -1,0 +1,31 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type state = Dialect;
+
+extern let entry_state_iface_Interp: Interface;
+extern fn entry_state_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn entry_state_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern fn join_verifier(operation: Operation, context: Context) -> Validation;
+extern let join_iface_Interp: Interface;
+extern fn split_verifier(operation: Operation, context: Context) -> Validation;
+extern let split_iface_Interp: Interface;
+
+pub let state::entry_state<StateResources> = {
+    signature: () -> (state: States<StateResources>,),
+    interfaces: [entry_state_iface_Interp],
+    assembly: { print: entry_state_printer, parse: entry_state_parser },
+};
+
+pub let state::join<StateResources> = {
+    signature: (states: Many<AnyState>) -> (state: States<StateResources>,),
+    verify: join_verifier,
+    interfaces: [join_iface_Interp],
+};
+
+pub let state::split<StateResources> = {
+    signature: (state: States<StateResources>) -> (states: Many<AnyState>,),
+    verify: split_verifier,
+    interfaces: [split_iface_Interp],
+};

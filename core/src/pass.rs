@@ -270,11 +270,11 @@ pub enum PassTarget {
 pub struct OperationTarget;
 
 impl PassTarget {
-    pub fn operation<T: Operation>() -> Self {
+    pub fn operation(_definition: &crate::OpDefSpec) -> Self {
         Self::Operation(OperationTarget)
     }
-    pub fn operation_on<T: Operation>(_kind: RegionKind) -> Self {
-        Self::operation::<T>()
+    pub fn operation_on(definition: &crate::OpDefSpec, _kind: RegionKind) -> Self {
+        Self::operation(definition)
     }
 }
 
@@ -296,13 +296,11 @@ impl OperationRef {
         self.op.name()
     }
 
-    /// Returns whether the referenced operation has type `T`.
-    pub fn is<T: Operation>(&self) -> bool {
-        self.op.is::<T>()
+    pub fn is_operation(&self, definition: &crate::OpDefSpec) -> bool {
+        self.op.is_operation(definition)
     }
-
-    pub fn as_op<T: Operation>(&self) -> Option<T> {
-        self.op.clone().as_op::<T>()
+    pub fn as_operation(&self, definition: &crate::OpDefSpec) -> Option<OpHandle> {
+        self.op.clone().as_operation(definition)
     }
 
     pub fn as_interface<I: ?Sized + 'static>(&self) -> Option<Box<I>> {
@@ -477,7 +475,7 @@ impl PassManager {
     pub fn add_boxed_pass(&mut self, _pass: Box<dyn Pass>) -> &mut Self {
         self
     }
-    pub fn nest<T: Operation>(&mut self) -> &mut PassManager {
+    pub fn nest(&mut self, _definition: &crate::OpDefSpec) -> &mut PassManager {
         self
     }
     pub fn fixpoint(&mut self, _cap: u8) -> &mut PassManager {

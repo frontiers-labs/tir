@@ -9,9 +9,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use tir::attributes::AttributeValue;
-use tir::backend::{MachineInstruction, SectionOp, SymbolOp};
-use tir::builtin::ModuleOp;
-use tir::{BlockId, Context, OpId, Operation};
+use tir::backend::MachineInstruction;
+use tir::{BlockId, Context, OpId};
 
 use crate::error::Error;
 
@@ -45,7 +44,7 @@ impl ProgramImage {
     /// every block has a distinct address.
     pub fn from_module(
         context: &Context,
-        module: ModuleOp,
+        module: tir::OpHandle,
         base_address: u64,
         entry_symbol: Option<&str>,
     ) -> Result<Self, Error> {
@@ -54,17 +53,17 @@ impl ProgramImage {
         let mut cur_pc = base_address;
         let mut first_symbol_pc = None;
 
-        let mut blocks_to_visit = vec![module.body()];
+        let mut blocks_to_visit = vec![tir::builtin::module_body(&module)];
         while let Some(block) = blocks_to_visit.pop() {
             for op_id in block.op_ids() {
                 let op = context.get_op(op_id);
 
-                if let Some(section) = op.clone().as_op::<SectionOp>() {
-                    blocks_to_visit.push(section.body());
+                if let Some(section) = op.clone().as_operation(&tir::backend::SECTION) {
+                    blocks_to_visit.push(tir::backend::section_body(&section));
                     continue;
                 }
 
-                let Some(symbol) = op.as_op::<SymbolOp>() else {
+                let Some(symbol) = op.as_operation(&tir::backend::SYMBOL) else {
                     continue;
                 };
 
@@ -75,7 +74,7 @@ impl ProgramImage {
                 symbols.insert(symbol_name, cur_pc);
                 first_symbol_pc.get_or_insert(cur_pc);
 
-                let symbol_block = symbol.body();
+                let symbol_block = tir::backend::symbol_body(&symbol);
                 let mut instructions = Vec::new();
                 let mut byte_len = 0u64;
                 for inner_id in symbol_block.op_ids() {

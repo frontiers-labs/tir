@@ -6,9 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 
 use tir::attributes::AttributeValue;
-use tir::builtin::{
-    AggregateKind, AggregateType, FloatType, ModuleOp, NamedType, TypeDefOp, ops as b, type_def,
-};
+use tir::builtin::{AggregateKind, AggregateType, FloatType, NamedType, ops as b, type_def};
 use tir::ptr::PtrType;
 use tir::{Context, DataLayout, Operation, TypeArg, TypeId};
 
@@ -19,7 +17,7 @@ use crate::ast::RecordKind;
 /// the core reads them under.
 pub struct Layouts {
     context: Context,
-    module: ModuleOp,
+    module: tir::OpHandle,
     defined: HashSet<String>,
     spec: AttributeValue,
     // A `DataLayout` reads the module's definitions once, so a new definition
@@ -50,7 +48,7 @@ impl Layouts {
             name,
             Some(body),
             Default::default(),
-            self.module.body().end(),
+            b::module_body(&self.module).end(),
         );
         self.defined.insert(name.to_string());
         *self.layout.get_mut() = None;
@@ -63,7 +61,7 @@ impl Layouts {
 
     /// The module the unit is generated into. It holds a `type.def` for every
     /// record.
-    pub fn module(&self) -> &ModuleOp {
+    pub fn module(&self) -> &tir::OpHandle {
         &self.module
     }
 
@@ -75,14 +73,14 @@ impl Layouts {
                 name,
                 None,
                 Default::default(),
-                self.module.body().end(),
+                b::module_body(&self.module).end(),
             );
         }
     }
 
     // An identifier the IR does not spell a type of its own with.
     pub(super) fn is_free_name(&self, tag: &str) -> bool {
-        is_identifier(tag) && !TypeDefOp::is_core_type_name(&self.context, tag)
+        is_identifier(tag) && !b::def_is_core_type_name(&self.context, tag)
     }
 
     /// Size and alignment of `ty`, in bytes.

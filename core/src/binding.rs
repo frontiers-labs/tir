@@ -13,7 +13,7 @@
 use std::ops::Range;
 
 use crate::attributes::{AttributeValue, Predicate};
-use crate::builtin::{AddIOp, CmpIOp, IntegerType};
+use crate::builtin::{ADDI, CMPI, IntegerType};
 use crate::parse::Span;
 use crate::parse::common::Cursor;
 use crate::parse::text::Parser;
@@ -498,7 +498,7 @@ pub fn verify_counted(
     let predicate = context.get_value(results[predicate]).defining_op();
     let compares = predicate.is_some_and(|op| {
         let op = context.get_op(op);
-        op.is::<CmpIOp>()
+        op.is_operation(&CMPI)
             && op.attr("predicate") == Some(AttributeValue::Predicate(Predicate::Slt))
             && matches!(op.operands().as_slice(),
                 [lhs, rhs] if *lhs == counter && names_same(context, *rhs, upper_bound))
@@ -511,7 +511,7 @@ pub fn verify_counted(
     let next = results[binding.continue_.start + induction];
     let advances = context.get_value(next).defining_op().is_some_and(|op| {
         let op = context.get_op(op);
-        op.is::<AddIOp>()
+        op.is_operation(&ADDI)
             && matches!(op.operands().as_slice(),
                 [lhs, rhs] if (*lhs == counter && names_same(context, *rhs, step))
                     || (*rhs == counter && names_same(context, *lhs, step)))

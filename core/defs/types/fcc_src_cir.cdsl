@@ -1,0 +1,49 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let VARARGS_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let VARARGS_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let VarArgsType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let VarArgsType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let VarArgsType_ctor_id: (context: Context) -> CtorId;
+extern let VA_LIST_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let VA_LIST_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let VaListType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let VaListType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let VaListType_ctor_id: (context: Context) -> CtorId;
+
+pub let constructors::VARARGS: ConstructorSpec = {
+    dialect: "cir",
+    name: "varargs",
+    params: [],
+    kind: Kind::Data(),
+    validate: VARARGS_validate,
+    carrier: VARARGS_carrier,
+};
+
+pub let spellings::VarArgsType: SpellingSpec = {
+    ctor_id: VarArgsType_ctor_id,
+    keys: ["varargs"],
+    parse: VarArgsType_parse,
+    print: VarArgsType_print,
+    variadic_tail: true,
+};
+
+pub let constructors::VA_LIST: ConstructorSpec = {
+    dialect: "cir",
+    name: "va_list",
+    params: [],
+    kind: Kind::Data(),
+    validate: VA_LIST_validate,
+    carrier: VA_LIST_carrier,
+};
+
+pub let spellings::VaListType: SpellingSpec = {
+    ctor_id: VaListType_ctor_id,
+    keys: ["va_list"],
+    parse: VaListType_parse,
+    print: VaListType_print,
+    variadic_tail: false,
+};

@@ -3,15 +3,11 @@
 //! frontend defines its own types with. Sizes and alignments are in bits.
 
 use crate::attributes::{AttributeValue, Predicate};
-use crate::builtin::{
-    AddIOp, AggregateKind, AggregateType, CmpIOp, ConstantOp, DivUIOp, IntegerType, ModuleEndOp,
-    ModuleOp, MulIOp, SubIOp, TypeDefOp,
-};
-use crate::scf::{OrderedForOp, SwitchOp, YieldOp};
+use crate::builtin::{AggregateKind, AggregateType, IntegerType};
 use crate::ty::{Ctor, TypeArg};
 use crate::{BlockHandle, Context, Operation, RegionId, TypeId, ValueId};
 
-use super::{AlignOfOp, AtOp, CountOp, FIELDS, FieldOp, ResultOp, SPEC, SizeOfOp, TYPE};
+use super::{FIELDS, SPEC, TYPE};
 
 type Param = (&'static str, &'static str, Option<AttributeValue>);
 
@@ -42,7 +38,7 @@ pub(crate) fn defaults(context: &Context) -> Vec<(&'static str, AttributeValue)>
 }
 
 // A module of the definitions, in `context`.
-pub(crate) fn define(context: &Context) -> ModuleOp {
+pub(crate) fn define(context: &Context) -> crate::OpHandle {
     let unit = |ctor: &'static Ctor| context.terms().intern(ctor.id(context), vec![]).unwrap();
     let (spec, fields, ty) = (unit(&SPEC), unit(&FIELDS), unit(&TYPE));
     let (flag, i64) = (IntegerType::new(context, 1), IntegerType::new(context, 64));
@@ -51,7 +47,7 @@ pub(crate) fn define(context: &Context) -> ModuleOp {
     let struct_region = layout_region(context, [spec, fields, flag], struct_layout);
     let variant_region = layout_region(context, [spec, fields, ty], variant_layout);
     let array_region = layout_region(context, [spec, i64, ty], array_layout);
-    let module = ModuleOp::new(
+    let module = crate::builtin::r#module(
         context,
         None,
         Default::default(),
@@ -67,8 +63,8 @@ pub(crate) fn define(context: &Context) -> ModuleOp {
         definition(
             context,
             crate::InsertionPoint::Block {
-                block: module.body().id(),
-                position: module.body().len(),
+                block: crate::builtin::module_body(&module).id(),
+                position: crate::builtin::module_body(&module).len(),
             },
             name,
             params,
@@ -76,12 +72,12 @@ pub(crate) fn define(context: &Context) -> ModuleOp {
             body,
         );
     }
-    ModuleEndOp::new(
+    crate::builtin::r#module_end(
         context,
         Default::default(),
         crate::InsertionPoint::Block {
-            block: module.body().id(),
-            position: module.body().len(),
+            block: crate::builtin::module_body(&module).id(),
+            position: crate::builtin::module_body(&module).len(),
         },
     );
     module
@@ -94,7 +90,7 @@ fn definition(
     params: &[Param],
     regions: Vec<RegionId>,
     body: Option<TypeId>,
-) -> TypeDefOp {
+) -> tir::OpHandle {
     let params: Vec<_> = params
         .iter()
         .map(|(name, kind, default)| {
@@ -106,7 +102,7 @@ fn definition(
     let mut attributes =
         vec![context.named_attribute("params", AttributeValue::Array(params.into()))];
     attributes.extend(body.map(|body| context.named_attribute("body", AttributeValue::Type(body))));
-    TypeDefOp::new(
+    crate::builtin::r#def(
         context,
         name,
         regions,
@@ -202,62 +198,54 @@ impl<'c> Emit<'c> {
     }
 
     fn constant(&self, value: i64) -> ValueId {
-        ConstantOp::new(
+        crate::builtin::r#constant(
             self.context,
             AttributeValue::Int(value),
             self.bits,
             Default::default(),
             self.block.end(),
         )
-        .result()
+        .results()[0]
+    }
+
+    fn binary(
+        &self,
+        constructor: fn(
+            &Context,
+            ValueId,
+            ValueId,
+            TypeId,
+            tir::NewOpParts,
+            tir::InsertionPoint,
+        ) -> tir::OpHandle,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> ValueId {
+        constructor(
+            self.context,
+            lhs,
+            rhs,
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .results()[0]
     }
 
     fn add(&self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        AddIOp::new(
-            self.context,
-            lhs,
-            rhs,
-            self.bits,
-            Default::default(),
-            self.block.end(),
-        )
-        .result()
+        self.binary(crate::builtin::addi, lhs, rhs)
     }
 
     fn mul(&self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        MulIOp::new(
-            self.context,
-            lhs,
-            rhs,
-            self.bits,
-            Default::default(),
-            self.block.end(),
-        )
-        .result()
+        self.binary(crate::builtin::muli, lhs, rhs)
     }
 
     fn sub(&self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        SubIOp::new(
-            self.context,
-            lhs,
-            rhs,
-            self.bits,
-            Default::default(),
-            self.block.end(),
-        )
-        .result()
+        self.binary(crate::builtin::subi, lhs, rhs)
     }
 
     fn div(&self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        DivUIOp::new(
-            self.context,
-            lhs,
-            rhs,
-            self.bits,
-            Default::default(),
-            self.block.end(),
-        )
-        .result()
+        self.binary(crate::builtin::divui, lhs, rhs)
     }
 
     // `value` rounded up to a multiple of `align`.
@@ -267,7 +255,7 @@ impl<'c> Emit<'c> {
     }
 
     fn max(&self, a: ValueId, b: ValueId) -> ValueId {
-        let greater = CmpIOp::new(
+        let greater = crate::builtin::r#cmpi(
             self.context,
             a,
             b,
@@ -276,7 +264,7 @@ impl<'c> Emit<'c> {
             Default::default(),
             self.block.end(),
         );
-        self.select(greater.result(), b, a)
+        self.select(greater.results()[0], b, a)
     }
 
     // `set` where `flag` is, else `clear`: a two-armed `scf.switch`.
@@ -291,7 +279,7 @@ impl<'c> Emit<'c> {
                 .create_nodes_region(ports, vec![], vec![result])
                 .id()
         };
-        SwitchOp::new(
+        crate::scf::r#switch(
             self.context,
             flag,
             vec![clear, set],
@@ -319,7 +307,7 @@ impl<'c> Emit<'c> {
                 .id()
         });
         let next = body(&inner, ports[0], carried);
-        YieldOp::new(
+        crate::scf::r#yield(
             self.context,
             next.to_vec(),
             Default::default(),
@@ -329,7 +317,7 @@ impl<'c> Emit<'c> {
         region.add_block(inner.block.id());
         let lb = self.constant(0);
         let step = self.constant(1);
-        let looped = OrderedForOp::new(
+        let looped = crate::scf::r#ordered_for(
             self.context,
             lb,
             start.to_vec(),
@@ -345,14 +333,14 @@ impl<'c> Emit<'c> {
     }
 
     fn count(&self, fields: ValueId) -> ValueId {
-        CountOp::new(
+        crate::layout::r#count(
             self.context,
             fields,
             self.bits,
             Default::default(),
             self.block.end(),
         )
-        .result()
+        .results()[0]
     }
 
     fn at(&self, fields: ValueId, index: ValueId) -> ValueId {
@@ -361,7 +349,7 @@ impl<'c> Emit<'c> {
             .terms()
             .intern(TYPE.id(self.context), vec![])
             .unwrap();
-        AtOp::new(
+        crate::layout::r#at(
             self.context,
             fields,
             index,
@@ -369,33 +357,33 @@ impl<'c> Emit<'c> {
             Default::default(),
             self.block.end(),
         )
-        .result()
+        .results()[0]
     }
 
     fn size_of(&self, ty: ValueId, spec: ValueId) -> ValueId {
-        SizeOfOp::new(
+        crate::layout::r#sizeof(
             self.context,
             vec![ty, spec],
             self.bits,
             Default::default(),
             self.block.end(),
         )
-        .result()
+        .results()[0]
     }
 
     fn align_of(&self, ty: ValueId, spec: ValueId) -> ValueId {
-        AlignOfOp::new(
+        crate::layout::r#alignof(
             self.context,
             vec![ty, spec],
             self.bits,
             Default::default(),
             self.block.end(),
         )
-        .result()
+        .results()[0]
     }
 
     fn field(&self, index: ValueId, offset: ValueId) {
-        FieldOp::new(
+        crate::layout::r#field(
             self.context,
             index,
             offset,
@@ -405,7 +393,7 @@ impl<'c> Emit<'c> {
     }
 
     fn result(&self, size: ValueId, align: ValueId) {
-        ResultOp::new(
+        crate::layout::r#result(
             self.context,
             size,
             align,

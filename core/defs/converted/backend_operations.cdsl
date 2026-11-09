@@ -1,0 +1,101 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type asm = Dialect;
+
+extern let section_end_iface_Terminator: Interface;
+extern let symbol_end_iface_Terminator: Interface;
+type literal_attributes = Record<{ kind: String }>;
+type symbol_address_attributes = Record<{ sym_name: String }>;
+extern let symbol_address_iface_Pure: Interface;
+extern let symbol_address_iface_Speculatable: Interface;
+type data_reloc_attributes = Record<{ symbol: String, width: AttrUInt, addend: AttrInt }>;
+extern let block_end_iface_Terminator: Interface;
+extern let vret_iface_Terminator: Interface;
+extern let vret_iface_MachineInstruction: Interface;
+extern fn vret_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn vret_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+type vbr_attributes = Record<{ dest: AttrBlock }>;
+extern let vbr_iface_Terminator: Interface;
+extern let vbr_iface_MachineInstruction: Interface;
+extern fn vbr_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn vbr_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern let pcopy_iface_MachineInstruction: Interface;
+type vcall_attributes = Record<{ callee: String, outgoing_stack_size: AttrUInt }>;
+extern let vcall_iface_MachineInstruction: Interface;
+extern let vcall_iface_ResourceEffects: Interface;
+type vcall_indirect_attributes = Record<{ outgoing_stack_size: AttrUInt }>;
+extern let vcall_indirect_iface_MachineInstruction: Interface;
+extern let vcall_indirect_iface_ResourceEffects: Interface;
+
+pub let asm::section = {
+    signature: () -> (),
+    regions: { body: { kind: RegionKind::Blocks(), variadic: false } },
+};
+
+pub let asm::section_end = {
+    signature: () -> (),
+    interfaces: [section_end_iface_Terminator],
+};
+
+pub let asm::symbol = {
+    signature: () -> (),
+    regions: { body: { kind: RegionKind::Blocks(), variadic: false } },
+};
+
+pub let asm::symbol_end = {
+    signature: () -> (),
+    interfaces: [symbol_end_iface_Terminator],
+};
+
+pub let asm::literal = {
+    signature: () -> (),
+    attributes: { kind: { ty: String, codec: str_codec } },
+};
+
+pub let asm::symbol_address = {
+    signature: () -> AnyPtr,
+    attributes: { sym_name: { ty: String, codec: str_codec } },
+    interfaces: [symbol_address_iface_Pure, symbol_address_iface_Speculatable],
+};
+
+pub let asm::data_reloc = {
+    signature: () -> (),
+    attributes: { symbol: { ty: String, codec: str_codec }, width: { ty: AttrUInt, codec: uint_codec }, addend: { ty: AttrInt, codec: int_codec } },
+};
+
+pub let asm::block_end = {
+    signature: () -> (),
+    interfaces: [block_end_iface_Terminator],
+};
+
+pub let asm::vret = {
+    signature: (values: Many<Any>) -> (),
+    interfaces: [vret_iface_Terminator, vret_iface_MachineInstruction],
+    assembly: { print: vret_printer, parse: vret_parser },
+};
+
+pub let asm::vbr = {
+    signature: (dest_args: Many<Any>) -> (),
+    attributes: { dest: { ty: AttrBlock, codec: block_codec } },
+    interfaces: [vbr_iface_Terminator, vbr_iface_MachineInstruction],
+    assembly: { print: vbr_printer, parse: vbr_parser },
+};
+
+pub let asm::pcopy = {
+    signature: (sources: Many<Any>) -> (copies: Many<Any>,),
+    interfaces: [pcopy_iface_MachineInstruction],
+};
+
+pub let asm::vcall<StateResources> = {
+    signature: (args: Many<Any>, state: States<StateResources>) -> (results: Many<Any>, state: States<StateResources>,),
+    attributes: { callee: { ty: String, codec: str_codec }, outgoing_stack_size: { ty: AttrUInt, codec: uint_codec } },
+    interfaces: [vcall_iface_MachineInstruction, vcall_iface_ResourceEffects],
+};
+
+pub let asm::vcall_indirect<StateResources> = {
+    signature: (callee: AnyReg, args: Many<Any>, state: States<StateResources>) -> (results: Many<Any>, state: States<StateResources>,),
+    attributes: { outgoing_stack_size: { ty: AttrUInt, codec: uint_codec } },
+    interfaces: [vcall_indirect_iface_MachineInstruction, vcall_indirect_iface_ResourceEffects],
+};

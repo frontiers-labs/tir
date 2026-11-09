@@ -1,0 +1,96 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type fp = Dialect;
+
+type add_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn add_exec_model<E: Nat, M: Nat, StateResources>(self: add_attributes, lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,);
+extern fn add_verifier(operation: Operation, context: Context) -> Validation;
+extern let add_iface_ResourceEffects: Interface;
+extern let add_iface_HasResourceSemantics: Interface;
+extern let add_iface_Speculatable: Interface;
+extern let add_iface_Interp: Interface;
+type sub_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn sub_exec_model<E: Nat, M: Nat, StateResources>(self: sub_attributes, lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,);
+extern fn sub_verifier(operation: Operation, context: Context) -> Validation;
+extern let sub_iface_ResourceEffects: Interface;
+extern let sub_iface_HasResourceSemantics: Interface;
+extern let sub_iface_Speculatable: Interface;
+extern let sub_iface_Interp: Interface;
+type mul_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn mul_exec_model<E: Nat, M: Nat, StateResources>(self: mul_attributes, lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,);
+extern fn mul_verifier(operation: Operation, context: Context) -> Validation;
+extern let mul_iface_ResourceEffects: Interface;
+extern let mul_iface_HasResourceSemantics: Interface;
+extern let mul_iface_Speculatable: Interface;
+extern let mul_iface_Interp: Interface;
+type div_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn div_exec_model<E: Nat, M: Nat, StateResources>(self: div_attributes, lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,);
+extern fn div_verifier(operation: Operation, context: Context) -> Validation;
+extern let div_iface_ResourceEffects: Interface;
+extern let div_iface_HasResourceSemantics: Interface;
+extern let div_iface_Speculatable: Interface;
+extern let div_iface_Interp: Interface;
+type fma_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn fma_exec_model<E: Nat, M: Nat, StateResources>(self: fma_attributes, a: Float<E, M>, b: Float<E, M>, c: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,);
+extern fn fma_verifier(operation: Operation, context: Context) -> Validation;
+extern let fma_iface_ResourceEffects: Interface;
+extern let fma_iface_HasResourceSemantics: Interface;
+extern let fma_iface_Speculatable: Interface;
+extern let fma_iface_Interp: Interface;
+type sqrt_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn sqrt_exec_model<E: Nat, M: Nat, StateResources>(self: sqrt_attributes, input: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,);
+extern fn sqrt_verifier(operation: Operation, context: Context) -> Validation;
+extern let sqrt_iface_ResourceEffects: Interface;
+extern let sqrt_iface_HasResourceSemantics: Interface;
+extern let sqrt_iface_Speculatable: Interface;
+extern let sqrt_iface_Interp: Interface;
+
+pub let fp::add<E: Nat, M: Nat, StateResources> = {
+    signature: (lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: add_exec_model<E, M, StateResources>,
+    verify: add_verifier,
+    interfaces: [add_iface_ResourceEffects, add_iface_HasResourceSemantics, add_iface_Speculatable, add_iface_Interp],
+};
+
+pub let fp::sub<E: Nat, M: Nat, StateResources> = {
+    signature: (lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: sub_exec_model<E, M, StateResources>,
+    verify: sub_verifier,
+    interfaces: [sub_iface_ResourceEffects, sub_iface_HasResourceSemantics, sub_iface_Speculatable, sub_iface_Interp],
+};
+
+pub let fp::mul<E: Nat, M: Nat, StateResources> = {
+    signature: (lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: mul_exec_model<E, M, StateResources>,
+    verify: mul_verifier,
+    interfaces: [mul_iface_ResourceEffects, mul_iface_HasResourceSemantics, mul_iface_Speculatable, mul_iface_Interp],
+};
+
+pub let fp::div<E: Nat, M: Nat, StateResources> = {
+    signature: (lhs: Float<E, M>, rhs: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: div_exec_model<E, M, StateResources>,
+    verify: div_verifier,
+    interfaces: [div_iface_ResourceEffects, div_iface_HasResourceSemantics, div_iface_Speculatable, div_iface_Interp],
+};
+
+pub let fp::fma<E: Nat, M: Nat, StateResources> = {
+    signature: (a: Float<E, M>, b: Float<E, M>, c: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: fma_exec_model<E, M, StateResources>,
+    verify: fma_verifier,
+    interfaces: [fma_iface_ResourceEffects, fma_iface_HasResourceSemantics, fma_iface_Speculatable, fma_iface_Interp],
+};
+
+pub let fp::sqrt<E: Nat, M: Nat, StateResources> = {
+    signature: (input: Float<E, M>, state: States<StateResources>) -> (result: Float<E, M>, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: sqrt_exec_model<E, M, StateResources>,
+    verify: sqrt_verifier,
+    interfaces: [sqrt_iface_ResourceEffects, sqrt_iface_HasResourceSemantics, sqrt_iface_Speculatable, sqrt_iface_Interp],
+};

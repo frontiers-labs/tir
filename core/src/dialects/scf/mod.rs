@@ -1,26 +1,27 @@
-use crate::{Terminator, dialect, operation};
+use crate::{Terminator, dialect};
 
 use crate as tir;
 
 pub mod nodes;
 pub mod ordered;
-pub use nodes::{ForOp, LoopOp, SwitchOp};
-pub use ordered::OrderedForOp;
+pub use nodes::*;
+pub use ordered::*;
 
 pub mod ops {
-    pub use super::nodes::{r#for, r#loop, switch};
-    pub use super::{YieldOp, r#yield};
+    pub use super::nodes::*;
+    pub use super::ordered::*;
+    pub use super::{YIELD, r#yield};
 }
 
 dialect! {
     ScfDialect {
         name: "scf",
         operations: [
-            LoopOp,
-            SwitchOp,
-            ForOp,
-            OrderedForOp,
-            YieldOp,
+            LOOP,
+            SWITCH,
+            FOR,
+            ORDERED_FOR,
+            YIELD,
         ],
         types: [],
     }
@@ -29,14 +30,9 @@ dialect! {
 // The back edge of an `scf.ordered_for`: it names what the next iteration
 // carries. An unordered body names its results outright and has no
 // terminator, so nothing else needs this.
-operation! {
-    YieldOp {
-        name: "yield",
-        dialect: "scf",
-        scheme: "(_*) -> ()",
-        operands: O { values },
-        interfaces: [Terminator],
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_scf_mod.cdsl",
+    hosts: {
+        yield_iface_Terminator => (Terminator, &crate::TerminatorCallbacks::DEFAULT),
+    },
 }
-
-impl Terminator for YieldOp {}

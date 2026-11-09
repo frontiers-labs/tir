@@ -1,0 +1,44 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type cfg = Dialect;
+
+type br_attributes = Record<{ dest: AttrBlock }>;
+extern let br_iface_Terminator: Interface;
+extern let br_iface_BranchTerminator: Interface;
+extern fn br_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn br_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+type cond_br_attributes = Record<{ true_dest: AttrBlock, false_dest: AttrBlock }>;
+extern let cond_br_iface_Terminator: Interface;
+extern let cond_br_iface_BranchTerminator: Interface;
+extern let cond_br_iface_BranchGuard: Interface;
+extern fn cond_br_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn cond_br_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern fn switch_verifier(operation: Operation, context: Context) -> Validation;
+extern let switch_iface_Terminator: Interface;
+extern let switch_iface_BranchTerminator: Interface;
+extern let switch_iface_CaseGuard: Interface;
+extern fn switch_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn switch_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let cfg::br = {
+    signature: (dest_args: Many<Any>) -> (),
+    attributes: { dest: { ty: AttrBlock, codec: block_codec } },
+    interfaces: [br_iface_Terminator, br_iface_BranchTerminator],
+    assembly: { print: br_printer, parse: br_parser },
+};
+
+pub let cfg::cond_br = {
+    signature: (condition: Int<1>, true_args: Many<Any>, false_args: Many<Any>) -> (),
+    attributes: { true_dest: { ty: AttrBlock, codec: block_codec }, false_dest: { ty: AttrBlock, codec: block_codec } },
+    interfaces: [cond_br_iface_Terminator, cond_br_iface_BranchTerminator, cond_br_iface_BranchGuard],
+    assembly: { print: cond_br_printer, parse: cond_br_parser },
+};
+
+pub let cfg::r#switch = {
+    signature: (selector: AnyInt, args: Many<Any>) -> (),
+    verify: switch_verifier,
+    interfaces: [switch_iface_Terminator, switch_iface_BranchTerminator, switch_iface_CaseGuard],
+    assembly: { print: switch_printer, parse: switch_parser },
+};

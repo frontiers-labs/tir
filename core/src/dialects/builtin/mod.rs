@@ -9,7 +9,7 @@ mod ub;
 
 use tir_symbolic::term::{ctor, no_carrier, valid};
 
-use crate::ty::{Ctor, Kind, Terms, TypeArg, TypeCtor, TypeSpelling};
+use crate::ty::{Ctor, Terms, TypeArg, TypeSpelling};
 use crate::{Context, Error, TypeId, dialect};
 
 use crate as tir;
@@ -29,7 +29,7 @@ pub mod ops {
     pub use super::global::*;
     pub use super::module::*;
     pub use super::tuple::*;
-    pub use super::type_def::{TypeDefOp, type_def};
+    pub use super::type_def::*;
     pub use super::ub::*;
 }
 
@@ -37,35 +37,35 @@ dialect! {
     BuiltinDialect {
         name: "builtin",
         operations: [
-            ModuleOp,
-            ModuleEndOp,
-            ConstantOp,
-            AddIOp,
-            SubIOp,
-            MulIOp,
-            DivSIOp,
-            DivUIOp,
-            RemSIOp,
-            RemUIOp,
-            AndIOp,
-            OrIOp,
-            XOrIOp,
-            ShlIOp,
-            ShrUIOp,
-            ShrSIOp,
-            CmpIOp,
-            ExtSIOp,
-            ExtUIOp,
-            TruncIOp,
-            BitcastOp,
-            MakeTupleOp,
-            TupleGetOp,
-            GlobalOp,
-            FnToPtrOp,
-            PtrToFnOp,
-            AssumeOp,
-            FreezeOp,
-            RefineOp,
+            MODULE,
+            MODULE_END,
+            CONSTANT,
+            ADDI,
+            SUBI,
+            MULI,
+            DIVSI,
+            DIVUI,
+            REMSI,
+            REMUI,
+            ANDI,
+            ORI,
+            XORI,
+            SHLI,
+            SHRUI,
+            SHRSI,
+            CMPI,
+            EXTSI,
+            EXTUI,
+            TRUNCI,
+            BITCAST,
+            MAKE_TUPLE,
+            TUPLE_GET,
+            GLOBAL,
+            FN_TO_PTR,
+            PTR_TO_FN,
+            ASSUME,
+            FREEZE,
+            REFINE,
         ],
         types: [
             IntegerType, FloatType, IndexType, UnitType, TupleType, FnType, VarArgsType, StateType,
@@ -97,22 +97,22 @@ impl IntegerType {
     }
 
     pub fn spelling(_context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: ctor::INT,
-            keys: &["i"],
-            parse: |mnemonic, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |mnemonic, parser, context| {
                 use tir::parse::common::Cursor;
                 mnemonic
                     .strip_prefix('i')
                     .and_then(|rest| rest.parse::<u64>().ok())
-                    .map(|width| Self::new(context, width))
+                    .map(|width| IntegerType::new(context, width))
                     .ok_or((parser.span(), Error::ExpectedType))
-            },
-            print: |spellings, ty, fmt| match Self::view(spellings, ty) {
-                Some(int) => fmt.write(format!("i{}", int.width)),
-                None => spellings.print_generic(ty, fmt),
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter =
+                |spellings, ty, fmt| match IntegerType::view(spellings, ty) {
+                    Some(int) => fmt.write(format!("i{}", int.width)),
+                    None => spellings.print_generic(ty, fmt),
+                };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId = |_context| ctor::INT;
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_mod.cdsl", binding: spellings::IntegerType, context: _context, hosts: { IntegerType_parse => __TIR_TYPE_PARSE, IntegerType_print => __TIR_TYPE_PRINT, IntegerType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
@@ -212,10 +212,8 @@ impl FloatType {
     }
 
     pub fn spelling(_context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: ctor::FLOAT,
-            keys: &["f", "bf"],
-            parse: |mnemonic, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |mnemonic, parser, context| {
                 use tir::parse::common::Cursor;
                 // A format with no name of its own prints as `builtin.f<E, M>`.
                 if mnemonic == "f" {
@@ -224,11 +222,11 @@ impl FloatType {
                 FLOAT_FORMATS
                     .iter()
                     .find(|(_, _, name)| *name == mnemonic)
-                    .map(|&(exp, mant, _)| Self::new(context, exp, mant))
+                    .map(|&(exp, mant, _)| FloatType::new(context, exp, mant))
                     .ok_or((parser.span(), Error::ExpectedType))
-            },
-            print: |spellings, ty, fmt| {
-                let named = Self::view(spellings, ty).and_then(|float| {
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
+                let named = FloatType::view(spellings, ty).and_then(|float| {
                     FLOAT_FORMATS
                         .iter()
                         .find(|&&(exp, mant, _)| exp == float.exp_width && mant == float.mant_width)
@@ -237,20 +235,16 @@ impl FloatType {
                     Some((_, _, name)) => fmt.write(name),
                     None => spellings.print_generic(ty, fmt),
                 }
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId = |_context| ctor::FLOAT;
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_mod.cdsl", binding: spellings::FloatType, context: _context, hosts: { FloatType_parse => __TIR_TYPE_PARSE, FloatType_print => __TIR_TYPE_PRINT, FloatType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
 
-static INDEX: Ctor = Ctor::new(TypeCtor {
-    dialect: "builtin",
-    name: "index",
-    params: &[],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static INDEX: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_builtin_mod.cdsl", binding: constructors::INDEX, hosts: { INDEX_validate => valid, INDEX_carrier => no_carrier } },
+);
 
 /// `builtin.index`: an address-sized count whose width the target picks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,12 +265,12 @@ impl IndexType {
     }
 
     pub fn spelling(context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: INDEX.id(context),
-            keys: &["index"],
-            parse: |_, _, context| Ok(Self::new(context)),
-            print: |_, _, fmt| fmt.write("index"),
-            variadic_tail: false,
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |_, _, context| Ok(IndexType::new(context));
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |_, _, fmt| fmt.write("index");
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| INDEX.id(context);
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_mod.cdsl", binding: spellings::IndexType, context: context, hosts: { IndexType_parse => __TIR_TYPE_PARSE, IndexType_print => __TIR_TYPE_PRINT, IndexType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
@@ -299,12 +293,11 @@ impl UnitType {
     }
 
     pub fn spelling(_context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: ctor::UNIT,
-            keys: &["unit"],
-            parse: |_, _, context| Ok(Self::new(context)),
-            print: |_, _, fmt| fmt.write("unit"),
-            variadic_tail: false,
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |_, _, context| Ok(UnitType::new(context));
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |_, _, fmt| fmt.write("unit");
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId = |_context| ctor::UNIT;
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_mod.cdsl", binding: spellings::UnitType, context: _context, hosts: { UnitType_parse => __TIR_TYPE_PARSE, UnitType_print => __TIR_TYPE_PRINT, UnitType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }

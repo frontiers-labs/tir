@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
 
 use quote::{format_ident, quote};
+use tir_cdsl::output::{AttrSpec, Operation, StatePorts, ValueSpec, emit_operation, op_fn_ident};
 
 use crate::Type;
 use crate::ast;
@@ -273,10 +274,25 @@ pub fn generate_operation_list(
     files: &[ast::File],
     mut output: Box<dyn Write>,
 ) -> Result<(), TMDLError> {
+    let item_cache: HashMap<&str, _> = files
+        .iter()
+        .flat_map(|file| file.items.iter().map(|item| (item.name(), item)))
+        .collect();
     writeln!(output, "[")?;
     for inst in files.iter().flat_map(|f| f.instructions()) {
-        let name = format_ident!("{}Op", &inst.name);
-        writeln!(output, "    {name},")?;
+        let params = resolve_params_for_instruction(inst, &item_cache);
+        let name = ["OPNAME", "MNEMONIC"]
+            .into_iter()
+            .find_map(|key| params.get(key)?.1.as_ref().and_then(resolve_string))
+            .ok_or_else(|| {
+                TMDLError::Codegen(format!(
+                    "Instruction '{}' must define OPNAME or MNEMONIC",
+                    inst.name
+                ))
+            })?;
+        let constructor = op_fn_ident(&name).to_string();
+        let definition = constructor.trim_start_matches("r#").to_uppercase();
+        writeln!(output, "    {definition},")?;
     }
     writeln!(output, "]")?;
 

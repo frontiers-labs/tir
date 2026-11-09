@@ -1,6 +1,5 @@
 use crate::BlockHandle;
 use crate::RegionHandle;
-use std::any::Any;
 use std::collections::HashSet;
 use tir_adt::IndexMap;
 
@@ -19,7 +18,7 @@ type BlockLabel = (String, BlockArguments, Vec<NamedAttribute>);
 /// The `(%a: !ty, %s: !state<memory>)` argument list of a block label.
 type BlockArguments = Vec<(String, crate::TypeId)>;
 
-pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, Error)> {
+pub fn parse_ir(context: &Context, src: &str) -> Result<crate::OpHandle, (Span, Error)> {
     let mut parser = TextParser::new(src);
 
     parse_attribute_aliases(&mut parser, context)?;
@@ -38,20 +37,30 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
             Error::VerificationError(format!("type `!{name}` has no type.def in this module")),
         ));
     }
-    let any: Box<dyn Any> = op.into_any();
-    let op = any
-        .downcast::<T>()
-        .map(|t| *t)
-        .map_err(|_| (Span(0), Error::ExpectedOperation(T::dialect(), T::name())))?;
-
     Ok(op)
+}
+
+pub fn parse_operation(
+    context: &Context,
+    source: &str,
+    definition: &crate::OpDefSpec,
+) -> Result<crate::OpHandle, (Span, Error)> {
+    let operation = parse_ir(context, source)?;
+    if operation.is_operation(definition) {
+        Ok(operation)
+    } else {
+        Err((
+            Span(0),
+            Error::ExpectedOperation(definition.schema.dialect, definition.schema.name),
+        ))
+    }
 }
 
 /// Parse a single operation from `src`, returning it detached from any block.
 /// Operand value references resolve by numeric id (e.g. `%5` is `ValueId(5)`),
 /// so callers can wire operands to existing values. The op is registered in the
 /// context; its results receive fresh value ids.
-pub fn parse_op(context: &Context, src: &str) -> Result<Box<dyn Operation>, (Span, Error)> {
+pub fn parse_op(context: &Context, src: &str) -> Result<crate::OpHandle, (Span, Error)> {
     let mut parser = TextParser::new(src);
     parser.forbid_forward_references();
     parse_attribute_aliases(&mut parser, context)?;
@@ -98,7 +107,7 @@ fn parse_attribute_aliases<'src>(
 pub(crate) fn parse_single_op<'src>(
     parser: &mut TextParser<'src>,
     context: &Context,
-) -> Result<Box<dyn Operation>, (Span, Error)> {
+) -> Result<crate::OpHandle, (Span, Error)> {
     parser.skip_trivia();
     // Every op the op's parser adds, nested ones aside, is located at its text.
     let origin = context.set_origin(Some(parser.span()));
@@ -110,7 +119,7 @@ pub(crate) fn parse_single_op<'src>(
 fn parse_located_op<'src>(
     parser: &mut TextParser<'src>,
     context: &Context,
-) -> Result<Box<dyn Operation>, (Span, Error)> {
+) -> Result<crate::OpHandle, (Span, Error)> {
     // Optional result binding prefix: `%2 =` or `%2, %3 =`. The builder
     // allocates the concrete ValueIds; the names are bound once the op exists
     // so later operands resolve by name rather than by a literal id.

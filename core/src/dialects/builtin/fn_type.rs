@@ -1,19 +1,14 @@
 use tir_symbolic::term::{no_carrier, valid};
 
 use crate::parse::common::Cursor;
-use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
+use crate::ty::{Ctor, Terms, TypeArg, TypeSpelling};
 use crate::{Context, Error, TypeId};
 
 use crate as tir;
 
-static VARARGS: Ctor = Ctor::new(TypeCtor {
-    dialect: "builtin",
-    name: "varargs",
-    params: &[],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static VARARGS: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_builtin_fn_type.cdsl", binding: constructors::VARARGS, hosts: { VARARGS_validate => valid, VARARGS_carrier => no_carrier } },
+);
 
 /// The open tail of a function's parameter list, independent of its source language.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,27 +29,20 @@ impl VarArgsType {
     }
 
     pub fn spelling(context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: VARARGS.id(context),
-            keys: &["varargs"],
-            parse: |_, _, context| Ok(Self::new(context)),
-            print: |_, _, fmt| fmt.write("varargs"),
-            variadic_tail: true,
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser =
+                |_, _, context| Ok(VarArgsType::new(context));
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |_, _, fmt| fmt.write("varargs");
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| VARARGS.id(context);
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_fn_type.cdsl", binding: spellings::VarArgsType, context: context, hosts: { VarArgsType_parse => __TIR_TYPE_PARSE, VarArgsType_print => __TIR_TYPE_PRINT, VarArgsType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
 
-static FN: Ctor = Ctor::new(TypeCtor {
-    dialect: "builtin",
-    name: "fn",
-    params: &[
-        ("params", Param::List(Kind::Data)),
-        ("ret", Param::One(Kind::Data)),
-    ],
-    kind: Kind::Data,
-    validate: valid,
-    carrier: no_carrier,
-});
+static FN: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_builtin_fn_type.cdsl", binding: constructors::FN, hosts: { FN_validate => valid, FN_carrier => no_carrier } },
+);
 
 /// The type of a function value, written `!fn<(!i32, !i32) -> !i32>`.
 ///
@@ -104,10 +92,8 @@ impl FnType {
     }
 
     pub fn spelling(context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: FN.id(context),
-            keys: &["fn"],
-            parse: |_, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |_, parser, context| {
                 if !parser.parse_token("<") {
                     return Err((parser.span(), Error::ExpectedToken("<")));
                 }
@@ -127,10 +113,10 @@ impl FnType {
                 if !parser.parse_token(">") {
                     return Err((parser.span(), Error::ExpectedToken(">")));
                 }
-                Ok(Self::new(context, &params, ret))
-            },
-            print: |spellings, ty, fmt| {
-                let signature = Self::view(spellings, ty).expect("a function type");
+                Ok(FnType::new(context, &params, ret))
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
+                let signature = FnType::view(spellings, ty).expect("a function type");
                 fmt.write("fn<(")?;
                 for (index, param) in signature.params().into_iter().enumerate() {
                     if index > 0 {
@@ -141,42 +127,25 @@ impl FnType {
                 fmt.write(") -> ")?;
                 spellings.print(signature.ret(), fmt)?;
                 fmt.write(">")
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId =
+                |context| FN.id(context);
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_fn_type.cdsl", binding: spellings::FnType, context: context, hosts: { FnType_parse => __TIR_TYPE_PARSE, FnType_print => __TIR_TYPE_PRINT, FnType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
 
 // Takes a function's address as data, for a language that stores function
 // pointers in memory. `!fn` values never live in memory themselves.
-tir::operation! {
-    FnToPtrOp {
-        name: "fn_to_ptr",
-        dialect: "builtin",
-        scheme: "(fn<_, _>) -> ptr.p<_>",
-        operands: O { callee },
-        results: R { result },
-        interfaces: [crate::Pure, crate::Speculatable],
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_builtin_fn_type.cdsl",
+    hosts: {
+        fn_to_ptr_iface_Pure => (crate :: Pure, &crate::PureCallbacks::DEFAULT),
+        fn_to_ptr_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        ptr_to_fn_iface_Pure => (crate :: Pure, &crate::PureCallbacks::DEFAULT),
+        ptr_to_fn_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+    },
 }
-
-impl crate::Speculatable for FnToPtrOp {}
-
-impl crate::Pure for FnToPtrOp {}
 
 // Recovers a callable function value from an address, asserting the signature
 // the call site expects. The inverse of `fn_to_ptr`.
-tir::operation! {
-    PtrToFnOp {
-        name: "ptr_to_fn",
-        dialect: "builtin",
-        scheme: "(ptr.p<_>) -> fn<_, _>",
-        operands: O { address },
-        results: R { result },
-        interfaces: [crate::Pure, crate::Speculatable],
-    }
-}
-
-impl crate::Speculatable for PtrToFnOp {}
-
-impl crate::Pure for PtrToFnOp {}

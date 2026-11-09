@@ -166,7 +166,7 @@ pub trait TargetMachine {
         &self,
         context: &Context,
         text: &str,
-    ) -> Option<Result<crate::builtin::ModuleOp, String>> {
+    ) -> Option<Result<crate::OpHandle, String>> {
         let _ = (context, text);
         None
     }
@@ -178,7 +178,7 @@ pub trait TargetMachine {
     fn print_asm_text(
         &self,
         context: &Context,
-        module: &crate::builtin::ModuleOp,
+        module: &crate::OpHandle,
     ) -> Option<Result<String, String>> {
         let _ = (context, module);
         None

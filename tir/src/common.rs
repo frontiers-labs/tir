@@ -7,7 +7,7 @@ use std::{
 
 use clap::{Args, ValueEnum};
 use tir::backend::TargetMachine;
-use tir::{Context, Operation, builtin::ModuleOp};
+use tir::{Context, Operation};
 
 /// The target flags a code-generating tool takes besides `--march`, which is
 /// the tool's own: only a tool that can read the target from its input makes it
@@ -53,7 +53,7 @@ pub fn parse_module(
     context: &Context,
     input_path: Option<&OsString>,
     kind: InputKind,
-) -> Result<(ModuleOp, bool), Box<dyn Error>> {
+) -> Result<(tir::OpHandle, bool), Box<dyn Error>> {
     let input = read_input(input_path)?;
 
     match resolve_kind(input_path, kind) {
@@ -88,10 +88,7 @@ pub fn parse_module(
                 attributes.push(context.named_attribute(tir::TARGET_ENV, value));
             }
             context.set_op_attributes(module.id(), attributes);
-            Ok((
-                context.get_op(module.id()).as_op::<ModuleOp>().unwrap(),
-                true,
-            ))
+            Ok((module, true))
         }
         InputKind::Auto => unreachable!(),
     }
@@ -101,7 +98,7 @@ pub fn parse_module(
 /// against, so the verifier and every pass read that layout from the IR. Entries
 /// the module declares itself override the target's key by key, which is how
 /// the backend already combines the two.
-pub fn attach_data_layout(context: &Context, module: &ModuleOp, target: &dyn TargetMachine) {
+pub fn attach_data_layout(context: &Context, module: &tir::OpHandle, target: &dyn TargetMachine) {
     let Some(layout) = tir::DataLayout::for_op_with_default(
         context,
         module.id(),
@@ -124,7 +121,10 @@ pub fn attach_data_layout(context: &Context, module: &ModuleOp, target: &dyn Tar
 /// Give a TIR `module` the data layout of the target its `target_env` `arch`
 /// names. A module that names no target keeps whatever layout it declares:
 /// nothing else says how wide its pointers are.
-pub fn attach_declared_data_layout(context: &Context, module: &ModuleOp) -> Result<(), String> {
+pub fn attach_declared_data_layout(
+    context: &Context,
+    module: &tir::OpHandle,
+) -> Result<(), String> {
     let Some(arch) =
         tir::TargetEnv::for_op(context, module.id()).and_then(|env| env.arch().map(str::to_string))
     else {
@@ -163,8 +163,8 @@ pub fn resolve_kind(input_path: Option<&OsString>, kind: InputKind) -> InputKind
 
 /// Parse TIR text into a module. Needs no target: the dialects the text uses
 /// must already be registered.
-pub fn parse_tir(context: &Context, input: &str) -> Result<ModuleOp, Box<dyn Error>> {
-    tir::parse::ir::parse_ir::<ModuleOp>(context, input)
+pub fn parse_tir(context: &Context, input: &str) -> Result<tir::OpHandle, Box<dyn Error>> {
+    tir::parse::ir::parse_operation(context, input, &tir::builtin::MODULE)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0).into())
 }
 

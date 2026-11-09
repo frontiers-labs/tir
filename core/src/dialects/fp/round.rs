@@ -5,227 +5,235 @@ use crate::builtin::{FloatType, StateResource};
 use crate::parse::common::Cursor;
 use crate::{
     Binding, Context, Error, Operation, RegionBinding, ResourceAccess, ResourceEffect,
-    ResourceEffects, ValueId, operation,
+    ResourceEffects, ValueId,
 };
 
-operation! {
-    RoundOp {
-        name: "round",
-        dialect: "fp",
-        scheme: "(_*) -> _*",
-        format: "custom",
-        verifier: "true",
-        operands: O { captures },
-        attributes: A { contract: "EvaluationContract" },
-        results: R { results },
-        regions: R { reference: Region { kind: Nodes } },
-        interfaces: [RegionBinding, ResourceEffects],
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_fp_round.cdsl",
+    hosts: {
+        round_verifier => crate::fp::round_verify_impl,
+        round_iface_RegionBinding => (RegionBinding, &crate::fp::__TIR_IFACE_RoundOp_RegionBinding),
+        round_iface_ResourceEffects => (ResourceEffects, &crate::fp::__TIR_IFACE_RoundOp_ResourceEffects),
+        round_printer => crate::fp::round_custom_print,
+        round_parser => |parser, context, _definition| crate::fp::round_custom_parse(parser, context),
+        fence_iface_Interp => (crate :: interp :: Interp, &crate::fp::__TIR_IFACE_FenceOp_Interp),
+        fence_iface_SameOperandAndResultType => (crate :: SameOperandAndResultType, &crate::SameOperandAndResultTypeCallbacks::DEFAULT),
+    },
+}
+
+pub(crate) fn fence_interp_evaluate(
+    _operation: &tir::OpHandle,
+    operands: &[crate::interp::Value],
+    _state: &mut crate::interp::ExecutionState,
+) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
+    Ok(vec![operands[0].clone()])
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_FenceOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::fp::fence_interp_evaluate,
+    };
+
+pub(crate) fn round_regionbinding_region(operation: &tir::OpHandle) -> tir::RegionId {
+    crate::fp::round_reference_region(operation).id()
+}
+
+pub(crate) fn round_regionbinding_binding(operation: &tir::OpHandle) -> Binding {
+    let captures = operation.operands().len();
+    let results = operation.results().len();
+    Binding {
+        operands: 0..captures,
+        ports: 0..captures,
+        continue_: 0..0,
+        exit: 0..results,
+        results: 0..results,
     }
 }
 
-operation! {
-    FenceOp {
-        name: "fence",
-        dialect: "fp",
-        scheme: "forall E: nat, M: nat. (float<E, M>) -> float<E, M>",
-        operands: O { input },
-        results: R { result },
-        interfaces: [crate::interp::Interp, crate::SameOperandAndResultType],
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_RoundOp_RegionBinding: crate::RegionBindingCallbacks =
+    crate::RegionBindingCallbacks {
+        region: crate::fp::round_regionbinding_region,
+        binding: crate::fp::round_regionbinding_binding,
+    };
+
+pub(crate) fn round_resourceeffects_resource_effects(
+    operation: &tir::OpHandle,
+) -> Vec<ResourceEffect> {
+    let context = &operation.context;
+    super::resource::effects_for(
+        Some(crate::fp::round_contract(operation).arithmetic.rounding),
+        crate::fp::round_contract(operation).arithmetic.exceptions,
+    )
+    .into_iter()
+    .map(|(resource, access)| ResourceEffect {
+        resource,
+        access,
+        observed: context.states_of(operation.operands(), resource),
+        produced: context.states_of(operation.results(), resource),
+    })
+    .collect()
 }
 
-impl crate::interp::Interp for FenceOp {
-    fn evaluate(
-        &self,
-        operands: &[crate::interp::Value],
-        _state: &mut crate::interp::ExecutionState,
-    ) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
-        Ok(vec![operands[0].clone()])
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_RoundOp_ResourceEffects: crate::ResourceEffectsCallbacks =
+    crate::ResourceEffectsCallbacks {
+        resource_effects: crate::fp::round_resourceeffects_resource_effects,
+    };
+
+pub fn round_reference_region(operation: &tir::OpHandle) -> tir::RegionHandle {
+    operation.context.get_region(
+        *operation
+            .regions()
+            .first()
+            .expect("fp.round owns its reference"),
+    )
 }
 
-impl crate::SameOperandAndResultType for FenceOp {}
-
-impl RegionBinding for RoundOp {
-    fn region(&self) -> tir::RegionId {
-        self.reference_region().id()
-    }
-
-    fn binding(&self) -> Binding {
-        let captures = self.operands().len();
-        let results = self.0.results().len();
-        Binding {
-            operands: 0..captures,
-            ports: 0..captures,
-            continue_: 0..0,
-            exit: 0..results,
-            results: 0..results,
-        }
-    }
-}
-
-impl ResourceEffects for RoundOp {
-    fn resource_effects(&self) -> Vec<ResourceEffect> {
-        let context = &self.0.context;
-        super::resource::effects_for(
-            Some(self.contract().arithmetic.rounding),
-            self.contract().arithmetic.exceptions,
-        )
-        .into_iter()
-        .map(|(resource, access)| ResourceEffect {
-            resource,
-            access,
-            observed: context.states_of(self.operands(), resource),
-            produced: context.states_of(self.0.results(), resource),
-        })
-        .collect()
-    }
-}
-
-impl RoundOp {
-    pub fn reference_region(&self) -> tir::RegionHandle {
-        self.regions().next().expect("fp.round owns its reference")
-    }
-
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.handle().context.clone();
-        let ports: Vec<_> = self
-            .reference_region()
-            .ports()
+pub(crate) fn round_custom_print(
+    operation: &tir::OpHandle,
+    fmt: &mut tir::IRFormatter,
+) -> Result<(), std::fmt::Error> {
+    let context = operation.handle().context.clone();
+    let ports: Vec<_> = crate::fp::round_reference_region(operation)
+        .ports()
+        .iter()
+        .map(tir::Value::id)
+        .collect();
+    tir::region_format::print_result_prefix(fmt, operation)?;
+    fmt.write("fp.round")?;
+    binding::print_port_bindings(fmt, &ports, &operation.operands())?;
+    fmt.write(" {contract = ")?;
+    AttributeValue::EvaluationContract(crate::fp::round_contract(operation))
+        .print(fmt, &context)?;
+    fmt.write("} : ")?;
+    print_types(
+        fmt,
+        &context,
+        &operation
+            .results()
             .iter()
-            .map(tir::Value::id)
-            .collect();
-        tir::region_format::print_result_prefix(fmt, &self.0)?;
-        fmt.write("fp.round")?;
-        binding::print_port_bindings(fmt, &ports, &self.operands())?;
-        fmt.write(" {contract = ")?;
-        AttributeValue::EvaluationContract(self.contract()).print(fmt, &context)?;
-        fmt.write("} : ")?;
-        print_types(
-            fmt,
-            &context,
-            &self
-                .0
-                .results()
-                .iter()
-                .map(|result| context.get_value(*result).ty())
-                .collect::<Vec<_>>(),
-        )?;
-        tir::region_format::print_region(fmt, &context, &self.reference_region())
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let bound = binding::parse_port_bindings(parser, context)?;
-        binding::expect(parser, "{")?;
-        binding::expect(parser, "contract")?;
-        binding::expect(parser, "=")?;
-        let attribute = parser
-            .parse_attribute_value(context)?
-            .ok_or_else(|| (parser.span(), Error::ExpectedToken("contract")))?;
-        let contract = super::EvaluationContract::parse_attribute(&attribute)
-            .map_err(|error| (parser.span(), error))?;
-        binding::expect(parser, "}")?;
-        binding::expect(parser, ":")?;
-        let result_types = parse_types(parser, context)?;
-        let reference = parser
-            .parse_region_with_entry_args(context, bound.ports)?
-            .id();
-        Ok(Box::new(RoundOp::new(
-            context,
-            bound.inits,
-            tir::attributes::AttributeValue::EvaluationContract(
-                context.intern_evaluation_contract(contract),
-            ),
-            result_types,
-            Some(reference),
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
-    }
+            .map(|result| context.get_value(*result).ty())
+            .collect::<Vec<_>>(),
+    )?;
+    tir::region_format::print_region(fmt, &context, &crate::fp::round_reference_region(operation))
 }
 
-impl tir::Verifiable for RoundOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let ports = self.reference_region().ports();
-        let captures = self.operands();
-        let yielded = self.reference_region().results();
-        let results = self.0.results();
-        if ports.len() != captures.len() {
-            return Err(invalid(
-                "fp.round must bind every capture to one reference port",
-            ));
+pub(crate) fn round_custom_parse(
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+) -> Result<tir::OpHandle, (tir::parse::Span, Error)> {
+    let bound = binding::parse_port_bindings(parser, context)?;
+    binding::expect(parser, "{")?;
+    binding::expect(parser, "contract")?;
+    binding::expect(parser, "=")?;
+    let attribute = parser
+        .parse_attribute_value(context)?
+        .ok_or_else(|| (parser.span(), Error::ExpectedToken("contract")))?;
+    let contract = super::EvaluationContract::parse_attribute(&attribute)
+        .map_err(|error| (parser.span(), error))?;
+    binding::expect(parser, "}")?;
+    binding::expect(parser, ":")?;
+    let result_types = parse_types(parser, context)?;
+    let reference = parser
+        .parse_region_with_entry_args(context, bound.ports)?
+        .id();
+    Ok(r#round(
+        context,
+        bound.inits,
+        tir::attributes::AttributeValue::EvaluationContract(
+            context.intern_evaluation_contract(contract),
+        ),
+        result_types,
+        Some(reference),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    ))
+}
+
+pub(crate) fn round_verify_impl(operation: &tir::OpHandle, context: &Context) -> Result<(), Error> {
+    let ports = crate::fp::round_reference_region(operation).ports();
+    let captures = operation.operands();
+    let yielded = crate::fp::round_reference_region(operation).results();
+    let results = operation.results();
+    if ports.len() != captures.len() {
+        return Err(invalid(
+            "fp.round must bind every capture to one reference port",
+        ));
+    }
+    if yielded.len() != results.len() {
+        return Err(invalid(
+            "fp.round reference yield count must match its result count",
+        ));
+    }
+    for (index, (port, capture)) in ports.iter().zip(captures).enumerate() {
+        if port.ty() != context.get_value(capture).ty() {
+            return Err(invalid(&format!(
+                "fp.round port {index} must have its capture's type"
+            )));
         }
-        if yielded.len() != results.len() {
-            return Err(invalid(
-                "fp.round reference yield count must match its result count",
-            ));
+    }
+    for (index, (yielded, result)) in yielded.iter().zip(results.iter()).enumerate() {
+        if context.get_value(*yielded).ty() != context.get_value(*result).ty() {
+            return Err(invalid(&format!(
+                "fp.round yield {index} must have its result's type"
+            )));
         }
-        for (index, (port, capture)) in ports.iter().zip(captures).enumerate() {
-            if port.ty() != context.get_value(capture).ty() {
-                return Err(invalid(&format!(
-                    "fp.round port {index} must have its capture's type"
-                )));
-            }
-        }
-        for (index, (yielded, result)) in yielded.iter().zip(results.iter()).enumerate() {
-            if context.get_value(*yielded).ty() != context.get_value(*result).ty() {
-                return Err(invalid(&format!(
-                    "fp.round yield {index} must have its result's type"
-                )));
-            }
-        }
-        let formats: Vec<_> = results
-            .iter()
-            .filter_map(|result| {
-                let ty = context.get_value(*result).ty();
-                (!context.is_state_type(ty)).then_some(ty)
-            })
-            .collect();
-        if self.contract().result_formats != formats {
-            return Err(invalid(
-                "fp.round result formats must match its numeric results",
-            ));
-        }
-        if results.iter().any(|result| {
+    }
+    let formats: Vec<_> = results
+        .iter()
+        .filter_map(|result| {
             let ty = context.get_value(*result).ty();
-            !context.is_state_type(ty) && FloatType::view(context, ty).is_none()
-        }) {
-            return Err(invalid("fp.round numeric results must have floating types"));
-        }
-        verify_explicit_captures(context, self.reference_region().id())?;
-        verify_primitive_semantics(
-            context,
-            self.reference_region().id(),
-            self.contract().arithmetic,
-        )?;
-        let expected = super::resource::effects_for(
-            Some(self.contract().arithmetic.rounding),
-            self.contract().arithmetic.exceptions,
-        );
-        verify_body_effects(context, self.reference_region().id(), &expected)?;
-        for resource in [StateResource::Memory, StateResource::FpEnv] {
-            let count = usize::from(expected.iter().any(|(candidate, _)| *candidate == resource));
-            if context.states_of(self.operands(), resource).len() != count
-                || context.states_of(results.iter().copied(), resource).len() != count
-            {
-                return Err(invalid("fp.round state ports do not match its contract"));
-            }
-            if expected.iter().any(|&(candidate, access)| {
-                candidate == resource && access == ResourceAccess::Change
-            }) {
-                verify_changed_state_is_yielded(
-                    context,
-                    self.reference_region().id(),
-                    &yielded,
-                    resource,
-                )?;
-            }
-        }
-        Ok(())
+            (!context.is_state_type(ty)).then_some(ty)
+        })
+        .collect();
+    if crate::fp::round_contract(operation).result_formats != formats {
+        return Err(invalid(
+            "fp.round result formats must match its numeric results",
+        ));
     }
+    if results.iter().any(|result| {
+        let ty = context.get_value(*result).ty();
+        !context.is_state_type(ty) && FloatType::view(context, ty).is_none()
+    }) {
+        return Err(invalid("fp.round numeric results must have floating types"));
+    }
+    verify_explicit_captures(context, crate::fp::round_reference_region(operation).id())?;
+    verify_primitive_semantics(
+        context,
+        crate::fp::round_reference_region(operation).id(),
+        crate::fp::round_contract(operation).arithmetic,
+    )?;
+    let expected = super::resource::effects_for(
+        Some(crate::fp::round_contract(operation).arithmetic.rounding),
+        crate::fp::round_contract(operation).arithmetic.exceptions,
+    );
+    verify_body_effects(
+        context,
+        crate::fp::round_reference_region(operation).id(),
+        &expected,
+    )?;
+    for resource in [StateResource::Memory, StateResource::FpEnv] {
+        let count = usize::from(expected.iter().any(|(candidate, _)| *candidate == resource));
+        if context.states_of(operation.operands(), resource).len() != count
+            || context.states_of(results.iter().copied(), resource).len() != count
+        {
+            return Err(invalid("fp.round state ports do not match its contract"));
+        }
+        if expected
+            .iter()
+            .any(|&(candidate, access)| candidate == resource && access == ResourceAccess::Change)
+        {
+            verify_changed_state_is_yielded(
+                context,
+                crate::fp::round_reference_region(operation).id(),
+                &yielded,
+                resource,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_types(
@@ -324,7 +332,7 @@ fn verify_primitive_semantics(
 ) -> Result<(), Error> {
     for op in context.get_region(region).op_ids() {
         let op = context.get_op(op);
-        if op.is::<RoundOp>() {
+        if op.is_operation(&ROUND) {
             continue;
         }
         if let Some(AttributeValue::FpSemantics(semantics)) = op.attr("semantics")
@@ -439,7 +447,7 @@ fn collect_state_effects(
                 predecessors.entry(next).or_default().extend(&chain.exits);
             }
         }
-        if op.is::<RoundOp>() {
+        if op.is_operation(&ROUND) {
             continue;
         }
         for nested in op.regions() {

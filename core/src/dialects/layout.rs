@@ -28,22 +28,22 @@ use crate::interp::{ExecutionState, InterpError, Value};
 use crate::parse::Span;
 use crate::parse::common::Cursor;
 use crate::parse::text::Parser;
-use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor};
+use crate::ty::{Ctor, Terms, TypeArg};
 use crate::utils::APInt;
-use crate::{Context, Error, IRFormatter, OpHandle, Terminator, TypeId, dialect, operation};
+use crate::{Context, Error, IRFormatter, OpHandle, Terminator, TypeId, dialect};
 
 use crate as tir;
 
 pub(crate) mod types;
 
 pub mod ops {
-    pub use super::{AlignOfOp, AtOp, CountOp, FieldOp, OffsetOfOp, ResultOp, SizeOfOp};
+    pub use super::{ALIGNOF, AT, COUNT, FIELD, OFFSETOF, RESULT, SIZEOF};
 }
 
 dialect! {
     LayoutDialect {
         name: "layout",
-        operations: [SizeOfOp, AlignOfOp, OffsetOfOp, FieldOp, ResultOp, CountOp, AtOp],
+        operations: [SIZEOF, ALIGNOF, OFFSETOF, FIELD, RESULT, COUNT, AT],
         types: [
             Ctor(&SPEC), Ctor(&TYPE), Ctor(&FIELDS),
             Ctor(&ALIGN_TO), Ctor(&MIN), Ctor(&MAX), Ctor(&POW2_CEIL),
@@ -51,41 +51,31 @@ dialect! {
     }
 }
 
-const fn region_value(name: &'static str) -> Ctor {
-    Ctor::new(TypeCtor {
-        dialect: "layout",
-        name,
-        params: &[],
-        kind: Kind::Data,
-        validate: valid,
-        carrier: no_carrier,
-    })
-}
-
 // What a layout region's values are: the spec it reads, a type it measures,
 // and the field types of an aggregate in order.
-static SPEC: Ctor = region_value("spec");
-static TYPE: Ctor = region_value("type");
-static FIELDS: Ctor = region_value("fields");
-
-const fn nat(name: &'static str, params: &'static [(&'static str, Param)]) -> Ctor {
-    Ctor::new(TypeCtor {
-        dialect: "nat",
-        name,
-        params,
-        kind: Kind::Nat,
-        validate: valid,
-        carrier: no_carrier,
-    })
-}
-
-const BINARY: &[(&str, Param)] = &[("a", Param::One(Kind::Nat)), ("b", Param::One(Kind::Nat))];
+static SPEC: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_layout.cdsl", binding: constructors::SPEC, hosts: { SPEC_validate => valid, SPEC_carrier => no_carrier } },
+);
+static TYPE: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_layout.cdsl", binding: constructors::TYPE, hosts: { TYPE_validate => valid, TYPE_carrier => no_carrier } },
+);
+static FIELDS: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_layout.cdsl", binding: constructors::FIELDS, hosts: { FIELDS_validate => valid, FIELDS_carrier => no_carrier } },
+);
 
 // The functions a spec entry computes a size or an alignment with.
-static ALIGN_TO: Ctor = nat("align_to", BINARY);
-static MIN: Ctor = nat("min", BINARY);
-static MAX: Ctor = nat("max", BINARY);
-static POW2_CEIL: Ctor = nat("pow2_ceil", &[("a", Param::One(Kind::Nat))]);
+static ALIGN_TO: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_layout.cdsl", binding: constructors::ALIGN_TO, hosts: { ALIGN_TO_validate => valid, ALIGN_TO_carrier => no_carrier } },
+);
+static MIN: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_layout.cdsl", binding: constructors::MIN, hosts: { MIN_validate => valid, MIN_carrier => no_carrier } },
+);
+static MAX: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_layout.cdsl", binding: constructors::MAX, hosts: { MAX_validate => valid, MAX_carrier => no_carrier } },
+);
+static POW2_CEIL: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "defs/types/core_src_dialects_layout.cdsl", binding: constructors::POW2_CEIL, hosts: { POW2_CEIL_validate => valid, POW2_CEIL_carrier => no_carrier } },
+);
 
 /// The size and alignments a spec entry gives the types its key matches.
 #[derive(Clone, Debug, PartialEq)]
@@ -438,101 +428,80 @@ fn type_attr(op: &OpHandle) -> Option<TypeId> {
 // The size, in bits, of a type: `layout.sizeof {ty = !T} : !i64` asks the
 // spec in scope; inside a layout region `layout.sizeof %t, %spec : !i64` asks
 // the spec the region was handed.
-operation! {
-    SizeOfOp {
-        name: "sizeof",
-        dialect: "layout",
-        scheme: "(_*) -> int<_>",
-        attributes: A {
-            ty: "?Type",
+
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_layout.cdsl",
+    hosts: {
+        sizeof_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("folded")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "folded" => (crate::layout::sizeof_folded)(operation, graph),
+                    _ => None,
+                },
+            )
         },
-        operands: O { args },
-        results: R { result },
-        interfaces: [crate::ConstantFold, crate::interp::Interp],
-        sem: "(set result $folded)",
-    }
+        sizeof_iface_ConstantFold => (crate :: ConstantFold, &crate::layout::__TIR_IFACE_SizeOfOp_ConstantFold),
+        sizeof_iface_Interp => (crate :: interp :: Interp, &crate::layout::__TIR_IFACE_SizeOfOp_Interp),
+        alignof_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("folded")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "folded" => (crate::layout::alignof_folded)(operation, graph),
+                    _ => None,
+                },
+            )
+        },
+        alignof_iface_ConstantFold => (crate :: ConstantFold, &crate::layout::__TIR_IFACE_AlignOfOp_ConstantFold),
+        alignof_iface_Interp => (crate :: interp :: Interp, &crate::layout::__TIR_IFACE_AlignOfOp_Interp),
+        offsetof_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("folded")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "folded" => (crate::layout::offsetof_folded)(operation, graph),
+                    _ => None,
+                },
+            )
+        },
+        offsetof_iface_ConstantFold => (crate :: ConstantFold, &crate::layout::__TIR_IFACE_OffsetOfOp_ConstantFold),
+        offsetof_iface_Interp => (crate :: interp :: Interp, &crate::layout::__TIR_IFACE_OffsetOfOp_Interp),
+        field_iface_Interp => (crate :: interp :: Interp, &crate::layout::__TIR_IFACE_FieldOp_Interp),
+        result_iface_Terminator => (Terminator, &crate::TerminatorCallbacks::DEFAULT),
+        count_iface_Interp => (crate :: interp :: Interp, &crate::layout::__TIR_IFACE_CountOp_Interp),
+        at_iface_Interp => (crate :: interp :: Interp, &crate::layout::__TIR_IFACE_AtOp_Interp),
+    },
 }
 
 // The ABI alignment, in bits, of a type; spelled as `layout.sizeof`.
-operation! {
-    AlignOfOp {
-        name: "alignof",
-        dialect: "layout",
-        scheme: "(_*) -> int<_>",
-        attributes: A {
-            ty: "?Type",
-        },
-        operands: O { args },
-        results: R { result },
-        interfaces: [crate::ConstantFold, crate::interp::Interp],
-        sem: "(set result $folded)",
-    }
-}
 
 // The offset, in bits, of field `field` of `ty` under the spec in scope:
 // `layout.offsetof {ty = !Node, field = "next"} : !i64`.
-operation! {
-    OffsetOfOp {
-        name: "offsetof",
-        dialect: "layout",
-        scheme: "() -> int<_>",
-        attributes: A {
-            ty: "Type",
-            field: "Str",
-        },
-        results: R { result },
-        interfaces: [crate::ConstantFold, crate::interp::Interp],
-        sem: "(set result $folded)",
-    }
-}
 
 // Inside a layout region: field `index` sits at `offset` bits.
-operation! {
-    FieldOp {
-        name: "field",
-        dialect: "layout",
-        scheme: "(int<_>, int<_>) -> ()",
-        operands: O { index, offset },
-        interfaces: [crate::interp::Interp],
-    }
-}
 
 // Ends a layout region with the size and the alignment, in bits.
-operation! {
-    ResultOp {
-        name: "result",
-        dialect: "layout",
-        scheme: "(int<_>, int<_>) -> ()",
-        operands: O { size, align },
-        interfaces: [Terminator],
-    }
-}
-
-impl Terminator for ResultOp {}
 
 // The number of fields of a `!layout.fields`.
-operation! {
-    CountOp {
-        name: "count",
-        dialect: "layout",
-        scheme: "(layout.fields) -> int<_>",
-        operands: O { fields },
-        results: R { result },
-        interfaces: [crate::interp::Interp],
-    }
-}
 
 // The type of field `index` of a `!layout.fields`.
-operation! {
-    AtOp {
-        name: "at",
-        dialect: "layout",
-        scheme: "(layout.fields, int<_>) -> layout.type",
-        operands: O { fields, index },
-        results: R { result },
-        interfaces: [crate::interp::Interp],
-    }
-}
 
 fn fold_static(op: &OpHandle, measure: Measure) -> Option<crate::sem::Value> {
     if !op.operands().is_empty() {
@@ -570,106 +539,158 @@ fn eval_measure(
     Ok(vec![Value::Int(int_result(op, bits))])
 }
 
-impl crate::ConstantFold for SizeOfOp {
-    fn fold(&self, _: &[crate::sem::Value]) -> Option<crate::sem::Value> {
-        fold_static(&self.0, Measure::Size)
+pub(crate) fn sizeof_constantfold_fold(
+    operation: &tir::OpHandle,
+    _: &[crate::sem::Value],
+) -> Option<crate::sem::Value> {
+    fold_static(operation, Measure::Size)
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_SizeOfOp_ConstantFold: crate::ConstantFoldCallbacks =
+    crate::ConstantFoldCallbacks {
+        fold: crate::layout::sizeof_constantfold_fold,
+    };
+
+pub(crate) fn alignof_constantfold_fold(
+    operation: &tir::OpHandle,
+    _: &[crate::sem::Value],
+) -> Option<crate::sem::Value> {
+    fold_static(operation, Measure::Align)
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_AlignOfOp_ConstantFold: crate::ConstantFoldCallbacks =
+    crate::ConstantFoldCallbacks {
+        fold: crate::layout::alignof_constantfold_fold,
+    };
+
+pub(crate) fn offsetof_constantfold_fold(
+    operation: &tir::OpHandle,
+    _: &[crate::sem::Value],
+) -> Option<crate::sem::Value> {
+    let layout = crate::DataLayout::for_op(&operation.context, operation.id)?;
+    let bits = layout.offset_in_bits(
+        crate::layout::offsetof_ty(operation),
+        &crate::layout::offsetof_field(operation),
+    )?;
+    Some(crate::sem::Value::Int(int_result(operation, bits)))
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_OffsetOfOp_ConstantFold: crate::ConstantFoldCallbacks =
+    crate::ConstantFoldCallbacks {
+        fold: crate::layout::offsetof_constantfold_fold,
+    };
+
+pub(crate) fn sizeof_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    eval_measure(operation, operands, state, Measure::Size)
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_SizeOfOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::layout::sizeof_interp_evaluate,
+    };
+
+pub(crate) fn alignof_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    eval_measure(operation, operands, state, Measure::Align)
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_AlignOfOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::layout::alignof_interp_evaluate,
+    };
+
+pub(crate) fn offsetof_interp_evaluate(
+    operation: &tir::OpHandle,
+    _: &[Value],
+    _: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    match offsetof_constantfold_fold(operation, &[]) {
+        Some(crate::sem::Value::Int(int)) => Ok(vec![Value::Int(int)]),
+        _ => Err(InterpError::Message(format!(
+            "no offset for field '{}'",
+            crate::layout::offsetof_field(operation)
+        ))),
     }
 }
 
-impl crate::ConstantFold for AlignOfOp {
-    fn fold(&self, _: &[crate::sem::Value]) -> Option<crate::sem::Value> {
-        fold_static(&self.0, Measure::Align)
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_OffsetOfOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::layout::offsetof_interp_evaluate,
+    };
+
+pub(crate) fn field_interp_evaluate(
+    __operation: &tir::OpHandle,
+    operands: &[Value],
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    let [Value::Int(index), Value::Int(offset)] = operands else {
+        return Err(InterpError::Message(
+            "layout.field takes two integers".into(),
+        ));
+    };
+    crate::layout::record_field(state, index.to_u64(), offset.to_u64())
+        .ok_or_else(|| InterpError::Message("layout.field outside a layout region".into()))?;
+    Ok(vec![])
 }
 
-impl crate::ConstantFold for OffsetOfOp {
-    fn fold(&self, _: &[crate::sem::Value]) -> Option<crate::sem::Value> {
-        let layout = crate::DataLayout::for_op(&self.0.context, self.0.id)?;
-        let bits = layout.offset_in_bits(self.ty(), &self.field())?;
-        Some(crate::sem::Value::Int(int_result(&self.0, bits)))
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_FieldOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::layout::field_interp_evaluate,
+    };
+
+pub(crate) fn count_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[Value],
+    _: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    let [Value::Tuple(fields)] = operands else {
+        return Err(InterpError::Message("layout.count takes fields".into()));
+    };
+    Ok(vec![Value::Int(int_result(operation, fields.len() as u64))])
 }
 
-impl crate::interp::Interp for SizeOfOp {
-    fn evaluate(
-        &self,
-        operands: &[Value],
-        state: &mut ExecutionState,
-    ) -> Result<Vec<Value>, InterpError> {
-        eval_measure(&self.0, operands, state, Measure::Size)
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_CountOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::layout::count_interp_evaluate,
+    };
+
+pub(crate) fn at_interp_evaluate(
+    __operation: &tir::OpHandle,
+    operands: &[Value],
+    _: &mut ExecutionState,
+) -> Result<Vec<Value>, InterpError> {
+    let [Value::Tuple(fields), Value::Int(index)] = operands else {
+        return Err(InterpError::Message(
+            "layout.at takes fields and an index".into(),
+        ));
+    };
+    fields
+        .get(index.to_u64() as usize)
+        .cloned()
+        .map(|field| vec![field])
+        .ok_or_else(|| InterpError::Message("layout.at past the last field".into()))
 }
 
-impl crate::interp::Interp for AlignOfOp {
-    fn evaluate(
-        &self,
-        operands: &[Value],
-        state: &mut ExecutionState,
-    ) -> Result<Vec<Value>, InterpError> {
-        eval_measure(&self.0, operands, state, Measure::Align)
-    }
-}
-
-impl crate::interp::Interp for OffsetOfOp {
-    fn evaluate(&self, _: &[Value], _: &mut ExecutionState) -> Result<Vec<Value>, InterpError> {
-        match crate::ConstantFold::fold(self, &[]) {
-            Some(crate::sem::Value::Int(int)) => Ok(vec![Value::Int(int)]),
-            _ => Err(InterpError::Message(format!(
-                "no offset for field '{}'",
-                self.field()
-            ))),
-        }
-    }
-}
-
-impl crate::interp::Interp for FieldOp {
-    fn evaluate(
-        &self,
-        operands: &[Value],
-        state: &mut ExecutionState,
-    ) -> Result<Vec<Value>, InterpError> {
-        let [Value::Int(index), Value::Int(offset)] = operands else {
-            return Err(InterpError::Message(
-                "layout.field takes two integers".into(),
-            ));
-        };
-        crate::layout::record_field(state, index.to_u64(), offset.to_u64())
-            .ok_or_else(|| InterpError::Message("layout.field outside a layout region".into()))?;
-        Ok(vec![])
-    }
-}
-
-impl crate::interp::Interp for CountOp {
-    fn evaluate(
-        &self,
-        operands: &[Value],
-        _: &mut ExecutionState,
-    ) -> Result<Vec<Value>, InterpError> {
-        let [Value::Tuple(fields)] = operands else {
-            return Err(InterpError::Message("layout.count takes fields".into()));
-        };
-        Ok(vec![Value::Int(int_result(&self.0, fields.len() as u64))])
-    }
-}
-
-impl crate::interp::Interp for AtOp {
-    fn evaluate(
-        &self,
-        operands: &[Value],
-        _: &mut ExecutionState,
-    ) -> Result<Vec<Value>, InterpError> {
-        let [Value::Tuple(fields), Value::Int(index)] = operands else {
-            return Err(InterpError::Message(
-                "layout.at takes fields and an index".into(),
-            ));
-        };
-        fields
-            .get(index.to_u64() as usize)
-            .cloned()
-            .map(|field| vec![field])
-            .ok_or_else(|| InterpError::Message("layout.at past the last field".into()))
-    }
-}
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_AtOp_Interp: crate::interp::InterpCallbacks =
+    crate::interp::InterpCallbacks {
+        evaluate: crate::layout::at_interp_evaluate,
+    };
 
 // A folded query as the constant its semantics is, so the op is a value the
 // rewriters fold; `None`, and no semantics, where it does not fold.
@@ -685,22 +706,25 @@ fn constant_node(
     Some(node)
 }
 
-impl SizeOfOp {
-    fn folded(&self, g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
-        constant_node(crate::ConstantFold::fold(self, &[]), g)
-    }
+pub(crate) fn sizeof_folded(
+    operation: &tir::OpHandle,
+    g: &mut crate::sem::SemGraph,
+) -> Option<crate::NodeId> {
+    constant_node(sizeof_constantfold_fold(operation, &[]), g)
 }
 
-impl AlignOfOp {
-    fn folded(&self, g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
-        constant_node(crate::ConstantFold::fold(self, &[]), g)
-    }
+pub(crate) fn alignof_folded(
+    operation: &tir::OpHandle,
+    g: &mut crate::sem::SemGraph,
+) -> Option<crate::NodeId> {
+    constant_node(alignof_constantfold_fold(operation, &[]), g)
 }
 
-impl OffsetOfOp {
-    fn folded(&self, g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
-        constant_node(crate::ConstantFold::fold(self, &[]), g)
-    }
+pub(crate) fn offsetof_folded(
+    operation: &tir::OpHandle,
+    g: &mut crate::sem::SemGraph,
+) -> Option<crate::NodeId> {
+    constant_node(offsetof_constantfold_fold(operation, &[]), g)
 }
 
 /// `layout.sizeof {ty = ty} : !i<width>`.
@@ -710,11 +734,11 @@ pub fn size_of(
     width: u32,
     mut parts: tir::NewOpParts,
     insertion: tir::InsertionPoint,
-) -> SizeOfOp {
+) -> tir::OpHandle {
     parts
         .attributes
         .insert(0, context.named_attribute("ty", AttributeValue::Type(ty)));
-    SizeOfOp::new(
+    crate::layout::r#sizeof(
         context,
         vec![],
         crate::builtin::IntegerType::new(context, u64::from(width)),
@@ -731,8 +755,8 @@ pub fn offset_of(
     width: u32,
     parts: tir::NewOpParts,
     insertion: tir::InsertionPoint,
-) -> OffsetOfOp {
-    OffsetOfOp::new(
+) -> tir::OpHandle {
+    crate::layout::r#offsetof(
         context,
         ty,
         field,

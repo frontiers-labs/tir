@@ -1,0 +1,16 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type test = Dialect;
+
+extern let exit_iface_Terminator: Interface;
+extern let exit_iface_NonLocalExit: Interface;
+extern fn exit_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn exit_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let test::exit = {
+    signature: (values: Many<Any>) -> (),
+    interfaces: [exit_iface_Terminator, exit_iface_NonLocalExit],
+    assembly: { print: exit_printer, parse: exit_parser },
+};

@@ -64,7 +64,7 @@ impl FnCodegen<'_> {
                     .iter()
                     .enumerate()
                     .map(|(index, piece)| {
-                        b::TupleGetOp::new(
+                        b::tuple_get(
                             self.context,
                             tuple,
                             tir::attributes::AttributeValue::UInt(index as u64),
@@ -72,7 +72,7 @@ impl FnCodegen<'_> {
                             Default::default(),
                             self.builder.end(),
                         )
-                        .result()
+                        .results()[0]
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -320,7 +320,7 @@ impl FnCodegen<'_> {
                 }
                 let condition_region = self.lower_condition_region(condition, false)?;
                 let body_region = self.lower_body_region(body)?;
-                cir::WhileOp::new(
+                cir::r#while(
                     self.context,
                     Some(condition_region),
                     Some(body_region),
@@ -339,7 +339,7 @@ impl FnCodegen<'_> {
                 }
                 let body_region = self.lower_body_region(body)?;
                 let condition_region = self.lower_condition_region(condition, false)?;
-                cir::DoOp::new(
+                cir::r#do(
                     self.context,
                     Some(body_region),
                     Some(condition_region),
@@ -372,7 +372,7 @@ impl FnCodegen<'_> {
                     ));
                     Ok(())
                 })?;
-                cir::ForOp::new(
+                cir::r#for(
                     self.context,
                     Some(condition_region),
                     Some(step_region),
@@ -568,7 +568,7 @@ impl FnCodegen<'_> {
             })
             .collect();
         let default = default.as_ref().unwrap_or(&exit).id();
-        self.terminate_with(tir::cfg::SwitchOp::with_successors(
+        self.terminate_with(tir::cfg::switch_with_successors(
             self.context,
             value,
             cases,
@@ -637,7 +637,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result();
+        .results()[0];
         p::store(
             self.context,
             zero,
@@ -674,7 +674,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result(),
+            .results()[0],
         )
     }
 
@@ -687,7 +687,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result());
+            .results()[0]);
         }
         self.lower_condition(condition)
     }
@@ -820,7 +820,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     pub(super) fn store_scalar(
@@ -851,7 +851,7 @@ impl FnCodegen<'_> {
                 Predicate::Ne => Predicate::Une,
                 _ => unreachable!("truth conversion uses equality predicates"),
             };
-            return fp::CmpOp::new(
+            return fp::cmp(
                 self.context,
                 value,
                 zero,
@@ -863,7 +863,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result();
+            .results()[0];
         }
         let narrow =
             IntegerType::view(&self.context, ty).is_some_and(|integer| integer.width() < 32);
@@ -877,7 +877,7 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result(),
+                .results()[0],
                 i32_ty,
             )
         } else {
@@ -888,8 +888,8 @@ impl FnCodegen<'_> {
             return self.lower_pointer_compare(predicate, value, null);
         }
         let zero =
-            b::constant(self.context, 0, ty, Default::default(), self.builder.end()).result();
-        b::CmpIOp::new(
+            b::constant(self.context, 0, ty, Default::default(), self.builder.end()).results()[0];
+        b::cmpi(
             self.context,
             value,
             zero,
@@ -898,6 +898,6 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 }

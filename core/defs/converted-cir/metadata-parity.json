@@ -1,0 +1,66 @@
+{
+  "count": 10,
+  "operations": [
+    {
+      "declaration_sha256": "0069f1ed75d04972d2063f3585d50cf3c20651a43cec44f377c57228186e5c78",
+      "fields_sha256": "3866bb067f329610065cc294dca0d3225f2c23fe15535a89b4aff0dd409b8304",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.va_start"
+    },
+    {
+      "declaration_sha256": "7081c58721cef18a9912e0c128a866224a8f96074dbb1990f1ec0eeb11e6eb49",
+      "fields_sha256": "372af0b0903f34f33283addd8f4b60b556c90456bb252e2cece4ce6a326d2aa9",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.va_arg"
+    },
+    {
+      "declaration_sha256": "db866f7a835aa7f737bf08316e988b8f533315d978a0e766748d227d6e60e91a",
+      "fields_sha256": "a34b73a20231034cc3c16607d70965348e3c60420cac1a86e809135b0eede98a",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.va_end"
+    },
+    {
+      "declaration_sha256": "093da2d722d82cac8324b234565ae4e948c67309e02d45dfa7ec45c9502fb774",
+      "fields_sha256": "bb19ea0710e049518754d3f35538d589b43bbee7a9cccc4f4a005edbb6fb1ee6",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.for"
+    },
+    {
+      "declaration_sha256": "51c649df2eae037b4f40c98d3e6561e0719c6369e690270f2187b56f6be31fb9",
+      "fields_sha256": "9932b7500cc5569d144ca4af8cdb68d4ece93e78e627cf0fadb52ad5db778539",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.while"
+    },
+    {
+      "declaration_sha256": "10254fe4f31484608eeac84210cf107ee7eb65ac1779eac210f9e80cda58cfe1",
+      "fields_sha256": "132852cba8458bd5756a2e4c6874a6f7669297c984509be7be6958996c212d94",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.do"
+    },
+    {
+      "declaration_sha256": "dbf1e60f31e003f15477f34a771391f6e81633ac9e597381f6c2e6322a3442b4",
+      "fields_sha256": "e2aa356efdb53091b8d2513d383f1b56a88e2728e0187a8863f2810d75e2d439",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.condition"
+    },
+    {
+      "declaration_sha256": "f4727892533d7270ccbca8f0b7e3d8966741fdb221ed353dd6ea9a34dbe2d164",
+      "fields_sha256": "33450b77fe61d8b2625d3183c8688dc17a5be97828737c236990f2264ccd2d1e",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.yield"
+    },
+    {
+      "declaration_sha256": "b28bafbd1fe4d77945dec7ea2f2c9079253ed1297d3d24d2b15578e49d29f3f8",
+      "fields_sha256": "ebde2b9244f7e928a89fe1bb5ab08ab39fda0054d227a1539a55d90df769ac4b",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.break"
+    },
+    {
+      "declaration_sha256": "a6168ac020fd95879ce9c65d3ede2ff953215054a0be0b78bbd5dd21da150e7d",
+      "fields_sha256": "4f71c83763e4a01293774d154bc799b151c46c2d0f956a188cbe774b540e0dd7",
+      "file": "fcc/src/cir.rs",
+      "identity": "cir.continue"
+    }
+  ],
+  "source_contract": "Every source field captured verbatim in inventory; generated signatures, codecs, callbacks, recipes, regions and binding data are derived from that payload."
+}

@@ -6,7 +6,7 @@ use super::{ArithmeticSemantics, NaNPolicy, Rounding, SubnormalMode, Tininess};
 use crate::builtin::FloatType;
 use crate::{
     Context, Error, HasResourceSemantics, ResourceEffect, ResourceEffects, ResourceSemantics,
-    TypeId, operation,
+    TypeId,
 };
 
 use crate as tir;
@@ -89,93 +89,6 @@ fn evaluate(
     ))])
 }
 
-macro_rules! arithmetic_op {
-    ($op:ident, $name:tt, [$($operand:ident),+], $scheme:tt, $kind:expr, $generic:expr, $rounded:expr, $arity:expr) => {
-        operation! {
-            $op {
-                name: $name,
-                dialect: "fp",
-                scheme: $scheme,
-                operands: O { $($operand),+ },
-                attributes: A { semantics: "FpSemantics" },
-                results: R { result },
-                interfaces: [ResourceEffects, HasResourceSemantics, crate::Speculatable, crate::interp::Interp],
-                sem: "(set result $value_semantics)",
-                state: "in_out",
-                verifier: "true",
-            }
-        }
-
-        impl $op {
-            fn value_semantics(
-                &self,
-                graph: &mut tir::sem::SemGraph,
-            ) -> Option<tir::NodeId> {
-                let semantics = self.semantics();
-                arithmetic_semantics(
-                    graph,
-                    $generic,
-                    $rounded,
-                    $arity,
-                    float_width(&self.0.context, self.0.context.get_value(self.0.value_results()[0]).ty(),
-                    ).ok()?,
-                    semantics.arithmetic().ok()?,
-                )
-            }
-        }
-
-        impl tir::Verifiable for $op {
-            fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-                let semantics = self.semantics();
-                verify(context, &self.0, semantics.arithmetic()?)
-            }
-        }
-
-        impl crate::Speculatable for $op {
-            fn is_speculatable(&self) -> bool {
-                speculatable_if_ignore(self.semantics().arithmetic().map(|s| s.exceptions))
-            }
-        }
-
-        impl ResourceEffects for $op {
-            fn resource_effects(&self) -> Vec<ResourceEffect> {
-                let semantics = self.semantics();
-                let semantics = semantics.arithmetic().expect("verified arithmetic semantics");
-                effect_records(&self.0, effects_for(Some(semantics.rounding), semantics.exceptions))
-            }
-        }
-
-        impl HasResourceSemantics for $op {
-            fn resource_semantics(&self) -> ResourceSemantics {
-                let semantics = self.semantics();
-                super::resource::arithmetic(
-                    &self.0,
-                    $generic,
-                    $rounded,
-                    None,
-                    semantics
-                        .arithmetic()
-                        .expect("verified arithmetic semantics"),
-                )
-            }
-        }
-
-        impl crate::interp::Interp for $op {
-            fn evaluate(
-                &self,
-                operands: &[crate::interp::Value],
-                state: &mut crate::interp::ExecutionState,
-            ) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
-                let semantics = self.semantics();
-                let semantics = semantics
-                    .arithmetic()
-                    .map_err(interp_error)?;
-                evaluate($kind, semantics, operands, state)
-            }
-        }
-    };
-}
-
 pub(crate) fn rounding_node(
     graph: &mut tir::sem::SemGraph,
     rounding: Rounding,
@@ -192,66 +105,167 @@ pub(crate) fn rounding_node(
     Some(node)
 }
 
-arithmetic_op!(
-    AddOp,
-    "add",
-    [lhs, rhs],
-    "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
-    FloatOp::Add,
-    tir::sem::SymKind::FAdd,
-    tir::sem::SymKind::FAddRound,
-    2
-);
-arithmetic_op!(
-    SubOp,
-    "sub",
-    [lhs, rhs],
-    "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
-    FloatOp::Sub,
-    tir::sem::SymKind::FSub,
-    tir::sem::SymKind::FSubRound,
-    2
-);
-arithmetic_op!(
-    MulOp,
-    "mul",
-    [lhs, rhs],
-    "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
-    FloatOp::Mul,
-    tir::sem::SymKind::FMul,
-    tir::sem::SymKind::FMulRound,
-    2
-);
-arithmetic_op!(
-    DivOp,
-    "div",
-    [lhs, rhs],
-    "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
-    FloatOp::Div,
-    tir::sem::SymKind::FDiv,
-    tir::sem::SymKind::FDivRound,
-    2
-);
-arithmetic_op!(
-    FmaOp,
-    "fma",
-    [a, b, c],
-    "forall E: nat, M: nat. (float<E, M>, float<E, M>, float<E, M>) -> float<E, M>",
-    FloatOp::Fma,
-    tir::sem::SymKind::Fma,
-    tir::sem::SymKind::FmaRound,
-    3
-);
-arithmetic_op!(
-    SqrtOp,
-    "sqrt",
-    [input],
-    "forall E: nat, M: nat. (float<E, M>) -> float<E, M>",
-    FloatOp::Sqrt,
-    tir::sem::SymKind::Sqrt,
-    tir::sem::SymKind::SqrtRound,
-    1
-);
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_fp_arithmetic.cdsl",
+    hosts: {
+        add_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("value_semantics")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "value_semantics" => arithmetic_op_value_semantics(
+                        operation,
+                        graph,
+                        tir::sem::SymKind::FAdd,
+                        tir::sem::SymKind::FAddRound,
+                        2,
+                    ),
+                    _ => None,
+                },
+            )
+        },
+        add_verifier => arithmetic_op_verifiable_verify_impl,
+        add_iface_ResourceEffects => (ResourceEffects, &crate::ResourceEffectsCallbacks { resource_effects: |operation| arithmetic_op_resourceeffects_resource_effects(operation) }),
+        add_iface_HasResourceSemantics => (HasResourceSemantics, &crate::HasResourceSemanticsCallbacks { resource_semantics: |operation| arithmetic_op_hasresourcesemantics_resource_semantics(operation, tir::sem::SymKind::FAdd , tir::sem::SymKind::FAddRound ) }),
+        add_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks { is_speculatable: Some(arithmetic_op_speculatable_is_speculatable) }),
+        add_iface_Interp => (crate :: interp :: Interp, &crate::interp::InterpCallbacks { evaluate: |operation, operands, state| arithmetic_op_interp_evaluate(operation, operands, state, FloatOp::Add ) }),
+        sub_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("value_semantics")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "value_semantics" => arithmetic_op_value_semantics(
+                        operation,
+                        graph,
+                        tir::sem::SymKind::FSub,
+                        tir::sem::SymKind::FSubRound,
+                        2,
+                    ),
+                    _ => None,
+                },
+            )
+        },
+        sub_verifier => arithmetic_op_verifiable_verify_impl,
+        sub_iface_ResourceEffects => (ResourceEffects, &crate::ResourceEffectsCallbacks { resource_effects: |operation| arithmetic_op_resourceeffects_resource_effects(operation) }),
+        sub_iface_HasResourceSemantics => (HasResourceSemantics, &crate::HasResourceSemanticsCallbacks { resource_semantics: |operation| arithmetic_op_hasresourcesemantics_resource_semantics(operation, tir::sem::SymKind::FSub , tir::sem::SymKind::FSubRound ) }),
+        sub_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks { is_speculatable: Some(arithmetic_op_speculatable_is_speculatable) }),
+        sub_iface_Interp => (crate :: interp :: Interp, &crate::interp::InterpCallbacks { evaluate: |operation, operands, state| arithmetic_op_interp_evaluate(operation, operands, state, FloatOp::Sub ) }),
+        mul_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("value_semantics")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "value_semantics" => arithmetic_op_value_semantics(
+                        operation,
+                        graph,
+                        tir::sem::SymKind::FMul,
+                        tir::sem::SymKind::FMulRound,
+                        2,
+                    ),
+                    _ => None,
+                },
+            )
+        },
+        mul_verifier => arithmetic_op_verifiable_verify_impl,
+        mul_iface_ResourceEffects => (ResourceEffects, &crate::ResourceEffectsCallbacks { resource_effects: |operation| arithmetic_op_resourceeffects_resource_effects(operation) }),
+        mul_iface_HasResourceSemantics => (HasResourceSemantics, &crate::HasResourceSemanticsCallbacks { resource_semantics: |operation| arithmetic_op_hasresourcesemantics_resource_semantics(operation, tir::sem::SymKind::FMul , tir::sem::SymKind::FMulRound ) }),
+        mul_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks { is_speculatable: Some(arithmetic_op_speculatable_is_speculatable) }),
+        mul_iface_Interp => (crate :: interp :: Interp, &crate::interp::InterpCallbacks { evaluate: |operation, operands, state| arithmetic_op_interp_evaluate(operation, operands, state, FloatOp::Mul ) }),
+        div_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("value_semantics")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "value_semantics" => arithmetic_op_value_semantics(
+                        operation,
+                        graph,
+                        tir::sem::SymKind::FDiv,
+                        tir::sem::SymKind::FDivRound,
+                        2,
+                    ),
+                    _ => None,
+                },
+            )
+        },
+        div_verifier => arithmetic_op_verifiable_verify_impl,
+        div_iface_ResourceEffects => (ResourceEffects, &crate::ResourceEffectsCallbacks { resource_effects: |operation| arithmetic_op_resourceeffects_resource_effects(operation) }),
+        div_iface_HasResourceSemantics => (HasResourceSemantics, &crate::HasResourceSemanticsCallbacks { resource_semantics: |operation| arithmetic_op_hasresourcesemantics_resource_semantics(operation, tir::sem::SymKind::FDiv , tir::sem::SymKind::FDivRound ) }),
+        div_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks { is_speculatable: Some(arithmetic_op_speculatable_is_speculatable) }),
+        div_iface_Interp => (crate :: interp :: Interp, &crate::interp::InterpCallbacks { evaluate: |operation, operands, state| arithmetic_op_interp_evaluate(operation, operands, state, FloatOp::Div ) }),
+        fma_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("value_semantics")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "value_semantics" => arithmetic_op_value_semantics(
+                        operation,
+                        graph,
+                        tir::sem::SymKind::Fma,
+                        tir::sem::SymKind::FmaRound,
+                        3,
+                    ),
+                    _ => None,
+                },
+            )
+        },
+        fma_verifier => arithmetic_op_verifiable_verify_impl,
+        fma_iface_ResourceEffects => (ResourceEffects, &crate::ResourceEffectsCallbacks { resource_effects: |operation| arithmetic_op_resourceeffects_resource_effects(operation) }),
+        fma_iface_HasResourceSemantics => (HasResourceSemantics, &crate::HasResourceSemanticsCallbacks { resource_semantics: |operation| arithmetic_op_hasresourcesemantics_resource_semantics(operation, tir::sem::SymKind::Fma , tir::sem::SymKind::FmaRound ) }),
+        fma_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks { is_speculatable: Some(arithmetic_op_speculatable_is_speculatable) }),
+        fma_iface_Interp => (crate :: interp :: Interp, &crate::interp::InterpCallbacks { evaluate: |operation, operands, state| arithmetic_op_interp_evaluate(operation, operands, state, FloatOp::Fma ) }),
+        sqrt_exec_model => |operation, graph| {
+            const RECIPE: tir::sem::SemRecipe = tir::sem::SemRecipe {
+                steps: &[tir::sem::SemRecipeStep::Splice("value_semantics")],
+                root: 0,
+            };
+            tir::sem::build_recipe_with(
+                operation,
+                graph,
+                &RECIPE,
+                |operation, name, graph| match name {
+                    "value_semantics" => arithmetic_op_value_semantics(
+                        operation,
+                        graph,
+                        tir::sem::SymKind::Sqrt,
+                        tir::sem::SymKind::SqrtRound,
+                        1,
+                    ),
+                    _ => None,
+                },
+            )
+        },
+        sqrt_verifier => arithmetic_op_verifiable_verify_impl,
+        sqrt_iface_ResourceEffects => (ResourceEffects, &crate::ResourceEffectsCallbacks { resource_effects: |operation| arithmetic_op_resourceeffects_resource_effects(operation) }),
+        sqrt_iface_HasResourceSemantics => (HasResourceSemantics, &crate::HasResourceSemanticsCallbacks { resource_semantics: |operation| arithmetic_op_hasresourcesemantics_resource_semantics(operation, tir::sem::SymKind::Sqrt , tir::sem::SymKind::SqrtRound ) }),
+        sqrt_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks { is_speculatable: Some(arithmetic_op_speculatable_is_speculatable) }),
+        sqrt_iface_Interp => (crate :: interp :: Interp, &crate::interp::InterpCallbacks { evaluate: |operation, operands, state| arithmetic_op_interp_evaluate(operation, operands, state, FloatOp::Sqrt ) }),
+    },
+}
 
 fn arithmetic_semantics(
     graph: &mut tir::sem::SemGraph,
@@ -402,4 +416,86 @@ pub(super) fn canonicalize_nan(width: FloatWidth, bits: u64) -> u64 {
     } else {
         bits
     }
+}
+
+fn arithmetic_op_value_semantics(
+    operation: &tir::OpHandle,
+    graph: &mut tir::sem::SemGraph,
+    generic: tir::sem::SymKind,
+    rounded: tir::sem::SymKind,
+    arity: usize,
+) -> Option<tir::NodeId> {
+    let semantics = super::semantics::operation_semantics(operation);
+    arithmetic_semantics(
+        graph,
+        generic,
+        rounded,
+        arity,
+        float_width(
+            &operation.context,
+            operation
+                .context
+                .get_value(operation.value_results()[0])
+                .ty(),
+        )
+        .ok()?,
+        semantics.arithmetic().ok()?,
+    )
+}
+
+fn arithmetic_op_verifiable_verify_impl(
+    operation: &tir::OpHandle,
+    context: &Context,
+) -> Result<(), Error> {
+    let semantics = super::semantics::operation_semantics(operation);
+    verify(context, operation, semantics.arithmetic()?)
+}
+
+fn arithmetic_op_speculatable_is_speculatable(operation: &tir::OpHandle) -> bool {
+    speculatable_if_ignore(
+        super::semantics::operation_semantics(operation)
+            .arithmetic()
+            .map(|s| s.exceptions),
+    )
+}
+
+fn arithmetic_op_resourceeffects_resource_effects(
+    operation: &tir::OpHandle,
+) -> Vec<ResourceEffect> {
+    let semantics = super::semantics::operation_semantics(operation);
+    let semantics = semantics
+        .arithmetic()
+        .expect("verified arithmetic semantics");
+    effect_records(
+        operation,
+        effects_for(Some(semantics.rounding), semantics.exceptions),
+    )
+}
+
+fn arithmetic_op_hasresourcesemantics_resource_semantics(
+    operation: &tir::OpHandle,
+    generic: tir::sem::SymKind,
+    rounded: tir::sem::SymKind,
+) -> ResourceSemantics {
+    let semantics = super::semantics::operation_semantics(operation);
+    super::resource::arithmetic(
+        operation,
+        generic,
+        rounded,
+        None,
+        semantics
+            .arithmetic()
+            .expect("verified arithmetic semantics"),
+    )
+}
+
+fn arithmetic_op_interp_evaluate(
+    operation: &tir::OpHandle,
+    operands: &[crate::interp::Value],
+    state: &mut crate::interp::ExecutionState,
+    kind: FloatOp,
+) -> Result<Vec<crate::interp::Value>, crate::interp::InterpError> {
+    let semantics = super::semantics::operation_semantics(operation);
+    let semantics = semantics.arithmetic().map_err(interp_error)?;
+    evaluate(kind, semantics, operands, state)
 }

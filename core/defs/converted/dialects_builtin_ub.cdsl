@@ -1,0 +1,30 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type builtin = Dialect;
+
+extern fn assume_requires_model(condition: Int<1>) -> Bool;
+extern let assume_iface_Interp: Interface;
+extern fn freeze_exec_model<T>(input: T) -> T;
+extern let freeze_iface_Interp: Interface;
+extern let freeze_iface_Speculatable: Interface;
+extern let refine_iface_Congruent: Interface;
+extern let refine_iface_Interp: Interface;
+
+pub let builtin::assume = {
+    signature: (condition: Int<1>) -> (),
+    requires: assume_requires_model,
+    interfaces: [assume_iface_Interp],
+};
+
+pub let builtin::freeze<T> = {
+    signature: (input: T) -> T,
+    exec: freeze_exec_model<T>,
+    interfaces: [freeze_iface_Interp, freeze_iface_Speculatable],
+};
+
+pub let builtin::refine<T> = {
+    signature: (input: T, predicate: Int<1>) -> T,
+    interfaces: [refine_iface_Congruent, refine_iface_Interp],
+};

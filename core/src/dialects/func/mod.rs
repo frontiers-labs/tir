@@ -3,7 +3,7 @@ mod declare;
 mod func_op;
 
 use crate::attributes::AttributeValue;
-use crate::{Context, Error, IRFormatter, Operation, dialect, parse::Span};
+use crate::{Context, Error, IRFormatter, dialect, parse::Span};
 
 use crate as tir;
 
@@ -20,12 +20,12 @@ pub mod ops {
 dialect! {
     FuncDialect {
         name: "func",
-        operations: [FuncOp, ReturnOp, CallOp, DeclareOp],
+        operations: [FUNC, RETURN, CALL, DECLARE],
         types: [],
     }
 }
 
-fn argument_alignments(op: &impl Operation) -> Vec<u64> {
+fn argument_alignments(op: &tir::OpHandle) -> Vec<u64> {
     match op.attr("argument_alignments") {
         Some(AttributeValue::Array(values)) => values
             .iter()
@@ -39,7 +39,7 @@ fn argument_alignments(op: &impl Operation) -> Vec<u64> {
     }
 }
 
-fn noalias_arguments(op: &impl Operation) -> Vec<usize> {
+fn noalias_arguments(op: &tir::OpHandle) -> Vec<usize> {
     match op.attr("noalias") {
         Some(AttributeValue::Array(values)) => values
             .iter()
@@ -92,7 +92,7 @@ fn print_keyed_list<T: std::fmt::Display>(
 
 fn verify_noalias_arguments(
     context: &Context,
-    op: &impl Operation,
+    op: &tir::OpHandle,
     arguments: &[tir::TypeId],
 ) -> Result<(), Error> {
     let reject = |what: &str| {
@@ -123,7 +123,7 @@ fn verify_noalias_arguments(
 }
 
 fn verify_argument_alignments(
-    op: &impl Operation,
+    op: &tir::OpHandle,
     arguments: usize,
     operation: &str,
 ) -> Result<(), Error> {

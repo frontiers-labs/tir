@@ -1,0 +1,19 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type scf = Dialect;
+
+extern fn ordered_for_verifier(operation: Operation, context: Context) -> Validation;
+extern let ordered_for_iface_ExitScope: Interface;
+extern let ordered_for_iface_CountedLoop: Interface;
+extern fn ordered_for_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn ordered_for_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let scf::ordered_for<C> = {
+    signature: (lb: Count<C>, inits: Many<Any>, ub: Count<C>, step: Count<C>) -> (results: Many<Any>,),
+    verify: ordered_for_verifier,
+    interfaces: [ordered_for_iface_ExitScope, ordered_for_iface_CountedLoop],
+    regions: { body: { kind: RegionKind::Blocks(), variadic: false } },
+    assembly: { print: ordered_for_printer, parse: ordered_for_parser },
+};

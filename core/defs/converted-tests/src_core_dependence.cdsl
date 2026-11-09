@@ -1,0 +1,38 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type dep = Dialect;
+
+type def_attributes = Record<{ rd: Optional<AttrRegister> }>;
+extern let def_iface_MachineInstruction: Interface;
+type update_param_attributes = Record<{ rd: Optional<AttrRegister>, rs: Optional<AttrRegister> }>;
+extern let update_param_iface_MachineInstruction: Interface;
+type set_flags_attributes = Record<{ rd: Optional<AttrRegister>, rs: Optional<AttrRegister> }>;
+extern let set_flags_iface_MachineInstruction: Interface;
+type read_flags_attributes = Record<{ rd: Optional<AttrRegister>, rs: Optional<AttrRegister> }>;
+extern let read_flags_iface_MachineInstruction: Interface;
+
+pub let dep::r#def = {
+    signature: () -> (rd: Many<AnyReg>,),
+    attributes: { rd: { ty: Optional<AttrRegister>, codec: _register_codec } },
+    interfaces: [def_iface_MachineInstruction],
+};
+
+pub let dep::update_param = {
+    signature: (rs: Optional<AnyReg>) -> (rd: Many<AnyReg>,),
+    attributes: { rd: { ty: Optional<AttrRegister>, codec: _register_codec }, rs: { ty: Optional<AttrRegister>, codec: _register_codec } },
+    interfaces: [update_param_iface_MachineInstruction],
+};
+
+pub let dep::set_flags = {
+    signature: (rs: Optional<AnyReg>) -> (rd: Many<AnyReg>,),
+    attributes: { rd: { ty: Optional<AttrRegister>, codec: _register_codec }, rs: { ty: Optional<AttrRegister>, codec: _register_codec } },
+    interfaces: [set_flags_iface_MachineInstruction],
+};
+
+pub let dep::read_flags = {
+    signature: (rs: Optional<AnyReg>) -> (rd: Many<AnyReg>,),
+    attributes: { rd: { ty: Optional<AttrRegister>, codec: _register_codec }, rs: { ty: Optional<AttrRegister>, codec: _register_codec } },
+    interfaces: [read_flags_iface_MachineInstruction],
+};

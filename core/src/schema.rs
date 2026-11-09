@@ -45,7 +45,33 @@ pub struct OpSchema {
 
 /// Link-time registry of every operation schema reachable in the final binary.
 #[distributed_slice]
-pub static OP_SCHEMAS: [OpSchema];
+pub static OP_DEFINITIONS: [crate::OpDefSpec];
+
+/// Compatibility view derived from the one registered definition table.
+#[derive(Clone, Copy)]
+pub struct OpSchemas;
+pub static OP_SCHEMAS: OpSchemas = OpSchemas;
+impl OpSchemas {
+    pub fn iter(self) -> impl ExactSizeIterator<Item = &'static OpSchema> {
+        OP_DEFINITIONS.iter().map(|definition| definition.schema)
+    }
+    pub fn len(self) -> usize {
+        OP_DEFINITIONS.len()
+    }
+    pub fn is_empty(self) -> bool {
+        OP_DEFINITIONS.is_empty()
+    }
+}
+impl IntoIterator for OpSchemas {
+    type Item = &'static OpSchema;
+    type IntoIter = std::iter::Map<
+        std::slice::Iter<'static, crate::OpDefSpec>,
+        fn(&'static crate::OpDefSpec) -> &'static OpSchema,
+    >;
+    fn into_iter(self) -> Self::IntoIter {
+        OP_DEFINITIONS.iter().map(|definition| definition.schema)
+    }
+}
 
 fn escape(s: &str, out: &mut String) {
     out.push('"');

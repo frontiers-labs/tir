@@ -15,12 +15,10 @@
 use std::collections::HashMap;
 
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
+use tir::backend as asm;
 use tir::backend::asm_syntax::{AsmSyntaxPart, InstrSyntax};
-use tir::backend::{SectionOp, SymbolEndOp, SymbolOp};
-use tir::builtin::{ModuleEndOp, ModuleOp};
+use tir::builtin;
 use tir::{Context, NewOp, OpHandle, OpId, Operation};
-
-use super::LabelOp;
 
 // ---------------------------------------------------------------------------
 // Tokenizer
@@ -556,13 +554,13 @@ fn build_op(
 }
 
 /// Parse PTX assembly text into a module.
-pub fn parse(context: &Context, text: &str) -> Result<ModuleOp, String> {
+pub fn parse(context: &Context, text: &str) -> Result<OpHandle, String> {
     let cleaned = strip_comments(text);
     let (preamble, kernels) = split_kernels(&cleaned);
     let index = syntax_index();
 
-    let module = ModuleOp::new(context, None, Default::default(), tir::InsertionPoint::Root);
-    let section = tir::backend::SectionOp::new(
+    let module = builtin::module(context, None, Default::default(), tir::InsertionPoint::Root);
+    let section = asm::section(
         context,
         None,
         tir::NewOpParts {
@@ -570,13 +568,17 @@ pub fn parse(context: &Context, text: &str) -> Result<ModuleOp, String> {
                 context.named_attribute("ptx_preamble", AttributeValue::Str(preamble.into())),
             ],
         },
-        module.body().end(),
+        builtin::module_body(&module).end(),
     );
-    ModuleEndOp::new(context, Default::default(), module.body().end());
+    builtin::module_end(
+        context,
+        Default::default(),
+        builtin::module_body(&module).end(),
+    );
 
-    let section_body = section.body();
+    let section_body = asm::section_body(&section);
     for kernel in kernels {
-        let symbol = tir::backend::SymbolOp::new(
+        let symbol = asm::symbol(
             context,
             None,
             tir::NewOpParts {
@@ -589,10 +591,10 @@ pub fn parse(context: &Context, text: &str) -> Result<ModuleOp, String> {
             },
             section_body.end(),
         );
-        let body = symbol.body();
+        let body = asm::symbol_body(&symbol);
         for item in body_items(&kernel.body) {
             match item {
-                BodyItem::Label(name) => LabelOp::new(
+                BodyItem::Label(name) => super::label(
                     context,
                     tir::attributes::AttributeValue::Str((name).into()),
                     Default::default(),
@@ -605,7 +607,7 @@ pub fn parse(context: &Context, text: &str) -> Result<ModuleOp, String> {
                 }
             };
         }
-        tir::backend::SymbolEndOp::new(context, Default::default(), body.end());
+        asm::symbol_end(context, Default::default(), body.end());
     }
 
     Ok(module)
@@ -662,16 +664,16 @@ fn print_instruction(op: &OpHandle, syntax: &InstrSyntax, out: &mut String) -> R
 }
 
 /// Print a module as PTX assembly text.
-pub fn print(context: &Context, module: &ModuleOp) -> Result<String, String> {
+pub fn print(context: &Context, module: &OpHandle) -> Result<String, String> {
     let by_op: HashMap<&'static str, &'static InstrSyntax> = crate::ptx::asm_syntax()
         .iter()
         .map(|s| (s.op_name, s))
         .collect();
 
     let mut out = String::new();
-    for op_id in module.body().op_ids() {
+    for op_id in builtin::module_body(module).op_ids() {
         let op = context.get_op(op_id);
-        if !op.is::<SectionOp>() {
+        if !op.is_operation(&asm::SECTION) {
             continue;
         }
         if let Some(preamble) = attr_str(&op, "ptx_preamble")
@@ -682,7 +684,7 @@ pub fn print(context: &Context, module: &ModuleOp) -> Result<String, String> {
         }
         for sym_id in region_ops(context, &op) {
             let sym = context.get_op(sym_id);
-            if !sym.is::<SymbolOp>() {
+            if !sym.is_operation(&asm::SYMBOL) {
                 continue;
             }
             out.push('\n');
@@ -699,10 +701,10 @@ pub fn print(context: &Context, module: &ModuleOp) -> Result<String, String> {
             }
             for body_id in region_ops(context, &sym) {
                 let body_op = context.get_op(body_id);
-                if body_op.is::<SymbolEndOp>() {
+                if body_op.is_operation(&asm::SYMBOL_END) {
                     continue;
                 }
-                if body_op.is::<LabelOp>() {
+                if body_op.is_operation(&super::LABEL) {
                     let name = attr_str(&body_op, "name").unwrap_or_default();
                     out.push('\n');
                     out.push_str(&name);

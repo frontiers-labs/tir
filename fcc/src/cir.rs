@@ -1,15 +1,14 @@
 use tir::parse::common::Cursor;
 use tir::{
-    Context, Ctor, Error, ExitScope, ExitScopeKind, ExitTarget, IRFormatter, Kind, NonLocalExit,
-    Operation, Terminator, Terms, TypeCtor, TypeId, TypeSpelling, dialect, operation, parse::Span,
+    Context, Ctor, Error, ExitScope, ExitScopeKind, ExitTarget, IRFormatter, NonLocalExit,
+    OpHandle, Terminator, Terms, TypeId, TypeSpelling, dialect, parse::Span,
 };
 use tir_symbolic::term::{no_carrier, valid};
 
 pub mod ops {
     pub use super::{
-        BreakOp, ConditionOp, ContinueOp, DoOp, ForOp, VaArgOp, VaEndOp, VaStartOp, WhileOp,
-        YieldOp, r#break, condition, r#continue, r#do, r#for, va_arg, va_end, va_start, r#while,
-        r#yield,
+        BREAK, CONDITION, CONTINUE, DO, FOR, VA_ARG, VA_END, VA_START, WHILE, YIELD, r#break,
+        condition, r#continue, r#do, r#for, va_arg, va_end, va_start, r#while, r#yield,
     };
 }
 
@@ -17,103 +16,86 @@ dialect! {
     CirDialect {
         name: "cir",
         operations: [
-            VaStartOp,
-            VaArgOp,
-            VaEndOp,
-            ForOp,
-            WhileOp,
-            DoOp,
-            ConditionOp,
-            YieldOp,
-            BreakOp,
-            ContinueOp,
+            VA_START,
+            VA_ARG,
+            VA_END,
+            FOR,
+            WHILE,
+            DO,
+            CONDITION,
+            YIELD,
+            BREAK,
+            CONTINUE,
         ],
         types: [VarArgsType, VaListType],
     }
 }
 
-macro_rules! unit_type {
-    ($name:ident, $ctor:ident, $mnemonic:literal, $variadic_tail:literal, $doc:literal) => {
-        static $ctor: Ctor = Ctor::new(TypeCtor {
-            dialect: "cir",
-            name: $mnemonic,
-            params: &[],
-            kind: Kind::Data,
-            validate: valid,
-            carrier: no_carrier,
-        });
-
-        #[doc = $doc]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub struct $name;
-
-        impl $name {
-            #[allow(clippy::new_ret_no_self)]
-            pub fn new(context: &Context) -> TypeId {
-                context
-                    .terms()
-                    .intern($ctor.id(context), vec![])
-                    .expect($mnemonic)
-            }
-
-            pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
-                $ctor.is(terms, ty).then_some(Self)
-            }
-
-            pub fn spelling(context: &Context) -> TypeSpelling {
-                TypeSpelling {
-                    ctor: $ctor.id(context),
-                    keys: &[$mnemonic],
-                    parse: |_, _, context| Ok(Self::new(context)),
-                    print: |_, _, fmt| fmt.write(concat!("cir.", $mnemonic)),
-                    variadic_tail: $variadic_tail,
-                }
-            }
-        }
-    };
-}
-
-unit_type!(
-    VarArgsType,
-    VARARGS,
-    "varargs",
-    true,
-    "The tail of a variadic signature, written `!cir.varargs`."
+static VARARGS: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "../core/defs/types/fcc_src_cir.cdsl", binding: constructors::VARARGS, hosts: { VARARGS_validate => valid, VARARGS_carrier => no_carrier } },
 );
-unit_type!(
-    VaListType,
-    VA_LIST,
-    "va_list",
-    false,
-    "A C `va_list`, written `!cir.va_list`."
+#[doc = "The tail of a variadic signature, written `!cir.varargs`."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VarArgsType;
+impl VarArgsType {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(context: &Context) -> TypeId {
+        context
+            .terms()
+            .intern(VARARGS.id(context), vec![])
+            .expect("varargs")
+    }
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        VARARGS.is(terms, ty).then_some(Self)
+    }
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        ::tir::helpers::type_spelling! { file: "../core/defs/types/fcc_src_cir.cdsl", binding: spellings::VarArgsType, context: context, hosts: { VarArgsType_parse => |_, _, context| Ok(VarArgsType::new(context)), VarArgsType_print => |_, _, fmt| fmt.write(concat!("cir.", "varargs")), VarArgsType_ctor_id => |context| { VARARGS.id(context) } } }
+    }
+}
+static VA_LIST: Ctor = Ctor::new(
+    ::tir::helpers::type_ctor! { file: "../core/defs/types/fcc_src_cir.cdsl", binding: constructors::VA_LIST, hosts: { VA_LIST_validate => valid, VA_LIST_carrier => no_carrier } },
 );
-
-operation! {
-    VaStartOp {
-        name: "va_start",
-        dialect: "cir",
-        scheme: "() -> cir.va_list",
-        results: R { result },
+#[doc = "A C `va_list`, written `!cir.va_list`."]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VaListType;
+impl VaListType {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(context: &Context) -> TypeId {
+        context
+            .terms()
+            .intern(VA_LIST.id(context), vec![])
+            .expect("va_list")
+    }
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        VA_LIST.is(terms, ty).then_some(Self)
+    }
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        ::tir::helpers::type_spelling! { file: "../core/defs/types/fcc_src_cir.cdsl", binding: spellings::VaListType, context: context, hosts: { VaListType_parse => |_, _, context| Ok(VaListType::new(context)), VaListType_print => |_, _, fmt| fmt.write(concat!("cir.", "va_list")), VaListType_ctor_id => |context| { VA_LIST.id(context) } } }
     }
 }
 
-operation! {
-    VaArgOp {
-        name: "va_arg",
-        dialect: "cir",
-        scheme: "(cir.va_list) -> _",
-        operands: O { list },
-        results: R { result },
-    }
-}
-
-operation! {
-    VaEndOp {
-        name: "va_end",
-        dialect: "cir",
-        scheme: "(cir.va_list) -> ()",
-        operands: O { list },
-    }
+tir::helpers::op_def! {
+    file: "../core/defs/converted-cir/cir.cdsl",
+    hosts: {
+        for_verifier => for_verify,
+        for_iface_ExitScope => (ExitScope, &CIR_LOOP_EXIT_SCOPE),
+        for_printer => for_print,
+        for_parser => |parser, context, definition| parse_loop(parser, context, definition, &["cond", "step", "body"]),
+        while_verifier => while_verify,
+        while_iface_ExitScope => (ExitScope, &CIR_LOOP_EXIT_SCOPE),
+        while_printer => while_print,
+        while_parser => |parser, context, definition| parse_loop(parser, context, definition, &["cond", "body"]),
+        do_verifier => do_verify,
+        do_iface_ExitScope => (ExitScope, &CIR_LOOP_EXIT_SCOPE),
+        do_printer => do_print,
+        do_parser => |parser, context, definition| parse_loop(parser, context, definition, &["body", "cond"]),
+        condition_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        yield_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        break_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        break_iface_NonLocalExit => (NonLocalExit, &CIR_NON_LOCAL_EXIT),
+        continue_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        continue_iface_NonLocalExit => (NonLocalExit, &CIR_NON_LOCAL_EXIT),
+    },
 }
 
 // C's loop statements, captured as they are written. The regions are CFG-form and
@@ -122,266 +104,99 @@ operation! {
 // for the `raise-loops` pass to reason about. Every loop it refuses is flattened to
 // the same blocks and branches codegen used to emit directly.
 
-operation! {
-    ForOp {
-        name: "for",
-        dialect: "cir",
-        scheme: "() -> ()",
-        format: "custom",
-        verifier: "true",
-        regions: R {
-            condition_region: Region {},
-            step_region: Region {},
-            body_region: Region {},
-        },
-        interfaces: [ExitScope],
-    }
+fn for_verify(operation: &OpHandle, context: &Context) -> Result<(), Error> {
+    verify_loop_region(
+        context,
+        operation,
+        0,
+        RegionRole::Condition,
+        "cir.for condition",
+    )?;
+    verify_loop_region(context, operation, 1, RegionRole::Step, "cir.for step")?;
+    verify_loop_region(context, operation, 2, RegionRole::Body, "cir.for body")
 }
 
-impl ExitScope for ForOp {
-    fn exit_scope(&self) -> ExitScopeKind {
-        ExitScopeKind::Loop
-    }
-
-    fn label(&self) -> Option<String> {
-        loop_label(self)
-    }
+fn for_print(operation: &OpHandle, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
+    print_loop_regions(fmt, operation, "cir.for", &["cond", "step", "body"])
 }
 
-impl tir::Verifiable for ForOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_loop_region(context, self, 0, RegionRole::Condition, "cir.for condition")?;
-        verify_loop_region(context, self, 1, RegionRole::Step, "cir.for step")?;
-        verify_loop_region(context, self, 2, RegionRole::Body, "cir.for body")
-    }
+fn while_verify(operation: &OpHandle, context: &Context) -> Result<(), Error> {
+    verify_loop_region(
+        context,
+        operation,
+        0,
+        RegionRole::Condition,
+        "cir.while condition",
+    )?;
+    verify_loop_region(context, operation, 1, RegionRole::Body, "cir.while body")
 }
 
-impl ForOp {
-    fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
-        print_loop_regions(fmt, self, "cir.for", &["cond", "step", "body"])
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (Span, Error)> {
-        let label = parse_loop_label(parser)?;
-        let condition = parse_loop_region(parser, context, "cond")?;
-        let step = parse_loop_region(parser, context, "step")?;
-        let body = parse_loop_region(parser, context, "body")?;
-        let attributes = label_attribute(label)
-            .map(|label| context.named_attribute("label", label))
-            .into_iter()
-            .collect();
-        Ok(Box::new(ForOp::new(
-            context,
-            Some(condition),
-            Some(step),
-            Some(body),
-            tir::NewOpParts { attributes },
-            tir::InsertionPoint::Root,
-        )))
-    }
+fn while_print(operation: &OpHandle, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
+    print_loop_regions(fmt, operation, "cir.while", &["cond", "body"])
 }
 
-operation! {
-    WhileOp {
-        name: "while",
-        dialect: "cir",
-        scheme: "() -> ()",
-        format: "custom",
-        verifier: "true",
-        regions: R {
-            condition_region: Region {},
-            body_region: Region {},
-        },
-        interfaces: [ExitScope],
-    }
+fn do_verify(operation: &OpHandle, context: &Context) -> Result<(), Error> {
+    verify_loop_region(context, operation, 0, RegionRole::Body, "cir.do body")?;
+    verify_loop_region(
+        context,
+        operation,
+        1,
+        RegionRole::Condition,
+        "cir.do condition",
+    )
 }
 
-impl ExitScope for WhileOp {
-    fn exit_scope(&self) -> ExitScopeKind {
-        ExitScopeKind::Loop
-    }
-
-    fn label(&self) -> Option<String> {
-        loop_label(self)
-    }
+fn do_print(operation: &OpHandle, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
+    print_loop_regions(fmt, operation, "cir.do", &["body", "cond"])
 }
 
-impl tir::Verifiable for WhileOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_loop_region(
-            context,
-            self,
-            0,
-            RegionRole::Condition,
-            "cir.while condition",
-        )?;
-        verify_loop_region(context, self, 1, RegionRole::Body, "cir.while body")
-    }
+fn parse_loop(
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+    definition: &'static tir::OpDefSpec,
+    labels: &[&'static str],
+) -> Result<OpHandle, (Span, Error)> {
+    let label = parse_loop_label(parser)?;
+    let regions = labels
+        .iter()
+        .map(|name| parse_loop_region(parser, context, name))
+        .collect::<Result<Vec<_>, _>>()?;
+    let attributes = label_attribute(label)
+        .map(|label| context.named_attribute("label", label))
+        .into_iter()
+        .collect();
+    let operation = tir::NewOp::for_definition(
+        definition,
+        context.clone(),
+        vec![],
+        vec![],
+        regions,
+        tir::NewOpParts { attributes },
+    );
+    Ok(context.add_operation(tir::InsertionPoint::Root, operation))
 }
-
-impl WhileOp {
-    fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
-        print_loop_regions(fmt, self, "cir.while", &["cond", "body"])
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (Span, Error)> {
-        let label = parse_loop_label(parser)?;
-        let condition = parse_loop_region(parser, context, "cond")?;
-        let body = parse_loop_region(parser, context, "body")?;
-        let attributes = label_attribute(label)
-            .map(|label| context.named_attribute("label", label))
-            .into_iter()
-            .collect();
-        Ok(Box::new(WhileOp::new(
-            context,
-            Some(condition),
-            Some(body),
-            tir::NewOpParts { attributes },
-            tir::InsertionPoint::Root,
-        )))
-    }
-}
-
-operation! {
-    DoOp {
-        name: "do",
-        dialect: "cir",
-        scheme: "() -> ()",
-        format: "custom",
-        verifier: "true",
-        regions: R {
-            body_region: Region {},
-            condition_region: Region {},
-        },
-        interfaces: [ExitScope],
-    }
-}
-
-impl ExitScope for DoOp {
-    fn exit_scope(&self) -> ExitScopeKind {
-        ExitScopeKind::Loop
-    }
-
-    fn label(&self) -> Option<String> {
-        loop_label(self)
-    }
-}
-
-impl tir::Verifiable for DoOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_loop_region(context, self, 0, RegionRole::Body, "cir.do body")?;
-        verify_loop_region(context, self, 1, RegionRole::Condition, "cir.do condition")
-    }
-}
-
-impl DoOp {
-    fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
-        print_loop_regions(fmt, self, "cir.do", &["body", "cond"])
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (Span, Error)> {
-        let label = parse_loop_label(parser)?;
-        let body = parse_loop_region(parser, context, "body")?;
-        let condition = parse_loop_region(parser, context, "cond")?;
-        let attributes = label_attribute(label)
-            .map(|label| context.named_attribute("label", label))
-            .into_iter()
-            .collect();
-        Ok(Box::new(DoOp::new(
-            context,
-            Some(body),
-            Some(condition),
-            tir::NewOpParts { attributes },
-            tir::InsertionPoint::Root,
-        )))
-    }
-}
-
-operation! {
-    ConditionOp {
-        name: "condition",
-        dialect: "cir",
-        scheme: "(int<1>) -> ()",
-        operands: O { condition },
-        interfaces: [Terminator],
-    }
-}
-
-impl Terminator for ConditionOp {}
-
-operation! {
-    YieldOp {
-        name: "yield",
-        dialect: "cir",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
-
-impl Terminator for YieldOp {}
-
-operation! {
-    BreakOp {
-        name: "break",
-        dialect: "cir",
-        scheme: "() -> ()",
-        interfaces: [Terminator, NonLocalExit],
-    }
-}
-
-impl Terminator for BreakOp {}
 
 /// A `cir.break` leaves the innermost loop, or the loop carrying its `label`;
 /// a `switch` break is a plain branch, so no `cir.break` names a switch. C
 /// keeps its dataflow in stack slots, so an exit carries no values.
-impl NonLocalExit for BreakOp {
-    fn target(&self) -> ExitTarget {
-        exit_target(self)
-    }
+const CIR_NON_LOCAL_EXIT: tir::NonLocalExitCallbacks = tir::NonLocalExitCallbacks {
+    target: exit_target,
+    values: |_| Vec::new(),
+};
 
-    fn values(&self) -> Vec<tir::ValueId> {
-        Vec::new()
-    }
-}
+const CIR_LOOP_EXIT_SCOPE: tir::ExitScopeCallbacks = tir::ExitScopeCallbacks {
+    exit_scope: |_| ExitScopeKind::Loop,
+    label: Some(loop_label),
+};
 
-operation! {
-    ContinueOp {
-        name: "continue",
-        dialect: "cir",
-        scheme: "() -> ()",
-        interfaces: [Terminator, NonLocalExit],
-    }
-}
-
-impl Terminator for ContinueOp {}
-
-impl NonLocalExit for ContinueOp {
-    fn target(&self) -> ExitTarget {
-        exit_target(self)
-    }
-
-    fn values(&self) -> Vec<tir::ValueId> {
-        Vec::new()
-    }
-}
-
-fn loop_label(op: &impl Operation) -> Option<String> {
+fn loop_label(op: &OpHandle) -> Option<String> {
     match op.attr("label")? {
         tir::attributes::AttributeValue::Str(label) => Some(label.to_string()),
         _ => None,
     }
 }
 
-fn exit_target(op: &impl Operation) -> ExitTarget {
+fn exit_target(op: &OpHandle) -> ExitTarget {
     match loop_label(op) {
         Some(label) => ExitTarget::Label(label),
         None => ExitTarget::InnermostLoop,
@@ -402,10 +217,12 @@ enum RegionRole {
 impl RegionRole {
     fn admits(self, exit: &tir::OpHandle) -> bool {
         match self {
-            RegionRole::Condition => exit.is::<ConditionOp>(),
-            RegionRole::Step => exit.is::<YieldOp>(),
+            RegionRole::Condition => exit.is_operation(&CONDITION),
+            RegionRole::Step => exit.is_operation(&YIELD),
             RegionRole::Body => {
-                exit.is::<YieldOp>() || exit.is::<BreakOp>() || exit.is::<ContinueOp>()
+                exit.is_operation(&YIELD)
+                    || exit.is_operation(&BREAK)
+                    || exit.is_operation(&CONTINUE)
             }
         }
     }
@@ -421,12 +238,12 @@ impl RegionRole {
 
 fn verify_loop_region(
     context: &Context,
-    op: &impl Operation,
+    op: &OpHandle,
     index: usize,
     role: RegionRole,
     label: &str,
 ) -> Result<(), Error> {
-    let region = context.get_region(op.regions().nth(index).unwrap().id());
+    let region = context.get_region(op.regions()[index]);
     let mut exits = 0;
     for block in region.iter(context.clone()) {
         let Some(&last) = block.op_ids().last() else {
@@ -461,11 +278,11 @@ fn verify_loop_region(
 
 fn print_loop_regions(
     fmt: &mut IRFormatter,
-    op: &impl Operation,
+    op: &OpHandle,
     mnemonic: &str,
     keywords: &[&str],
 ) -> Result<(), std::fmt::Error> {
-    let context = op.handle().context.clone();
+    let context = op.context.clone();
     fmt.write(mnemonic)?;
     if let Some(label) = loop_label(op) {
         fmt.write(format!(" {{label = \"{label}\"}}"))?;

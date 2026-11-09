@@ -5,7 +5,7 @@ use crate::parse::Span;
 use crate::parse::text::Parser as IRParser;
 use crate::{Context, Error, OpHandle, Operation};
 
-pub type OperationParser = fn(&mut IRParser, &Context) -> Result<Box<dyn Operation>, (Span, Error)>;
+pub type OperationParser = fn(&mut IRParser, &Context) -> Result<OpHandle, (Span, Error)>;
 
 pub trait Dialect: 'static + Send + Sync + Any {
     #[allow(clippy::new_ret_no_self)]

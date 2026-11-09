@@ -1,31 +1,30 @@
 use std::error::Error;
 
-use tir::{Context, Operation, attributes::AttributeValue, builtin::ModuleOp, func::FuncOp};
+use tir::{Context, OpHandle, Operation, attributes::AttributeValue, builtin, func};
 use tir_egglog::{Read, Write};
 use tir_symbolic::term::constructor_fields;
 
-fn parse(context: &Context, source: &str) -> Result<ModuleOp, Box<dyn Error>> {
-    tir::parse::ir::parse_ir(context, source)
+fn parse(context: &Context, source: &str) -> Result<OpHandle, Box<dyn Error>> {
+    tir::parse::ir::parse_operation(context, source, &builtin::MODULE)
         .map_err(|(span, error)| format!("IR parse at {}: {error}", span.0).into())
 }
 
-fn fixture_function(context: &Context, module: &ModuleOp) -> Result<FuncOp, Box<dyn Error>> {
-    module
-        .body()
+fn fixture_function(context: &Context, module: &OpHandle) -> Result<OpHandle, Box<dyn Error>> {
+    builtin::module_body(module)
         .op_ids()
         .into_iter()
-        .find_map(|id| context.get_op(id).as_op::<FuncOp>())
+        .find_map(|id| context.get_op(id).as_operation(&func::FUNC))
         .ok_or_else(|| "fixture function".into())
 }
 
 fn verify_type_read_after_placement_edit(
     context: &Context,
-    source: &FuncOp,
-    target: &FuncOp,
+    source: &OpHandle,
+    target: &OpHandle,
     block: &tir::BlockHandle,
 ) -> Result<(), Box<dyn Error>> {
     let moved = context
-        .get_block(source.body_region().entry_block())
+        .get_block(func::func_body_region(source).entry_block())
         .op_ids()[0];
     let moved_type = block.arguments()[0].ty();
     let original_placement;
@@ -89,7 +88,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         include_str!("../checks/IRRoundtrip/br-with-args.tir"),
     )?;
     let function = fixture_function(&context, &module)?;
-    let block = context.get_block(function.body_region().entry_block());
+    let block = context.get_block(func::func_body_region(&function).entry_block());
     let branch = block.op_ids()[0];
     let parameter = block.arguments()[0].id();
     {
@@ -144,7 +143,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     verify_type_read_after_placement_edit(&context, &loop_function, &function, &block)?;
 
     verify_float_attribute(&context, branch)?;
-    let body = function.body_region();
+    let body = func::func_body_region(&function);
     let next_entry = body.block_ids()[1];
     assert!(body.remove_block(block.id()));
     {

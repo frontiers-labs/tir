@@ -7,7 +7,7 @@ use tir::{Context, Error, OpHandle, OpId, ValueId};
 use crate::backend::regalloc::RegClassId;
 use crate::backend::registers::{PINS_ATTR, slot_pin};
 use crate::backend::registers::{RegAssignment, register_attr, value_class};
-use crate::backend::{ASSIGNMENT_ATTR, SymbolOp};
+use crate::backend::{ASSIGNMENT_ATTR, SYMBOL};
 
 /// Verify the machine IR under `root`.
 pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
@@ -24,7 +24,7 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
         verify_instruction_ports(context, &op)?;
         verify_state_operands(context, &op)?;
         verify_slot_pins(context, &op)?;
-        let symbol = op.is::<SymbolOp>();
+        let symbol = op.is_operation(&SYMBOL);
         if symbol {
             verify_assignment(context, &op)?;
         }

@@ -1,14 +1,11 @@
 use tir::backend::binary::{encode_with, BinaryWriter, EncodedInst, ObjectFile, ObjectFormatInfo};
-use tir::backend::{
-    MachineBlockLayoutPass, MachineInstruction, RegAssignment, SectionOp, SymbolOp,
-};
-use tir::builtin::ModuleOp;
+use tir::backend::{MachineBlockLayoutPass, MachineInstruction, RegAssignment};
 use tir::{AnalysisManager, BlockId, Context, Operation, Pass};
 
 struct Assembly {
     context: Context,
-    module: ModuleOp,
-    symbol: SymbolOp,
+    module: tir::OpHandle,
+    symbol: tir::OpHandle,
     format: ObjectFormatInfo,
 }
 
@@ -22,12 +19,12 @@ impl Assembly {
             .parse_asm(&context, source)
             .unwrap();
         let section = context
-            .get_op(module.body().op_ids()[0])
-            .as_op::<SectionOp>()
+            .get_op(tir::builtin::module_body(&module).op_ids()[0])
+            .as_operation(&tir::backend::SECTION)
             .unwrap();
         let symbol = context
-            .get_op(section.body().op_ids()[0])
-            .as_op::<SymbolOp>()
+            .get_op(tir::backend::section_body(&section).op_ids()[0])
+            .as_operation(&tir::backend::SYMBOL)
             .unwrap();
         Self {
             context,
@@ -97,9 +94,9 @@ proptest::proptest! {
         let mut order: Vec<_> = (0..keys.len()).collect();
         order.sort_by_key(|&index| keys[index]);
         let assembly = Assembly::new(&chain(" jmp block0\n", &order));
-        let original = assembly.symbol.body().op_ids();
+        let original = tir::backend::symbol_body(&assembly.symbol).op_ids();
         assembly.layout();
-        proptest::prop_assert_eq!(assembly.symbol.body().op_ids(), original);
+        proptest::prop_assert_eq!(tir::backend::symbol_body(&assembly.symbol).op_ids(), original);
         let object = assembly.object();
         proptest::prop_assert_eq!(object.sections[0].data.as_slice(), &[0xc3]);
     }
@@ -121,7 +118,7 @@ proptest::proptest! {
         let assembly = Assembly::new(&chain(" jrcxz 5\n jmp block0\n", &order));
         let original = assembly.order();
         if annotated {
-            let branch = assembly.context.get_op(assembly.symbol.body().op_ids()[0]);
+            let branch = assembly.context.get_op(tir::backend::symbol_body(&assembly.symbol).op_ids()[0]);
             let mut attributes = branch.attributes();
             attributes.push(assembly.context.named_attribute(
                 "note", tir::attributes::AttributeValue::Str("diagnostic".into()),

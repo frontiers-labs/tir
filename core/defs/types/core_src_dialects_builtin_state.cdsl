@@ -1,0 +1,16 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let StateType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let StateType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let StateType_ctor_id: (context: Context) -> CtorId;
+
+pub let spellings::StateType: SpellingSpec = {
+    ctor_id: StateType_ctor_id,
+    keys: ["state"],
+    parse: StateType_parse,
+    print: StateType_print,
+    variadic_tail: false,
+};

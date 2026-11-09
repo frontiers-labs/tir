@@ -37,6 +37,9 @@ instruction Sub for [TextIsa] : Binary {
     behavior { todo(); }
 }
 
-// CHECK: AddOp {
-// CHECK: operands : O { d, a, control }
-// CHECK: SubOp {
+// CHECK: pub static ADD: tir::OpDefSpec
+// CHECK: pub fn r#add(
+// CHECK: d: impl Into<tir::Operand>,
+// CHECK-NEXT: a: impl Into<tir::Operand>,
+// CHECK-NEXT: control: impl Into<tir::Operand>,
+// CHECK: pub static SUB: tir::OpDefSpec

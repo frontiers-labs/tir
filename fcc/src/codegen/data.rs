@@ -1,54 +1,51 @@
 //! Emits global data sections from frontend definitions.
 
 use tir::Context;
-use tir::builtin::ModuleOp;
+use tir::backend as asm;
 use tir::builtin::ops as b;
 
 /// Lower frontend data definitions immediately ahead of the machine backend.
 /// String uses become addresses into `.rodata`; scalar globals become symbols
 /// in `.data`.
-pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassError> {
+pub fn lower_data(context: &Context, module: &tir::OpHandle) -> Result<(), tir::PassError> {
     use tir::attributes::AttributeValue;
-    use tir::backend::{LiteralOp, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp};
 
     let mut globals = Vec::new();
     let mut read_only = Vec::new();
     let mut zero_globals = Vec::new();
 
-    let module_body = module.body();
+    let module_body = b::module_body(module);
     for op_id in module_body.op_ids() {
         let op = context.get_op(op_id);
-        let Some(global) = op.clone().as_op::<b::GlobalOp>() else {
+        let Some(global) = op.clone().as_operation(&b::GLOBAL) else {
             continue;
         };
-        if global.is_external() {
+        if b::global_is_external(&global) {
             continue;
         }
-        let align = global
-            .align()
-            .expect("a global definition carries an alignment");
+        let align = b::global_align(&global).expect("a global definition carries an alignment");
         let binding = match tir::symbol_table::visibility_of(&global) {
             tir::Visibility::Private => "local",
             tir::Visibility::Public => "global",
         };
-        match global.bytes() {
+        match b::global_bytes_attr(&global) {
             Some(bytes) => {
                 let entry = (
-                    global.sym_name(),
+                    b::global_sym_name(&global),
                     bytes,
-                    global.relocations(),
+                    b::global_relocations(&global),
                     align,
                     binding,
                 );
-                if global.section().as_deref() == Some(".rodata") {
+                if b::global_section(&global).as_deref() == Some(".rodata") {
                     read_only.push(entry);
                 } else {
                     globals.push(entry);
                 }
             }
             None => zero_globals.push((
-                global.sym_name(),
-                global.size().expect("a zero-filled global carries a size"),
+                b::global_sym_name(&global),
+                b::global_size(&global).expect("a zero-filled global carries a size"),
                 align,
                 binding,
             )),
@@ -60,7 +57,7 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
     emit_data_section(context, &module_body, ".rodata", read_only);
 
     if !zero_globals.is_empty() {
-        let section = SectionOp::new(
+        let section = asm::section(
             context,
             None,
             tir::NewOpParts {
@@ -75,7 +72,7 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
             },
         );
         for (name, size, align, binding) in zero_globals {
-            let symbol = SymbolOp::new(
+            let symbol = asm::symbol(
                 context,
                 None,
                 tir::NewOpParts {
@@ -92,9 +89,9 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
                         context.named_attribute("align", AttributeValue::UInt(align)),
                     ],
                 },
-                section.body().end(),
+                asm::section_body(&section).end(),
             );
-            LiteralOp::new(
+            asm::literal(
                 context,
                 tir::attributes::AttributeValue::Str(("space").into()),
                 tir::NewOpParts {
@@ -102,11 +99,15 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
                         context.named_attribute("value", AttributeValue::Int(size as i64)),
                     ],
                 },
-                symbol.body().end(),
+                asm::symbol_body(&symbol).end(),
             );
-            SymbolEndOp::new(context, Default::default(), symbol.body().end());
+            asm::symbol_end(context, Default::default(), asm::symbol_body(&symbol).end());
         }
-        SectionEndOp::new(context, Default::default(), section.body().end());
+        asm::section_end(
+            context,
+            Default::default(),
+            asm::section_body(&section).end(),
+        );
     }
     Ok(())
 }
@@ -118,13 +119,12 @@ fn emit_data_section(
     definitions: Vec<DataSymbol>,
 ) {
     use tir::attributes::AttributeValue;
-    use tir::backend::{DataRelocOp, LiteralOp, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp};
 
     if definitions.is_empty() {
         return;
     }
     let byte = |insertion, value: u8| {
-        LiteralOp::new(
+        asm::literal(
             context,
             tir::attributes::AttributeValue::Str(("byte").into()),
             tir::NewOpParts {
@@ -135,7 +135,7 @@ fn emit_data_section(
             insertion,
         )
     };
-    let section = SectionOp::new(
+    let section = asm::section(
         context,
         None,
         tir::NewOpParts {
@@ -149,7 +149,7 @@ fn emit_data_section(
         },
     );
     for (name, bytes, mut relocations, align, binding) in definitions {
-        let symbol = SymbolOp::new(
+        let symbol = asm::symbol(
             context,
             None,
             tir::NewOpParts {
@@ -164,10 +164,10 @@ fn emit_data_section(
                     context.named_attribute("align", AttributeValue::UInt(align)),
                 ],
             },
-            section.body().end(),
+            asm::section_body(&section).end(),
         );
         if let (true, Some(text)) = (relocations.is_empty(), c_string(&bytes)) {
-            LiteralOp::new(
+            asm::literal(
                 context,
                 tir::attributes::AttributeValue::Str(("asciz").into()),
                 tir::NewOpParts {
@@ -175,9 +175,9 @@ fn emit_data_section(
                         context.named_attribute("value", AttributeValue::Str(text.into())),
                     ],
                 },
-                symbol.body().end(),
+                asm::symbol_body(&symbol).end(),
             );
-            SymbolEndOp::new(context, Default::default(), symbol.body().end());
+            asm::symbol_end(context, Default::default(), asm::symbol_body(&symbol).end());
 
             continue;
         }
@@ -185,24 +185,28 @@ fn emit_data_section(
         let mut cursor = 0;
         for (offset, target, addend, width) in relocations {
             for &value in &bytes[cursor..offset as usize] {
-                byte(symbol.body().end(), value);
+                byte(asm::symbol_body(&symbol).end(), value);
             }
-            DataRelocOp::new(
+            asm::data_reloc(
                 context,
                 tir::attributes::AttributeValue::Str((target).into()),
                 tir::attributes::AttributeValue::UInt(width),
                 tir::attributes::AttributeValue::Int(addend),
                 Default::default(),
-                symbol.body().end(),
+                asm::symbol_body(&symbol).end(),
             );
             cursor = (offset + width) as usize;
         }
         for &value in &bytes[cursor..] {
-            byte(symbol.body().end(), value);
+            byte(asm::symbol_body(&symbol).end(), value);
         }
-        SymbolEndOp::new(context, Default::default(), symbol.body().end());
+        asm::symbol_end(context, Default::default(), asm::symbol_body(&symbol).end());
     }
-    SectionEndOp::new(context, Default::default(), section.body().end());
+    asm::section_end(
+        context,
+        Default::default(),
+        asm::section_body(&section).end(),
+    );
 }
 
 fn c_string(bytes: &[u8]) -> Option<String> {
