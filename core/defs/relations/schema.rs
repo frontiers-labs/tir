@@ -1,4 +1,6 @@
-&[
+use tir_cdsl::relations::SchemaEntry;
+
+pub const ENTRIES: &[SchemaEntry<'static>] = &[
     SchemaEntry::Ruleset("ir-type-index"),
     SchemaEntry::Ruleset("ir-structure-index"),
     SchemaEntry::CombinedRuleset("ir-index", &["ir-type-index", "ir-structure-index"]),
@@ -139,4 +141,4 @@
     SchemaEntry::Rule("rule_49", "ir-structure-index"),
     SchemaEntry::Rule("rule_50", "ir-structure-index"),
     SchemaEntry::Rule("rule_51", "ir-structure-index"),
-]
+];

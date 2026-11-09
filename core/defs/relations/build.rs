@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::path::{Path, PathBuf};
-use tir_cdsl::relations::SchemaEntry;
+mod schema;
 
 pub fn compile(core: &Path) -> Result<(), Box<dyn Error>> {
     let definitions = core.join("defs/relations");
@@ -30,7 +30,7 @@ pub fn compile(core: &Path) -> Result<(), Box<dyn Error>> {
             .collect::<Vec<_>>()
             .join("\n")
     })?;
-    let entries: &[SchemaEntry<'_>] = include!("schema.rs");
+    let entries = schema::ENTRIES;
     let schema = tir_cdsl::relations::emit_schema(&module, entries)?;
     let mut engine = tir_egglog::EGraph::default();
     engine.run_program(engine.parse_program("ir-schema.egg", &schema)?)?;
