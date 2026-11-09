@@ -288,7 +288,7 @@ impl Terms {
     pub fn new() -> Self {
         let mut engine = EGraph::default();
         engine
-            .load_program(tir_ir_schema::IR_PROGRAM)
+            .load_program(include_bytes!(concat!(env!("OUT_DIR"), "/ir-schema.bin")))
             .expect("the compiled structural IR schema loads");
         Self::with_engine(
             Rc::new(RefCell::new(engine)),

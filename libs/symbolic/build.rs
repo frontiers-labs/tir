@@ -1,8 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+#[path = "../../core/defs/relations/build.rs"]
+mod relations;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
+    relations::compile(&manifest.join("../../core"))?;
     let source = manifest.join("../../core/defs/types/libs_symbolic_src_term.cdsl");
     let (sources, dependencies) = tir_cdsl::SourceMap::from_file(&source).map_err(|errors| {
         errors
