@@ -24,7 +24,7 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
         verify_instruction_ports(context, &op)?;
         verify_state_operands(context, &op)?;
         verify_slot_pins(context, &op)?;
-        let symbol = op.is_operation(&SYMBOL);
+        let symbol = op.is_operation(&SYMBOL) || op.attr(ASSIGNMENT_ATTR).is_some();
         if symbol {
             verify_assignment(context, &op)?;
         }
@@ -196,7 +196,11 @@ fn register_values(context: &Context, symbol: &OpHandle) -> Vec<ValueId> {
     let mut seen = HashSet::new();
     let mut values = Vec::new();
     let record = |value: ValueId, seen: &mut HashSet<ValueId>, values: &mut Vec<ValueId>| {
-        if context.has_value(value) && value_class(context, value).is_some() && seen.insert(value) {
+        if context.has_value(value)
+            && !context.is_state_type(context.get_value(value).ty())
+            && !crate::son::CONTROL.is(context, context.get_value(value).ty())
+            && seen.insert(value)
+        {
             values.push(value);
         }
     };

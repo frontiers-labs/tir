@@ -213,6 +213,17 @@ impl Context {
         self.0.engine.borrow_mut()
     }
 
+    pub(crate) fn clone_engine(&self) -> EGraph {
+        self.refresh_indexes();
+        self.engine().clone()
+    }
+
+    // The caller rebuilds indexes before installation, including rollback.
+    pub(crate) fn replace_engine(&self, engine: EGraph) -> EGraph {
+        self.0.indexes_dirty.store(false, Ordering::Relaxed);
+        std::mem::replace(&mut *self.engine(), engine)
+    }
+
     /// Invalidate rule-derived facts after an external edit.
     pub fn invalidate_indexes(&self) {
         self.0.indexes_dirty.store(true, Ordering::Relaxed);
@@ -715,7 +726,11 @@ impl Context {
         if !self.0.indexes_dirty.swap(false, Ordering::Relaxed) {
             return;
         }
-        let mut engine = self.engine();
+        Self::refresh_engine_indexes(&mut self.engine())
+            .unwrap_or_else(|error| panic!("IR indexes: {error}"));
+    }
+
+    pub(crate) fn refresh_engine_indexes(engine: &mut EGraph) -> Result<(), tir_egglog::Error> {
         for table in [
             "TypeItem",
             "KindItem",
@@ -751,18 +766,15 @@ impl Context {
             "ScopedSiblingRead",
             "OwnedEntity",
         ] {
-            engine
-                .clear_function(table)
-                .unwrap_or_else(|error| panic!("{table}: {error}"));
+            engine.clear_function(table)?;
         }
         engine.seminaive = false;
         let schedule = tir_egglog::ast::Command::RunSchedule(tir_egglog::Schedule::Saturate(
             tir_egglog::span!(),
             Box::new(tir_egglog::Schedule::run("ir-index")),
         ));
-        engine
-            .run_program(vec![schedule])
-            .unwrap_or_else(|error| panic!("IR indexes: {error}"));
+        engine.run_program(vec![schedule])?;
+        Ok(())
     }
 
     pub fn has_operation(&self, id: OpId) -> bool {

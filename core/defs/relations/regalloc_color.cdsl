@@ -1,0 +1,957 @@
+use ::relational::*;
+use ::regalloc::RANativeCall;
+use ::regalloc::RANativePhysicalRead;
+use ::regalloc::RANativePhysicalWrite;
+use ::regalloc::RAValueBits;
+use ::regalloc::RAValueExcluded;
+use ::regalloc_control::RAAt;
+use ::regalloc_control::RABinding;
+use ::regalloc_control::RABlock;
+use ::regalloc_control::RAControlComplete;
+use ::regalloc_control::RAControlEdge;
+use ::regalloc_control::RADef;
+use ::regalloc_control::RAIds;
+use ::regalloc_control::RAIncoming;
+use ::regalloc_control::RANode;
+use ::regalloc_control::RASource;
+use ::regalloc_control::RAUse;
+use ::tmdl_schema::TMDLAbiRegister;
+use ::tmdl_schema::TMDLClass;
+use ::tmdl_schema::TMDLFixedRead;
+use ::tmdl_schema::TMDLFixedWrite;
+use ::tmdl_schema::TMDLHardwiredZero;
+use ::tmdl_schema::TMDLImplicitOrUpdate;
+use ::tmdl_schema::TMDLOpaqueTransferKind;
+use ::tmdl_schema::TMDLRegister;
+use ::tmdl_schema::TMDLRegisterWidth;
+
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let pins_union = primitive<(a0: RAPinRefs, a1: RAPinRefs) -> RAPinRefs>("set-union");
+let registers_union = primitive<(a0: RARegisterRefs, a1: RARegisterRefs) -> RARegisterRefs>("set-union");
+let max = primitive<(a0: Integer, a1: Integer) -> Integer>("max");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let pins_empty = primitive<() -> RAPinRefs>("set-empty");
+let registers_empty = primitive<() -> RARegisterRefs>("set-empty");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let registers_one = primitive<(a0: RARegisterRef) -> RARegisterRefs>("set-of");
+let registers_not_contains = predicate<(RARegisterRefs, RARegisterRef)>("set-not-contains");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let min = primitive<(a0: Integer, a1: Integer) -> Integer>("min");
+let colors_empty = primitive<() -> RAColorMap>("map-empty");
+let colors_get = primitive<(a0: RAColorMap, a1: Integer) -> RAColorLocation>("map-get");
+let ids_length = primitive<(a0: RAIds) -> Integer>("set-length");
+let ids_contains = predicate<(RAIds, Integer)>("set-contains");
+let ids_intersect = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-intersect");
+let ids_diff = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-diff");
+let colors_insert = primitive<(a0: RAColorMap, a1: Integer, a2: RAColorLocation) -> RAColorMap>("map-insert");
+let ids_insert = primitive<(a0: RAIds, a1: Integer) -> RAIds>("set-insert");
+let pins_one = primitive<(a0: RAPinRef) -> RAPinRefs>("set-of");
+let pins_not_contains = predicate<(RAPinRefs, RAPinRef)>("set-not-contains");
+
+// Each phase consumes the saturated output of its predecessor:
+// ra-color-import, ra-color-live, ra-color-interfere, ra-color-reject,
+// ra-color-domain, ra-color-seed,
+// saturate(seq(saturate ra-color-blocked, saturate ra-color-priority,
+// saturate ra-color-saturation, saturate ra-color-degree,
+// saturate ra-color-ready, run ra-color-step)),
+// ra-color-finish, ra-color-check, ra-color-complete.
+// An invocation's input facts must remain frozen across these phases.
+
+// Only hardware values have a class. State and control never enter this table.
+pub let RAValueClass = relation<(Integer, Integer, Integer, String)>("RAValueClass");
+pub let RAInputPin = relation<(Integer, Integer, Integer, Integer, Integer, String, Integer)>("RAInputPin");
+pub let RAOutputPin = relation<(Integer, Integer, Integer, Integer, String, Integer)>("RAOutputPin");
+pub let RATiedOperands = relation<(Integer, Integer, Integer, Integer, Integer)>("RATiedOperands");
+pub let RAReservedRegister = relation<(Integer, String, Integer)>("RAReservedRegister");
+pub let RAForcedRegister = relation<(Integer, Integer, Integer, String, Integer)>("RAForcedRegister");
+pub let RANoSpill = relation<(Integer, Integer, Integer)>("RANoSpill");
+pub let RAColorUnspillable = table<(Integer, Integer), RAIds>("RAColorUnspillable", merge(fn(old, new) { ids_union(old, new) }));
+pub enum RASpillDescriptor {
+    RASlot(Integer, String, Integer),
+};
+let make_RASlot = constructor(RASpillDescriptor::RASlot);
+
+pub enum RAColorLocation {
+    RAInRegister(String, Integer),
+    RAOnStack(RASpillDescriptor),
+};
+let make_RAInRegister = constructor(RAColorLocation::RAInRegister);
+let make_RAOnStack = constructor(RAColorLocation::RAOnStack);
+
+pub extern type RAColorMap = Type;
+pub let ra_color_map_sort = container<RAColorMap, Map<Integer, RAColorLocation>>();
+
+pub enum RAColoring {
+    RAC(Integer, Integer, Integer, RAColorMap, RAIds),
+};
+let make_RAC = constructor(RAColoring::RAC);
+
+pub let RAColorState = relation<(RAColoring,)>("RAColorState");
+pub let RAColorValue = relation<(Integer, Integer, Integer, Integer, String)>("RAColorValue");
+pub let RAColorValues = table<(Integer, Integer, Integer), RAIds>("RAColorValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAChosenRegister = relation<(Integer, Integer, Integer, Integer, String, Integer)>("RAChosenRegister");
+pub let RASpill = relation<(Integer, Integer, Integer, Integer, RASpillDescriptor)>("RASpill");
+pub let RAColorComplete = relation<(Integer, Integer, Integer)>("RAColorComplete");
+pub let RARepairRequest = relation<(Integer, Integer, Integer, Integer, Integer, Integer, String)>("RARepairRequest");
+pub let RAColorError = relation<(Integer, Integer, Integer, Integer, String)>("RAColorError");
+pub let RAColorErrors = table<(Integer, Integer, Integer), RAIds>("RAColorErrors", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorRepairs = table<(Integer, Integer, Integer), RAIds>("RAColorRepairs", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorDecided = table<(Integer, Integer, Integer), RAIds>("RAColorDecided", merge(fn(old, new) { ids_union(old, new) }));
+pub enum RARegisterRef {
+    RARegRef(String, Integer),
+};
+let make_RARegRef = constructor(RARegisterRef::RARegRef);
+
+pub enum RAPinRef {
+    RAReadPin(Integer, Integer, Integer, String, Integer),
+    RAWritePin(Integer, Integer, String, Integer),
+};
+let make_RAReadPin = constructor(RAPinRef::RAReadPin);
+let make_RAWritePin = constructor(RAPinRef::RAWritePin);
+
+pub extern type RAPinRefs = Type;
+pub let ra_pin_refs_sort = container<RAPinRefs, Set<RAPinRef>>();
+
+pub let RAColorPin = relation<(Integer, Integer, RAPinRef)>("RAColorPin");
+pub let RAKnownResourceRef = relation<(Integer, RARegisterRef)>("RAKnownResourceRef");
+pub let RAVerifiedPins = table<(Integer, Integer, Integer), RAPinRefs>("RAVerifiedPins", merge(fn(old, new) { pins_union(old, new) }));
+pub extern type RARegisterRefs = Type;
+pub let ra_register_refs_sort = container<RARegisterRefs, Set<RARegisterRef>>();
+
+pub let RAColorResource = relation<(Integer, String, Integer)>("RAColorResource");
+pub let RAResourceWrite = relation<(Integer, Integer, Integer, String, Integer)>("RAResourceWrite");
+pub let RAResourceKills = table<(Integer, Integer, Integer), RARegisterRefs>("RAResourceKills", merge(fn(old, new) { registers_union(old, new) }));
+pub let RAResourceOwners = table<(Integer, Integer, String, Integer), RAIds>("RAResourceOwners", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAResourceLive = relation<(Integer, Integer, Integer, Integer, Integer, String, Integer)>("RAResourceLive");
+pub let RAResourceConflict = relation<(Integer, Integer, Integer, Integer, String, Integer)>("RAResourceConflict");
+
+// Program points are instruction boundaries. Bindings kill propagation across
+// incoming edges; their source values are uses at predecessor terminators.
+pub let RAColorPoint = relation<(Integer, Integer, Integer, Integer, Integer)>("RAColorPoint");
+pub let RAColorNext = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RAColorNext");
+pub let RAColorBlockEnd = table<(Integer, Integer, Integer, Integer), Integer>("RAColorBlockEnd", merge(fn(old, new) { max(old, new) }));
+pub let RAColorDefs = table<(Integer, Integer, Integer, Integer), RAIds>("RAColorDefs", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorBindings = table<(Integer, Integer, Integer), RAIds>("RAColorBindings", merge(fn(old, new) { ids_union(old, new) }));
+pub let RALiveAt = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RALiveAt");
+pub let RALiveBefore = relation<(Integer, Integer, Integer, Integer, Integer)>("RALiveBefore");
+pub let RALiveAfter = relation<(Integer, Integer, Integer, Integer, Integer)>("RALiveAfter");
+pub let RAInterference = relation<(Integer, Integer, Integer, Integer, Integer)>("RAInterference");
+pub let RACopyAffinity = relation<(Integer, Integer, Integer, Integer, Integer)>("RACopyAffinity");
+pub let RAClassIndices = table<(Integer, String), RAIds>("RAClassIndices", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorNeighbors = table<(Integer, Integer, Integer, Integer), RAIds>("RAColorNeighbors", merge(fn(old, new) { ids_union(old, new) }));
+pub let RASavedIndices = table<(Integer, String), RAIds>("RASavedIndices", merge(fn(old, new) { ids_union(old, new) }));
+pub let RASavedRegister = relation<(Integer, String, Integer)>("RASavedRegister");
+
+// All register exclusions are frozen before constructing domains. A physical
+// group overlaps every covered file index, including aliases in other classes.
+pub let RARejectedRegisters = table<(Integer, Integer, Integer, Integer), RAIds>("RARejectedRegisters", merge(fn(old, new) { ids_union(old, new) }));
+pub let RARegisterDomain = table<(Integer, Integer, Integer, Integer), RAIds>("RARegisterDomain", merge(fn(old, new) { ids_union(old, new) }));
+
+// States contain the complete immutable assignment prefix. Each iteration
+// freezes conflicts, then prioritizes urgent values and narrow domains. Ties
+// prefer more blocked legal indices, then more uncolored same-file neighbors,
+// then the smallest value ID. No register is kept as scratch.
+pub let RAColorBlocked = table<(RAColoring, Integer), RAIds>("RAColorBlocked", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorDomainSize = table<RAColoring, Integer>("RAColorDomainSize", merge(fn(old, new) { min(old, new) }));
+pub let RAColorUrgent = table<RAColoring, RAIds>("RAColorUrgent", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorEligible = relation<(RAColoring, Integer)>("RAColorEligible");
+pub let RAColorConstrained = relation<(RAColoring, Integer)>("RAColorConstrained");
+pub let RAColorSaturated = relation<(RAColoring, Integer)>("RAColorSaturated");
+pub let RAColorSaturation = table<RAColoring, Integer>("RAColorSaturation", merge(fn(old, new) { max(old, new) }));
+pub let RAColorDegree = table<RAColoring, Integer>("RAColorDegree", merge(fn(old, new) { max(old, new) }));
+pub let RAColorNextValue = table<RAColoring, Integer>("RAColorNextValue", merge(fn(old, new) { min(old, new) }));
+pub let RAColorAvailable = table<(RAColoring, Integer), RAIds>("RAColorAvailable", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorRegisterMin = table<(RAColoring, Integer), Integer>("RAColorRegisterMin", merge(fn(old, new) { min(old, new) }));
+pub let RAColorRegisterMax = table<(RAColoring, Integer), Integer>("RAColorRegisterMax", merge(fn(old, new) { max(old, new) }));
+pub let RAColorCheapAvailable = table<(RAColoring, Integer), RAIds>("RAColorCheapAvailable", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorCheapMax = table<(RAColoring, Integer), Integer>("RAColorCheapMax", merge(fn(old, new) { max(old, new) }));
+pub let RAColorPreferred = table<(RAColoring, Integer), RAIds>("RAColorPreferred", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAColorPreferredMin = table<(RAColoring, Integer), Integer>("RAColorPreferredMin", merge(fn(old, new) { min(old, new) }));
+pub let RAColorPreferredMax = table<(RAColoring, Integer), Integer>("RAColorPreferredMax", merge(fn(old, new) { max(old, new) }));
+pub let ra_color_import = [
+    forall(fn(inv, f, candidate, block) {
+        { when: RAControlComplete(inv, f, candidate) & RABlock(inv, f, block),
+          then: RAColorPoint(inv, f, candidate, block, 0) & RAColorBlockEnd.has(inv, f, candidate, block, 0) &
+                RAColorBindings.has(inv, f, block, ids_empty()) &
+                RAColorValues.has(inv, f, candidate, ids_empty()) &
+                RAColorErrors.has(inv, f, candidate, ids_empty()) &
+                RAColorRepairs.has(inv, f, candidate, ids_empty()) &
+                RAColorDecided.has(inv, f, candidate, ids_empty()) & RAColorUnspillable.has(inv, f, ids_empty()) &
+                RAVerifiedPins.has(inv, f, candidate, pins_empty()) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RAControlComplete(inv, f, candidate),
+          then: RAColorPoint(inv, f, candidate, block, index) &
+                RAColorPoint(inv, f, candidate, block, (index + 1)) &
+                RAColorNext(inv, f, candidate, block, index, op) &
+                RAColorBlockEnd.has(inv, f, candidate, block, (index + 1)) &
+                RAColorDefs.has(inv, f, candidate, op, ids_empty()) &
+                RAResourceKills.has(inv, f, op, registers_empty()) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index, value) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RADef(inv, f, op, value),
+          then: RAColorDefs.has(inv, f, candidate, op, ids_one(value)) }
+    }),
+    forall(fn(inv, f, block, slot, value) {
+        { when: RABinding(inv, f, block, slot, value),
+          then: RAColorBindings.has(inv, f, block, ids_one(value)) }
+    }),
+    forall(fn(inv, f, candidate, value, class) {
+        { when: RAControlComplete(inv, f, candidate) & RAValueClass(inv, f, value, class),
+          then: RAColorValue(inv, f, candidate, value, class) &
+                RAColorValues.has(inv, f, candidate, ids_one(value)) &
+                RAColorNeighbors.has(inv, f, candidate, value, ids_empty()) }
+    }),
+    forall(fn(inv, f, value) {
+        { when: RANoSpill(inv, f, value),
+          then: RAColorUnspillable.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, class, file, width, offset, merge) {
+        { when: TMDLClass(inv, class, file, width, offset, merge),
+          then: RAClassIndices.has(inv, class, ids_empty()) & RASavedIndices.has(inv, class, ids_empty()) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLAbiRegister(inv, "callee-saved", class, index),
+          then: RASavedRegister(inv, class, index) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLAbiRegister(inv, "ra", class, index),
+          then: RASavedRegister(inv, class, index) }
+    }),
+    forall(fn(inv, class, index, file, width, offset, merge, saved, savedIndex, savedWidth, savedOffset,
+        savedMerge) {
+        { when: TMDLRegister(inv, class, index) & TMDLClass(inv, class, file, width, offset, merge) &
+                RASavedRegister(inv, saved, savedIndex) &
+                TMDLClass(inv, saved, file, savedWidth, savedOffset, savedMerge) &
+                (index < (savedIndex + savedWidth)) & (savedIndex < (index + width)),
+          then: RASavedIndices.has(inv, class, ids_one(index)) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLRegister(inv, class, index),
+          then: RAClassIndices.has(inv, class, ids_one(index)) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLAbiRegister(inv, "reserved", class, index),
+          then: RAReservedRegister(inv, class, index) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLAbiRegister(inv, "sp", class, index),
+          then: RAReservedRegister(inv, class, index) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLHardwiredZero(inv, class, index),
+          then: RAReservedRegister(inv, class, index) }
+    }),
+    forall(fn(inv, kind, class, index) {
+        { when: TMDLFixedWrite(inv, kind, class, index),
+          then: RAColorResource(inv, class, index) }
+    }),
+    forall(fn(inv, f, op, value, class, index) {
+        { when: RAOutputPin(inv, f, op, value, class, index),
+          then: RAColorResource(inv, class, index) }
+    }),
+    forall(fn(inv, kind, class, index) {
+        { when: TMDLFixedRead(inv, kind, class, index),
+          then: RAColorResource(inv, class, index) }
+    }),
+    forall(fn(inv, kind, class, index) {
+        { when: TMDLImplicitOrUpdate(inv, kind, class, index),
+          then: RAColorResource(inv, class, index) }
+    }),
+    // Constructor keys must exist before negative container lookups in later phases.
+    forall(fn(inv, class, index) {
+        { when: RAColorResource(inv, class, index),
+          then: RAKnownResourceRef(inv, make_RARegRef(class, index)) }
+    }),
+    forall(fn(inv, f, op, slot, value, class, index) {
+        { when: RAInputPin(inv, f, op, slot, value, class, index),
+          then: RAColorPin(inv, f, make_RAReadPin(op, slot, value, class, index)) }
+    }),
+    forall(fn(inv, f, op, value, class, index) {
+        { when: RAOutputPin(inv, f, op, value, class, index),
+          then: RAColorPin(inv, f, make_RAWritePin(op, value, class, index)) }
+    }),
+    forall(fn(inv, f, candidate, class, index) {
+        { when: RAControlComplete(inv, f, candidate) & RAColorResource(inv, class, index),
+          then: RAResourceOwners.has(inv, f, class, index, ids_empty()) }
+    }),
+    forall(fn(inv, f, value, owner, index, resource, file, width, offset, ownerMerge, resourceMerge) {
+        { when: RAForcedRegister(inv, f, value, owner, index) & RAColorResource(inv, resource, index) &
+                TMDLClass(inv, owner, file, width, offset, ownerMerge) &
+                TMDLClass(inv, resource, file, width, offset, resourceMerge),
+          then: RAResourceOwners.has(inv, f, resource, index, ids_one(value)) }
+    }),
+    forall(fn(inv, f, op, slot, value, owner, index, resource, file, width, offset, ownerMerge, resourceMerge) {
+        { when: RAInputPin(inv, f, op, slot, value, owner, index) & RAColorResource(inv, resource, index) &
+                TMDLClass(inv, owner, file, width, offset, ownerMerge) &
+                TMDLClass(inv, resource, file, width, offset, resourceMerge),
+          then: RAResourceOwners.has(inv, f, resource, index, ids_one(value)) }
+    }),
+    forall(fn(inv, f, op, value, owner, index, resource, file, width, offset, ownerMerge, resourceMerge) {
+        { when: RAOutputPin(inv, f, op, value, owner, index) & RAColorResource(inv, resource, index) &
+                TMDLClass(inv, owner, file, width, offset, ownerMerge) &
+                TMDLClass(inv, resource, file, width, offset, resourceMerge),
+          then: RAResourceOwners.has(inv, f, resource, index, ids_one(value)) }
+    }),
+    forall(fn(inv, f, op, kind, class, index) {
+        { when: RANode(inv, f, op, kind) & TMDLFixedWrite(inv, kind, class, index),
+          then: RAResourceWrite(inv, f, op, class, index) }
+    }),
+    forall(fn(inv, f, op, kind, class, index) {
+        { when: RANode(inv, f, op, kind) & TMDLImplicitOrUpdate(inv, kind, class, index),
+          then: RAResourceWrite(inv, f, op, class, index) }
+    }),
+    forall(fn(inv, f, op, value, class, index) {
+        { when: RAOutputPin(inv, f, op, value, class, index),
+          then: RAResourceWrite(inv, f, op, class, index) }
+    }),
+    forall(fn(inv, f, op, written, writtenIndex, resource, resourceIndex, file, writtenWidth, writtenOffset,
+        resourceWidth, resourceOffset, resourceMerge) {
+        { when: RAResourceWrite(inv, f, op, written, writtenIndex) &
+                RAColorResource(inv, resource, resourceIndex) &
+                TMDLClass(inv, written, file, writtenWidth, writtenOffset, false) &
+                TMDLClass(inv, resource, file, resourceWidth, resourceOffset, resourceMerge) &
+                (writtenIndex <= resourceIndex) &
+                ((writtenIndex + writtenWidth) >= (resourceIndex + resourceWidth)),
+          then: RAResourceKills.has(inv, f, op, registers_one(make_RARegRef(resource, resourceIndex))) }
+    }),
+    // Native declarations can restrict an otherwise shared physical-file view.
+    forall(fn(inv, f, candidate, value, class, bits) {
+        { when: RAControlComplete(inv, f, candidate) & RAValueClass(inv, f, value, class) &
+                TMDLRegisterWidth(inv, class, bits),
+          then: RAValueBits.has(inv, f, value, bits) }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativePhysicalRead(inv, f, op, class, index),
+          then: RAColorResource(inv, class, index) & RAKnownResourceRef(inv, make_RARegRef(class, index)) }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativePhysicalWrite(inv, f, op, class, index),
+          then: RAColorResource(inv, class, index) & RAKnownResourceRef(inv, make_RARegRef(class, index)) &
+                RAResourceWrite(inv, f, op, class, index) }
+    }),
+    // Opaque transfers can invoke code that clobbers the ABI's caller-saved registers.
+    forall(fn(inv, f, op, kind) {
+        { when: RASource(inv, f, op, kind) & TMDLOpaqueTransferKind(inv, kind),
+          then: RANativeCall(inv, f, op) }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativeCall(inv, f, op) & TMDLAbiRegister(inv, "caller-saved", class, index),
+          then: RAColorResource(inv, class, index) & RAKnownResourceRef(inv, make_RARegRef(class, index)) &
+                RAResourceWrite(inv, f, op, class, index) }
+    }),
+];
+
+pub let ra_color_live = [
+    forall(fn(inv, f, candidate, block, op, index, class, register, file, width, offset) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RAResourceWrite(inv, f, op, class, register) &
+                TMDLClass(inv, class, file, width, offset, true),
+          then: RAResourceLive(inv, f, candidate, block, index, class, register) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index, kind, class, register) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RANode(inv, f, op, kind) &
+                TMDLFixedRead(inv, kind, class, register),
+          then: RAResourceLive(inv, f, candidate, block, index, class, register) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index, kind, class, register) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RANode(inv, f, op, kind) &
+                TMDLImplicitOrUpdate(inv, kind, class, register),
+          then: RAResourceLive(inv, f, candidate, block, index, class, register) }
+    }),
+    forall(fn(inv, f, candidate, block, point, op, class, register) {
+        { when: RAColorNext(inv, f, candidate, block, point, op) &
+                RAResourceLive(inv, f, candidate, block, (point + 1), class, register) &
+                registers_not_contains(RAResourceKills.get(inv, f, op), make_RARegRef(class, register)),
+          then: RAResourceLive(inv, f, candidate, block, point, class, register) }
+    }),
+    forall(fn(inv, f, from, dest, candidate, class, register, end) {
+        { when: RAControlEdge(inv, f, from, dest) & RAResourceLive(inv, f, candidate, dest, 0, class, register) &
+                RAColorBlockEnd.has(inv, f, candidate, from, end),
+          then: RAResourceLive(inv, f, candidate, from, end, class, register) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index, slot, value, class) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RAUse(inv, f, op, slot, value) &
+                RAColorValue(inv, f, candidate, value, class),
+          then: RALiveAt(inv, f, candidate, block, index, value) }
+    }),
+    forall(fn(inv, f, candidate, block, edge, index, dest, slot, joined, value, class) {
+        { when: RAAt(inv, f, candidate, block, edge, index) &
+                RAIncoming(inv, f, edge, dest, slot, joined, value) &
+                RAColorValue(inv, f, candidate, value, class),
+          then: RALiveAt(inv, f, candidate, block, index, value) }
+    }),
+    forall(fn(inv, f, candidate, block, index, op, value) {
+        { when: RAColorNext(inv, f, candidate, block, index, op) &
+                RALiveAt(inv, f, candidate, block, (index + 1), value) &
+                ids_not_contains(RAColorDefs.get(inv, f, candidate, op), value),
+          then: RALiveAt(inv, f, candidate, block, index, value) }
+    }),
+    forall(fn(inv, f, from, dest, candidate, value, end) {
+        { when: RAControlEdge(inv, f, from, dest) & RALiveAt(inv, f, candidate, dest, 0, value) &
+                RAColorBlockEnd.has(inv, f, candidate, from, end) &
+                ids_not_contains(RAColorBindings.get(inv, f, dest), value),
+          then: RALiveAt(inv, f, candidate, from, end, value) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index, value) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RALiveAt(inv, f, candidate, block, index, value),
+          then: RALiveBefore(inv, f, candidate, op, value) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index, value) {
+        { when: RAAt(inv, f, candidate, block, op, index) &
+                RALiveAt(inv, f, candidate, block, (index + 1), value),
+          then: RALiveAfter(inv, f, candidate, op, value) }
+    }),
+    forall(fn(inv, f, candidate, block, op, point, class, index) {
+        { when: RAAt(inv, f, candidate, block, op, point) & RANativePhysicalRead(inv, f, op, class, index),
+          then: RAResourceLive(inv, f, candidate, block, point, class, index) }
+    }),
+];
+
+pub let ra_color_interfere = [
+    forall(fn(inv, f, candidate, block, point, first, second) {
+        { when: RALiveAt(inv, f, candidate, block, point, first) &
+                RALiveAt(inv, f, candidate, block, point, second) & (first != second),
+          then: RAInterference(inv, f, candidate, first, second) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index, first, class, second) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RADef(inv, f, op, first) &
+                RAColorValue(inv, f, candidate, first, class) & RALiveAfter(inv, f, candidate, op, second) &
+                (first != second),
+          then: RAInterference(inv, f, candidate, first, second) &
+                RAInterference(inv, f, candidate, second, first) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index, first, second, firstClass, secondClass) {
+        { when: RAAt(inv, f, candidate, block, op, index) & RADef(inv, f, op, first) & RADef(inv, f, op, second) &
+                RAColorValue(inv, f, candidate, first, firstClass) &
+                RAColorValue(inv, f, candidate, second, secondClass) & (first != second),
+          then: RAInterference(inv, f, candidate, first, second) }
+    }),
+    forall(fn(inv, f, candidate, block, slot, first, second, class) {
+        { when: RAControlComplete(inv, f, candidate) & RABinding(inv, f, block, slot, first) &
+                RALiveAt(inv, f, candidate, block, 0, second) & RAColorValue(inv, f, candidate, first, class) &
+                (first != second),
+          then: RAInterference(inv, f, candidate, first, second) &
+                RAInterference(inv, f, candidate, second, first) }
+    }),
+    forall(fn(inv, f, candidate, block, firstSlot, first, secondSlot, second, firstClass, secondClass) {
+        { when: RAControlComplete(inv, f, candidate) & RABinding(inv, f, block, firstSlot, first) &
+                RABinding(inv, f, block, secondSlot, second) &
+                RAColorValue(inv, f, candidate, first, firstClass) &
+                RAColorValue(inv, f, candidate, second, secondClass) & (first != second),
+          then: RAInterference(inv, f, candidate, first, second) }
+    }),
+    forall(fn(inv, f, candidate, edge, dest, slot, joined, input) {
+        { when: RAControlComplete(inv, f, candidate) & RAIncoming(inv, f, edge, dest, slot, joined, input),
+          then: RACopyAffinity(inv, f, candidate, joined, input) &
+                RACopyAffinity(inv, f, candidate, input, joined) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, result, input) {
+        { when: RAControlComplete(inv, f, candidate) & RATiedOperands(inv, f, op, slot, result) &
+                RAUse(inv, f, op, slot, input),
+          then: RACopyAffinity(inv, f, candidate, input, result) &
+                RACopyAffinity(inv, f, candidate, result, input) }
+    }),
+    forall(fn(inv, f, candidate, block, point, value, resource, index) {
+        { when: RALiveAt(inv, f, candidate, block, point, value) &
+                RAResourceLive(inv, f, candidate, block, point, resource, index),
+          then: RAResourceConflict(inv, f, candidate, value, resource, index) }
+    }),
+    forall(fn(inv, f, candidate, block, op, point, value, resource, index) {
+        { when: RAAt(inv, f, candidate, block, op, point) & RADef(inv, f, op, value) &
+                RAResourceLive(inv, f, candidate, block, (point + 1), resource, index),
+          then: RAResourceConflict(inv, f, candidate, value, resource, index) }
+    }),
+    forall(fn(inv, f, candidate, block, op, point, value, resource, index) {
+        { when: RAAt(inv, f, candidate, block, op, point) & RADef(inv, f, op, value) &
+                RAResourceWrite(inv, f, op, resource, index),
+          then: RAResourceConflict(inv, f, candidate, value, resource, index) }
+    }),
+    forall(fn(inv, f, candidate, block, slot, value, resource, index) {
+        { when: RAControlComplete(inv, f, candidate) & RABinding(inv, f, block, slot, value) &
+                RAResourceLive(inv, f, candidate, block, 0, resource, index),
+          then: RAResourceConflict(inv, f, candidate, value, resource, index) }
+    }),
+    forall(fn(inv, f, candidate, value, other, class, otherClass, file, width, offset, merge, otherWidth,
+        otherOffset, otherMerge) {
+        { when: RAInterference(inv, f, candidate, value, other) & RAColorValue(inv, f, candidate, value, class) &
+                RAColorValue(inv, f, candidate, other, otherClass) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, otherClass, file, otherWidth, otherOffset, otherMerge),
+          then: RAColorNeighbors.has(inv, f, candidate, value, ids_one(other)) }
+    }),
+];
+
+pub let ra_color_reject = [
+    forall(fn(inv, f, candidate, value, class) {
+        { when: RAColorValue(inv, f, candidate, value, class),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_empty()) &
+                RARegisterDomain.has(inv, f, candidate, value, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index, file, width, offset, merge, reserved, reservedIndex,
+        reservedWidth, reservedOffset, reservedMerge) {
+        { when: RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                RAReservedRegister(inv, reserved, reservedIndex) &
+                TMDLClass(inv, reserved, file, reservedWidth, reservedOffset, reservedMerge) &
+                (index < (reservedIndex + reservedWidth)) & (reservedIndex < (index + width)),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index, forced, forcedIndex) {
+        { when: RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                RAForcedRegister(inv, f, value, forced, forcedIndex) & (index != forcedIndex),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index, forced, forcedIndex, file, width, offset, merge,
+        forcedFile, forcedWidth, forcedOffset, forcedMerge) {
+        { when: RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                RAForcedRegister(inv, f, value, forced, forcedIndex) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, forced, forcedFile, forcedWidth, forcedOffset, forcedMerge) &
+                (file != forcedFile),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index, forced, forcedIndex, file, width, offset, merge,
+        forcedWidth, forcedOffset, forcedMerge) {
+        { when: RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                RAForcedRegister(inv, f, value, forced, forcedIndex) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, forced, file, forcedWidth, forcedOffset, forcedMerge) & (offset != forcedOffset),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index, forced, forcedIndex, file, width, offset, merge,
+        forcedWidth, forcedOffset, forcedMerge) {
+        { when: RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                RAForcedRegister(inv, f, value, forced, forcedIndex) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, forced, file, forcedWidth, forcedOffset, forcedMerge) & (width != forcedWidth),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index, forced, forcedIndex) {
+        { when: RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                RAForcedRegister(inv, f, value, forced, forcedIndex) &
+                ids_not_contains(RAClassIndices.get(inv, forced), index),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, value, resource, resourceIndex, class, index, file, width, offset, merge,
+        resourceWidth, resourceOffset, resourceMerge) {
+        { when: RAResourceConflict(inv, f, candidate, value, resource, resourceIndex) &
+                RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, resource, file, resourceWidth, resourceOffset, resourceMerge) &
+                (index < (resourceIndex + resourceWidth)) & (resourceIndex < (index + width)) &
+                ids_not_contains(RAResourceOwners.get(inv, f, resource, resourceIndex), value),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, block, op, point, fixed, fixedIndex, value, class, index, file, width, offset,
+        merge, fixedWidth, fixedOffset, fixedMerge) {
+        { when: RAAt(inv, f, candidate, block, op, point) & RAResourceWrite(inv, f, op, fixed, fixedIndex) &
+                RALiveBefore(inv, f, candidate, op, value) & RALiveAfter(inv, f, candidate, op, value) &
+                RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, fixed, file, fixedWidth, fixedOffset, fixedMerge) &
+                (index < (fixedIndex + fixedWidth)) & (fixedIndex < (index + width)),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index) {
+        { when: RAColorValue(inv, f, candidate, value, class) & RAValueExcluded(inv, f, value, class, index),
+          then: RARejectedRegisters.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+];
+
+pub let ra_color_domain = [
+    forall(fn(inv, f, candidate, value, class, index) {
+        { when: RAColorValue(inv, f, candidate, value, class) & TMDLRegister(inv, class, index) &
+                ids_not_contains(RARejectedRegisters.get(inv, f, candidate, value), index),
+          then: RARegisterDomain.has(inv, f, candidate, value, ids_one(index)) }
+    }),
+];
+
+pub let ra_color_seed = [
+    forall(fn(inv, f, candidate) {
+        { when: RAControlComplete(inv, f, candidate),
+          then: RAColorState(make_RAC(inv, f, candidate, colors_empty(), ids_empty())) }
+    }),
+];
+
+pub let ra_color_blocked = [
+    forall(fn(state) {
+        { when: RAColorState(state),
+          then: RAColorUrgent.has(state, ids_empty()) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RANoSpill(inv, f, value) & ids_not_contains(seen, value),
+          then: RAColorUrgent.has(state, ids_one(value)) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorValue(inv, f, candidate, value, class) & ids_not_contains(seen, value),
+          then: RAColorBlocked.has(state, value, ids_empty()) & RAColorAvailable.has(state, value, ids_empty()) &
+                RAColorCheapAvailable.has(state, value, ids_empty()) &
+                RAColorPreferred.has(state, value, ids_empty()) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, other, otherClass, otherIndex, index,
+        file, width, offset, merge, otherWidth, otherOffset, otherMerge) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorValue(inv, f, candidate, value, class) & ids_not_contains(seen, value) &
+                RAInterference(inv, f, candidate, value, other) &
+                (colors_get(assignments, other) == make_RAInRegister(otherClass, otherIndex)) &
+                TMDLRegister(inv, class, index) & TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, otherClass, file, otherWidth, otherOffset, otherMerge) &
+                (index < (otherIndex + otherWidth)) & (otherIndex < (index + width)),
+          then: RAColorBlocked.has(state, value, ids_one(index)) }
+    }),
+];
+
+pub let ra_color_priority = [
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorValue(inv, f, candidate, value, class) & ids_not_contains(seen, value) &
+                (ids_length(RAColorUrgent.get(state)) == 0),
+          then: RAColorEligible(state, value) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorValue(inv, f, candidate, value, class) & ids_contains(RAColorUrgent.get(state), value),
+          then: RAColorEligible(state, value) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, domain) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorEligible(state, value) & RARegisterDomain.has(inv, f, candidate, value, domain),
+          then: RAColorDomainSize.has(state, ids_length(domain)) }
+    }),
+];
+
+pub let ra_color_saturation = [
+    forall(fn(state, inv, f, candidate, assignments, seen, value, domain) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorEligible(state, value) & RARegisterDomain.has(inv, f, candidate, value, domain) &
+                RAColorDomainSize.has(state, ids_length(domain)),
+          then: RAColorConstrained(state, value) &
+                RAColorSaturation.has(
+                    state, ids_length(ids_intersect(RAColorBlocked.get(state, value), domain))
+                ) }
+    }),
+];
+
+pub let ra_color_degree = [
+    forall(fn(state, inv, f, candidate, assignments, seen, value, domain) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorConstrained(state, value) & RARegisterDomain.has(inv, f, candidate, value, domain) &
+                RAColorSaturation.has(
+                    state, ids_length(ids_intersect(RAColorBlocked.get(state, value), domain))
+                ),
+          then: RAColorSaturated(state, value) &
+                RAColorDegree.has(
+                    state, ids_length(ids_diff(RAColorNeighbors.get(inv, f, candidate, value), seen))
+                ) }
+    }),
+];
+
+pub let ra_color_ready = [
+    forall(fn(state, inv, f, candidate, assignments, seen, value) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorSaturated(state, value) &
+                RAColorDegree.has(
+                    state, ids_length(ids_diff(RAColorNeighbors.get(inv, f, candidate, value), seen))
+                ),
+          then: RAColorNextValue.has(state, value) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, index) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                TMDLRegister(inv, class, index) &
+                ids_contains(RARegisterDomain.get(inv, f, candidate, value), index) &
+                ids_not_contains(RAColorBlocked.get(state, value), index),
+          then: RAColorAvailable.has(state, value, ids_one(index)) & RAColorRegisterMin.has(state, value, index) &
+                RAColorRegisterMax.has(state, value, index) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, index) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                TMDLRegister(inv, class, index) & ids_contains(RAColorAvailable.get(state, value), index) &
+                ids_not_contains(RASavedIndices.get(inv, class), index),
+          then: RAColorCheapAvailable.has(state, value, ids_one(index)) &
+                RAColorCheapMax.has(state, value, index) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, partner, partnerClass, index, file,
+        width, offset, merge, partnerMerge) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                RACopyAffinity(inv, f, candidate, value, partner) &
+                (colors_get(assignments, partner) == make_RAInRegister(partnerClass, index)) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, partnerClass, file, width, offset, partnerMerge) &
+                ids_contains(RAColorAvailable.get(state, value), index),
+          then: RAColorPreferred.has(state, value, ids_one(index)) &
+                RAColorPreferredMin.has(state, value, index) & RAColorPreferredMax.has(state, value, index) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, op, slot, required, index, file, width,
+        offset, merge, requiredMerge) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                RAInputPin(inv, f, op, slot, value, required, index) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, required, file, width, offset, requiredMerge) &
+                ids_contains(RAColorAvailable.get(state, value), index),
+          then: RAColorPreferred.has(state, value, ids_one(index)) &
+                RAColorPreferredMin.has(state, value, index) & RAColorPreferredMax.has(state, value, index) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, op, required, index, file, width,
+        offset, merge, requiredMerge) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                RAOutputPin(inv, f, op, value, required, index) &
+                TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, required, file, width, offset, requiredMerge) &
+                ids_contains(RAColorAvailable.get(state, value), index),
+          then: RAColorPreferred.has(state, value, ids_one(index)) &
+                RAColorPreferredMin.has(state, value, index) & RAColorPreferredMax.has(state, value, index) }
+    }),
+];
+
+pub let ra_color_step = [
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, index) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                RAColorPreferredMin.has(state, value, index) & (candidate == 0),
+          then: RAColorState(
+              make_RAC(
+                  inv, f, candidate, colors_insert(assignments, value, make_RAInRegister(class, index)),
+                  ids_insert(seen, value)
+              )
+          ) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, index) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                RAColorPreferredMax.has(state, value, index) & (candidate != 0),
+          then: RAColorState(
+              make_RAC(
+                  inv, f, candidate, colors_insert(assignments, value, make_RAInRegister(class, index)),
+                  ids_insert(seen, value)
+              )
+          ) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, index) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                (ids_length(RAColorPreferred.get(state, value)) == 0) &
+                RAColorRegisterMin.has(state, value, index) & (candidate == 0),
+          then: RAColorState(
+              make_RAC(
+                  inv, f, candidate, colors_insert(assignments, value, make_RAInRegister(class, index)),
+                  ids_insert(seen, value)
+              )
+          ) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, index) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                (ids_length(RAColorPreferred.get(state, value)) == 0) & RAColorCheapMax.has(state, value, index) &
+                (candidate != 0),
+          then: RAColorState(
+              make_RAC(
+                  inv, f, candidate, colors_insert(assignments, value, make_RAInRegister(class, index)),
+                  ids_insert(seen, value)
+              )
+          ) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, index) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                (ids_length(RAColorPreferred.get(state, value)) == 0) &
+                (ids_length(RAColorCheapAvailable.get(state, value)) == 0) &
+                RAColorRegisterMax.has(state, value, index) & (candidate != 0),
+          then: RAColorState(
+              make_RAC(
+                  inv, f, candidate, colors_insert(assignments, value, make_RAInRegister(class, index)),
+                  ids_insert(seen, value)
+              )
+          ) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, bits) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RAColorValue(inv, f, candidate, value, class) &
+                (ids_length(RAColorAvailable.get(state, value)) == 0) &
+                ids_not_contains(RAColorUnspillable.get(inv, f), value) & RAValueBits.has(inv, f, value, bits) &
+                (bits > 0),
+          then: RAColorState(
+              make_RAC(
+                  inv, f, candidate,
+                  colors_insert(assignments, value, make_RAOnStack(make_RASlot(value, class, ((bits + 7) / 8)))),
+                  ids_insert(seen, value)
+              )
+          ) }
+    }),
+];
+
+pub let ra_color_finish = [
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, index) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorValues.has(inv, f, candidate, seen) & RAColorValue(inv, f, candidate, value, class) &
+                (colors_get(assignments, value) == make_RAInRegister(class, index)),
+          then: RAChosenRegister(inv, f, candidate, value, class, index) &
+                RAColorDecided.has(inv, f, candidate, ids_one(value)) }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value, class, slot) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorValues.has(inv, f, candidate, seen) & RAColorValue(inv, f, candidate, value, class) &
+                (colors_get(assignments, value) == make_RAOnStack(slot)),
+          then: RASpill(inv, f, candidate, value, slot) & RAColorDecided.has(inv, f, candidate, ids_one(value)) }
+    }),
+    forall(fn(inv, f, candidate, value, actual, index, op, slot, required, file, width, offset, actualMerge,
+        requiredMerge) {
+        { when: RAChosenRegister(inv, f, candidate, value, actual, index) &
+                RAInputPin(inv, f, op, slot, value, required, index) &
+                TMDLClass(inv, actual, file, width, offset, actualMerge) &
+                TMDLClass(inv, required, file, width, offset, requiredMerge) &
+                ids_contains(RAClassIndices.get(inv, required), index),
+          then: RAVerifiedPins.has(
+              inv, f, candidate, pins_one(make_RAReadPin(op, slot, value, required, index))
+          ) }
+    }),
+    forall(fn(inv, f, candidate, value, actual, index, op, required, file, width, offset, actualMerge,
+        requiredMerge) {
+        { when: RAChosenRegister(inv, f, candidate, value, actual, index) &
+                RAOutputPin(inv, f, op, value, required, index) &
+                TMDLClass(inv, actual, file, width, offset, actualMerge) &
+                TMDLClass(inv, required, file, width, offset, requiredMerge) &
+                ids_contains(RAClassIndices.get(inv, required), index),
+          then: RAVerifiedPins.has(inv, f, candidate, pins_one(make_RAWritePin(op, value, required, index))) }
+    }),
+];
+
+pub let ra_color_check = [
+    forall(fn(inv, f, candidate, value, first, second) {
+        { when: RAControlComplete(inv, f, candidate) & RAValueClass(inv, f, value, first) &
+                RAValueClass(inv, f, value, second) & (first != second),
+          then: RAColorError(inv, f, candidate, value, "value has conflicting register classes") }
+    }),
+    forall(fn(inv, f, candidate, value, class) {
+        { when: RAControlComplete(inv, f, candidate) & RAColorValue(inv, f, candidate, value, class) &
+                ids_not_contains(RAColorDecided.get(inv, f, candidate), value),
+          then: RAColorError(inv, f, candidate, value, "value has no allocation") }
+    }),
+    forall(fn(inv, f, candidate, value, class, index) {
+        { when: RAChosenRegister(inv, f, candidate, value, class, index) &
+                ids_not_contains(RARegisterDomain.get(inv, f, candidate, value), index),
+          then: RAColorError(inv, f, candidate, value, "register violates target or fixed constraints") }
+    }),
+    forall(fn(inv, f, candidate, first, firstClass, firstIndex, second, secondClass, secondIndex, file,
+        firstWidth, firstOffset, firstMerge, secondWidth, secondOffset, secondMerge) {
+        { when: RAChosenRegister(inv, f, candidate, first, firstClass, firstIndex) &
+                RAChosenRegister(inv, f, candidate, second, secondClass, secondIndex) &
+                RAInterference(inv, f, candidate, first, second) &
+                TMDLClass(inv, firstClass, file, firstWidth, firstOffset, firstMerge) &
+                TMDLClass(inv, secondClass, file, secondWidth, secondOffset, secondMerge) &
+                (firstIndex < (secondIndex + secondWidth)) & (secondIndex < (firstIndex + firstWidth)),
+          then: RAColorError(inv, f, candidate, first, "interfering register spans overlap") }
+    }),
+    forall(fn(inv, f, candidate, value, class, first, second) {
+        { when: RAChosenRegister(inv, f, candidate, value, class, first) &
+                RAChosenRegister(inv, f, candidate, value, class, second) & (first != second),
+          then: RAColorError(inv, f, candidate, value, "value has multiple registers") }
+    }),
+    forall(fn(inv, f, candidate, value, class, index, slot) {
+        { when: RAChosenRegister(inv, f, candidate, value, class, index) &
+                RASpill(inv, f, candidate, value, slot),
+          then: RAColorError(inv, f, candidate, value, "value has register and stack assignments") }
+    }),
+    forall(fn(state, inv, f, candidate, assignments, seen, value) {
+        { when: RAColorState(state) & (state == make_RAC(inv, f, candidate, assignments, seen)) &
+                RAColorNextValue.has(state, value) & RANoSpill(inv, f, value) &
+                (ids_length(RAColorAvailable.get(state, value)) == 0),
+          then: RAColorError(inv, f, candidate, value, "repair temporary has no legal register") }
+    }),
+    forall(fn(inv, f, candidate, value, slot) {
+        { when: RASpill(inv, f, candidate, value, slot),
+          then: RARepairRequest(inv, f, candidate, value, -1, value, "insert spill transfers") }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value, class, index) {
+        { when: RAControlComplete(inv, f, candidate) & RAInputPin(inv, f, op, slot, value, class, index) &
+                pins_not_contains(
+                    RAVerifiedPins.get(inv, f, candidate), make_RAReadPin(op, slot, value, class, index)
+                ),
+          then: RARepairRequest(inv, f, candidate, op, slot, value, "split fixed operand") }
+    }),
+    forall(fn(inv, f, candidate, op, value, class, index) {
+        { when: RAControlComplete(inv, f, candidate) & RAOutputPin(inv, f, op, value, class, index) &
+                pins_not_contains(
+                    RAVerifiedPins.get(inv, f, candidate), make_RAWritePin(op, value, class, index)
+                ),
+          then: RARepairRequest(inv, f, candidate, op, -1, value, "split fixed result") }
+    }),
+    // A tied result may reuse its input only when the input dies at the operation.
+    // Otherwise a copy/split is required even when their global choices agree.
+    forall(fn(inv, f, op, slot, result, input, candidate, inputClass, inputIndex, resultClass, resultIndex) {
+        { when: RATiedOperands(inv, f, op, slot, result) & RAUse(inv, f, op, slot, input) &
+                RAChosenRegister(inv, f, candidate, input, inputClass, inputIndex) &
+                RAChosenRegister(inv, f, candidate, result, resultClass, resultIndex) &
+                (inputIndex != resultIndex),
+          then: RARepairRequest(inv, f, candidate, op, slot, input, "copy tied operand") }
+    }),
+    forall(fn(inv, f, op, slot, result, input, candidate, inputClass, inputIndex, resultClass, resultIndex,
+        inputFile, inputWidth, inputOffset, inputMerge, resultFile, resultWidth, resultOffset, resultMerge) {
+        { when: RATiedOperands(inv, f, op, slot, result) & RAUse(inv, f, op, slot, input) &
+                RAChosenRegister(inv, f, candidate, input, inputClass, inputIndex) &
+                RAChosenRegister(inv, f, candidate, result, resultClass, resultIndex) &
+                TMDLClass(inv, inputClass, inputFile, inputWidth, inputOffset, inputMerge) &
+                TMDLClass(inv, resultClass, resultFile, resultWidth, resultOffset, resultMerge) &
+                (inputFile != resultFile),
+          then: RARepairRequest(inv, f, candidate, op, slot, input, "copy tied operand") }
+    }),
+    forall(fn(inv, f, op, slot, result, input, candidate, inputClass, inputIndex, resultClass, resultIndex,
+        inputFile, inputWidth, inputOffset, inputMerge, resultFile, resultWidth, resultOffset, resultMerge) {
+        { when: RATiedOperands(inv, f, op, slot, result) & RAUse(inv, f, op, slot, input) &
+                RAChosenRegister(inv, f, candidate, input, inputClass, inputIndex) &
+                RAChosenRegister(inv, f, candidate, result, resultClass, resultIndex) &
+                TMDLClass(inv, inputClass, inputFile, inputWidth, inputOffset, inputMerge) &
+                TMDLClass(inv, resultClass, resultFile, resultWidth, resultOffset, resultMerge) &
+                (inputWidth != resultWidth),
+          then: RARepairRequest(inv, f, candidate, op, slot, input, "copy tied operand") }
+    }),
+    forall(fn(inv, f, op, slot, result, input, candidate, inputClass, inputIndex, resultClass, resultIndex,
+        inputFile, inputWidth, inputOffset, inputMerge, resultFile, resultWidth, resultOffset, resultMerge) {
+        { when: RATiedOperands(inv, f, op, slot, result) & RAUse(inv, f, op, slot, input) &
+                RAChosenRegister(inv, f, candidate, input, inputClass, inputIndex) &
+                RAChosenRegister(inv, f, candidate, result, resultClass, resultIndex) &
+                TMDLClass(inv, inputClass, inputFile, inputWidth, inputOffset, inputMerge) &
+                TMDLClass(inv, resultClass, resultFile, resultWidth, resultOffset, resultMerge) &
+                (inputOffset != resultOffset),
+          then: RARepairRequest(inv, f, candidate, op, slot, input, "copy tied operand") }
+    }),
+    forall(fn(inv, f, op, slot, result, input, candidate) {
+        { when: RATiedOperands(inv, f, op, slot, result) & RAUse(inv, f, op, slot, input) &
+                RALiveAfter(inv, f, candidate, op, input) & (input != result),
+          then: RARepairRequest(inv, f, candidate, op, slot, input, "split live tied operand") }
+    }),
+    forall(fn(inv, f, op, slot, result, input, candidate, descriptor) {
+        { when: RATiedOperands(inv, f, op, slot, result) & RAUse(inv, f, op, slot, input) &
+                RASpill(inv, f, candidate, input, descriptor),
+          then: RARepairRequest(inv, f, candidate, op, slot, input, "reload tied operand") }
+    }),
+    forall(fn(inv, f, op, slot, result, input, candidate, descriptor) {
+        { when: RATiedOperands(inv, f, op, slot, result) & RAUse(inv, f, op, slot, input) &
+                RASpill(inv, f, candidate, result, descriptor),
+          then: RARepairRequest(inv, f, candidate, op, slot, result, "store tied result") }
+    }),
+    forall(fn(inv, f, candidate, value, message) {
+        { when: RAColorError(inv, f, candidate, value, message),
+          then: RAColorErrors.has(inv, f, candidate, ids_one(value)) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value, message) {
+        { when: RARepairRequest(inv, f, candidate, op, slot, value, message),
+          then: RAColorRepairs.has(inv, f, candidate, ids_one(value)) }
+    }),
+];
+
+pub let ra_color_complete = [
+    forall(fn(inv, f, candidate) {
+        { when: RAControlComplete(inv, f, candidate) &
+                RAColorDecided.has(inv, f, candidate, RAColorValues.get(inv, f, candidate)) &
+                (ids_length(RAColorErrors.get(inv, f, candidate)) == 0) &
+                (ids_length(RAColorRepairs.get(inv, f, candidate)) == 0),
+          then: RAColorComplete(inv, f, candidate) }
+    }),
+];

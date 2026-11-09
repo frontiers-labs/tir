@@ -1,0 +1,886 @@
+use ::relational::*;
+use ::Attr;
+use ::Attribute;
+use ::BlockParam;
+use ::BlockRegion;
+use ::Definition;
+use ::Entry;
+use ::Function;
+use ::Mode;
+use ::OpKind;
+use ::OpPlacement;
+use ::Operand;
+use ::OwnedRegion;
+use ::Placement;
+use ::RegionMode;
+use ::RegionParam;
+use ::Result;
+use ::Successor;
+use ::SuccessorArg;
+use ::TypeExpr;
+use ::TypeList;
+use ::ValueDefinition;
+use ::ValueType;
+use ::Within;
+use ::Yield;
+use ::regalloc::RARequest;
+use ::tmdl_schema::TMDLPureKind;
+
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let bool_or = primitive<(a0: Bool, a1: Bool) -> Bool>("or");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let ids_length = primitive<(a0: RAIds) -> Integer>("set-length");
+let fresh_ir_id = primitive<() -> Integer>("fresh-ir-id");
+let min = primitive<(a0: Integer, a1: Integer) -> Integer>("min");
+let sequence_empty = primitive<() -> RASequence>("vec-empty");
+let ids_diff = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-diff");
+let sequence_push = primitive<(a0: RASequence, a1: Integer) -> RASequence>("vec-push");
+let ids_insert = primitive<(a0: RAIds, a1: Integer) -> RAIds>("set-insert");
+let sequence_length = primitive<(a0: RASequence) -> Integer>("vec-length");
+let sequence_get = primitive<(a0: RASequence, a1: Integer) -> Integer>("vec-get");
+let make_InGraph = constructor(Placement::InGraph);
+let make_CFG = constructor(RegionMode::CFG);
+let make_Graph = constructor(RegionMode::Graph);
+let make_InBlock = constructor(Placement::InBlock);
+let make_Apply = constructor(TypeExpr::Apply);
+let make_Ctor = constructor(TypeExpr::Ctor);
+let make_TNil = constructor(TypeList::TNil);
+let make_ResultDef = constructor(Definition::ResultDef);
+let make_RegionParamDef = constructor(Definition::RegionParamDef);
+let make_ListAttr = constructor(Attr::ListAttr);
+
+// Control tokens name logical blocks. Publication allocates the real CFG
+// entities after a complete candidate has passed validation.
+//
+// Run each phase to saturation in this order:
+// ra-control-import, ra-control-normalize, ra-control-entry, ra-control-reach,
+// ra-control-dom, ra-control-demand, ra-control-mandatory,
+// ra-control-mandatory-bad, ra-control-mandatory-legal,
+// ra-control-mandatory-extrema, ra-control-pin,
+// ra-control-demand, ra-control-bad,
+// ra-control-legal, ra-control-extrema, ra-control-place,
+// ra-control-pred, ra-control-seed,
+// saturate(seq(saturate ra-control-blocked,
+// saturate ra-control-priority,
+// saturate ra-control-ready, run ra-control-step)),
+// ra-control-finish, ra-control-check, ra-control-complete.
+// All reductions consumed by a later phase are frozen for this invocation.
+pub extern type RAIds = Type;
+pub let ra_ids_sort = container<RAIds, Set<Integer>>();
+
+pub extern type RASequence = Type;
+pub let ra_sequence_sort = container<RASequence, Vec<Integer>>();
+
+// The importer only marks kinds with proven total, effect-free semantics.
+// A dynamic Speculatable interface's presence alone does not prove safety.
+pub let RAMovable = relation<(Integer, Integer, Integer)>("RAMovable");
+pub let RAPureOps = table<(Integer, Integer), RAIds>("RAPureOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAExplicitlyPinned = table<(Integer, Integer), RAIds>("RAExplicitlyPinned", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAControlYield = relation<(Integer, Integer, Integer, Integer)>("RAControlYield");
+pub let RAFunction = relation<(Integer, Integer, Integer)>("RAFunction");
+pub let RAAlreadyAllocated = table<(Integer, Integer), Bool>("RAAlreadyAllocated", merge(fn(old, new) { bool_or(old, new) }));
+pub let RAAllocatedFunction = relation<(Integer, Integer)>("RAAllocatedFunction");
+pub let RARequestedFunction = relation<(Integer, Integer)>("RARequestedFunction");
+pub let RASource = relation<(Integer, Integer, Integer, String)>("RASource");
+pub let RABlock = relation<(Integer, Integer, Integer)>("RABlock");
+pub let RAEntry = relation<(Integer, Integer, Integer)>("RAEntry");
+pub let RAExit = relation<(Integer, Integer, Integer)>("RAExit");
+pub let RAControlEdge = relation<(Integer, Integer, Integer, Integer)>("RAControlEdge");
+pub let RANode = relation<(Integer, Integer, Integer, String)>("RANode");
+pub let RAPin = relation<(Integer, Integer, Integer, Integer)>("RAPin");
+pub let RADef = relation<(Integer, Integer, Integer, Integer)>("RADef");
+pub let RAUse = relation<(Integer, Integer, Integer, Integer, Integer)>("RAUse");
+pub let RAArgument = relation<(Integer, Integer, Integer, Integer)>("RAArgument");
+pub let RABinding = relation<(Integer, Integer, Integer, Integer, Integer)>("RABinding");
+pub let RAIncoming = relation<(Integer, Integer, Integer, Integer, Integer, Integer, Integer)>("RAIncoming");
+pub let RABranch = relation<(Integer, Integer, Integer, Integer, Integer, Integer, Integer)>("RABranch");
+pub let RAJump = relation<(Integer, Integer, Integer, Integer, Integer)>("RAJump");
+pub let RAReturn = relation<(Integer, Integer, Integer, Integer)>("RAReturn");
+pub let RAReturnValue = relation<(Integer, Integer, Integer, Integer, Integer)>("RAReturnValue");
+pub let RAReturnNode = table<(Integer, Integer), Integer>("RAReturnNode", unique);
+pub let RADirectJump = table<(Integer, Integer, Integer, Integer), Integer>("RADirectJump", unique);
+pub let RAIncomingControls = table<(Integer, Integer, Integer), RAIds>("RAIncomingControls", merge(fn(old, new) { ids_union(old, new) }));
+pub let RASourceOps = table<(Integer, Integer), RAIds>("RASourceOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAControlTokens = table<(Integer, Integer), RAIds>("RAControlTokens", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAImplicitControl = table<(Integer, Integer), Integer>("RAImplicitControl", unique);
+pub let RARecognizedOps = table<(Integer, Integer), RAIds>("RARecognizedOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RACFGFunction = relation<(Integer, Integer)>("RACFGFunction");
+pub let RAGraphFunction = relation<(Integer, Integer)>("RAGraphFunction");
+pub let RAStructuredFlag = table<(Integer, Integer), Bool>("RAStructuredFlag", merge(fn(old, new) { bool_or(old, new) }));
+pub let RAStructuredOwnerSet = table<(Integer, Integer), RAIds>("RAStructuredOwnerSet", merge(fn(old, new) { ids_union(old, new) }));
+pub let RACFGSource = relation<(Integer, Integer, Integer, Integer, Integer)>("RACFGSource");
+pub let RATerminator = relation<(Integer, Integer, Integer, Integer)>("RATerminator");
+pub let RAContinuationJump = table<(Integer, Integer, Integer), Integer>("RAContinuationJump", unique);
+pub let RAReach = relation<(Integer, Integer, Integer, Integer)>("RAReach");
+pub let RAAvoid = relation<(Integer, Integer, Integer, Integer)>("RAAvoid");
+pub let RADom = relation<(Integer, Integer, Integer, Integer)>("RADom");
+pub let RAAvoided = table<(Integer, Integer, Integer), RAIds>("RAAvoided", merge(fn(old, new) { ids_union(old, new) }));
+
+// Demand walks back through actual data/state definitions but stops at merge
+// results. The incoming edge owns the use of the preceding iteration's value.
+pub let RADemand = relation<(Integer, Integer, Integer, Integer)>("RADemand");
+pub let RARequired = relation<(Integer, Integer, Integer, Integer)>("RARequired");
+pub let RAValueHome = relation<(Integer, Integer, Integer, Integer)>("RAValueHome");
+pub let RALiveOps = table<(Integer, Integer), RAIds>("RALiveOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAAllPathsDemand = relation<(Integer, Integer, Integer, Integer)>("RAAllPathsDemand");
+pub let RAMandatoryBad = table<(Integer, Integer, Integer), RAIds>("RAMandatoryBad", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAMandatoryEarlier = table<(Integer, Integer, Integer), RAIds>("RAMandatoryEarlier", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAMandatoryPlacement = relation<(Integer, Integer, Integer, Integer)>("RAMandatoryPlacement");
+
+// Legal placements dominate every demand and follow every operand binding.
+// This availability bound keeps loop-carried data inside its loop header.
+pub let RABadPlacement = table<(Integer, Integer, Integer), RAIds>("RABadPlacement", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEarlierPlacement = table<(Integer, Integer, Integer), RAIds>("RAEarlierPlacement", merge(fn(old, new) { ids_union(old, new) }));
+pub let RALaterPlacement = table<(Integer, Integer, Integer), RAIds>("RALaterPlacement", merge(fn(old, new) { ids_union(old, new) }));
+pub let RALegalPlacement = relation<(Integer, Integer, Integer, Integer)>("RALegalPlacement");
+pub let RAPlace = relation<(Integer, Integer, Integer, Integer, Integer)>("RAPlace");
+
+// Each immutable prefix freezes blockers and pressure deltas before choosing
+// one ready operation. Candidate zero keeps source ID order; candidate one
+// minimizes new hardware definitions minus last uses, then source ID.
+pub enum RASchedule {
+    RAS(Integer, Integer, Integer, Integer, RASequence, RAIds),
+};
+let make_RAS = constructor(RASchedule::RAS);
+
+pub let RAScheduleState = relation<(RASchedule,)>("RAScheduleState");
+pub let RAPred = relation<(Integer, Integer, Integer, Integer, Integer)>("RAPred");
+pub let RABlockOps = table<(Integer, Integer, Integer, Integer), RAIds>("RABlockOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RABlocked = table<RASchedule, RAIds>("RABlocked", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAReadyMin = table<RASchedule, Integer>("RAReadyMin", merge(fn(old, new) { min(old, new) }));
+pub let RAScheduleHardware = relation<(Integer,)>("RAScheduleHardware");
+pub let RAScheduleDefs = table<(Integer, Integer, Integer), RAIds>("RAScheduleDefs", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAScheduleUsers = table<(Integer, Integer, Integer, Integer), RAIds>("RAScheduleUsers", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAScheduleKills = table<(RASchedule, Integer), RAIds>("RAScheduleKills", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAReadyPressure = table<RASchedule, Integer>("RAReadyPressure", merge(fn(old, new) { min(old, new) }));
+pub let RAAt = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RAAt");
+pub let RABlockScheduled = relation<(Integer, Integer, Integer, Integer)>("RABlockScheduled");
+pub let RAEnumerate = relation<(RASchedule, Integer)>("RAEnumerate");
+
+// These completeness facts are publication gates, not substitutes for the
+// parent's allocation and descriptor validation.
+pub let RAPlacedOps = table<(Integer, Integer, Integer), RAIds>("RAPlacedOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAScheduledOps = table<(Integer, Integer, Integer), RAIds>("RAScheduledOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RABlocks = table<(Integer, Integer), RAIds>("RABlocks", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAScheduledBlocks = table<(Integer, Integer, Integer), RAIds>("RAScheduledBlocks", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAControlErrors = table<(Integer, Integer), RAIds>("RAControlErrors", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEntries = table<(Integer, Integer), RAIds>("RAEntries", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAReachableBlocks = table<(Integer, Integer), RAIds>("RAReachableBlocks", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATerminators = table<(Integer, Integer, Integer), RAIds>("RATerminators", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAControlComplete = relation<(Integer, Integer, Integer)>("RAControlComplete");
+pub let RAControlError = relation<(Integer, Integer, String, Integer)>("RAControlError");
+pub let ra_control_inputs = [
+    forall(fn(inv, f, region) {
+        { when: RARequestedFunction(inv, f) & RAAlreadyAllocated.has(inv, f, false) &
+                OwnedRegion.has(f, 0, region),
+          then: RAFunction(inv, f, region) & RASourceOps.has(inv, f, ids_empty()) &
+                RAControlTokens.has(inv, f, ids_empty()) & RARecognizedOps.has(inv, f, ids_empty()) &
+                RAPureOps.has(inv, f, ids_empty()) & RAExplicitlyPinned.has(inv, f, ids_empty()) &
+                RAStructuredFlag.has(inv, f, false) & RAStructuredOwnerSet.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region) & Mode.has(region, make_CFG()),
+          then: RACFGFunction(inv, f) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region) & Mode.has(region, make_Graph()),
+          then: RAGraphFunction(inv, f) }
+    }),
+];
+
+pub let ra_control_import = [
+    forall(fn(inv, f, region, op, kind) {
+        { when: RAFunction(inv, f, region) & OpPlacement.has(op, make_InGraph(region)) & OpKind.has(op, kind),
+          then: RASource(inv, f, op, kind) & RASourceOps.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, region, block) {
+        { when: RAFunction(inv, f, region) & BlockRegion.has(block, region),
+          then: RABlock(inv, f, block) }
+    }),
+    forall(fn(inv, f, region, block) {
+        { when: RACFGFunction(inv, f) & RAFunction(inv, f, region) & Entry.has(region, block),
+          then: RAEntry(inv, f, block) }
+    }),
+    forall(fn(inv, f, region, block, op, point, kind) {
+        { when: RAFunction(inv, f, region) & BlockRegion.has(block, region) &
+                OpPlacement.has(op, make_InBlock(block, point)) & OpKind.has(op, kind),
+          then: RACFGSource(inv, f, op, block, point) & RASource(inv, f, op, kind) &
+                RASourceOps.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, block, slot, value) {
+        { when: RAEntry(inv, f, block) & BlockParam(block, slot, value),
+          then: RAArgument(inv, f, slot, value) }
+    }),
+    forall(fn(inv, f, region, entry, block, slot, value) {
+        { when: RACFGFunction(inv, f) & RAFunction(inv, f, region) & Entry.has(region, entry) &
+                BlockRegion.has(block, region) & (block != entry) & BlockParam(block, slot, value),
+          then: RABinding(inv, f, block, slot, value) }
+    }),
+    forall(fn(inv, f, op, block, point, dest, edge) {
+        { when: RACFGSource(inv, f, op, block, point) & Successor.has(op, edge, dest),
+          then: RAControlEdge(inv, f, block, dest) & RATerminator(inv, f, op, block) }
+    }),
+    forall(fn(inv, f, op, block, point, dest) {
+        { when: RACFGSource(inv, f, op, block, point) & OpKind.has(op, "cfg.br") & Successor.has(op, 0, dest),
+          then: RAJump(inv, f, op, block, dest) }
+    }),
+    forall(fn(inv, f, op, block, point, predicate, taken, fallthrough) {
+        { when: RACFGSource(inv, f, op, block, point) & OpKind.has(op, "cfg.cond_br") &
+                Operand.has(op, 0, predicate) & Successor.has(op, 0, taken) & Successor.has(op, 1, fallthrough),
+          then: RABranch(inv, f, op, block, predicate, taken, fallthrough) }
+    }),
+    forall(fn(inv, f, op, block, point, dest, edge, inputSlot, slot, value, joined) {
+        { when: RACFGSource(inv, f, op, block, point) & Successor.has(op, edge, dest) &
+                SuccessorArg.has(op, edge, slot, inputSlot) & Operand.has(op, inputSlot, value) &
+                BlockParam(dest, slot, joined),
+          then: RAIncoming(inv, f, op, dest, slot, joined, value) }
+    }),
+    forall(fn(inv, f, op, block, point) {
+        { when: RACFGSource(inv, f, op, block, point) & OpKind.has(op, "func.return"),
+          then: RAReturn(inv, f, op, block) & RAExit(inv, f, block) }
+    }),
+    forall(fn(inv, f, op, block, point, value, slot) {
+        { when: RAReturn(inv, f, op, block) & RACFGSource(inv, f, op, block, point) &
+                Operand.has(op, slot, value),
+          then: RAReturnValue(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, region, slot, value) {
+        { when: RAFunction(inv, f, region) & RegionParam(region, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAControlTokens.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, f, op, kind, slot, value) {
+        { when: RASource(inv, f, op, kind) & Result(op, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAControlTokens.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, f, merge, control) {
+        { when: RASource(inv, f, merge, "son.merge") & Result(merge, 0, control),
+          then: RABlock(inv, f, control) & RAIncomingControls.has(inv, f, merge, ids_empty()) &
+                RARecognizedOps.has(inv, f, ids_one(merge)) }
+    }),
+    forall(fn(inv, f, merge, incoming, slot) {
+        { when: RASource(inv, f, merge, "son.merge") & Operand.has(merge, slot, incoming),
+          then: RAIncomingControls.has(inv, f, merge, ids_one(incoming)) }
+    }),
+    forall(fn(inv, f, branch, control, predicate, taken, fallthrough) {
+        { when: RASource(inv, f, branch, "son.branch") & Operand.has(branch, 0, control) &
+                Operand.has(branch, 1, predicate) & Result(branch, 0, taken) & Result(branch, 1, fallthrough),
+          then: RABlock(inv, f, control) & RABlock(inv, f, taken) & RABlock(inv, f, fallthrough) &
+                RAControlEdge(inv, f, control, taken) & RAControlEdge(inv, f, control, fallthrough) &
+                RABranch(inv, f, branch, control, predicate, taken, fallthrough) &
+                RANode(inv, f, branch, "son.branch") & RAPin(inv, f, branch, control) &
+                RAUse(inv, f, branch, 1, predicate) & RARecognizedOps.has(inv, f, ids_one(branch)) }
+    }),
+    // A source edge already is the predecessor terminator. Its result names the
+    // arrival, while the merge result names the destination block.
+    forall(fn(inv, f, edge, control, arrival, merge, edgeSlot, dest) {
+        { when: RASource(inv, f, edge, "son.edge") & Operand.has(edge, 0, control) & Result(edge, 0, arrival) &
+                RASource(inv, f, merge, "son.merge") & Operand.has(merge, edgeSlot, arrival) &
+                Result(merge, 0, dest),
+          then: RABlock(inv, f, control) & RAControlEdge(inv, f, control, dest) &
+                RAJump(inv, f, edge, control, dest) & RANode(inv, f, edge, "son.edge") &
+                RAPin(inv, f, edge, control) & RARecognizedOps.has(inv, f, ids_one(edge)) }
+    }),
+    // Control-only merges also admit bare branch projections and region controls.
+    // Those transitions have no source edge operation, so keep a pending jump ID.
+    forall(fn(inv, f, merge, dest, incoming, slot, producer, resultSlot, kind) {
+        { when: RASource(inv, f, merge, "son.merge") & Result(merge, 0, dest) &
+                Operand.has(merge, slot, incoming) &
+                ValueDefinition.has(incoming, make_ResultDef(producer, resultSlot)) & OpKind.has(producer, kind) &
+                (kind != "son.edge"),
+          then: RADirectJump.has(inv, f, merge, slot, fresh_ir_id()) }
+    }),
+    forall(fn(inv, f, merge, incoming, slot, region, paramSlot) {
+        { when: RASource(inv, f, merge, "son.merge") & Operand.has(merge, slot, incoming) &
+                ValueDefinition.has(incoming, make_RegionParamDef(region, paramSlot)),
+          then: RADirectJump.has(inv, f, merge, slot, fresh_ir_id()) }
+    }),
+    forall(fn(jump, inv, f, merge, slot, dest, incoming) {
+        { when: RADirectJump.has(inv, f, merge, slot, jump) & Result(merge, 0, dest) &
+                Operand.has(merge, slot, incoming),
+          then: RABlock(inv, f, incoming) & RAControlEdge(inv, f, incoming, dest) &
+                RAJump(inv, f, jump, incoming, dest) & RANode(inv, f, jump, "cfg.br") &
+                RAPin(inv, f, jump, incoming) }
+    }),
+    // An edge may feed a branch, another edge, or the function exit directly.
+    // Such an edge result needs its own block rather than a merge binding.
+    forall(fn(inv, f, consumer, kind, control, slot, edge, from) {
+        { when: RASource(inv, f, consumer, kind) & (kind != "son.merge") & Operand.has(consumer, slot, control) &
+                ValueType.has(control, make_Apply(make_Ctor("son.control"), make_TNil())) &
+                ValueDefinition.has(control, make_ResultDef(edge, 0)) & RASource(inv, f, edge, "son.edge") &
+                Operand.has(edge, 0, from),
+          then: RABlock(inv, f, control) & RABlock(inv, f, from) & RAControlEdge(inv, f, from, control) &
+                RAJump(inv, f, edge, from, control) & RANode(inv, f, edge, "son.edge") &
+                RAPin(inv, f, edge, from) & RARecognizedOps.has(inv, f, ids_one(edge)) }
+    }),
+    forall(fn(inv, f, region, control, controlSlot) {
+        { when: RAFunction(inv, f, region) & Yield.has(region, controlSlot, control) &
+                ValueType.has(control, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RABlock(inv, f, control) & RAExit(inv, f, control) &
+                RAControlYield(inv, f, controlSlot, control) & RAReturnNode.has(inv, f, fresh_ir_id()) }
+    }),
+    forall(fn(inv, f, control, edge, from) {
+        { when: RAExit(inv, f, control) & ValueDefinition.has(control, make_ResultDef(edge, 0)) &
+                RASource(inv, f, edge, "son.edge") & Operand.has(edge, 0, from),
+          then: RABlock(inv, f, from) & RAControlEdge(inv, f, from, control) &
+                RAJump(inv, f, edge, from, control) & RANode(inv, f, edge, "son.edge") &
+                RAPin(inv, f, edge, from) & RARecognizedOps.has(inv, f, ids_one(edge)) }
+    }),
+    forall(fn(op, inv, f, control) {
+        { when: RAReturnNode.has(inv, f, op) & RAExit(inv, f, control),
+          then: RAReturn(inv, f, op, control) & RANode(inv, f, op, "func.return") & RAPin(inv, f, op, control) }
+    }),
+    forall(fn(inv, f, region, op, controlSlot, control, value, slot) {
+        { when: RAFunction(inv, f, region) & RAReturnNode.has(inv, f, op) &
+                RAControlYield(inv, f, controlSlot, control) & Yield.has(region, slot, value) &
+                (slot < controlSlot),
+          then: RAReturnValue(inv, f, op, slot, value) & RAUse(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, region, op, controlSlot, control, value, slot) {
+        { when: RAFunction(inv, f, region) & RAReturnNode.has(inv, f, op) &
+                RAControlYield(inv, f, controlSlot, control) & Yield.has(region, slot, value) &
+                (slot > controlSlot),
+          then: RAReturnValue(inv, f, op, (slot - 1), value) & RAUse(inv, f, op, (slot - 1), value) }
+    }),
+    forall(fn(inv, f, region, slot, value, ty) {
+        { when: RAFunction(inv, f, region) & RegionParam(region, slot, value) & ValueType.has(value, ty) &
+                (ty != make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAArgument(inv, f, slot, value) }
+    }),
+    forall(fn(inv, f, region, slot, control) {
+        { when: RAFunction(inv, f, region) & RegionParam(region, slot, control) &
+                ValueType.has(control, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RABlock(inv, f, control) & RAEntry(inv, f, control) }
+    }),
+    // A native control result is the continuation after the instruction executes.
+    forall(fn(inv, f, op, kind, input, inputSlot, resultSlot, output) {
+        { when: RASource(inv, f, op, kind) & (kind != "son.merge") & (kind != "son.branch") &
+                (kind != "son.edge") & Operand.has(op, inputSlot, input) &
+                ValueType.has(input, make_Apply(make_Ctor("son.control"), make_TNil())) &
+                Result(op, resultSlot, output) &
+                ValueType.has(output, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAContinuationJump.has(inv, f, op, fresh_ir_id()) & RABlock(inv, f, output) &
+                RAControlEdge(inv, f, input, output) }
+    }),
+    forall(fn(jump, inv, f, op, input, resultSlot, output) {
+        { when: RAContinuationJump.has(inv, f, op, jump) & RAPin(inv, f, op, input) &
+                Result(op, resultSlot, output) &
+                ValueType.has(output, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAJump(inv, f, jump, input, output) & RANode(inv, f, jump, "cfg.br") &
+                RAPin(inv, f, jump, input) }
+    }),
+    // All explicit control operands pin their operation. State dependencies remain
+    // ordinary typed uses and definitions, including joined state values.
+    forall(fn(inv, f, op, kind, control, slot) {
+        { when: RASource(inv, f, op, kind) & (kind != "son.merge") & (kind != "son.branch") &
+                (kind != "son.edge") & Operand.has(op, slot, control) &
+                ValueType.has(control, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RABlock(inv, f, control) & RAPin(inv, f, op, control) & RANode(inv, f, op, kind) &
+                RARecognizedOps.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RASource(inv, f, op, kind) & TMDLPureKind(inv, kind),
+          then: RAMovable(inv, f, op) & RAPureOps.has(inv, f, ids_one(op)) &
+                RARecognizedOps.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, block) {
+        { when: RAPin(inv, f, op, block),
+          then: RAExplicitlyPinned.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, kind, value, slot, ty) {
+        { when: RASource(inv, f, op, kind) & (kind != "son.merge") &
+                ids_not_contains(RAStructuredOwnerSet.get(inv, f), op) & Operand.has(op, slot, value) &
+                ValueType.has(value, ty) & (ty != make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAUse(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, op, kind, slot, value, ty) {
+        { when: RASource(inv, f, op, kind) & (kind != "son.merge") &
+                ids_not_contains(RAStructuredOwnerSet.get(inv, f), op) & Result(op, slot, value) &
+                ValueType.has(value, ty) & (ty != make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RADef(inv, f, op, value) }
+    }),
+    forall(fn(inv, f, op, block, dest) {
+        { when: RAJump(inv, f, op, block, dest),
+          then: RATerminator(inv, f, op, block) }
+    }),
+    forall(fn(inv, f, op, block, predicate, taken, fallthrough) {
+        { when: RABranch(inv, f, op, block, predicate, taken, fallthrough),
+          then: RATerminator(inv, f, op, block) }
+    }),
+];
+
+pub let ra_control_normalize = [
+    forall(fn(inv, f, op, block, point, kind) {
+        { when: RACFGSource(inv, f, op, block, point) & RASource(inv, f, op, kind) &
+                ids_not_contains(RAPureOps.get(inv, f), op),
+          then: RAPin(inv, f, op, block) & RANode(inv, f, op, kind) &
+                RAExplicitlyPinned.has(inv, f, ids_one(op)) & RARecognizedOps.has(inv, f, ids_one(op)) }
+    }),
+    // A control-free graph executes its demanded operations in one implicit block.
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region) & Mode.has(region, make_Graph()) &
+                RAStructuredFlag.has(inv, f, false) & (ids_length(RAControlTokens.get(inv, f)) == 0),
+          then: RAImplicitControl.has(inv, f, fresh_ir_id()) & RAReturnNode.has(inv, f, fresh_ir_id()) }
+    }),
+    forall(fn(block, inv, f) {
+        { when: RAImplicitControl.has(inv, f, block),
+          then: RABlock(inv, f, block) & RAEntry(inv, f, block) & RAExit(inv, f, block) }
+    }),
+    forall(fn(block, inv, f, op) {
+        { when: RAImplicitControl.has(inv, f, block) & RAReturnNode.has(inv, f, op),
+          then: RAReturn(inv, f, op, block) & RANode(inv, f, op, "func.return") & RAPin(inv, f, op, block) }
+    }),
+    forall(fn(block, inv, f, region, op, value, slot) {
+        { when: RAImplicitControl.has(inv, f, block) & RAFunction(inv, f, region) & RAReturnNode.has(inv, f, op) &
+                Yield.has(region, slot, value),
+          then: RAReturnValue(inv, f, op, slot, value) & RAUse(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, op, block) {
+        { when: RAReturn(inv, f, op, block),
+          then: RATerminator(inv, f, op, block) }
+    }),
+];
+
+pub let ra_control_entry = [
+    forall(fn(inv, f, merge, control) {
+        { when: RASource(inv, f, merge, "son.merge") & Result(merge, 0, control) &
+                (0 == ids_length(RAIncomingControls.get(inv, f, merge))),
+          then: RAEntry(inv, f, control) }
+    }),
+];
+
+pub let ra_control_reach = [
+    forall(fn(inv, f, block) {
+        { when: RABlock(inv, f, block),
+          then: RAReach(inv, f, block, block) & RAAvoided.has(inv, f, block, ids_empty()) }
+    }),
+    forall(fn(inv, f, from, dest) {
+        { when: RAControlEdge(inv, f, from, dest),
+          then: RAReach(inv, f, from, dest) }
+    }),
+    forall(fn(inv, f, from, middle, dest) {
+        { when: RAReach(inv, f, from, middle) & RAControlEdge(inv, f, middle, dest),
+          then: RAReach(inv, f, from, dest) }
+    }),
+    forall(fn(inv, f, avoided, entry) {
+        { when: RABlock(inv, f, avoided) & RAEntry(inv, f, entry) & (avoided != entry),
+          then: RAAvoid(inv, f, avoided, entry) }
+    }),
+    forall(fn(inv, f, avoided, from, dest) {
+        { when: RAAvoid(inv, f, avoided, from) & RAControlEdge(inv, f, from, dest) & (avoided != dest),
+          then: RAAvoid(inv, f, avoided, dest) }
+    }),
+    forall(fn(inv, f, avoided, block) {
+        { when: RAAvoid(inv, f, avoided, block),
+          then: RAAvoided.has(inv, f, avoided, ids_one(block)) }
+    }),
+];
+
+pub let ra_control_dom = [
+    forall(fn(inv, f, dom, block, entry) {
+        { when: RABlock(inv, f, dom) & RABlock(inv, f, block) & RAEntry(inv, f, entry) &
+                RAReach(inv, f, entry, block) & ids_not_contains(RAAvoided.get(inv, f, dom), block),
+          then: RADom(inv, f, dom, block) }
+    }),
+];
+
+pub let ra_control_demand = [
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RALiveOps.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, op, block) {
+        { when: RAPin(inv, f, op, block),
+          then: RADemand(inv, f, op, block) }
+    }),
+    forall(fn(inv, f, user, block, slot, value, op) {
+        { when: RADemand(inv, f, user, block) & RAUse(inv, f, user, slot, value) & RADef(inv, f, op, value),
+          then: RADemand(inv, f, op, block) }
+    }),
+    forall(fn(inv, f, op, block, kind) {
+        { when: RADemand(inv, f, op, block) & RASource(inv, f, op, kind) & (kind != "son.merge") &
+                (kind != "son.branch") & (kind != "son.edge"),
+          then: RANode(inv, f, op, kind) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RANode(inv, f, op, kind),
+          then: RALiveOps.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, block, slot, value) {
+        { when: RABinding(inv, f, block, slot, value),
+          then: RAValueHome(inv, f, value, block) }
+    }),
+    forall(fn(inv, f, slot, value, entry) {
+        { when: RAArgument(inv, f, slot, value) & RAEntry(inv, f, entry),
+          then: RAValueHome(inv, f, value, entry) }
+    }),
+    forall(fn(inv, f, op, value, block) {
+        { when: RADef(inv, f, op, value) & RAPin(inv, f, op, block),
+          then: RAValueHome(inv, f, value, block) }
+    }),
+    forall(fn(inv, f, op, slot, value, block) {
+        { when: RAUse(inv, f, op, slot, value) & RAValueHome(inv, f, value, block),
+          then: RARequired(inv, f, op, block) }
+    }),
+    forall(fn(inv, f, user, slot, value, producer, block) {
+        { when: RAUse(inv, f, user, slot, value) & RADef(inv, f, producer, value) &
+                RARequired(inv, f, producer, block),
+          then: RARequired(inv, f, user, block) }
+    }),
+];
+
+pub let ra_control_mandatory = [
+    // Least fixed point proves a demand is reached on every path, including both
+    // branch arms. A loop that can avoid the demand never acquires this fact.
+    forall(fn(inv, f, op, block) {
+        { when: RADemand(inv, f, op, block),
+          then: RAAllPathsDemand(inv, f, op, block) }
+    }),
+    forall(fn(inv, f, jump, block, dest, op) {
+        { when: RAJump(inv, f, jump, block, dest) & RAAllPathsDemand(inv, f, op, dest),
+          then: RAAllPathsDemand(inv, f, op, block) }
+    }),
+    forall(fn(inv, f, branch, block, predicate, taken, fallthrough, op) {
+        { when: RABranch(inv, f, branch, block, predicate, taken, fallthrough) &
+                RAAllPathsDemand(inv, f, op, taken) & RAAllPathsDemand(inv, f, op, fallthrough),
+          then: RAAllPathsDemand(inv, f, op, block) }
+    }),
+];
+
+pub let ra_control_mandatory_bad = [
+    forall(fn(inv, f, op, kind) {
+        { when: RANode(inv, f, op, kind),
+          then: RAMandatoryBad.has(inv, f, op, ids_empty()) & RAMandatoryEarlier.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, op, demand, block) {
+        { when: RADemand(inv, f, op, demand) & RABlock(inv, f, block) & RAAvoid(inv, f, block, demand),
+          then: RAMandatoryBad.has(inv, f, op, ids_one(block)) }
+    }),
+];
+
+pub let ra_control_mandatory_legal = [
+    forall(fn(inv, f, op, block, entry) {
+        { when: RAAllPathsDemand(inv, f, op, block) & ids_not_contains(RAMandatoryBad.get(inv, f, op), block) &
+                RAEntry(inv, f, entry) & RAReach(inv, f, entry, block),
+          then: RAMandatoryPlacement(inv, f, op, block) }
+    }),
+];
+
+pub let ra_control_mandatory_extrema = [
+    forall(fn(inv, f, op, earlier, later) {
+        { when: RAMandatoryPlacement(inv, f, op, earlier) & RAMandatoryPlacement(inv, f, op, later) &
+                (earlier != later) & RADom(inv, f, earlier, later),
+          then: RAMandatoryEarlier.has(inv, f, op, ids_one(earlier)) }
+    }),
+];
+
+pub let ra_control_pin = [
+    forall(fn(inv, f, op, block, kind) {
+        { when: RAMandatoryPlacement(inv, f, op, block) & RASource(inv, f, op, kind) &
+                ids_not_contains(RAPureOps.get(inv, f), op) &
+                ids_not_contains(RAExplicitlyPinned.get(inv, f), op) &
+                ids_not_contains(RAMandatoryEarlier.get(inv, f, op), block),
+          then: RAPin(inv, f, op, block) & RARecognizedOps.has(inv, f, ids_one(op)) }
+    }),
+];
+
+pub let ra_control_bad = [
+    forall(fn(inv, f, op, kind) {
+        { when: RANode(inv, f, op, kind),
+          then: RABadPlacement.has(inv, f, op, ids_empty()) & RAEarlierPlacement.has(inv, f, op, ids_empty()) &
+                RALaterPlacement.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, op, kind, block, demand) {
+        { when: RANode(inv, f, op, kind) & RABlock(inv, f, block) & RADemand(inv, f, op, demand) &
+                RAAvoid(inv, f, block, demand),
+          then: RABadPlacement.has(inv, f, op, ids_one(block)) }
+    }),
+    forall(fn(inv, f, op, kind, block, required) {
+        { when: RANode(inv, f, op, kind) & RABlock(inv, f, block) & RARequired(inv, f, op, required) &
+                RAAvoid(inv, f, required, block),
+          then: RABadPlacement.has(inv, f, op, ids_one(block)) }
+    }),
+];
+
+pub let ra_control_legal = [
+    forall(fn(inv, f, op, kind, block, entry) {
+        { when: RANode(inv, f, op, kind) & RAMovable(inv, f, op) & RABlock(inv, f, block) &
+                ids_not_contains(RAExplicitlyPinned.get(inv, f), op) & RAEntry(inv, f, entry) &
+                RAReach(inv, f, entry, block) & ids_not_contains(RABadPlacement.get(inv, f, op), block),
+          then: RALegalPlacement(inv, f, op, block) }
+    }),
+];
+
+pub let ra_control_extrema = [
+    forall(fn(inv, f, op, earlier, later) {
+        { when: RALegalPlacement(inv, f, op, earlier) & RALegalPlacement(inv, f, op, later) &
+                RADom(inv, f, earlier, later) & (earlier != later),
+          then: RAEarlierPlacement.has(inv, f, op, ids_one(later)) &
+                RALaterPlacement.has(inv, f, op, ids_one(earlier)) }
+    }),
+];
+
+pub let ra_control_place = [
+    forall(fn(inv, f, op, block) {
+        { when: RALegalPlacement(inv, f, op, block) &
+                ids_not_contains(RAEarlierPlacement.get(inv, f, op), block),
+          then: RAPlace(inv, f, 0, op, block) }
+    }),
+    forall(fn(inv, f, op, block) {
+        { when: RALegalPlacement(inv, f, op, block) & ids_not_contains(RALaterPlacement.get(inv, f, op), block),
+          then: RAPlace(inv, f, 1, op, block) }
+    }),
+    forall(fn(inv, f, op, block) {
+        { when: RAPin(inv, f, op, block),
+          then: RAPlace(inv, f, 0, op, block) & RAPlace(inv, f, 1, op, block) }
+    }),
+];
+
+pub let ra_control_pred = [
+    forall(fn(value, name, args) {
+        { when: ValueType.has(value, make_Apply(make_Ctor(name), args)) & (name != "son.control") &
+                (name != "builtin.state"),
+          then: RAScheduleHardware(value) }
+    }),
+    forall(fn(inv, f, candidate, op, block) {
+        { when: RAPlace(inv, f, candidate, op, block),
+          then: RAScheduleDefs.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, op, block, value) {
+        { when: RAPlace(inv, f, candidate, op, block) & RADef(inv, f, op, value) & RAScheduleHardware(value),
+          then: RAScheduleDefs.has(inv, f, op, ids_one(value)) }
+    }),
+    // A user in another block remains outside this prefix and prevents a kill.
+    forall(fn(inv, f, candidate, op, block, slot, value) {
+        { when: RAPlace(inv, f, candidate, op, block) & RAUse(inv, f, op, slot, value) &
+                RAScheduleHardware(value),
+          then: RAScheduleUsers.has(inv, f, candidate, value, ids_one(op)) }
+    }),
+    forall(fn(inv, f, block) {
+        { when: RABlock(inv, f, block),
+          then: RABlockOps.has(inv, f, 0, block, ids_empty()) & RABlockOps.has(inv, f, 1, block, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, op, block) {
+        { when: RAPlace(inv, f, candidate, op, block),
+          then: RABlockOps.has(inv, f, candidate, block, ids_one(op)) }
+    }),
+    forall(fn(inv, f, candidate, user, block, producer, slot, value) {
+        { when: RAPlace(inv, f, candidate, user, block) & RAPlace(inv, f, candidate, producer, block) &
+                RAUse(inv, f, user, slot, value) & RADef(inv, f, producer, value),
+          then: RAPred(inv, f, candidate, user, producer) }
+    }),
+    forall(fn(inv, f, candidate, term, block, op) {
+        { when: RAPlace(inv, f, candidate, term, block) & RAPlace(inv, f, candidate, op, block) &
+                RATerminator(inv, f, term, block) & (term != op),
+          then: RAPred(inv, f, candidate, term, op) }
+    }),
+    forall(fn(inv, f, later, block, laterPoint, earlier, earlierPoint, candidate) {
+        { when: RACFGSource(inv, f, later, block, laterPoint) &
+                RACFGSource(inv, f, earlier, block, earlierPoint) & (laterPoint > earlierPoint) &
+                RAPin(inv, f, later, block) & RAPin(inv, f, earlier, block) &
+                RAPlace(inv, f, candidate, later, block) & RAPlace(inv, f, candidate, earlier, block),
+          then: RAPred(inv, f, candidate, later, earlier) }
+    }),
+];
+
+pub let ra_control_seed = [
+    forall(fn(inv, f, block) {
+        { when: RABlock(inv, f, block),
+          then: RAScheduleState(make_RAS(inv, f, 0, block, sequence_empty(), ids_empty())) &
+                RAScheduleState(make_RAS(inv, f, 1, block, sequence_empty(), ids_empty())) }
+    }),
+];
+
+pub let ra_control_blocked = [
+    forall(fn(state) {
+        { when: RAScheduleState(state),
+          then: RABlocked.has(state, ids_empty()) }
+    }),
+    forall(fn(state, inv, f, candidate, block, sequence, seen, op, pred) {
+        { when: RAScheduleState(state) & (state == make_RAS(inv, f, candidate, block, sequence, seen)) &
+                RAPlace(inv, f, candidate, op, block) & RAPred(inv, f, candidate, op, pred) &
+                ids_not_contains(seen, pred),
+          then: RABlocked.has(state, ids_one(op)) }
+    }),
+    forall(fn(state, inv, f, block, sequence, seen, op) {
+        { when: RAScheduleState(state) & (state == make_RAS(inv, f, 1, block, sequence, seen)) &
+                RAPlace(inv, f, 1, op, block) & ids_not_contains(seen, op),
+          then: RAScheduleKills.has(state, op, ids_empty()) }
+    }),
+    forall(fn(state, inv, f, block, sequence, seen, op, slot, value) {
+        { when: RAScheduleState(state) & (state == make_RAS(inv, f, 1, block, sequence, seen)) &
+                RAPlace(inv, f, 1, op, block) & ids_not_contains(seen, op) & RAUse(inv, f, op, slot, value) &
+                RAScheduleHardware(value) &
+                (ids_diff(RAScheduleUsers.get(inv, f, 1, value), seen) == ids_one(op)),
+          then: RAScheduleKills.has(state, op, ids_one(value)) }
+    }),
+];
+
+pub let ra_control_priority = [
+    forall(fn(state, inv, f, block, sequence, seen, op) {
+        { when: RAScheduleState(state) & (state == make_RAS(inv, f, 1, block, sequence, seen)) &
+                RAPlace(inv, f, 1, op, block) & ids_not_contains(seen, op) &
+                ids_not_contains(RABlocked.get(state), op),
+          then: RAReadyPressure.has(
+              state, (ids_length(RAScheduleDefs.get(inv, f, op)) - ids_length(RAScheduleKills.get(state, op)))
+          ) }
+    }),
+];
+
+pub let ra_control_ready = [
+    forall(fn(state, inv, f, block, sequence, seen, op) {
+        { when: RAScheduleState(state) & (state == make_RAS(inv, f, 0, block, sequence, seen)) &
+                RAPlace(inv, f, 0, op, block) & ids_not_contains(seen, op) &
+                ids_not_contains(RABlocked.get(state), op),
+          then: RAReadyMin.has(state, op) }
+    }),
+    forall(fn(state, inv, f, block, sequence, seen, op) {
+        { when: RAScheduleState(state) & (state == make_RAS(inv, f, 1, block, sequence, seen)) &
+                RAPlace(inv, f, 1, op, block) & ids_not_contains(seen, op) &
+                ids_not_contains(RABlocked.get(state), op) &
+                RAReadyPressure.has(
+                    state,
+                    (ids_length(RAScheduleDefs.get(inv, f, op)) - ids_length(RAScheduleKills.get(state, op)))
+                ),
+          then: RAReadyMin.has(state, op) }
+    }),
+];
+
+pub let ra_control_step = [
+    forall(fn(state, inv, f, candidate, block, sequence, seen, op) {
+        { when: RAScheduleState(state) & (state == make_RAS(inv, f, candidate, block, sequence, seen)) &
+                RAReadyMin.has(state, op),
+          then: RAScheduleState(
+              make_RAS(inv, f, candidate, block, sequence_push(sequence, op), ids_insert(seen, op))
+          ) }
+    }),
+];
+
+pub let ra_control_finish = [
+    forall(fn(state, inv, f, candidate, block, sequence, seen) {
+        { when: RAScheduleState(state) & (state == make_RAS(inv, f, candidate, block, sequence, seen)) &
+                RABlockOps.has(inv, f, candidate, block, seen),
+          then: RABlockScheduled(inv, f, candidate, block) & RAEnumerate(state, 0) }
+    }),
+    forall(fn(state, index, inv, f, candidate, block, sequence, seen, op) {
+        { when: RAEnumerate(state, index) & (state == make_RAS(inv, f, candidate, block, sequence, seen)) &
+                (index < sequence_length(sequence)) & (op == sequence_get(sequence, index)),
+          then: RAAt(inv, f, candidate, block, op, index) & RAEnumerate(state, (index + 1)) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RAPlacedOps.has(inv, f, 0, ids_empty()) & RAPlacedOps.has(inv, f, 1, ids_empty()) &
+                RAScheduledOps.has(inv, f, 0, ids_empty()) & RAScheduledOps.has(inv, f, 1, ids_empty()) &
+                RABlocks.has(inv, f, ids_empty()) & RAControlErrors.has(inv, f, ids_empty()) &
+                RAEntries.has(inv, f, ids_empty()) & RAReachableBlocks.has(inv, f, ids_empty()) &
+                RAScheduledBlocks.has(inv, f, 0, ids_empty()) & RAScheduledBlocks.has(inv, f, 1, ids_empty()) }
+    }),
+    forall(fn(inv, f, block) {
+        { when: RABlock(inv, f, block),
+          then: RABlocks.has(inv, f, ids_one(block)) & RATerminators.has(inv, f, block, ids_empty()) }
+    }),
+    forall(fn(inv, f, block) {
+        { when: RAEntry(inv, f, block),
+          then: RAEntries.has(inv, f, ids_one(block)) }
+    }),
+    forall(fn(inv, f, entry, block) {
+        { when: RAEntry(inv, f, entry) & RAReach(inv, f, entry, block),
+          then: RAReachableBlocks.has(inv, f, ids_one(block)) }
+    }),
+    forall(fn(inv, f, op, block) {
+        { when: RATerminator(inv, f, op, block),
+          then: RATerminators.has(inv, f, block, ids_one(op)) }
+    }),
+    forall(fn(inv, f, candidate, op, block) {
+        { when: RAPlace(inv, f, candidate, op, block),
+          then: RAPlacedOps.has(inv, f, candidate, ids_one(op)) }
+    }),
+    forall(fn(inv, f, candidate, block, op, index) {
+        { when: RAAt(inv, f, candidate, block, op, index),
+          then: RAScheduledOps.has(inv, f, candidate, ids_one(op)) }
+    }),
+    forall(fn(inv, f, candidate, block) {
+        { when: RABlockScheduled(inv, f, candidate, block),
+          then: RAScheduledBlocks.has(inv, f, candidate, ids_one(block)) }
+    }),
+];
+
+pub let ra_control_complete = [
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region) & (ids_length(RAControlErrors.get(inv, f)) == 0) &
+                (ids_length(RAEntries.get(inv, f)) == 1) & RASourceOps.has(inv, f, RARecognizedOps.get(inv, f)) &
+                RALiveOps.has(inv, f, RAPlacedOps.get(inv, f, 0)) &
+                RALiveOps.has(inv, f, RAScheduledOps.get(inv, f, 0)) &
+                RABlocks.has(inv, f, RAScheduledBlocks.get(inv, f, 0)),
+          then: RAControlComplete(inv, f, 0) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region) & (ids_length(RAControlErrors.get(inv, f)) == 0) &
+                (ids_length(RAEntries.get(inv, f)) == 1) & RASourceOps.has(inv, f, RARecognizedOps.get(inv, f)) &
+                RALiveOps.has(inv, f, RAPlacedOps.get(inv, f, 1)) &
+                RALiveOps.has(inv, f, RAScheduledOps.get(inv, f, 1)) &
+                RABlocks.has(inv, f, RAScheduledBlocks.get(inv, f, 1)),
+          then: RAControlComplete(inv, f, 1) }
+    }),
+];
+
+pub let ra_control_check = [
+    forall(fn(inv, f, first, second) {
+        { when: RAEntry(inv, f, first) & RAEntry(inv, f, second) & (first != second),
+          then: RAControlError(inv, f, "multiple entries", f) }
+    }),
+    forall(fn(inv, f, candidate, op, first, second) {
+        { when: RAPlace(inv, f, candidate, op, first) & RAPlace(inv, f, candidate, op, second) &
+                (first != second),
+          then: RAControlError(inv, f, "ambiguous placement", op) }
+    }),
+    forall(fn(inv, f, op, block, required) {
+        { when: RAPin(inv, f, op, block) & RARequired(inv, f, op, required) & RAAvoid(inv, f, required, block),
+          then: RAControlError(inv, f, "operand binding does not dominate pinned use", op) }
+    }),
+    forall(fn(inv, f, candidate, user, userBlock, producer, producerBlock, slot, value) {
+        { when: RAPlace(inv, f, candidate, user, userBlock) &
+                RAPlace(inv, f, candidate, producer, producerBlock) & RAUse(inv, f, user, slot, value) &
+                RADef(inv, f, producer, value) & RAAvoid(inv, f, producerBlock, userBlock),
+          then: RAControlError(inv, f, "definition does not dominate use", user) }
+    }),
+    forall(fn(inv, f, message, entity) {
+        { when: RAControlError(inv, f, message, entity),
+          then: RAControlErrors.has(inv, f, ids_one(entity)) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RASource(inv, f, op, kind) & ids_not_contains(RARecognizedOps.get(inv, f), op),
+          then: RAControlError(inv, f, "operation has no safe execution placement", op) }
+    }),
+    forall(fn(inv, f, block) {
+        { when: RABlock(inv, f, block) & ids_not_contains(RAReachableBlocks.get(inv, f), block),
+          then: RAControlError(inv, f, "unreachable control block", block) }
+    }),
+    forall(fn(inv, f, block) {
+        { when: RABlock(inv, f, block) & (ids_length(RATerminators.get(inv, f, block)) != 1),
+          then: RAControlError(inv, f, "control block requires one terminator", block) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RANode(inv, f, op, kind) & ids_not_contains(RAScheduledOps.get(inv, f, 0), op),
+          then: RAControlError(inv, f, "earliest candidate contains an unscheduled operation", op) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RANode(inv, f, op, kind) & ids_not_contains(RAScheduledOps.get(inv, f, 1), op),
+          then: RAControlError(inv, f, "latest candidate contains an unscheduled operation", op) }
+    }),
+];
+
+pub let ra_control_functions = [
+    forall(fn(inv, root, f) {
+        { when: RARequest(inv, root) & Within(root, f) & Function(f),
+          then: RARequestedFunction(inv, f) & RAAlreadyAllocated.has(inv, f, false) }
+    }),
+    forall(fn(inv, root, f, region, assignments) {
+        { when: RARequest(inv, root) & Within(root, f) & Function(f) & OwnedRegion.has(f, 0, region) &
+                Mode.has(region, make_CFG()) & Attribute.has(f, "assignment", make_ListAttr(assignments)),
+          then: RAAllocatedFunction(inv, f) & RAAlreadyAllocated.has(inv, f, true) }
+    }),
+];

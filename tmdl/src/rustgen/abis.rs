@@ -1,10 +1,22 @@
 use super::*;
 
-fn abi_kind(kind: ast::AbiValueKind) -> proc_macro2::TokenStream {
+fn abi_register_fact(role: &str, register: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let insert = allocation::Compiler::insert(
+        "TMDLAbiRegister",
+        &[
+            quote! { #role },
+            quote! { class.name() },
+            quote! { i64::from(index) },
+        ],
+    );
+    quote! { { let (class, index) = #register; #insert } }
+}
+
+fn abi_kind(kind: ast::AbiValueKind) -> (proc_macro2::TokenStream, &'static str) {
     match kind {
-        ast::AbiValueKind::Int => quote! { tir::backend::abi::ValueKind::Int },
-        ast::AbiValueKind::Float => quote! { tir::backend::abi::ValueKind::Float },
-        ast::AbiValueKind::Vector => quote! { tir::backend::abi::ValueKind::Vector },
+        ast::AbiValueKind::Int => (quote! { tir::backend::abi::ValueKind::Int }, "int"),
+        ast::AbiValueKind::Float => (quote! { tir::backend::abi::ValueKind::Float }, "float"),
+        ast::AbiValueKind::Vector => (quote! { tir::backend::abi::ValueKind::Vector }, "vector"),
     }
 }
 
@@ -109,6 +121,7 @@ fn caller_saved_registers(
     files: &[ast::File],
     classes: &HashMap<String, &ast::RegisterClass>,
     excluded: &HashSet<(String, u16)>,
+    facts: &mut Vec<proc_macro2::TokenStream>,
 ) -> Vec<proc_macro2::TokenStream> {
     let mut caller_saved = Vec::new();
     let mut seen = HashSet::new();
@@ -131,7 +144,9 @@ fn caller_saved_registers(
             };
             let identity = (file.clone(), index);
             if !excluded.contains(&identity) && seen.insert(identity) {
-                caller_saved.push(quote! { (#class_id, #index) });
+                let register = quote! { (#class_id, #index) };
+                facts.push(abi_register_fact("caller-saved", &register));
+                caller_saved.push(register);
             }
         }
     }
@@ -141,6 +156,7 @@ fn caller_saved_registers(
 fn abi_stack_layout_ts(
     abi: &ast::Abi,
     item_cache: &HashMap<&str, &ast::Item>,
+    facts: &mut Vec<proc_macro2::TokenStream>,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let stack = abi.stack.as_ref().ok_or_else(|| {
         TMDLError::Codegen(format!(
@@ -179,10 +195,34 @@ fn abi_stack_layout_ts(
             )));
         }
     };
-    let save_style = match stack.save_style.unwrap_or(ast::AbiSaveStyle::FrameSlots) {
-        ast::AbiSaveStyle::FrameSlots => quote! { tir::backend::abi::SaveStyle::FrameSlots },
-        ast::AbiSaveStyle::PushPop => quote! { tir::backend::abi::SaveStyle::PushPop },
+    let (save_style, style) = match stack.save_style.unwrap_or(ast::AbiSaveStyle::FrameSlots) {
+        ast::AbiSaveStyle::FrameSlots => (
+            quote! { tir::backend::abi::SaveStyle::FrameSlots },
+            "frame-slots",
+        ),
+        ast::AbiSaveStyle::PushPop => {
+            (quote! { tir::backend::abi::SaveStyle::PushPop }, "push-pop")
+        }
     };
+    facts.push(allocation::Compiler::insert(
+        "TMDLStackLayout",
+        &[
+            quote! { i64::from(#align) },
+            quote! { i64::from(#slot_size) },
+            quote! { i64::from(#red_zone) },
+            quote! { #grows_down },
+            quote! { #style },
+        ],
+    ));
+    let link_bytes = if abi.classifier.as_deref() == Some("sysv") {
+        slot_size
+    } else {
+        0
+    };
+    facts.push(allocation::Compiler::insert(
+        "TMDLStackLinkBytes",
+        &[quote! { i64::from(#link_bytes) }],
+    ));
     Ok(quote! {
         tir::backend::abi::StackLayout {
             align: #align,
@@ -194,127 +234,177 @@ fn abi_stack_layout_ts(
     })
 }
 
+fn abi_pass_sequences(
+    direction: &str,
+    passes: &[ast::AbiPassSequence],
+    classes: &HashMap<String, &ast::RegisterClass>,
+    facts: &mut Vec<proc_macro2::TokenStream>,
+) -> Result<Vec<proc_macro2::TokenStream>, TMDLError> {
+    passes
+        .iter()
+        .map(|pass| {
+            let (kind, kind_name) = abi_kind(pass.kind);
+            let registers = abi_registers(&pass.registers, classes)?;
+            for (slot, (register, _, _)) in registers.iter().enumerate() {
+                let slot = slot as i64;
+                let pin = allocation::Compiler::insert(
+                    "TMDLAbiPin",
+                    &[
+                        quote! { #direction },
+                        quote! { #kind_name },
+                        quote! { #slot },
+                        quote! { class.name() },
+                        quote! { i64::from(index) },
+                    ],
+                );
+                facts.push(quote! { { let (class, index) = #register; #pin } });
+            }
+            let (overflow, overflow_name) = match pass.overflow.unwrap_or(ast::AbiOverflow::Stack) {
+                ast::AbiOverflow::Stack => (quote! { tir::backend::abi::Overflow::Stack }, "stack"),
+                ast::AbiOverflow::Kind(kind) => {
+                    let (kind, name) = abi_kind(kind);
+                    (quote! { tir::backend::abi::Overflow::Chain(#kind) }, name)
+                }
+            };
+            facts.push(allocation::Compiler::insert(
+                "TMDLAbiOverflow",
+                &[
+                    quote! { #direction },
+                    quote! { #kind_name },
+                    quote! { #overflow_name },
+                ],
+            ));
+            let regs = registers.into_iter().map(|(register, _, _)| register);
+            Ok(quote! {
+                tir::backend::abi::PassSeq {
+                    kind: #kind,
+                    regs: &[#(#regs),*],
+                    overflow: #overflow,
+                }
+            })
+        })
+        .collect()
+}
+
+fn emit_abi(
+    abi: &ast::Abi,
+    files: &[ast::File],
+    item_cache: &HashMap<&str, &ast::Item>,
+    classes: &HashMap<String, &ast::RegisterClass>,
+    allocation: &mut allocation::Compiler,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    let name = abi.alias.as_deref().unwrap_or(&abi.name);
+    let mut facts = Vec::new();
+    let stack_layout = abi_stack_layout_ts(abi, item_cache, &mut facts)?;
+
+    let role = |name: &str| -> Result<Option<(proc_macro2::TokenStream, String, u16)>, TMDLError> {
+        abi.roles
+            .iter()
+            .find(|role| role.name == name)
+            .map(|role| abi_register(&role.register, classes))
+            .transpose()
+    };
+    let sp = role("sp")?
+        .ok_or_else(|| TMDLError::Codegen(format!("ABI '{}' does not declare sp", abi.name)))?;
+    let ra = role("ra")?;
+    let fp = role("fp")?;
+
+    let args = abi_pass_sequences("arg", &abi.args, classes, &mut facts)?;
+    let rets = abi_pass_sequences("ret", &abi.rets, classes, &mut facts)?;
+    let callee_saved = abi_registers(abi.callee_saved.as_deref().unwrap_or_default(), classes)?;
+    let reserved = abi_registers(abi.reserved.as_deref().unwrap_or_default(), classes)?;
+
+    let mut excluded = HashSet::new();
+    excluded.extend(
+        callee_saved
+            .iter()
+            .map(|(_, file, index)| (file.clone(), *index)),
+    );
+    excluded.extend(
+        reserved
+            .iter()
+            .map(|(_, file, index)| (file.clone(), *index)),
+    );
+    excluded.insert((sp.1.clone(), sp.2));
+    if let Some((_, file, index)) = &ra {
+        excluded.insert((file.clone(), *index));
+    }
+    if let Some((_, file, index)) = &fp {
+        excluded.insert((file.clone(), *index));
+    }
+    let caller_saved = caller_saved_registers(files, classes, &excluded, &mut facts);
+    for (role, registers) in [("callee-saved", &callee_saved), ("reserved", &reserved)] {
+        facts.extend(
+            registers
+                .iter()
+                .map(|(register, _, _)| abi_register_fact(role, register)),
+        );
+    }
+    for (role, register) in [("sp", Some(&sp)), ("ra", ra.as_ref()), ("fp", fp.as_ref())] {
+        if let Some((register, _, _)) = register {
+            facts.push(abi_register_fact(role, register));
+        }
+    }
+    allocation.abi(name, quote! { #(#facts)* });
+
+    let callee_saved = callee_saved.into_iter().map(|(register, _, _)| register);
+    let reserved = reserved.into_iter().map(|(register, _, _)| register);
+    let sp = sp.0;
+    let ra = match ra {
+        Some((register, _, _)) => quote! { Some(#register) },
+        None => quote! { None },
+    };
+    let fp = match fp {
+        Some((register, _, _)) => quote! { Some(#register) },
+        None => quote! { None },
+    };
+    let classifier = match abi.classifier.as_deref() {
+        Some("riscv") => quote! { tir::backend::abi::ClassifierKind::Riscv },
+        Some("aapcs64") => quote! { tir::backend::abi::ClassifierKind::Aapcs64 },
+        Some("sysv") => quote! { tir::backend::abi::ClassifierKind::Sysv },
+        _ => {
+            return Err(TMDLError::Codegen(format!(
+                "ABI '{}' has no known classifier",
+                abi.name
+            )));
+        }
+    };
+
+    Ok(quote! {
+        tir::backend::abi::AbiInfo {
+            name: #name,
+            stack: #stack_layout,
+            sp: #sp,
+            ra: #ra,
+            fp: #fp,
+            indirect_result: None,
+            argument_group_alignment: None,
+            argument_group_policy: None,
+            args: &[#(#args),*],
+            rets: &[#(#rets),*],
+            callee_saved: &[#(#callee_saved),*],
+            caller_saved: &[#(#caller_saved),*],
+            reserved: &[#(#reserved),*],
+            classifier: #classifier,
+        }
+    })
+}
+
 pub(super) fn emit_abi_info(
     files: &[ast::File],
     item_cache: &HashMap<&str, &ast::Item>,
+    allocation: &mut allocation::Compiler,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let classes: HashMap<String, &ast::RegisterClass> = files
         .iter()
         .flat_map(|file| file.register_classes())
         .map(|class| (class.name.clone(), class))
         .collect();
-    let mut entries = Vec::new();
-
-    for abi in files.iter().flat_map(|file| file.abis()) {
-        let name = abi.alias.as_deref().unwrap_or(&abi.name);
-        let stack_layout = abi_stack_layout_ts(abi, item_cache)?;
-
-        let role =
-            |name: &str| -> Result<Option<(proc_macro2::TokenStream, String, u16)>, TMDLError> {
-                abi.roles
-                    .iter()
-                    .find(|role| role.name == name)
-                    .map(|role| abi_register(&role.register, &classes))
-                    .transpose()
-            };
-        let sp = role("sp")?
-            .ok_or_else(|| TMDLError::Codegen(format!("ABI '{}' does not declare sp", abi.name)))?;
-        let ra = role("ra")?;
-        let fp = role("fp")?;
-
-        let pass_entries = |passes: &[ast::AbiPassSequence]| -> Result<Vec<_>, TMDLError> {
-            passes
-                .iter()
-                .map(|pass| {
-                    let kind = abi_kind(pass.kind);
-                    let regs = abi_registers(&pass.registers, &classes)?
-                        .into_iter()
-                        .map(|(register, _, _)| register);
-                    let overflow = match pass.overflow.unwrap_or(ast::AbiOverflow::Stack) {
-                        ast::AbiOverflow::Stack => quote! { tir::backend::abi::Overflow::Stack },
-                        ast::AbiOverflow::Kind(kind) => {
-                            let kind = abi_kind(kind);
-                            quote! { tir::backend::abi::Overflow::Chain(#kind) }
-                        }
-                    };
-                    Ok(quote! {
-                        tir::backend::abi::PassSeq {
-                            kind: #kind,
-                            regs: &[#(#regs),*],
-                            overflow: #overflow,
-                        }
-                    })
-                })
-                .collect()
-        };
-        let args = pass_entries(&abi.args)?;
-        let rets = pass_entries(&abi.rets)?;
-        let callee_saved =
-            abi_registers(abi.callee_saved.as_deref().unwrap_or_default(), &classes)?;
-        let reserved = abi_registers(abi.reserved.as_deref().unwrap_or_default(), &classes)?;
-
-        let mut excluded = HashSet::new();
-        excluded.extend(
-            callee_saved
-                .iter()
-                .map(|(_, file, index)| (file.clone(), *index)),
-        );
-        excluded.extend(
-            reserved
-                .iter()
-                .map(|(_, file, index)| (file.clone(), *index)),
-        );
-        excluded.insert((sp.1.clone(), sp.2));
-        if let Some((_, file, index)) = &ra {
-            excluded.insert((file.clone(), *index));
-        }
-        if let Some((_, file, index)) = &fp {
-            excluded.insert((file.clone(), *index));
-        }
-        let caller_saved = caller_saved_registers(files, &classes, &excluded);
-
-        let callee_saved = callee_saved.into_iter().map(|(register, _, _)| register);
-        let reserved = reserved.into_iter().map(|(register, _, _)| register);
-        let sp = sp.0;
-        let ra = match ra {
-            Some((register, _, _)) => quote! { Some(#register) },
-            None => quote! { None },
-        };
-        let fp = match fp {
-            Some((register, _, _)) => quote! { Some(#register) },
-            None => quote! { None },
-        };
-        let classifier = match abi.classifier.as_deref() {
-            Some("riscv") => quote! { tir::backend::abi::ClassifierKind::Riscv },
-            Some("aapcs64") => quote! { tir::backend::abi::ClassifierKind::Aapcs64 },
-            Some("sysv") => quote! { tir::backend::abi::ClassifierKind::Sysv },
-            _ => {
-                return Err(TMDLError::Codegen(format!(
-                    "ABI '{}' has no known classifier",
-                    abi.name
-                )));
-            }
-        };
-
-        entries.push(quote! {
-            tir::backend::abi::AbiInfo {
-                name: #name,
-                stack: #stack_layout,
-                sp: #sp,
-                ra: #ra,
-                fp: #fp,
-                indirect_result: None,
-                argument_group_alignment: None,
-                argument_group_policy: None,
-                args: &[#(#args),*],
-                rets: &[#(#rets),*],
-                callee_saved: &[#(#callee_saved),*],
-                caller_saved: &[#(#caller_saved),*],
-                reserved: &[#(#reserved),*],
-                classifier: #classifier,
-            }
-        });
-    }
+    let entries = files
+        .iter()
+        .flat_map(|file| file.abis())
+        .map(|abi| emit_abi(abi, files, item_cache, &classes, allocation))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let count = entries.len();
     let default_abi = if count == 0 {

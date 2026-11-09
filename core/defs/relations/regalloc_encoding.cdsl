@@ -1,0 +1,466 @@
+use ::relational::*;
+use ::BigInt;
+use ::regalloc_bindings::RARecipeProfileEligible;
+use ::regalloc_control::RAIds;
+use ::regalloc_publish::RASelectedCandidate;
+use ::regalloc_transfer::RATransferFirstShape;
+use ::regalloc_transfer::RATransferGuard;
+use ::regalloc_transfer::RATransferNative;
+use ::regalloc_transfer::RATransferNumber;
+use ::regalloc_transfer::RATransferVerifiedOps;
+use ::tmdl_schema::TMDLEncodingField;
+use ::tmdl_schema::TMDLEncodingRange;
+use ::tmdl_schema::TMDLEncodingShape;
+use ::tmdl_schema::TMDLGuard;
+use ::tmdl_schema::TMDLGuardChild;
+
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let ids_length = primitive<(a0: RAIds) -> Integer>("set-length");
+let hex_big = primitive<(a0: String) -> BigInt>("hex-big");
+let bigint = primitive<(a0: Integer) -> BigInt>("bigint");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let big_shift_left = primitive<(a0: BigInt, a1: Integer) -> BigInt>("<<");
+let big_shift_right = primitive<(a0: BigInt, a1: Integer) -> BigInt>(">>");
+
+// Generic guard and field evaluation over canonical TMDL encoding metadata.
+pub let RATransferPatternRequest = relation<(Integer, Integer, Integer, Integer, String, Integer)>("RATransferPatternRequest");
+pub let RATransferPattern = relation<(Integer, Integer, Integer, Integer, String, Integer, BigInt, BigInt)>("RATransferPattern");
+pub let RATransferGuardYes = table<(Integer, Integer, Integer, Integer, Integer), RAIds>("RATransferGuardYes", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferGuardNo = table<(Integer, Integer, Integer, Integer, Integer), RAIds>("RATransferGuardNo", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferEncodingFields = table<(Integer, String, Integer), RAIds>("RATransferEncodingFields", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferRangedFields = table<(Integer, String, Integer), RAIds>("RATransferRangedFields", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferValidFields = table<(Integer, Integer, Integer, Integer, Integer), RAIds>("RATransferValidFields", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferFieldAligned = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RATransferFieldAligned");
+pub let RATransferFieldRange = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RATransferFieldRange");
+pub let RATransferCompare = relation<(Integer, Integer, Integer, Integer, Integer, String, BigInt, BigInt, BigInt, BigInt)>("RATransferCompare");
+pub let RATransferSignRequest = relation<(BigInt, Integer)>("RATransferSignRequest");
+pub let RATransferSigned = relation<(BigInt, Integer, BigInt)>("RATransferSigned");
+pub let ra_transfer_verify_index = [
+    forall(fn(inv, kind, shape, guard, width, bits) {
+        { when: TMDLEncodingShape(inv, kind, shape, guard, width, bits),
+          then: RATransferEncodingFields.has(inv, kind, shape, ids_empty()) &
+                RATransferRangedFields.has(inv, kind, shape, ids_empty()) }
+    }),
+    forall(fn(inv, kind, shape, field, name, mask, nonzero) {
+        { when: TMDLEncodingField(inv, kind, shape, field, name, mask, nonzero),
+          then: RATransferEncodingFields.has(inv, kind, shape, ids_one(field)) }
+    }),
+    forall(fn(inv, kind, shape, field, lower, upper, unsigned) {
+        { when: TMDLEncodingRange(inv, kind, shape, field, lower, upper, unsigned),
+          then: RATransferRangedFields.has(inv, kind, shape, ids_one(field)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, shape, guard, width, bits) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLEncodingShape(inv, kind, shape, guard, width, bits),
+          then: RATransferValidFields.has(inv, f, candidate, op, shape, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, tag, a, b, x, y, z, bits, comparison) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, tag, a, b, x, y, z, bits, comparison),
+          then: RATransferGuardYes.has(inv, f, candidate, op, guard, ids_empty()) &
+                RATransferGuardNo.has(inv, f, candidate, op, guard, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, tag, a, b, width, y, z, bits, comparison, value) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, tag, a, b, width, y, z, bits, comparison) &
+                RATransferNumber(inv, f, candidate, op, a, value) & (width > 0) & (width <= 128),
+          then: RATransferPatternRequest(inv, f, candidate, op, a, width) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, width, y, z, bits, comparison, value) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "same", a, b, width, y, z, bits, comparison) &
+                RATransferNumber(inv, f, candidate, op, b, value) & (width > 0) & (width <= 128),
+          then: RATransferPatternRequest(inv, f, candidate, op, b, width) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, lo, hi, z, bits, comparison) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "slice-eq", a, b, lo, hi, z, bits, comparison),
+          then: RATransferPatternRequest(inv, f, candidate, op, a, (hi + 1)) }
+    }),
+];
+
+pub let ra_target_shapes = [
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "true", a, b, x, y, z, bits, comparison),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, child, kind, recipe, parent, slot) {
+        { when: RATransferGuard(inv, f, candidate, op, child, true) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuardChild(inv, kind, parent, slot, child),
+          then: RATransferGuardYes.has(inv, f, candidate, op, parent, ids_one(slot)) }
+    }),
+    forall(fn(inv, f, candidate, op, child, kind, recipe, parent, slot) {
+        { when: RATransferGuard(inv, f, candidate, op, child, false) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuardChild(inv, kind, parent, slot, child),
+          then: RATransferGuardNo.has(inv, f, candidate, op, parent, ids_one(slot)) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, guard, a, b, count, y, z, bits, comparison) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLGuard(inv, kind, guard, "and", a, b, count, y, z, bits, comparison) &
+                (count == ids_length(RATransferGuardYes.get(inv, f, candidate, op, guard))),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, guard, a, b, count, y, z, bits, comparison) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLGuard(inv, kind, guard, "and", a, b, count, y, z, bits, comparison) &
+                (ids_length(RATransferGuardNo.get(inv, f, candidate, op, guard)) > 0),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, guard, a, b, count, y, z, bits, comparison) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLGuard(inv, kind, guard, "or", a, b, count, y, z, bits, comparison) &
+                (ids_length(RATransferGuardYes.get(inv, f, candidate, op, guard)) > 0),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, guard, a, b, count, y, z, bits, comparison) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLGuard(inv, kind, guard, "or", a, b, count, y, z, bits, comparison) &
+                (count == ids_length(RATransferGuardNo.get(inv, f, candidate, op, guard))),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, guard, a, b, y, z, bits, comparison, child) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLGuard(inv, kind, guard, "not", a, b, 1, y, z, bits, comparison) &
+                TMDLGuardChild(inv, kind, guard, 0, child) & RATransferGuard(inv, f, candidate, op, child, true),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, guard, a, b, y, z, bits, comparison, child) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLGuard(inv, kind, guard, "not", a, b, 1, y, z, bits, comparison) &
+                TMDLGuardChild(inv, kind, guard, 0, child) &
+                RATransferGuard(inv, f, candidate, op, child, false),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, shape, guard, width, bits) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLEncodingShape(inv, kind, shape, guard, width, bits) &
+                RATransferGuard(inv, f, candidate, op, guard, true),
+          then: RATransferFirstShape.has(inv, f, candidate, op, shape) }
+    }),
+    forall(fn(pattern, width) {
+        { when: RATransferSignRequest(pattern, width) & (width > 0) & (width <= 128) &
+                ((pattern & big_shift_left(bigint(1), (width - 1))) == bigint(0)),
+          then: RATransferSigned(pattern, width, pattern) }
+    }),
+    forall(fn(pattern, width) {
+        { when: RATransferSignRequest(pattern, width) & (width > 0) & (width <= 128) &
+                ((pattern & big_shift_left(bigint(1), (width - 1))) != bigint(0)),
+          then: RATransferSigned(pattern, width, (pattern - big_shift_left(bigint(1), width))) }
+    }),
+    forall(fn(inv, f, candidate, op, name, width, value, unsigned) {
+        { when: RATransferPatternRequest(inv, f, candidate, op, name, width) & (width > 0) & (width <= 128) &
+                RATransferNumber(inv, f, candidate, op, name, value) &
+                (unsigned == (bigint(value) & (big_shift_left(bigint(1), width) - bigint(1)))),
+          then: RATransferSignRequest(unsigned, width) }
+    }),
+    forall(fn(inv, f, candidate, op, name, width, value, unsigned, signed) {
+        { when: RATransferPatternRequest(inv, f, candidate, op, name, width) & (width > 0) & (width <= 128) &
+                RATransferNumber(inv, f, candidate, op, name, value) &
+                (unsigned == (bigint(value) & (big_shift_left(bigint(1), width) - bigint(1)))) &
+                RATransferSigned(unsigned, width, signed),
+          then: RATransferPattern(inv, f, candidate, op, name, width, unsigned, signed) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, value) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "bit", a, b, x, y, z, bits, comparison) &
+                RATransferNumber(inv, f, candidate, op, a, value) & (x >= 0) & (x < 128) &
+                ((big_shift_right(bigint(value), x) & bigint(1)) != bigint(0)),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, value) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "bit", a, b, x, y, z, bits, comparison) &
+                RATransferNumber(inv, f, candidate, op, a, value) & (x >= 0) & (x < 128) &
+                ((big_shift_right(bigint(value), x) & bigint(1)) == bigint(0)),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, unsigned, signed,
+        expected) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "slice-eq", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, (y + 1), unsigned, signed) &
+                (expected == hex_big(bits)) & (x >= 0) & (y < 128) & (big_shift_right(unsigned, x) == expected),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, unsigned, signed,
+        expected) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "slice-eq", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, (y + 1), unsigned, signed) &
+                (expected == hex_big(bits)) & (x >= 0) & (y < 128) & (big_shift_right(unsigned, x) != expected),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, first, firstSigned,
+        second, secondSigned) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "same", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, x, first, firstSigned) &
+                RATransferPattern(inv, f, candidate, op, b, x, second, secondSigned) & (first == second),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, first, firstSigned,
+        second, secondSigned) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "same", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, x, first, firstSigned) &
+                RATransferPattern(inv, f, candidate, op, b, x, second, secondSigned) & (first != second),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, unsigned, signed,
+        limit) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "signed-fits", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, x, unsigned, signed) & (y > 0) & (y < 128) &
+                (limit == big_shift_left(bigint(1), (y - 1))) & (signed >= (bigint(0) - limit)) &
+                (signed < limit),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, unsigned, signed,
+        limit) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "signed-fits", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, x, unsigned, signed) & (y > 0) & (y < 128) &
+                (limit == big_shift_left(bigint(1), (y - 1))) & (signed >= limit),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, unsigned, signed,
+        limit) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "signed-fits", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, x, unsigned, signed) & (y > 0) & (y < 128) &
+                (limit == big_shift_left(bigint(1), (y - 1))) & (signed < (bigint(0) - limit)),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, unsigned, signed) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "unsigned-fits", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, x, unsigned, signed) & (y >= 0) & (y < 128) &
+                (unsigned < big_shift_left(bigint(1), y)),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, x, y, z, bits, comparison, unsigned, signed) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "unsigned-fits", a, b, x, y, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, x, unsigned, signed) & (y >= 0) & (y < 128) &
+                (unsigned >= big_shift_left(bigint(1), y)),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, width, cmpWidth, z, bits, comparison, unsigned,
+        sourceSigned, expected) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "cmp", a, b, width, cmpWidth, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, width, unsigned, sourceSigned) & (cmpWidth > 0) &
+                (cmpWidth <= 128) &
+                (expected == (hex_big(bits) & (big_shift_left(bigint(1), cmpWidth) - bigint(1)))),
+          then: RATransferSignRequest(unsigned, cmpWidth) & RATransferSignRequest(expected, cmpWidth) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, guard, a, b, width, cmpWidth, z, bits, comparison, unsigned,
+        sourceSigned, expected, signed, expectedSigned) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                TMDLGuard(inv, kind, guard, "cmp", a, b, width, cmpWidth, z, bits, comparison) &
+                RATransferPattern(inv, f, candidate, op, a, width, unsigned, sourceSigned) & (cmpWidth > 0) &
+                (cmpWidth <= 128) &
+                (expected == (hex_big(bits) & (big_shift_left(bigint(1), cmpWidth) - bigint(1)))) &
+                RATransferSigned(unsigned, cmpWidth, signed) &
+                RATransferSigned(expected, cmpWidth, expectedSigned),
+          then: RATransferCompare(
+              inv, f, candidate, op, guard, comparison, unsigned, expected, signed, expectedSigned
+          ) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "eq", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned == expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "eq", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned != expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ne", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned != expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ne", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned == expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "lt", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (signed < expectedSigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "lt", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (signed >= expectedSigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "le", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (signed <= expectedSigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "le", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (signed > expectedSigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "gt", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (signed > expectedSigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "gt", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (signed <= expectedSigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ge", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (signed >= expectedSigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ge", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (signed < expectedSigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ult", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned < expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ult", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned >= expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ule", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned <= expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ule", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned > expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ugt", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned > expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "ugt", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned <= expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "uge", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned >= expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, true) }
+    }),
+    forall(fn(inv, f, candidate, op, guard, unsigned, expectedUnsigned, signed, expectedSigned) {
+        { when: RATransferCompare(
+            inv, f, candidate, op, guard, "uge", unsigned, expectedUnsigned, signed, expectedSigned
+        ) &
+                (unsigned < expectedUnsigned),
+          then: RATransferGuard(inv, f, candidate, op, guard, false) }
+    }),
+];
+
+pub let ra_target_fields = [
+    forall(fn(f, op, kind, recipe, inv, candidate, shape, field, name, mask, align, value) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLEncodingField(inv, kind, shape, field, name, mask, false) & (align == hex_big(mask)) &
+                RATransferNumber(inv, f, candidate, op, name, value) & ((bigint(value) & align) == bigint(0)),
+          then: RATransferFieldAligned(inv, f, candidate, op, shape, field) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, shape, field, name, mask, align, value) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLEncodingField(inv, kind, shape, field, name, mask, true) & (align == hex_big(mask)) &
+                RATransferNumber(inv, f, candidate, op, name, value) & ((bigint(value) & align) == bigint(0)) &
+                (value != 0),
+          then: RATransferFieldAligned(inv, f, candidate, op, shape, field) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, shape, field, name, mask, nonzero) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLEncodingField(inv, kind, shape, field, name, mask, nonzero) &
+                ids_not_contains(RATransferRangedFields.get(inv, kind, shape), field),
+          then: RATransferFieldRange(inv, f, candidate, op, shape, field) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, shape, field, name, mask, nonzero, lower, upper, unsigned,
+        value) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLEncodingField(inv, kind, shape, field, name, mask, nonzero) &
+                TMDLEncodingRange(inv, kind, shape, field, lower, upper, unsigned) &
+                RATransferNumber(inv, f, candidate, op, name, value) & (value >= lower) & (value < upper),
+          then: RATransferFieldRange(inv, f, candidate, op, shape, field) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, shape, field, name, mask, nonzero, lower, upper, unsigned,
+        maximum, value) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLEncodingField(inv, kind, shape, field, name, mask, nonzero) &
+                TMDLEncodingRange(inv, kind, shape, field, lower, upper, unsigned) &
+                (maximum == hex_big(unsigned)) & RATransferNumber(inv, f, candidate, op, name, value) &
+                (value >= 0) & (bigint(value) < maximum),
+          then: RATransferFieldRange(inv, f, candidate, op, shape, field) }
+    }),
+    forall(fn(inv, f, candidate, op, shape, field) {
+        { when: RATransferFieldAligned(inv, f, candidate, op, shape, field) &
+                RATransferFieldRange(inv, f, candidate, op, shape, field),
+          then: RATransferValidFields.has(inv, f, candidate, op, shape, ids_one(field)) }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate, shape) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                RATransferFirstShape.has(inv, f, candidate, op, shape) &
+                RATransferValidFields.has(
+                    inv, f, candidate, op, shape, RATransferEncodingFields.get(inv, kind, shape)
+                ) &
+                RARecipeProfileEligible(inv, kind, recipe),
+          then: RATransferVerifiedOps.has(inv, f, candidate, ids_one(op)) }
+    }),
+];

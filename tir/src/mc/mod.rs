@@ -6,7 +6,7 @@ use std::{error::Error, ffi::OsString};
 use clap::{Args, ValueEnum};
 use tir::backend::binary::{ObjectEmission, render_ascii, write_elf};
 use tir::backend::pipeline::{Oracles, StopAfter, build_pipeline, lower_and_emit, structure};
-use tir::{Context, IRFormatter, Operation};
+use tir::{AnalysisManager, Context, IRFormatter, Operation, Pass};
 
 use crate::common::{
     InputKind, TargetArgs, attach_data_layout, parse_module, parse_tir, read_input, resolve_kind,
@@ -141,6 +141,11 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         let mut pm = build_pipeline(target.as_ref(), &context, stop_after, oracles);
         pm.run(&context, module.id())
             .map_err(|e| format!("pass pipeline failed: {e}"))?;
+        if stop_after != StopAfter::ISel && !target.abis().is_empty() {
+            tir::backend::regalloc::RegisterAllocationPass::new()
+                .run(module.id(), &context, &AnalysisManager::new())
+                .map_err(|e| format!("register allocation failed: {e}"))?;
+        }
     }
 
     let output = match filetype {

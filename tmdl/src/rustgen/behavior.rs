@@ -311,12 +311,8 @@ pub(super) fn emit_sym_inits(
                 Type::Struct(class_name) => {
                     let (is_float, width) =
                         reg_kinds.get(class_name).copied().unwrap_or((false, 64));
-                    if is_float && matches!(width, 16 | 32 | 64) {
-                        let (exponent, mantissa) = match width {
-                            16 => (5u32, 10u32),
-                            32 => (8, 23),
-                            _ => (11, 52),
-                        };
+                    let source = register_source_kind(is_float, width);
+                    if let RegisterSourceKind::Float(exponent, mantissa) = source {
                         entries.push((
                             sym_id,
                             quote! {
@@ -327,10 +323,9 @@ pub(super) fn emit_sym_inits(
                         ));
                         continue;
                     }
-                    let variant = if width > 64 {
-                        format_ident!("WideRegisterAttr")
-                    } else {
-                        format_ident!("RegisterAttr")
+                    let variant = match source {
+                        RegisterSourceKind::RawBits => format_ident!("WideRegisterAttr"),
+                        _ => format_ident!("RegisterAttr"),
                     };
                     entries.push((
                         sym_id,
@@ -496,7 +491,7 @@ pub(super) fn intern_dag(
     (intern_sem_ops(&ops), has_typed_node)
 }
 
-fn emit_dag_as_code(
+pub(super) fn emit_dag_as_code(
     dag: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
     widths: &[Option<u32>],
@@ -551,3 +546,20 @@ pub(super) fn emit_expr_kind_ts(kind: &tir_symbolic::lang::SymKind) -> proc_macr
 
 // ---------------------------------------------------------------------------
 // Instruction encoders
+
+#[derive(Clone, Copy)]
+pub(super) enum RegisterSourceKind {
+    Integer,
+    Float(u32, u32),
+    RawBits,
+}
+
+pub(super) fn register_source_kind(is_float: bool, width: u32) -> RegisterSourceKind {
+    match (is_float, width) {
+        (true, 16) => RegisterSourceKind::Float(5, 10),
+        (true, 32) => RegisterSourceKind::Float(8, 23),
+        (true, 64) => RegisterSourceKind::Float(11, 52),
+        (_, width) if width > 64 => RegisterSourceKind::RawBits,
+        _ => RegisterSourceKind::Integer,
+    }
+}

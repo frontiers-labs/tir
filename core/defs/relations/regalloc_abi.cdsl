@@ -1,0 +1,354 @@
+use ::relational::*;
+use ::BigInt;
+use ::SymbolName;
+use ::TypeExpr;
+use ::TypeList;
+use ::ValueType;
+use ::regalloc::RAValueBits;
+use ::regalloc_bindings::RABindingError;
+use ::regalloc_bindings::RANativeClassifiedValues;
+use ::regalloc_bindings::RARequiredValues;
+use ::regalloc_color::RAForcedRegister;
+use ::regalloc_color::RAInputPin;
+use ::regalloc_color::RAValueClass;
+use ::regalloc_control::RAArgument;
+use ::regalloc_control::RAFunction;
+use ::regalloc_control::RAIds;
+use ::regalloc_control::RAReturnValue;
+use ::tmdl_schema::TMDLAbiOverflow;
+use ::tmdl_schema::TMDLAbiPin;
+use ::tmdl_schema::TMDLClass;
+use ::tmdl_schema::TMDLClassDialect;
+use ::tmdl_schema::TMDLClassOrder;
+use ::tmdl_schema::TMDLRegister;
+use ::tmdl_schema::TMDLRegisterWidth;
+
+let min = primitive<(a0: Integer, a1: Integer) -> Integer>("min");
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let kinds_union = primitive<(a0: RAAbiKinds, a1: RAAbiKinds) -> RAAbiKinds>("set-union");
+let max = primitive<(a0: Integer, a1: Integer) -> Integer>("max");
+let counters_insert = primitive<(a0: RAAbiCounters, a1: String, a2: Integer) -> RAAbiCounters>("map-insert");
+let counters_empty = primitive<() -> RAAbiCounters>("map-empty");
+let counters_get = primitive<(a0: RAAbiCounters, a1: String) -> Integer>("map-get");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let kinds_empty = primitive<() -> RAAbiKinds>("set-empty");
+let kinds_one = primitive<(a0: String) -> RAAbiKinds>("set-of");
+let kinds_not_contains = predicate<(RAAbiKinds, String)>("set-not-contains");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let kinds_length = primitive<(a0: RAAbiKinds) -> Integer>("set-length");
+let kinds_contains = predicate<(RAAbiKinds, String)>("set-contains");
+let nat_i64 = primitive<(a0: BigInt) -> Integer>("nat-i64");
+let make_Apply = constructor(TypeExpr::Apply);
+let make_Ctor = constructor(TypeExpr::Ctor);
+let make_TCons = constructor(TypeList::TCons);
+let make_SymbolParam = constructor(TypeExpr::SymbolParam);
+let make_TNil = constructor(TypeList::TNil);
+let make_NatLit = constructor(TypeExpr::NatLit);
+
+// Install after regalloc-bindings. Saturate ra-abi-index, then ra-abi-bind
+// after ra-bind-domain and before ra-bind-check. Source slots and target ABI
+// sequences remain frozen. Each boundary has independent kind counters.
+pub extern type RAAbiCounters = Type;
+pub let ra_abi_counters_sort = container<RAAbiCounters, Map<String, Integer>>();
+
+pub extern type RAAbiKinds = Type;
+pub let ra_abi_kinds_sort = container<RAAbiKinds, Set<String>>();
+
+pub let RAAbiValue = relation<(Integer, Integer, Integer, String, Integer, Integer)>("RAAbiValue");
+pub let RAAbiKind = relation<(Integer, Integer, Integer, String)>("RAAbiKind");
+pub let RAAbiSkip = relation<(Integer, Integer, Integer)>("RAAbiSkip");
+pub let RAAbiCursor = relation<(Integer, Integer, Integer, String, Integer, RAAbiCounters)>("RAAbiCursor");
+pub let RAAbiTry = relation<(Integer, Integer, Integer, String, Integer, Integer, String, RAAbiCounters)>("RAAbiTry");
+pub let RAAbiBound = relation<(Integer, Integer, Integer, String, Integer, Integer, String, Integer)>("RAAbiBound");
+pub let RAAbiSpan = relation<(Integer, String, String, Integer, String, Integer, Integer, Integer)>("RAAbiSpan");
+pub let RAAbiFit = relation<(Integer, String, String, String, Integer, Integer, Integer)>("RAAbiFit");
+pub let RAAbiChoice = table<(Integer, String, String, String, Integer), Integer>("RAAbiChoice", merge(fn(old, new) { min(old, new) }));
+pub let RAAbiFittingStarts = table<(Integer, String, String, String), RAIds>("RAAbiFittingStarts", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAAbiClassKinds = table<(Integer, String), RAAbiKinds>("RAAbiClassKinds", merge(fn(old, new) { kinds_union(old, new) }));
+pub let RAAbiExactKinds = table<(Integer, String), RAAbiKinds>("RAAbiExactKinds", merge(fn(old, new) { kinds_union(old, new) }));
+pub let RAAbiFallbackWidth = table<(Integer, Integer, Integer), Integer>("RAAbiFallbackWidth", unique);
+pub let RAAbiFallbackOrder = table<(Integer, Integer, Integer), Integer>("RAAbiFallbackOrder", merge(fn(old, new) { min(old, new) }));
+pub let RAAbiFallbackClass = relation<(Integer, Integer, Integer, String)>("RAAbiFallbackClass");
+pub let RAAbiLength = table<(Integer, String, String), Integer>("RAAbiLength", merge(fn(old, new) { max(old, new) }));
+pub let RAAbiKnownKinds = table<(Integer, String), RAAbiKinds>("RAAbiKnownKinds", merge(fn(old, new) { kinds_union(old, new) }));
+pub let ra_abi_index = [
+    forall(fn(inv, f, slot, value) {
+        { when: RAArgument(inv, f, slot, value),
+          then: RAAbiValue(inv, f, f, "arg", slot, value) }
+    }),
+    forall(fn(inv, f, op, slot, value) {
+        { when: RAReturnValue(inv, f, op, slot, value),
+          then: RAAbiValue(inv, f, op, "ret", slot, value) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value),
+          then: RAAbiCursor(
+              inv, f, boundary, direction, 0,
+              counters_insert(
+                  counters_insert(counters_insert(counters_empty(), "int", 0), "float", 0), "vector", 0
+              )
+          ) }
+    }),
+    forall(fn(inv, direction, kind, overflow) {
+        { when: TMDLAbiOverflow(inv, direction, kind, overflow),
+          then: RAAbiLength.has(inv, direction, kind, 0) }
+    }),
+    forall(fn(inv, direction, kind, slot, class, index) {
+        { when: TMDLAbiPin(inv, direction, kind, slot, class, index),
+          then: RAAbiLength.has(inv, direction, kind, (slot + 1)) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, args) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("builtin.f"), args)),
+          then: RAAbiKind(inv, f, value, "float") }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, args) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("vector.v"), args)),
+          then: RAAbiKind(inv, f, value, "vector") }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, name, args) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor(name), args)) & (name != "builtin.f") &
+                (name != "vector.v") & (name != "builtin.state") & (name != "son.control") &
+                (name != "backend.reg"),
+          then: RAAbiKind(inv, f, value, "int") }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, args) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("builtin.state"), args)),
+          then: RAAbiSkip(inv, f, value) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, args) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("son.control"), args)),
+          then: RAAbiSkip(inv, f, value) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RAAbiKnownKinds.has(inv, "arg", kinds_empty()) & RAAbiKnownKinds.has(inv, "ret", kinds_empty()) }
+    }),
+    forall(fn(inv, direction, kind, overflow) {
+        { when: TMDLAbiOverflow(inv, direction, kind, overflow),
+          then: RAAbiKnownKinds.has(inv, direction, kinds_one(kind)) }
+    }),
+    // ABI slots name a physical file. The value retains its native register view.
+    forall(fn(inv, direction, kind, ordinal, class, index, file, width, offset, merge) {
+        { when: TMDLAbiPin(inv, direction, kind, ordinal, class, index) &
+                TMDLClass(inv, class, file, width, offset, merge),
+          then: RAAbiSpan(inv, direction, kind, ordinal, file, index, 1, width) }
+    }),
+    forall(fn(inv, direction, kind, ordinal, file, index, consumed, span, class, width, offset, merge) {
+        { when: RAAbiSpan(inv, direction, kind, ordinal, file, index, consumed, span) &
+                TMDLAbiPin(inv, direction, kind, (ordinal + consumed), class, (index + span)) &
+                TMDLClass(inv, class, file, width, offset, merge),
+          then: RAAbiSpan(inv, direction, kind, ordinal, file, index, (consumed + 1), (span + width)) }
+    }),
+    forall(fn(inv, direction, kind, ordinal, file, index, consumed, span, abi, abiWidth, offset, abiMerge, class,
+        merge) {
+        { when: RAAbiSpan(inv, direction, kind, ordinal, file, index, consumed, span) &
+                TMDLAbiPin(inv, direction, kind, ordinal, abi, index) &
+                TMDLClass(inv, abi, file, abiWidth, offset, abiMerge) &
+                TMDLClass(inv, class, file, span, offset, merge) & TMDLRegister(inv, class, index),
+          then: RAAbiFit(inv, direction, kind, class, ordinal, index, consumed) }
+    }),
+    forall(fn(inv, direction, kind, overflow, class, file, width, offset, merge) {
+        { when: TMDLAbiOverflow(inv, direction, kind, overflow) &
+                TMDLClass(inv, class, file, width, offset, merge),
+          then: RAAbiFittingStarts.has(inv, direction, kind, class, ids_empty()) }
+    }),
+    forall(fn(inv, direction, kind, start, abi, startIndex, class, ordinal, index, consumed) {
+        { when: TMDLAbiPin(inv, direction, kind, start, abi, startIndex) &
+                RAAbiFit(inv, direction, kind, class, ordinal, index, consumed) & (ordinal >= start),
+          then: RAAbiChoice.has(inv, direction, kind, class, start, ordinal) &
+                RAAbiFittingStarts.has(inv, direction, kind, class, ids_one(start)) }
+    }),
+    // A backend.reg type loses the logical scalar/vector distinction. Use only
+    // unambiguous sequence metadata, never register-class spelling heuristics.
+    forall(fn(inv, class, file, width, offset, merge) {
+        { when: TMDLClass(inv, class, file, width, offset, merge),
+          then: RAAbiClassKinds.has(inv, class, kinds_empty()) & RAAbiExactKinds.has(inv, class, kinds_empty()) }
+    }),
+    forall(fn(inv, kind, abi, index, file, abiWidth, abiOffset, abiMerge, class, width, offset, merge) {
+        { when: TMDLAbiPin(inv, "arg", kind, 0, abi, index) &
+                TMDLClass(inv, abi, file, abiWidth, abiOffset, abiMerge) &
+                TMDLClass(inv, class, file, width, offset, merge),
+          then: RAAbiClassKinds.has(inv, class, kinds_one(kind)) }
+    }),
+    forall(fn(inv, kind, class, index) {
+        { when: TMDLAbiPin(inv, "arg", kind, 0, class, index),
+          then: RAAbiExactKinds.has(inv, class, kinds_one(kind)) }
+    }),
+    // Unused parameters still consume ABI slots, and passthrough values need a
+    // domain even when no native instruction imposes one.
+    forall(fn(inv, f, boundary, direction, slot, value, class, index, bits) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) & RAAbiKind(inv, f, value, "int") &
+                TMDLAbiPin(inv, "arg", "int", 0, class, index) & TMDLRegisterWidth(inv, class, bits),
+          then: RAAbiFallbackWidth.has(inv, f, value, bits) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, bits) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(
+                    value, make_Apply(make_Ctor("builtin.f"), make_TCons(make_NatLit(bits), make_TNil()))
+                ),
+          then: RAAbiFallbackWidth.has(inv, f, value, nat_i64(bits)) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, lanes, element, bits) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(
+                    value,
+                    make_Apply(
+                        make_Ctor("vector.v"),
+                        make_TCons(
+                            make_NatLit(lanes),
+                            make_TCons(
+                                make_Apply(make_Ctor(element), make_TCons(make_NatLit(bits), make_TNil())),
+                                make_TNil()
+                            )
+                        )
+                    )
+                ),
+          then: RAAbiFallbackWidth.has(inv, f, value, nat_i64((lanes * bits))) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, kind, abi, index, file, abiWidth, offset, abiMerge, bits,
+        class, width, merge, order) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ids_not_contains(RARequiredValues.get(inv, f), value) & RAAbiKind(inv, f, value, kind) &
+                TMDLAbiPin(inv, "arg", kind, 0, abi, index) &
+                TMDLClass(inv, abi, file, abiWidth, offset, abiMerge) &
+                RAAbiFallbackWidth.has(inv, f, value, bits) & TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLRegisterWidth(inv, class, bits) & TMDLClassOrder(inv, class, order),
+          then: RAAbiFallbackClass(inv, f, value, class) & RAAbiFallbackOrder.has(inv, f, value, order) }
+    }),
+];
+
+pub let ra_abi_bind = [
+    forall(fn(inv, f, boundary, direction, slot, counters, value) {
+        { when: RAAbiCursor(inv, f, boundary, direction, slot, counters) &
+                RAAbiValue(inv, f, boundary, direction, slot, value) & RAAbiSkip(inv, f, value),
+          then: RAAbiCursor(inv, f, boundary, direction, (slot + 1), counters) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, counters, value, kind) {
+        { when: RAAbiCursor(inv, f, boundary, direction, slot, counters) &
+                RAAbiValue(inv, f, boundary, direction, slot, value) & RAAbiKind(inv, f, value, kind),
+          then: RAAbiTry(inv, f, boundary, direction, slot, value, kind, counters) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, kind, counters, class, ordinal, index, consumed) {
+        { when: RAAbiTry(inv, f, boundary, direction, slot, value, kind, counters) &
+                RAValueClass(inv, f, value, class) &
+                RAAbiChoice.has(inv, direction, kind, class, counters_get(counters, kind), ordinal) &
+                RAAbiFit(inv, direction, kind, class, ordinal, index, consumed),
+          then: RAAbiBound(inv, f, boundary, direction, slot, value, class, index) &
+                RAAbiCursor(
+                    inv, f, boundary, direction, (slot + 1),
+                    counters_insert(counters, kind, (ordinal + consumed))
+                ) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, kind, counters, class, next) {
+        { when: RAAbiTry(inv, f, boundary, direction, slot, value, kind, counters) &
+                RAValueClass(inv, f, value, class) &
+                ids_not_contains(
+                    RAAbiFittingStarts.get(inv, direction, kind, class), counters_get(counters, kind)
+                ) &
+                TMDLAbiOverflow(inv, direction, kind, next) & (next != "stack"),
+          then: RAAbiTry(inv, f, boundary, direction, slot, value, next, counters) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, kind, counters, class) {
+        { when: RAAbiTry(inv, f, boundary, direction, slot, value, kind, counters) &
+                RAValueClass(inv, f, value, class) &
+                ids_not_contains(
+                    RAAbiFittingStarts.get(inv, direction, kind, class), counters_get(counters, kind)
+                ) &
+                TMDLAbiOverflow(inv, direction, kind, "stack"),
+          then: RABindingError(inv, f, value, "ABI boundary requires stack passing") }
+    }),
+    forall(fn(inv, f, boundary, slot, value, class, index) {
+        { when: RAAbiBound(inv, f, boundary, "arg", slot, value, class, index),
+          then: RAForcedRegister(inv, f, value, class, index) }
+    }),
+    forall(fn(inv, f, op, slot, value, class, index) {
+        { when: RAAbiBound(inv, f, op, "ret", slot, value, class, index),
+          then: RAInputPin(inv, f, op, slot, value, class, index) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, kind, counters) {
+        { when: RAAbiTry(inv, f, boundary, direction, slot, value, kind, counters) &
+                kinds_not_contains(RAAbiKnownKinds.get(inv, direction), kind),
+          then: RABindingError(inv, f, value, "ABI has no sequence for boundary value kind") }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, dialect, name, class, kind, overflow) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(
+                    value,
+                    make_Apply(
+                        make_Ctor("backend.reg"),
+                        make_TCons(make_SymbolParam(dialect), make_TCons(make_SymbolParam(name), make_TNil()))
+                    )
+                ) &
+                SymbolName.has(name, class) & TMDLAbiOverflow(inv, direction, kind, overflow) &
+                (kinds_length(RAAbiExactKinds.get(inv, class)) == 1) &
+                kinds_contains(RAAbiExactKinds.get(inv, class), kind),
+          then: RAAbiKind(inv, f, value, kind) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, dialect, name, class, kind, overflow) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(
+                    value,
+                    make_Apply(
+                        make_Ctor("backend.reg"),
+                        make_TCons(make_SymbolParam(dialect), make_TCons(make_SymbolParam(name), make_TNil()))
+                    )
+                ) &
+                SymbolName.has(name, class) & TMDLAbiOverflow(inv, direction, kind, overflow) &
+                (kinds_length(RAAbiExactKinds.get(inv, class)) == 0) &
+                (kinds_length(RAAbiClassKinds.get(inv, class)) == 1) &
+                kinds_contains(RAAbiClassKinds.get(inv, class), kind),
+          then: RAAbiKind(inv, f, value, kind) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, dialect, name, class) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(
+                    value,
+                    make_Apply(
+                        make_Ctor("backend.reg"),
+                        make_TCons(make_SymbolParam(dialect), make_TCons(make_SymbolParam(name), make_TNil()))
+                    )
+                ) &
+                SymbolName.has(name, class) & (kinds_length(RAAbiExactKinds.get(inv, class)) > 1),
+          then: RABindingError(inv, f, value, "ABI register class has ambiguous value kind") }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, dialect, name, class) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ValueType.has(
+                    value,
+                    make_Apply(
+                        make_Ctor("backend.reg"),
+                        make_TCons(make_SymbolParam(dialect), make_TCons(make_SymbolParam(name), make_TNil()))
+                    )
+                ) &
+                SymbolName.has(name, class) & (kinds_length(RAAbiExactKinds.get(inv, class)) == 0) &
+                (kinds_length(RAAbiClassKinds.get(inv, class)) != 1),
+          then: RABindingError(inv, f, value, "ABI register file has no unique value kind") }
+    }),
+    forall(fn(inv, f, value, class, order, bits) {
+        { when: RAAbiFallbackClass(inv, f, value, class) & TMDLClassOrder(inv, class, order) &
+                RAAbiFallbackOrder.has(inv, f, value, order) & TMDLRegisterWidth(inv, class, bits),
+          then: RAValueClass(inv, f, value, class) & RAValueBits.has(inv, f, value, bits) &
+                RANativeClassifiedValues.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, f, boundary, direction, slot, value, dialect, name, class, target, bits) {
+        { when: RAAbiValue(inv, f, boundary, direction, slot, value) &
+                ids_not_contains(RARequiredValues.get(inv, f), value) &
+                ValueType.has(
+                    value,
+                    make_Apply(
+                        make_Ctor("backend.reg"),
+                        make_TCons(make_SymbolParam(dialect), make_TCons(make_SymbolParam(name), make_TNil()))
+                    )
+                ) &
+                SymbolName.has(name, class) & TMDLClassDialect(inv, class, target) &
+                TMDLRegisterWidth(inv, class, bits),
+          then: RAValueClass(inv, f, value, class) & RAValueBits.has(inv, f, value, bits) &
+                RANativeClassifiedValues.has(inv, f, ids_one(value)) }
+    }),
+];

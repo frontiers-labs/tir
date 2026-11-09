@@ -1230,7 +1230,8 @@ fn free_accessors(tokens: proc_macro2::TokenStream, prefix: &str) -> proc_macro2
     };
     let mut output = proc_macro2::TokenStream::new();
     for item in implementation.items {
-        if let syn::ImplItem::Fn(function) = item {
+        if let syn::ImplItem::Fn(mut function) = item {
+            function.attrs.push(syn::parse_quote!(#[allow(dead_code)]));
             let name = format_ident!(
                 "{}_{}",
                 prefix,

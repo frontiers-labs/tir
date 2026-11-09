@@ -1,0 +1,30 @@
+// RUN: tir mc --march=riscv32 --stage=regalloc %s | filecheck %s --implicit-check-not=scf. --implicit-check-not=son.
+
+// CHECK-LABEL: func.func @choose(
+// CHECK-DAG: riscv.add
+// CHECK-DAG: riscv.sub
+// CHECK-DAG: cfg.switch
+// CHECK-LABEL: func.func @swap(
+// CHECK-DAG: riscv.sub
+// CHECK-DAG: cfg.cond_br
+
+module {
+  %f = func.func @choose(%p: !i1, %x: !i32, %y: !i32) -> !i32 {
+    %r = scf.switch %p {
+      %a = riscv.add %x, %y : !i32
+      -> %a
+    } {
+      %b = riscv.sub %x, %y : !i32
+      -> %b
+    }
+    -> %r
+  }
+  %f = func.func @swap(%p: !i1, %false: !i1, %x: !i32, %y: !i32) -> !i32 {
+    %last_p, %last_a, %last_b = scf.loop (%q = %p, %a = %x, %b = %y) {
+      -> %q, %false, %b, %a, %q, %a, %b
+    }
+    %out = riscv.sub %last_a, %last_b : !i32
+    -> %out
+  }
+  module_end
+}

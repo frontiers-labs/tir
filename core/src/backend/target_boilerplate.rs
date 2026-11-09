@@ -110,6 +110,8 @@ macro_rules! impl_target_machine {
                 context.register_dialect::<$crate::backend::AsmDialect>();
                 context.register_dialect::<$dialect>();
                 context.register_reg_classes(register_info().classes);
+                register_target_facts(context, self.config.features(), self.abi().name)
+                    .unwrap_or_else(|error| panic!("TMDL target facts: {error}"));
             }
 
             fn data_layout(

@@ -38,16 +38,17 @@ fn fields(ty: &Type) -> Vec<Type> {
     }
 }
 pub(crate) fn call_type(ty: &Type) -> Option<Type> {
-    let (schema, result) = if let Some([schema]) = arguments(ty, "Relation") {
-        (fields(schema), nominal("Goal", vec![]))
-    } else if let Some([Type::Function(parameters, result)]) = arguments(ty, "Constructor") {
-        (
-            parameters.iter().map(|(_, ty)| ty.clone()).collect(),
-            nominal("Expr", vec![result.as_ref().clone()]),
-        )
-    } else {
-        return None;
-    };
+    let (schema, result) =
+        if let Some([schema]) = arguments(ty, "Relation").or_else(|| arguments(ty, "Predicate")) {
+            (fields(schema), nominal("Goal", vec![]))
+        } else if let Some([Type::Function(parameters, result)]) = arguments(ty, "Constructor") {
+            (
+                parameters.iter().map(|(_, ty)| ty.clone()).collect(),
+                nominal("Expr", vec![result.as_ref().clone()]),
+            )
+        } else {
+            return None;
+        };
     Some(Type::Function(
         schema
             .into_iter()
@@ -58,13 +59,34 @@ pub(crate) fn call_type(ty: &Type) -> Option<Type> {
     ))
 }
 pub(crate) fn projection_type(ty: &Type, field: &str) -> Option<Type> {
-    if field != "has" {
-        return None;
-    }
     let [key, value] = arguments(ty, "Table")? else {
         return None;
     };
     let mut schema = fields(key);
+    if field == "remove" {
+        return Some(nominal(
+            "Relation",
+            vec![Type::Tuple(
+                schema.into_iter().map(|ty| (None, ty)).collect(),
+            )],
+        ));
+    }
+    if field == "get" {
+        return Some(nominal(
+            "Constructor",
+            vec![Type::Function(
+                schema
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, ty)| (format!("_{index}"), ty))
+                    .collect(),
+                Box::new(value.clone()),
+            )],
+        ));
+    }
+    if field != "has" {
+        return None;
+    }
     schema.push(value.clone());
     Some(nominal(
         "Relation",
@@ -93,9 +115,17 @@ pub(crate) fn binary_type(operator: &str, left: &Type) -> Option<(Type, Type)> {
         return Some((left.clone(), left.clone()));
     }
     let sort = expression_sort(left)?;
+    let numeric = matches!(sort, Type::Nat | Type::Integer)
+        || matches!(sort, Type::Nominal(name, args) if args.is_empty() && name.rsplit("::").next() == Some("BigInt"));
     match operator {
-        "==" => Some((left.clone(), nominal("Goal", vec![]))),
-        "+" if matches!(sort, Type::Nat | Type::Integer) => Some((left.clone(), left.clone())),
+        "==" | "!=" => Some((left.clone(), nominal("Goal", vec![]))),
+        "<" | ">" | "<=" | ">=" if numeric || *sort == Type::String => {
+            Some((left.clone(), nominal("Goal", vec![])))
+        }
+        "+" if numeric || *sort == Type::String => Some((left.clone(), left.clone())),
+        "-" | "*" | "/" | "%" | "<<" | ">>" | "&" | "|" if numeric => {
+            Some((left.clone(), left.clone()))
+        }
         _ => None,
     }
 }
@@ -116,9 +146,23 @@ enum Kind {
         key: String,
         keys: Vec<Type>,
         value: Type,
+        merge: Option<Expression>,
     },
     Constructor {
         name: String,
+    },
+    Predicate {
+        name: String,
+    },
+    Removal {
+        name: String,
+        schema: Schema,
+    },
+    Merge(Type, Expression),
+    Container {
+        name: String,
+        kind: String,
+        arguments: Vec<Type>,
     },
     Clause {
         body: Vec<Fact>,
@@ -136,6 +180,8 @@ enum Kind {
 #[derive(Clone, Debug)]
 enum Expression {
     Variable(u64, usize),
+    MergeOld,
+    MergeNew,
     Call(String, Vec<Expression>),
     Integer(i128),
     String(String),
@@ -144,6 +190,8 @@ enum Expression {
 #[derive(Clone, Debug)]
 enum Fact {
     Atom(String, Vec<Expression>, Schema),
+    Erase(String, Vec<Expression>, Schema),
+    Predicate(String, Vec<Expression>),
     Equal(Expression, Expression),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,7 +202,9 @@ enum Schema {
 fn declaration(value: &RelationalValue) -> Result<(&str, Schema), String> {
     match &value.0 {
         Kind::Relation { key, schema } => Ok((key, Schema::Relation(schema.clone()))),
-        Kind::Table { key, keys, value } => Ok((key, Schema::Table(keys.clone(), value.clone()))),
+        Kind::Table {
+            key, keys, value, ..
+        } => Ok((key, Schema::Table(keys.clone(), value.clone()))),
         _ => Err("expected a relation or table declaration".into()),
     }
 }
@@ -248,29 +298,49 @@ pub(crate) fn coerce_value(original: Value, target: &Type) -> Result<Value, Stri
     }
 }
 pub(crate) fn project(value: &Value, field: &str) -> Option<Value> {
-    (field == "has" && matches!(&native(value).ok()?.0, Kind::Table { .. })).then(|| value.clone())
+    let Kind::Table { key, .. } = &native(value).ok()?.0 else {
+        return None;
+    };
+    match field {
+        "has" => Some(value.clone()),
+        "get" => Some(self::value(Kind::Constructor { name: key.clone() })),
+        "remove" => Some(self::value(Kind::Removal {
+            name: key.clone(),
+            schema: declaration(native(value).ok()?).ok()?.1,
+        })),
+        _ => None,
+    }
 }
 pub(crate) fn binary(operator: &str, left: &Value, right: &Value) -> Option<Result<Value, String>> {
     if !matches!(left, Value::Relational(_)) && !matches!(right, Value::Relational(_)) {
         return None;
     }
     Some(match operator {
-        "&" => goal(left).and_then(|mut left| {
-            left.extend(goal(right)?);
-            Ok(value(Kind::Goal(left)))
-        }),
+        "&" if matches!(native(left).map(|value| &value.0), Ok(Kind::Goal(_))) => goal(left)
+            .and_then(|mut left| {
+                left.extend(goal(right)?);
+                Ok(value(Kind::Goal(left)))
+            }),
         "==" => expression(left).and_then(|left| {
             Ok(value(Kind::Goal(vec![Fact::Equal(
                 left,
                 expression(right)?,
             )])))
         }),
-        "+" => expression(left).and_then(|left| {
-            Ok(value(Kind::Expr(Expression::Call(
-                "+".into(),
+        "!=" | "<" | ">" | "<=" | ">=" => expression(left).and_then(|left| {
+            Ok(value(Kind::Goal(vec![Fact::Predicate(
+                operator.into(),
                 vec![left, expression(right)?],
-            ))))
+            )])))
         }),
+        "+" | "-" | "*" | "/" | "%" | "<<" | ">>" | "&" | "|" => {
+            expression(left).and_then(|left| {
+                Ok(value(Kind::Expr(Expression::Call(
+                    operator.into(),
+                    vec![left, expression(right)?],
+                ))))
+            })
+        }
         _ => Err(format!("unsupported symbolic operator `{operator}`")),
     })
 }
@@ -294,6 +364,22 @@ pub(crate) fn call_value(function: &Value, args: &[Value]) -> Option<Result<Valu
             .map(expression)
             .collect::<Result<Vec<_>, _>>()
             .map(|args| value(Kind::Expr(Expression::Call(name.clone(), args)))),
+        Kind::Predicate { name } => args
+            .iter()
+            .map(expression)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|args| value(Kind::Goal(vec![Fact::Predicate(name.clone(), args)]))),
+        Kind::Removal { name, schema } => args
+            .iter()
+            .map(expression)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|args| {
+                value(Kind::Goal(vec![Fact::Erase(
+                    name.clone(),
+                    args,
+                    schema.clone(),
+                )]))
+            }),
         _ => Err("relational value is not callable".into()),
     })
 }
@@ -328,13 +414,117 @@ fn host_call_inner(
             schema: fields(&parameter("S")?),
         })),
         ("table", [key, policy]) => {
-            if !matches!(&native(policy)?.0, Kind::Marker(policy) if policy == "unique") {
-                return Err("unsupported table merge policy".into());
-            }
+            let table_value = parameter("V")?;
+            let merge = match &native(policy)?.0 {
+                Kind::Marker(policy) if policy == "unique" => None,
+                Kind::Merge(sort, expression) if *sort == table_value => Some(expression.clone()),
+                Kind::Merge(..) => {
+                    return Err("table merge policy does not match its value sort".into());
+                }
+                _ => return Err("unsupported table merge policy".into()),
+            };
             Ok(value(Kind::Table {
                 key: string(key)?,
                 keys: fields(&parameter("K")?),
-                value: parameter("V")?,
+                value: table_value,
+                merge,
+            }))
+        }
+        ("primitive", [name]) => {
+            let Type::Function(parameters, result) = parameter("F")? else {
+                return Err("primitive requires a function type".into());
+            };
+            for ty in parameters
+                .iter()
+                .map(|(_, ty)| ty)
+                .chain(std::iter::once(result.as_ref()))
+            {
+                sort(ty)?;
+            }
+            Ok(value(Kind::Constructor {
+                name: string(name)?,
+            }))
+        }
+        ("predicate", [name]) => {
+            for ty in fields(&parameter("S")?) {
+                sort(&ty)?;
+            }
+            Ok(value(Kind::Predicate {
+                name: string(name)?,
+            }))
+        }
+        ("merge", [body]) => {
+            let Type::Function(parameters, result) = parameter("F")? else {
+                return Err("merge requires a function".into());
+            };
+            let [(_, old), (_, new)] = parameters.as_slice() else {
+                return Err("merge requires exactly two Expr<T> parameters".into());
+            };
+            let Some(merge_sort) = expression_sort(old) else {
+                return Err("merge requires Expr<T> parameters".into());
+            };
+            if old != new || result.as_ref() != old {
+                return Err("merge parameters and result must have the same Expr<T> type".into());
+            }
+            sort(merge_sort)?;
+            let completed = evaluator
+                .call(
+                    source,
+                    span,
+                    body.clone(),
+                    vec![
+                        value(Kind::Expr(Expression::MergeOld)),
+                        value(Kind::Expr(Expression::MergeNew)),
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+            let expression = expression(&completed)?;
+            if !variables(&[Fact::Equal(expression.clone(), expression.clone())]).is_empty() {
+                return Err("a quantified variable escaped into a merge policy".into());
+            }
+            Ok(value(Kind::Merge(merge_sort.clone(), expression)))
+        }
+        ("erase", [row]) => {
+            let facts = goal(row)?
+                .into_iter()
+                .map(|fact| match fact {
+                    Fact::Atom(name, mut args, schema) => {
+                        if let Schema::Table(keys, _) = &schema {
+                            args.truncate(keys.len());
+                        }
+                        Ok(Fact::Erase(name, args, schema))
+                    }
+                    _ => Err("erase requires positive relation or table rows".into()),
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            if facts.is_empty() {
+                return Err("erase requires a positive relation or table row".into());
+            }
+            Ok(value(Kind::Goal(facts)))
+        }
+        ("container", []) => {
+            let schema = parameter("S")?;
+            if !matches!(&schema, Type::Nominal(_, args) if args.is_empty()) {
+                return Err("a container sort must be a nominal type without arguments".into());
+            }
+            let container = parameter("C")?;
+            let (kind, arguments) = [("Set", 1), ("Vec", 1), ("Map", 2)]
+                .into_iter()
+                .find_map(|(name, arity)| {
+                    arguments(&container, name)
+                        .filter(|args| args.len() == arity)
+                        .map(|args| (name, args))
+                })
+                .ok_or_else(|| {
+                    "container requires relational::Set<T>, Vec<T>, or Map<K,V>".to_string()
+                })?;
+            for ty in arguments {
+                sort(ty)?;
+            }
+            Ok(value(Kind::Container {
+                name: sort(&schema)?,
+                kind: kind.into(),
+                arguments: arguments.to_vec(),
             }))
         }
         ("constructor", [constructor]) => {
@@ -363,8 +553,14 @@ fn host_call_inner(
                 .map_err(|error| error.to_string())?;
             let body = goal(record_field(&completed, "when")?)?;
             let head = goal(record_field(&completed, "then")?)?;
-            if head.iter().any(|fact| !matches!(fact, Fact::Atom(..))) {
+            if head
+                .iter()
+                .any(|fact| !matches!(fact, Fact::Atom(..) | Fact::Erase(..)))
+            {
                 return Err("a rule head must contain positive relation or table rows".into());
+            }
+            if body.iter().any(|fact| matches!(fact, Fact::Erase(..))) {
+                return Err("erase is only valid in a rule head".into());
             }
             let body_variables = variables(&body);
             let head_variables = variables(&head);
@@ -451,7 +647,7 @@ fn variables(facts: &[Fact]) -> BTreeSet<(u64, usize)> {
     let mut result = BTreeSet::new();
     for fact in facts {
         match fact {
-            Fact::Atom(_, args, _) => {
+            Fact::Atom(_, args, _) | Fact::Erase(_, args, _) | Fact::Predicate(_, args) => {
                 for arg in args {
                     collect(arg, &mut result);
                 }
@@ -483,7 +679,7 @@ fn validate_program(tables: &[RelationalValue], stages: &[RelationalValue]) -> R
                 return Err("invalid completed clause".into());
             };
             for fact in body.iter().chain(head) {
-                if let Fact::Atom(key, _, schema) = fact {
+                if let Fact::Atom(key, _, schema) | Fact::Erase(key, _, schema) = fact {
                     match schemas.get(key.as_str()) {
                         None => return Err(format!("undeclared relation `{key}`")),
                         Some(declared) if declared != schema => {
@@ -558,10 +754,19 @@ fn emit_declaration(value: &RelationalValue, output: &mut String) -> Result<(), 
         Kind::Relation { key, schema } => {
             output.push_str(&format!("(relation {key} ({}))\n", types(schema)?))
         }
-        Kind::Table { key, keys, value } => output.push_str(&format!(
-            "(function {key} ({}) {} :no-merge)\n",
+        Kind::Table {
+            key,
+            keys,
+            value,
+            merge,
+        } => output.push_str(&format!(
+            "(function {key} ({}) {} {})\n",
             types(keys)?,
-            sort(value)?
+            sort(value)?,
+            merge
+                .as_ref()
+                .map(|merge| format!(":merge {}", expression_text(merge)))
+                .unwrap_or_else(|| ":no-merge".into())
         )),
         _ => return Err("expected a relation or table declaration".into()),
     }
@@ -570,6 +775,8 @@ fn emit_declaration(value: &RelationalValue, output: &mut String) -> Result<(), 
 fn expression_text(expression: &Expression) -> String {
     match expression {
         Expression::Variable(_, index) => format!("v{index}"),
+        Expression::MergeOld => "old".into(),
+        Expression::MergeNew => "new".into(),
         Expression::Integer(value) => value.to_string(),
         Expression::String(value) => format!("{value:?}"),
         Expression::Bool(value) => value.to_string(),
@@ -590,6 +797,8 @@ fn call_text(name: &str, args: &[Expression]) -> String {
 }
 fn fact_text(fact: &Fact, head: bool) -> String {
     match fact {
+        Fact::Erase(name, args, _) => format!("(delete {})", call_text(name, args)),
+        Fact::Predicate(name, args) => call_text(name, args),
         Fact::Equal(left, right) => {
             format!("(= {} {})", expression_text(left), expression_text(right))
         }
@@ -636,8 +845,12 @@ pub enum SchemaEntry<'a> {
     Datatypes(&'a [&'a str]),
     /// A binding evaluating to a relation or table declaration.
     Declaration(&'a str),
+    /// A binding evaluating to a typed container sort declaration.
+    Container(&'a str),
     /// A completed clause binding and its engine ruleset.
     Rule(&'a str, &'a str),
+    /// A list of completed clauses emitted in order into one engine ruleset.
+    Rules(&'a str, &'a str),
 }
 
 /// Lower selected checked schema exports to the existing engine input format.
@@ -645,9 +858,21 @@ pub fn emit_schema(
     module: &CheckedModule,
     entries: &[SchemaEntry<'_>],
 ) -> Result<String, Diagnostic> {
+    emit_schema_extension(module, &[], entries)
+}
+
+/// Lower checked exports against declarations already installed by an imported schema.
+pub fn emit_schema_extension(
+    module: &CheckedModule,
+    imports: &[SchemaEntry<'_>],
+    entries: &[SchemaEntry<'_>],
+) -> Result<String, Diagnostic> {
     let mut exports = BTreeMap::new();
-    for entry in entries {
-        if let SchemaEntry::Declaration(binding) | SchemaEntry::Rule(binding, _) = entry
+    for entry in imports.iter().chain(entries) {
+        if let SchemaEntry::Declaration(binding)
+        | SchemaEntry::Container(binding)
+        | SchemaEntry::Rule(binding, _)
+        | SchemaEntry::Rules(binding, _) = entry
             && let std::collections::btree_map::Entry::Vacant(entry) = exports.entry(*binding)
         {
             entry.insert(module.evaluate(binding)?);
@@ -655,7 +880,7 @@ pub fn emit_schema(
     }
     let mut declarations = Vec::new();
     let mut clauses = Vec::new();
-    for entry in entries {
+    for entry in imports.iter().chain(entries) {
         match entry {
             SchemaEntry::Declaration(binding) => declarations.push(
                 native(&exports[binding])
@@ -667,6 +892,17 @@ pub fn emit_schema(
                     .map_err(|message| error(binding, &(0..0), message))?
                     .clone(),
             ),
+            SchemaEntry::Rules(binding, _) => {
+                for clause in collection(&exports[binding])
+                    .map_err(|message| error(binding, &(0..0), message))?
+                {
+                    clauses.push(
+                        native(clause)
+                            .map_err(|message| error(binding, &(0..0), message))?
+                            .clone(),
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -699,6 +935,29 @@ pub fn emit_schema(
             SchemaEntry::Rule(binding, ruleset) => {
                 native(&exports[binding]).and_then(|value| emit_clause(value, ruleset, &mut output))
             }
+            SchemaEntry::Rules(binding, ruleset) => {
+                collection(&exports[binding]).and_then(|clauses| {
+                    for clause in clauses {
+                        emit_clause(native(clause)?, ruleset, &mut output)?;
+                    }
+                    Ok(())
+                })
+            }
+            SchemaEntry::Container(binding) => native(&exports[binding]).and_then(|value| {
+                let Kind::Container {
+                    name,
+                    kind,
+                    arguments,
+                } = &value.0
+                else {
+                    return Err("expected a typed container declaration".into());
+                };
+                if emitted.insert(name) {
+                    let arguments = arguments.iter().map(sort).collect::<Result<Vec<_>, _>>()?;
+                    output.push_str(&format!("(sort {name} ({kind} {}))\n", arguments.join(" ")));
+                }
+                Ok(())
+            }),
         };
         result.map_err(|message| error("relational schema", &(0..0), message))?;
     }

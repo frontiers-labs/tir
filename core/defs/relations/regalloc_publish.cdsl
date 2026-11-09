@@ -1,0 +1,712 @@
+use ::relational::*;
+use ::Attr;
+use ::AttrList;
+use ::Attribute;
+use ::BigInt;
+use ::BlockLayout;
+use ::BlockParam;
+use ::BlockRegion;
+use ::Boundary;
+use ::DeclaredType;
+use ::DefinedValue;
+use ::Definition;
+use ::Entry;
+use ::EntryBinding;
+use ::ExitBinding;
+use ::FeedbackBinding;
+use ::Gamma;
+use ::GammaArm;
+use ::GammaDefaultArm;
+use ::GammaPredicate;
+use ::GraphLayout;
+use ::KindBoundary;
+use ::Mode;
+use ::OpKind;
+use ::OpLocation;
+use ::OpPlacement;
+use ::OpUnderRegion;
+use ::Operand;
+use ::Placement;
+use ::RegionMode;
+use ::RegionOwner;
+use ::RegionParam;
+use ::RegionSlot;
+use ::RegionUnder;
+use ::Result;
+use ::Successor;
+use ::SuccessorArg;
+use ::Theta;
+use ::ThetaBody;
+use ::ThetaContinueOn;
+use ::ThetaPredicate;
+use ::TypeExpr;
+use ::TypeList;
+use ::ValueDefinition;
+use ::ValueType;
+use ::Yield;
+use ::regalloc::RARequest;
+use ::regalloc::RATransferComplete;
+use ::regalloc_bindings::RABindingsComplete;
+use ::regalloc_bindings::RAHardwareSlot;
+use ::regalloc_bindings::RANativeRead;
+use ::regalloc_bindings::RANativeSegment;
+use ::regalloc_color::RAChosenRegister;
+use ::regalloc_color::RAColorComplete;
+use ::regalloc_color::RAColorValues;
+use ::regalloc_control::RAAt;
+use ::regalloc_control::RABinding;
+use ::regalloc_control::RABlock;
+use ::regalloc_control::RABranch;
+use ::regalloc_control::RACFGFunction;
+use ::regalloc_control::RACFGSource;
+use ::regalloc_control::RAControlComplete;
+use ::regalloc_control::RAEntry;
+use ::regalloc_control::RAFunction;
+use ::regalloc_control::RAGraphFunction;
+use ::regalloc_control::RAIds;
+use ::regalloc_control::RAIncoming;
+use ::regalloc_control::RAJump;
+use ::regalloc_control::RANode;
+use ::regalloc_control::RAReturn;
+use ::regalloc_control::RAReturnValue;
+use ::regalloc_control::RAScheduledOps;
+use ::regalloc_control::RASource;
+use ::regalloc_control::RATerminator;
+use ::regalloc_structured::RASwitch;
+use ::regalloc_structured::RASwitchCase;
+use ::regalloc_structured::RASwitchOwner;
+use ::tmdl_schema::TMDLClassDialect;
+use ::tmdl_schema::TMDLInstructionSlot;
+use ::tmdl_schema::TMDLInstructionSlotCount;
+use ::tmdl_schema::TMDLOpcode;
+
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let fresh_ir_id = primitive<() -> Integer>("fresh-ir-id");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let i64_hex = primitive<(a0: Integer) -> String>("i64-hex");
+let nat_i64 = primitive<(a0: BigInt) -> Integer>("nat-i64");
+let bigint = primitive<(a0: Integer) -> BigInt>("bigint");
+let big_shift_right = primitive<(a0: BigInt, a1: Integer) -> BigInt>(">>");
+let ids_length = primitive<(a0: RAIds) -> Integer>("set-length");
+let ids_get = primitive<(a0: RAIds, a1: Integer) -> Integer>("set-get");
+let ids_contains = predicate<(RAIds, Integer)>("set-contains");
+let make_ANil = constructor(AttrList::ANil);
+let make_BlockParamDef = constructor(Definition::BlockParamDef);
+let make_Apply = constructor(TypeExpr::Apply);
+let make_Ctor = constructor(TypeExpr::Ctor);
+let make_TNil = constructor(TypeList::TNil);
+let make_ResultDef = constructor(Definition::ResultDef);
+let make_ACons = constructor(AttrList::ACons);
+let make_IntegerAttr = constructor(Attr::IntegerAttr);
+let make_ListAttr = constructor(Attr::ListAttr);
+let make_PhysicalRegisterAttr = constructor(Attr::PhysicalRegisterAttr);
+let make_BlockAttr = constructor(Attr::BlockAttr);
+let make_AssignedRegisterAttr = constructor(Attr::AssignedRegisterAttr);
+let make_CFG = constructor(RegionMode::CFG);
+let make_InBlock = constructor(Placement::InBlock);
+let make_OrdinaryBoundary = constructor(Boundary::OrdinaryBoundary);
+
+// Saturate plan, check, ready, delete, install in that order. Never rerun the
+// source indexes between delete and install. The caller stages a cloned engine
+// and rebuilds every structural index before verification or publication.
+pub let RASelectedCandidate = relation<(Integer, Integer, Integer)>("RASelectedCandidate");
+pub let RAIntegerType = relation<(TypeExpr,)>("RAIntegerType");
+pub let RAPublishCandidate = relation<(Integer, Integer, Integer)>("RAPublishCandidate");
+pub let RAPublishReady = relation<(Integer, Integer, Integer)>("RAPublishReady");
+pub let RAPublished = relation<(Integer, Integer, Integer)>("RAPublished");
+pub let RAPublishError = relation<(Integer, Integer, Integer, String)>("RAPublishError");
+pub let RAPublishValues = table<(Integer, Integer), RAIds>("RAPublishValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAPublishOps = table<(Integer, Integer), RAIds>("RAPublishOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAPublishControlValues = table<(Integer, Integer), RAIds>("RAPublishControlValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAPublishSegmentDirections = table<(Integer, Integer, Integer), RAIds>("RAPublishSegmentDirections", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAPublishErrors = table<(Integer, Integer), RAIds>("RAPublishErrors", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAPublishedBlock = table<(Integer, Integer, Integer), Integer>("RAPublishedBlock", unique);
+pub let RAPublishAllocatedBlocks = table<(Integer, Integer), RAIds>("RAPublishAllocatedBlocks", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAPublishEarlierBlocks = table<(Integer, Integer, Integer), RAIds>("RAPublishEarlierBlocks", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAPublishKind = relation<(Integer, Integer, Integer, String)>("RAPublishKind");
+pub let RAPublishOperand = relation<(Integer, Integer, Integer, Integer, Integer)>("RAPublishOperand");
+pub let RAPublishDefinition = relation<(Integer, Integer, Integer, Definition)>("RAPublishDefinition");
+pub let RAPublishAttribute = relation<(Integer, Integer, Integer, String, Attr)>("RAPublishAttribute");
+pub let RAPublishSuccessor = relation<(Integer, Integer, Integer, Integer, Integer)>("RAPublishSuccessor");
+pub let RAPublishParamScan = relation<(Integer, Integer, Integer, Integer)>("RAPublishParamScan");
+pub let RAPublishNativeScan = relation<(Integer, Integer, Integer, String, Integer, Integer)>("RAPublishNativeScan");
+pub let RAPublishSegments = table<(Integer, Integer, Integer, String, Integer), AttrList>("RAPublishSegments", unique);
+pub let RAPublishAssignments = table<(Integer, Integer, Integer, Integer), AttrList>("RAPublishAssignments", unique);
+pub let RAPublishStateKind = relation<(String,)>("RAPublishStateKind");
+pub let RAPublishRetiredOp = relation<(Integer, Integer, Integer)>("RAPublishRetiredOp");
+pub let RAPublishRetiredRegion = relation<(Integer, Integer, Integer)>("RAPublishRetiredRegion");
+pub let RAPublishSwitchCases = table<(Integer, Integer, Integer, Integer), AttrList>("RAPublishSwitchCases", unique);
+pub let RAPublishSwitchDests = table<(Integer, Integer, Integer, Integer), AttrList>("RAPublishSwitchDests", unique);
+pub let RAPublishSwitchCounts = table<(Integer, Integer, Integer, Integer), AttrList>("RAPublishSwitchCounts", unique);
+pub let RAPublishOperandSlots = table<(Integer, Integer, Integer), RAIds>("RAPublishOperandSlots", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAPublishStateSlots = table<(Integer, Integer, Integer), RAIds>("RAPublishStateSlots", merge(fn(old, new) { ids_union(old, new) }));
+pub let ra_publish_plan = [
+    forall(fn(inv, root) {
+        { when: RARequest(inv, root),
+          then: RAPublishStateKind("state.entry_state") & RAPublishStateKind("state.join") &
+                RAPublishStateKind("state.split") }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate) & RACFGFunction(inv, f) &
+                RAControlComplete(inv, f, candidate) & RABindingsComplete(inv, f) &
+                RAColorComplete(inv, f, candidate) & RATransferComplete(inv, f, candidate),
+          then: RAPublishCandidate(inv, f, candidate) & RAPublishErrors.has(inv, f, ids_empty()) &
+                RAPublishOps.has(inv, f, ids_empty()) & RAPublishValues.has(inv, f, ids_empty()) &
+                RAPublishControlValues.has(inv, f, ids_empty()) & RAPublishParamScan(inv, f, 0, 0) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAGraphFunction(inv, f) &
+                RAControlComplete(inv, f, candidate) & RABindingsComplete(inv, f),
+          then: RAPublishCandidate(inv, f, candidate) & RAPublishErrors.has(inv, f, ids_empty()) &
+                RAPublishOps.has(inv, f, ids_empty()) & RAPublishValues.has(inv, f, ids_empty()) &
+                RAPublishControlValues.has(inv, f, ids_empty()) &
+                RAPublishAllocatedBlocks.has(inv, f, ids_empty()) &
+                RAPublishAssignments.has(inv, f, candidate, 0, make_ANil()) & RAPublishParamScan(inv, f, 0, 0) }
+    }),
+    forall(fn(inv, f, candidate, logical) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAGraphFunction(inv, f) & RABlock(inv, f, logical) &
+                ids_not_contains(RAPublishAllocatedBlocks.get(inv, f), logical),
+          then: RAPublishedBlock.has(inv, f, logical, fresh_ir_id()) &
+                RAPublishAllocatedBlocks.has(inv, f, ids_one(logical)) &
+                RAPublishEarlierBlocks.has(inv, f, logical, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, logical) {
+        { when: RAPublishCandidate(inv, f, candidate) & RACFGFunction(inv, f) & RABlock(inv, f, logical),
+          then: RAPublishedBlock.has(inv, f, logical, logical) &
+                RAPublishEarlierBlocks.has(inv, f, logical, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, block, slot, value) {
+        { when: RAPublishCandidate(inv, f, candidate) & RACFGFunction(inv, f) & RAEntry(inv, f, block) &
+                BlockParam(block, slot, value),
+          then: RAPublishDefinition(inv, f, value, make_BlockParamDef(block, slot)) }
+    }),
+    forall(fn(inv, f, candidate, logical, entry, earlier) {
+        { when: RAPublishCandidate(inv, f, candidate) & RABlock(inv, f, logical) & RAEntry(inv, f, entry) &
+                (logical != entry) & RABlock(inv, f, earlier) & (earlier != entry) & (earlier < logical),
+          then: RAPublishEarlierBlocks.has(inv, f, logical, ids_one(earlier)) }
+    }),
+    forall(fn(inv, f, candidate, logical, entry) {
+        { when: RAPublishCandidate(inv, f, candidate) & RABlock(inv, f, logical) & RAEntry(inv, f, entry) &
+                (logical != entry),
+          then: RAPublishEarlierBlocks.has(inv, f, logical, ids_one(entry)) }
+    }),
+    forall(fn(inv, f, candidate, region, old, slot, value) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAFunction(inv, f, region) &
+                RAPublishParamScan(inv, f, old, slot) & RegionParam(region, old, value) &
+                ValueType.has(value, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAPublishParamScan(inv, f, (old + 1), slot) }
+    }),
+    forall(fn(inv, f, candidate, region, old, slot, value, ty, logical, block) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAFunction(inv, f, region) &
+                RAPublishParamScan(inv, f, old, slot) & RegionParam(region, old, value) &
+                ValueType.has(value, ty) & (ty != make_Apply(make_Ctor("son.control"), make_TNil())) &
+                RAEntry(inv, f, logical) & RAPublishedBlock.has(inv, f, logical, block),
+          then: RAPublishDefinition(inv, f, value, make_BlockParamDef(block, slot)) &
+                RAPublishParamScan(inv, f, (old + 1), (slot + 1)) }
+    }),
+    forall(fn(inv, f, candidate, logical, slot, value, block) {
+        { when: RAPublishCandidate(inv, f, candidate) & RABinding(inv, f, logical, slot, value) &
+                RAPublishedBlock.has(inv, f, logical, block),
+          then: RAPublishDefinition(inv, f, value, make_BlockParamDef(block, slot)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, logical, point, local, dialect) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) &
+                RAAt(inv, f, candidate, logical, op, point) & TMDLOpcode(inv, kind, local, dialect),
+          then: RAPublishKind(inv, f, op, kind) & RAPublishSegmentDirections.has(inv, f, op, ids_empty()) &
+                RAPublishNativeScan(inv, f, op, "in", 0, 0) & RAPublishNativeScan(inv, f, op, "out", 0, 0) }
+    }),
+    forall(fn(inv, f, op, direction, old, slot, value) {
+        { when: RAPublishNativeScan(inv, f, op, direction, old, slot) &
+                RANativeRead(inv, f, op, direction, old, value) &
+                ValueType.has(value, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAPublishNativeScan(inv, f, op, direction, (old + 1), slot) }
+    }),
+    forall(fn(inv, f, op, old, slot, value, ty) {
+        { when: RAPublishNativeScan(inv, f, op, "in", old, slot) & RANativeRead(inv, f, op, "in", old, value) &
+                ValueType.has(value, ty) & (ty != make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAPublishOperand(inv, f, op, slot, value) &
+                RAPublishNativeScan(inv, f, op, "in", (old + 1), (slot + 1)) }
+    }),
+    forall(fn(inv, f, op, old, slot, value, ty) {
+        { when: RAPublishNativeScan(inv, f, op, "out", old, slot) & RANativeRead(inv, f, op, "out", old, value) &
+                ValueType.has(value, ty) & (ty != make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAPublishDefinition(inv, f, value, make_ResultDef(op, slot)) &
+                RAPublishNativeScan(inv, f, op, "out", (old + 1), (slot + 1)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, local, dialect, direction, count) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) &
+                RAPublishKind(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                TMDLInstructionSlotCount(inv, kind, direction, count),
+          then: RAPublishSegments.has(inv, f, op, direction, count, make_ANil()) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, direction, field, name, optional, variadic, tail, ty) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, true) &
+                RAPublishSegments.has(inv, f, op, direction, (field + 1), tail) & RAIntegerType(ty),
+          then: RAPublishSegments.has(
+              inv, f, op, direction, field, make_ACons(make_IntegerAttr(ty, 64, i64_hex(0)), tail)
+          ) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, direction, field, name, optional, variadic, size, tail, ty) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, false) &
+                RANativeSegment(inv, f, op, direction, field, size) &
+                RAPublishSegments.has(inv, f, op, direction, (field + 1), tail) & RAIntegerType(ty),
+          then: RAPublishSegments.has(
+              inv, f, op, direction, field, make_ACons(make_IntegerAttr(ty, 64, i64_hex(size)), tail)
+          ) }
+    }),
+    forall(fn(xs, inv, f, op) {
+        { when: RAPublishSegments.has(inv, f, op, "in", 0, xs),
+          then: RAPublishAttribute(inv, f, op, "operand_segment_sizes", make_ListAttr(xs)) &
+                RAPublishSegmentDirections.has(inv, f, op, ids_one(0)) }
+    }),
+    forall(fn(xs, inv, f, op) {
+        { when: RAPublishSegments.has(inv, f, op, "out", 0, xs),
+          then: RAPublishAttribute(inv, f, op, "result_segment_sizes", make_ListAttr(xs)) &
+                RAPublishSegmentDirections.has(inv, f, op, ids_one(1)) }
+    }),
+    forall(fn(inv, f, candidate, op, direction, name, slot, value, required, kind, class, index, dialect) {
+        { when: RAPublishCandidate(inv, f, candidate) &
+                RAHardwareSlot(inv, f, op, direction, name, slot, value, required) & RACFGFunction(inv, f) &
+                RAPublishKind(inv, f, op, kind) & RAChosenRegister(inv, f, candidate, value, class, index) &
+                TMDLClassDialect(inv, class, dialect),
+          then: RAPublishAttribute(inv, f, op, name, make_PhysicalRegisterAttr(dialect, class, index)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, logical, point) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) &
+                RAAt(inv, f, candidate, logical, op, point) & RAPublishStateKind(kind),
+          then: RAPublishKind(inv, f, op, kind) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, value, slot) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) & RAPublishStateKind(kind) &
+                RAPublishKind(inv, f, op, kind) & Operand.has(op, slot, value),
+          then: RAPublishOperand(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, slot, value) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) & RAPublishStateKind(kind) &
+                RAPublishKind(inv, f, op, kind) & Result(op, slot, value),
+          then: RAPublishDefinition(inv, f, value, make_ResultDef(op, slot)) }
+    }),
+    forall(fn(inv, f, candidate, op, block, point, kind) {
+        { when: RAPublishCandidate(inv, f, candidate) & RACFGFunction(inv, f) &
+                RACFGSource(inv, f, op, block, point) & RATerminator(inv, f, op, block) &
+                RASource(inv, f, op, kind),
+          then: RAPublishKind(inv, f, op, kind) }
+    }),
+    forall(fn(inv, f, candidate, op, block, value, slot) {
+        { when: RAPublishCandidate(inv, f, candidate) & RACFGFunction(inv, f) & RATerminator(inv, f, op, block) &
+                Operand.has(op, slot, value),
+          then: RAPublishOperand(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, op, logical, dest, block) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAGraphFunction(inv, f) &
+                RAJump(inv, f, op, logical, dest) & RAPublishedBlock.has(inv, f, dest, block),
+          then: RAPublishKind(inv, f, op, "cfg.br") &
+                RAPublishAttribute(inv, f, op, "dest", make_BlockAttr(block)) }
+    }),
+    forall(fn(inv, f, candidate, op, dest, slot, joined, incoming) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAGraphFunction(inv, f) &
+                RAIncoming(inv, f, op, dest, slot, joined, incoming),
+          then: RAPublishOperand(inv, f, op, slot, incoming) }
+    }),
+    forall(fn(inv, f, candidate, op, logical, predicate, taken, fallthrough, trueBlock, falseBlock, ty) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAGraphFunction(inv, f) &
+                RABranch(inv, f, op, logical, predicate, taken, fallthrough) &
+                RAPublishedBlock.has(inv, f, taken, trueBlock) &
+                RAPublishedBlock.has(inv, f, fallthrough, falseBlock) & RAIntegerType(ty),
+          then: RAPublishKind(inv, f, op, "cfg.cond_br") & RAPublishOperand(inv, f, op, 0, predicate) &
+                RAPublishAttribute(inv, f, op, "true_dest", make_BlockAttr(trueBlock)) &
+                RAPublishAttribute(inv, f, op, "false_dest", make_BlockAttr(falseBlock)) &
+                RAPublishAttribute(
+                    inv, f, op, "operand_segment_sizes",
+                    make_ListAttr(
+                        make_ACons(
+                            make_IntegerAttr(ty, 64, i64_hex(1)),
+                            make_ACons(
+                                make_IntegerAttr(ty, 64, i64_hex(0)),
+                                make_ACons(make_IntegerAttr(ty, 64, i64_hex(0)), make_ANil())
+                            )
+                        )
+                    )
+                ) }
+    }),
+    forall(fn(inv, f, candidate, op, logical) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAReturn(inv, f, op, logical),
+          then: RAPublishKind(inv, f, op, "func.return") }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAReturnValue(inv, f, op, slot, value),
+          then: RAPublishOperand(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, op, logical, predicate, default, owner, region, count, block, ty) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASwitch(inv, f, op, logical, predicate, default) &
+                RASwitchOwner(inv, f, op, owner) & GammaDefaultArm.has(owner, region) &
+                RegionSlot.has(region, count) & RAPublishedBlock.has(inv, f, default, block) & RAIntegerType(ty),
+          then: RAPublishKind(inv, f, op, "cfg.switch") & RAPublishOperand(inv, f, op, 0, predicate) &
+                RAPublishSuccessor(inv, f, op, count, block) &
+                RAPublishSwitchCases.has(inv, f, op, count, make_ANil()) &
+                RAPublishSwitchDests.has(inv, f, op, count, make_ACons(make_BlockAttr(block), make_ANil())) &
+                RAPublishSwitchCounts.has(
+                    inv, f, op, count, make_ACons(make_IntegerAttr(ty, 64, i64_hex(0)), make_ANil())
+                ) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, case, dest, cases, dests, counts, block, ty, low, high, bits) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASwitchCase(inv, f, op, slot, case, dest) &
+                RAPublishSwitchCases.has(inv, f, op, (slot + 1), cases) &
+                RAPublishSwitchDests.has(inv, f, op, (slot + 1), dests) &
+                RAPublishSwitchCounts.has(inv, f, op, (slot + 1), counts) &
+                RAPublishedBlock.has(inv, f, dest, block) & RAIntegerType(ty) &
+                (low == nat_i64((case & bigint(9223372036854775807)))) &
+                (high == nat_i64(big_shift_right(case, 63))) & (bits == (low | (high * -9223372036854775808))),
+          then: RAPublishSwitchCases.has(
+              inv, f, op, slot, make_ACons(make_IntegerAttr(ty, 64, i64_hex(bits)), cases)
+          ) &
+                RAPublishSuccessor(inv, f, op, slot, block) &
+                RAPublishSwitchDests.has(inv, f, op, slot, make_ACons(make_BlockAttr(block), dests)) &
+                RAPublishSwitchCounts.has(
+                    inv, f, op, slot, make_ACons(make_IntegerAttr(ty, 64, i64_hex(0)), counts)
+                ) }
+    }),
+    forall(fn(inv, f, candidate, op, logical, predicate, default, cases, dests, counts, ty) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASwitch(inv, f, op, logical, predicate, default) &
+                RAPublishSwitchCases.has(inv, f, op, 0, cases) & RAPublishSwitchDests.has(inv, f, op, 0, dests) &
+                RAPublishSwitchCounts.has(inv, f, op, 0, counts) & RAIntegerType(ty),
+          then: RAPublishAttribute(inv, f, op, "cases", make_ListAttr(cases)) &
+                RAPublishAttribute(inv, f, op, "dests", make_ListAttr(dests)) &
+                RAPublishAttribute(inv, f, op, "arg_counts", make_ListAttr(counts)) &
+                RAPublishAttribute(
+                    inv, f, op, "operand_segment_sizes",
+                    make_ListAttr(
+                        make_ACons(
+                            make_IntegerAttr(ty, 64, i64_hex(1)),
+                            make_ACons(make_IntegerAttr(ty, 64, i64_hex(0)), make_ANil())
+                        )
+                    )
+                ) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RAPublishKind(inv, f, op, kind),
+          then: RAPublishOperandSlots.has(inv, f, op, ids_empty()) &
+                RAPublishStateSlots.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, op, slot, value) {
+        { when: RAPublishOperand(inv, f, op, slot, value),
+          then: RAPublishOperandSlots.has(inv, f, op, ids_one(slot)) }
+    }),
+    forall(fn(inv, f, op, slot, value, args) {
+        { when: RAPublishOperand(inv, f, op, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("builtin.state"), args)),
+          then: RAPublishStateSlots.has(inv, f, op, ids_one(slot)) }
+    }),
+    forall(fn(inv, f, candidate, values) {
+        { when: RAPublishCandidate(inv, f, candidate) & RACFGFunction(inv, f) &
+                RAColorValues.has(inv, f, candidate, values),
+          then: RAPublishAssignments.has(inv, f, candidate, ids_length(values), make_ANil()) }
+    }),
+    forall(fn(inv, f, candidate, values, tail, next, slot, value, class, index, dialect) {
+        { when: RAPublishCandidate(inv, f, candidate) & RACFGFunction(inv, f) &
+                RAColorValues.has(inv, f, candidate, values) &
+                RAPublishAssignments.has(inv, f, candidate, next, tail) & (next > 0) & (slot == (next - 1)) &
+                (slot < ids_length(values)) & (slot >= 0) & (value == ids_get(values, slot)) &
+                RAChosenRegister(inv, f, candidate, value, class, index) & TMDLClassDialect(inv, class, dialect),
+          then: RAPublishAssignments.has(
+              inv, f, candidate, slot, make_ACons(make_AssignedRegisterAttr(value, dialect, class, index), tail)
+          ) }
+    }),
+    forall(fn(inv, f, candidate, xs) {
+        { when: RAPublishCandidate(inv, f, candidate) & RACFGFunction(inv, f) &
+                RAPublishAssignments.has(inv, f, candidate, 0, xs),
+          then: RAPublishAttribute(inv, f, f, "assignment", make_ListAttr(xs)) }
+    }),
+    forall(fn(inv, f, value, def) {
+        { when: RAPublishDefinition(inv, f, value, def),
+          then: RAPublishValues.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RAPublishKind(inv, f, op, kind),
+          then: RAPublishOps.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, candidate, region, slot, value) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAFunction(inv, f, region) &
+                RegionParam(region, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAPublishControlValues.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, slot, value) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) & Result(op, slot, value) &
+                ValueType.has(value, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAPublishControlValues.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, f, candidate, root, region) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAGraphFunction(inv, f) & RAFunction(inv, f, root) &
+                RegionUnder(region, root) & (region != root),
+          then: RAPublishRetiredRegion(inv, f, region) }
+    }),
+    forall(fn(inv, f, candidate, root, op) {
+        { when: RAPublishCandidate(inv, f, candidate) & RAGraphFunction(inv, f) & RAFunction(inv, f, root) &
+                OpUnderRegion(root, op) & ids_not_contains(RAScheduledOps.get(inv, f, candidate), op),
+          then: RAPublishRetiredOp(inv, f, op) }
+    }),
+];
+
+pub let ra_publish_check = [
+    forall(fn(inv, f, op, ty, count) {
+        { when: RAPublishKind(inv, f, op, "cfg.br") & RAIntegerType(ty) &
+                (count == ids_length(RAPublishOperandSlots.get(inv, f, op))),
+          then: RAPublishAttribute(
+              inv, f, op, "operand_segment_sizes",
+              make_ListAttr(make_ACons(make_IntegerAttr(ty, 64, i64_hex(count)), make_ANil()))
+          ) }
+    }),
+    forall(fn(inv, f, op, ty, count, states) {
+        { when: RAPublishKind(inv, f, op, "func.return") & RAIntegerType(ty) &
+                (count == ids_length(RAPublishOperandSlots.get(inv, f, op))) &
+                (states == ids_length(RAPublishStateSlots.get(inv, f, op))),
+          then: RAPublishAttribute(
+              inv, f, op, "operand_segment_sizes",
+              make_ListAttr(
+                  make_ACons(
+                      make_IntegerAttr(ty, 64, i64_hex((count - states))),
+                      make_ACons(make_IntegerAttr(ty, 64, i64_hex(states)), make_ANil())
+                  )
+              )
+          ) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RAPublishCandidate(inv, f, candidate) &
+                (RAPublishOps.get(inv, f) != RAScheduledOps.get(inv, f, candidate)),
+          then: RAPublishError(inv, f, f, "scheduled operations lack native publication descriptors") }
+    }),
+    forall(fn(inv, f, candidate, op, kind) {
+        { when: RAPublishCandidate(inv, f, candidate) & RANode(inv, f, op, kind) &
+                ids_contains(RAScheduledOps.get(inv, f, candidate), op) &
+                ids_not_contains(RAPublishOps.get(inv, f), op),
+          then: RAPublishError(inv, f, op, ("scheduled operation lacks publication descriptor: " + kind)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, local, dialect) {
+        { when: RAPublishCandidate(inv, f, candidate) & RASource(inv, f, op, kind) &
+                RAPublishKind(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                (ids_length(RAPublishSegmentDirections.get(inv, f, op)) != 2),
+          then: RAPublishError(inv, f, op, "native segment publication is incomplete") }
+    }),
+    forall(fn(inv, f, op, name, first, second) {
+        { when: RAPublishAttribute(inv, f, op, name, first) & RAPublishAttribute(inv, f, op, name, second) &
+                (first != second),
+          then: RAPublishError(inv, f, op, "conflicting published attributes") }
+    }),
+    forall(fn(inv, f, entity, message) {
+        { when: RAPublishError(inv, f, entity, message),
+          then: RAPublishErrors.has(inv, f, ids_one(entity)) }
+    }),
+];
+
+pub let ra_publish_ready = [
+    forall(fn(inv, f, candidate, assignment) {
+        { when: RAPublishCandidate(inv, f, candidate) & (ids_length(RAPublishErrors.get(inv, f)) == 0) &
+                RAPublishAssignments.has(inv, f, candidate, 0, assignment),
+          then: RAPublishReady(inv, f, candidate) }
+    }),
+];
+
+pub let ra_publish_delete = [
+    forall(fn(inv, f, candidate, region) {
+        { when: RAPublishReady(inv, f, candidate) & RAFunction(inv, f, region),
+          then: Mode.remove(region) }
+    }),
+    forall(fn(inv, f, candidate, op, kind) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, kind),
+          then: OpPlacement.remove(op) & GraphLayout.remove(op) & OpKind.remove(op) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, value, slot) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, kind) & Operand.has(op, slot, value),
+          then: Operand.remove(op, slot) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, slot, value, def) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, kind) & Result(op, slot, value) &
+                ValueDefinition.has(value, def),
+          then: ValueDefinition.remove(value) & DefinedValue.remove(def) & erase(Result(op, slot, value)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, slot, value) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, kind) & Result(op, slot, value) &
+                ids_not_contains(RAPublishValues.get(inv, f), value),
+          then: ValueType.remove(value) & DeclaredType.remove(value) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, attr, name) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, kind) &
+                ids_not_contains(RAPublishOps.get(inv, f), op) & Attribute.has(op, name, attr),
+          then: Attribute.remove(op, name) }
+    }),
+    forall(fn(inv, f, candidate, op, kind) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, kind) &
+                ids_not_contains(RAPublishOps.get(inv, f), op),
+          then: OpLocation.remove(op) }
+    }),
+    forall(fn(inv, f, candidate, region, slot, value, def) {
+        { when: RAPublishReady(inv, f, candidate) & RAFunction(inv, f, region) &
+                RegionParam(region, slot, value) & ValueDefinition.has(value, def),
+          then: ValueDefinition.remove(value) & DefinedValue.remove(def) &
+                erase(RegionParam(region, slot, value)) }
+    }),
+    forall(fn(inv, f, candidate, control) {
+        { when: RAPublishReady(inv, f, candidate) &
+                ValueType.has(control, make_Apply(make_Ctor("son.control"), make_TNil())) &
+                ids_contains(RAPublishControlValues.get(inv, f), control),
+          then: ValueType.remove(control) & DeclaredType.remove(control) }
+    }),
+    forall(fn(inv, f, candidate, region, value, slot) {
+        { when: RAPublishReady(inv, f, candidate) & RAFunction(inv, f, region) & Yield.has(region, slot, value),
+          then: Yield.remove(region, slot) }
+    }),
+    forall(fn(inv, f, candidate, region) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredRegion(inv, f, region),
+          then: Mode.remove(region) & RegionOwner.remove(region) & RegionSlot.remove(region) }
+    }),
+    forall(fn(inv, f, candidate, region, value, slot) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredRegion(inv, f, region) &
+                Yield.has(region, slot, value),
+          then: Yield.remove(region, slot) }
+    }),
+    forall(fn(inv, f, candidate, region, slot, value) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredRegion(inv, f, region) &
+                RegionParam(region, slot, value),
+          then: ValueDefinition.remove(value) & DeclaredType.remove(value) }
+    }),
+    forall(fn(inv, f, candidate, region, slot, value) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredRegion(inv, f, region) &
+                RegionParam(region, slot, value) & ids_not_contains(RAPublishValues.get(inv, f), value),
+          then: ValueType.remove(value) }
+    }),
+    forall(fn(inv, f, candidate, region, operand, slot) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredRegion(inv, f, region) &
+                EntryBinding.has(region, slot, operand),
+          then: EntryBinding.remove(region, slot) }
+    }),
+    forall(fn(inv, f, candidate, region, yielded, slot) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredRegion(inv, f, region) &
+                ExitBinding.has(region, slot, yielded),
+          then: ExitBinding.remove(region, slot) }
+    }),
+    forall(fn(inv, f, candidate, region, yielded, slot) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredRegion(inv, f, region) &
+                FeedbackBinding.has(region, slot, yielded),
+          then: FeedbackBinding.remove(region, slot) }
+    }),
+    forall(fn(inv, f, candidate, op) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredOp(inv, f, op),
+          then: OpKind.remove(op) & OpPlacement.remove(op) & GraphLayout.remove(op) & OpLocation.remove(op) }
+    }),
+    forall(fn(inv, f, candidate, op, value, slot) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredOp(inv, f, op) &
+                Operand.has(op, slot, value),
+          then: Operand.remove(op, slot) }
+    }),
+    forall(fn(inv, f, candidate, op, attr, name) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredOp(inv, f, op) &
+                Attribute.has(op, name, attr),
+          then: Attribute.remove(op, name) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredOp(inv, f, op) & Result(op, slot, value),
+          then: ValueDefinition.remove(value) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredOp(inv, f, op) & Result(op, slot, value) &
+                ids_not_contains(RAPublishValues.get(inv, f), value),
+          then: ValueType.remove(value) & DeclaredType.remove(value) }
+    }),
+    forall(fn(inv, f, candidate, op) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredOp(inv, f, op),
+          then: erase(Gamma(op)) & erase(Theta(op)) & GammaPredicate.remove(op) & GammaDefaultArm.remove(op) &
+                ThetaBody.remove(op) & ThetaPredicate.remove(op) & ThetaContinueOn.remove(op) }
+    }),
+    forall(fn(inv, f, candidate, op, region, case) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishRetiredOp(inv, f, op) &
+                GammaArm.has(op, case, region),
+          then: GammaArm.remove(op, case) }
+    }),
+    forall(fn(inv, f, candidate, op) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, "son.branch"),
+          then: Attribute.remove(op, "operand_segment_sizes") & Attribute.remove(op, "result_segment_sizes") }
+    }),
+    forall(fn(inv, f, candidate, op) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, "son.edge"),
+          then: Attribute.remove(op, "operand_segment_sizes") & Attribute.remove(op, "result_segment_sizes") }
+    }),
+    forall(fn(inv, f, candidate, op, name, attr) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishAttribute(inv, f, op, name, attr),
+          then: Attribute.remove(op, name) }
+    }),
+    forall(fn(inv, f, candidate, op, attr, name) {
+        { when: RAPublishReady(inv, f, candidate) & RASource(inv, f, op, "son.merge") &
+                Attribute.has(op, name, attr),
+          then: Attribute.remove(op, name) & OpLocation.remove(op) }
+    }),
+];
+
+pub let ra_publish_install = [
+    forall(fn(inv, f, candidate, region) {
+        { when: RAPublishReady(inv, f, candidate) & RAFunction(inv, f, region),
+          then: Mode.has(region, make_CFG()) & RAPublished(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate, region, block, logical, earlier) {
+        { when: RAPublishReady(inv, f, candidate) & RAGraphFunction(inv, f) & RAFunction(inv, f, region) &
+                RAPublishedBlock.has(inv, f, logical, block) &
+                RAPublishEarlierBlocks.has(inv, f, logical, earlier),
+          then: BlockRegion.has(block, region) & BlockLayout.has(block, ids_length(earlier)) }
+    }),
+    forall(fn(inv, f, candidate, region, logical, block) {
+        { when: RAPublishReady(inv, f, candidate) & RAFunction(inv, f, region) & RAEntry(inv, f, logical) &
+                RAPublishedBlock.has(inv, f, logical, block),
+          then: Entry.has(region, block) }
+    }),
+    forall(fn(inv, f, candidate, logical, op, point, block) {
+        { when: RAPublishReady(inv, f, candidate) & RAAt(inv, f, candidate, logical, op, point) &
+                RAPublishedBlock.has(inv, f, logical, block),
+          then: OpPlacement.has(op, make_InBlock(block, point)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishKind(inv, f, op, kind),
+          then: OpKind.has(op, kind) & KindBoundary.has(kind, make_OrdinaryBoundary()) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishOperand(inv, f, op, slot, value),
+          then: Operand.has(op, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, value, def) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishDefinition(inv, f, value, def),
+          then: ValueDefinition.has(value, def) }
+    }),
+    forall(fn(inv, f, candidate, value, block, slot, ty) {
+        { when: RAPublishReady(inv, f, candidate) &
+                RAPublishDefinition(inv, f, value, make_BlockParamDef(block, slot)) & ValueType.has(value, ty),
+          then: DeclaredType.has(value, ty) }
+    }),
+    forall(fn(inv, f, candidate, op, name, attr) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishAttribute(inv, f, op, name, attr),
+          then: Attribute.has(op, name, attr) }
+    }),
+    forall(fn(inv, f, candidate, op, logical, dest, block) {
+        { when: RAPublishReady(inv, f, candidate) & RAGraphFunction(inv, f) & RAJump(inv, f, op, logical, dest) &
+                RAPublishedBlock.has(inv, f, dest, block),
+          then: Successor.has(op, 0, block) }
+    }),
+    forall(fn(inv, f, candidate, op, dest, slot, joined, incoming) {
+        { when: RAPublishReady(inv, f, candidate) & RAGraphFunction(inv, f) &
+                RAIncoming(inv, f, op, dest, slot, joined, incoming),
+          then: SuccessorArg.has(op, 0, slot, slot) }
+    }),
+    forall(fn(inv, f, candidate, op, logical, predicate, taken, fallthrough, trueBlock, falseBlock) {
+        { when: RAPublishReady(inv, f, candidate) & RAGraphFunction(inv, f) &
+                RABranch(inv, f, op, logical, predicate, taken, fallthrough) &
+                RAPublishedBlock.has(inv, f, taken, trueBlock) &
+                RAPublishedBlock.has(inv, f, fallthrough, falseBlock),
+          then: Successor.has(op, 0, trueBlock) & Successor.has(op, 1, falseBlock) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, block) {
+        { when: RAPublishReady(inv, f, candidate) & RAPublishSuccessor(inv, f, op, slot, block),
+          then: Successor.has(op, slot, block) }
+    }),
+];

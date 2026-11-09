@@ -1,0 +1,32 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+// SysV enters with an eight-byte return address below the caller's aligned SP.
+// One saved register needs eight bytes, so calls use an aligned body SP.
+// CHECK-LABEL: func.func @native_call(
+// CHECK: x86_64.lea_base_disp {{.*}}imm = -8,
+// CHECK: x86_64.call
+// CHECK: x86_64.lea_base_disp {{.*}}imm = 8,
+
+module {
+%f = func.func @native_call(%x: !i64, %y: !i64) -> !i64 {
+  %s0 = state.entry_state : !state<memory>
+  %c0 = son.merge : !son.control
+  %v, %c1 = x86_64.add %x, %y, %c0 : !i64, !son.control
+  %c2, %s1 = x86_64.call %c1 state(%s0) {imm = 0} : !son.control, !state<memory>
+  %res, %c3 = x86_64.add %v, %v, %c2 : !i64, !son.control
+  -> %c3, %res, %s1
+}
+// CHECK-LABEL: func.func @padding_only(
+// CHECK: x86_64.lea_base_disp {{.*}}imm = -8,
+// CHECK: x86_64.call
+// CHECK: x86_64.lea_base_disp {{.*}}imm = 8,
+
+  %f = func.func @padding_only() -> !i32 {
+    %s0 = state.entry_state : !state<memory>
+    %c0 = son.merge : !son.control
+    %c1, %s1 = x86_64.call %c0 state(%s0) {imm = 0} : !son.control, !state<memory>
+    %r, %c2 = x86_64.mov_imm32 %c1 {imm = 42} : !i32, !son.control
+    -> %c2, %r, %s1
+  }
+module_end
+}

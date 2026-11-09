@@ -1,6 +1,10 @@
 use std::error::Error;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+mod allocation;
 mod schema;
+use tir_egglog::ast::{Command, Expr, Subdatatypes};
+use tir_egglog::{Signature, WriteState};
 
 pub fn compile(core: &Path) -> Result<(), Box<dyn Error>> {
     let definitions = core.join("defs/relations");
@@ -11,6 +15,10 @@ pub fn compile(core: &Path) -> Result<(), Box<dyn Error>> {
     println!(
         "cargo:rerun-if-changed={}",
         definitions.join("schema.rs").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        definitions.join("allocation.rs").display()
     );
     let (sources, dependencies) = tir_cdsl::SourceMap::from_file(definitions.join("schema.cdsl"))
         .map_err(|errors| {
@@ -36,9 +44,128 @@ pub fn compile(core: &Path) -> Result<(), Box<dyn Error>> {
     engine.run_program(engine.parse_program("ir-schema.egg", &schema)?)?;
     let output = PathBuf::from(std::env::var("OUT_DIR")?);
     std::fs::write(output.join("ir-schema.egg"), schema)?;
+    let tmdl = tir_cdsl::relations::emit_schema_extension(&module, entries, allocation::TMDL)?;
+    engine.run_program(engine.parse_program("TMDL schema", &tmdl)?)?;
+    std::fs::write(output.join("tmdl-schema.egg"), tmdl)?;
     std::fs::write(
         output.join("ir-schema.bin"),
         engine.save_program_with_schema()?,
     )?;
+    let ir_tables = engine.database().schema().tables().count();
+    // Compiling rules needs signatures; their runtime callbacks are never executed here.
+    let db = engine.database_mut();
+    let integer = db.sort("i64")?;
+    let string = db.sort("String")?;
+    let natural = db.sort("BigInt")?;
+    for name in ["fresh-ir-id", "fresh-ir-type-id"] {
+        db.add_primitive_in(
+            name,
+            Signature {
+                inputs: vec![],
+                output: integer,
+            },
+            WriteState::valid_contexts(),
+            |_, _| None,
+        );
+    }
+    for (name, input, output) in [
+        ("i64-hex", integer, string),
+        ("hex-i64", string, integer),
+        ("nat-i64", natural, integer),
+        ("hex-big", string, natural),
+    ] {
+        db.add_primitive(
+            name,
+            Signature {
+                inputs: vec![input],
+                output,
+            },
+            |_, _| None,
+        );
+    }
+    let imports: Vec<_> = entries.iter().chain(allocation::TMDL).copied().collect();
+    let allocation: Vec<_> = [
+        allocation::BASE,
+        allocation::CONTROL,
+        allocation::STRUCTURED,
+        allocation::COLOR,
+        allocation::BINDINGS,
+        allocation::ABI,
+        allocation::PUBLISH,
+        allocation::TRANSFER,
+        allocation::ENCODING,
+        allocation::SELECT,
+    ]
+    .into_iter()
+    .flatten()
+    .copied()
+    .collect();
+    let source = tir_cdsl::relations::emit_schema_extension(&module, &imports, &allocation)?;
+    std::fs::write(output.join("regalloc.egg"), &source)?;
+    let commands = engine.parse_program("CDSL allocation", &source)?;
+    let mut sorts = Vec::new();
+    for command in &commands {
+        match command {
+            Command::Sort {
+                name,
+                presort_and_args,
+                ..
+            } => {
+                sorts.push((name.clone(), presort_and_args.clone()));
+            }
+            Command::Datatype { name, .. } => sorts.push((name.clone(), None)),
+            Command::Datatypes { datatypes, .. } => {
+                for (_, name, datatype) in datatypes {
+                    let presort = match datatype {
+                        Subdatatypes::Variants(_) => None,
+                        Subdatatypes::NewSort(name, args) => Some((name.clone(), args.clone())),
+                    };
+                    sorts.push((name.clone(), presort));
+                }
+            }
+            _ => {}
+        }
+    }
+    engine.run_program(commands)?;
+    std::fs::write(
+        output.join("regalloc.bin"),
+        engine.save_program_with_schema()?,
+    )?;
+
+    let mut schema = String::from(
+        "/// Sort declarations required before loading the compiled allocation program.\n\
+         pub const REGALLOC_SORTS: &[(&str, Option<&str>, &[&str])] = &[\n",
+    );
+    // Containers may refer to Eq sorts whose constructors appear later in the source.
+    for (name, presort) in sorts
+        .iter()
+        .filter(|(_, presort)| presort.is_none())
+        .chain(sorts.iter().filter(|(_, presort)| presort.is_some()))
+    {
+        write!(schema, "({name:?}, ")?;
+        if let Some((presort, args)) = presort {
+            write!(schema, "Some({presort:?}), &[")?;
+            for arg in args {
+                let Expr::Var(_, name) = arg else {
+                    return Err(format!("sort {name} has a non-name presort argument").into());
+                };
+                write!(schema, "{name:?},")?;
+            }
+            write!(schema, "]")?;
+        } else {
+            write!(schema, "None, &[]")?;
+        }
+        writeln!(schema, "),")?;
+    }
+    schema.push_str(
+        "];\n\n\
+         /// Exact tables owned by the allocation program.\n\
+         pub const REGALLOC_TABLES: &[&str] = &[\n",
+    );
+    for (_, table) in engine.database().schema().tables().skip(ir_tables) {
+        writeln!(schema, "{:?},", table.name())?;
+    }
+    schema.push_str("];\n");
+    std::fs::write(output.join("regalloc-schema.rs"), schema)?;
     Ok(())
 }

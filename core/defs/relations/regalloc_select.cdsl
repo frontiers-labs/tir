@@ -1,0 +1,145 @@
+use ::relational::*;
+use ::regalloc::RANativePhysicalRead;
+use ::regalloc_bindings::RABindingsComplete;
+use ::regalloc_color::RAChosenRegister;
+use ::regalloc_color::RAColorErrors;
+use ::regalloc_color::RARepairRequest;
+use ::regalloc_color::RASpill;
+use ::regalloc_control::RAArgument;
+use ::regalloc_control::RAControlComplete;
+use ::regalloc_control::RAControlEdge;
+use ::regalloc_control::RADef;
+use ::regalloc_control::RAFunction;
+use ::regalloc_control::RAIds;
+use ::regalloc_control::RAIncoming;
+use ::regalloc_control::RAMovable;
+use ::regalloc_control::RAPlace;
+use ::regalloc_control::RAReach;
+use ::regalloc_control::RAReturn;
+use ::regalloc_control::RAUse;
+use ::regalloc_publish::RASelectedCandidate;
+use ::regalloc_transfer::RAFrameSaveInstalled;
+use ::tmdl_schema::TMDLAbiRegister;
+use ::tmdl_schema::TMDLClass;
+
+let costs_union = primitive<(a0: RAExtraCosts, a1: RAExtraCosts) -> RAExtraCosts>("set-union");
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let min = primitive<(a0: Integer, a1: Integer) -> Integer>("min");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let costs_empty = primitive<() -> RAExtraCosts>("set-empty");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let costs_one = primitive<(a0: RAExtraCost) -> RAExtraCosts>("set-of");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let ids_length = primitive<(a0: RAIds) -> Integer>("set-length");
+let costs_length = primitive<(a0: RAExtraCosts) -> Integer>("set-length");
+
+// Rank repairs by the extra loads, stores, copies and preserved registers.
+// This is a deterministic local estimate, not a global runtime optimum.
+pub enum RAExtraCost {
+    RAStoreCost(Integer),
+    RAPhiStoreCost(Integer, Integer),
+    RALoadCost(Integer, Integer),
+    RAMoveCost(Integer, Integer, Integer),
+    RASaveCost(String, Integer, Bool),
+    RASpeculationCost(Integer),
+};
+let make_RAStoreCost = constructor(RAExtraCost::RAStoreCost);
+let make_RAPhiStoreCost = constructor(RAExtraCost::RAPhiStoreCost);
+let make_RALoadCost = constructor(RAExtraCost::RALoadCost);
+let make_RAMoveCost = constructor(RAExtraCost::RAMoveCost);
+let make_RASaveCost = constructor(RAExtraCost::RASaveCost);
+let make_RASpeculationCost = constructor(RAExtraCost::RASpeculationCost);
+
+pub extern type RAExtraCosts = Type;
+pub let ra_extra_costs_sort = container<RAExtraCosts, Set<RAExtraCost>>();
+
+pub let RACandidateExtra = table<(Integer, Integer, Integer), RAExtraCosts>("RACandidateExtra", merge(fn(old, new) { costs_union(old, new) }));
+pub let RALoopBlocks = table<(Integer, Integer), RAIds>("RALoopBlocks", merge(fn(old, new) { ids_union(old, new) }));
+pub let RABestCost = table<(Integer, Integer), Integer>("RABestCost", merge(fn(old, new) { min(old, new) }));
+pub let RABestCandidate = table<(Integer, Integer), Integer>("RABestCandidate", merge(fn(old, new) { min(old, new) }));
+pub let RACandidateScore = relation<(Integer, Integer, Integer, Integer)>("RACandidateScore");
+pub let ra_select_index = [
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RALoopBlocks.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RAControlComplete(inv, f, candidate),
+          then: RACandidateExtra.has(inv, f, candidate, costs_empty()) }
+    }),
+    forall(fn(inv, f, from, dest, block) {
+        { when: RAControlEdge(inv, f, from, dest) & RAReach(inv, f, dest, from) & RAReach(inv, f, dest, block) &
+                RAReach(inv, f, block, dest),
+          then: RALoopBlocks.has(inv, f, ids_one(block)) }
+    }),
+];
+
+pub let ra_select_cost = [
+    forall(fn(inv, f, candidate, value, slot, op) {
+        { when: RASpill(inv, f, candidate, value, slot) & RADef(inv, f, op, value),
+          then: RACandidateExtra.has(inv, f, candidate, costs_one(make_RAStoreCost(value))) }
+    }),
+    forall(fn(inv, f, candidate, value, slot, argument) {
+        { when: RASpill(inv, f, candidate, value, slot) & RAArgument(inv, f, argument, value),
+          then: RACandidateExtra.has(inv, f, candidate, costs_one(make_RAStoreCost(value))) }
+    }),
+    forall(fn(inv, f, candidate, value, slot, edge, dest, param, incoming) {
+        { when: RASpill(inv, f, candidate, value, slot) & RAIncoming(inv, f, edge, dest, param, value, incoming),
+          then: RACandidateExtra.has(inv, f, candidate, costs_one(make_RAPhiStoreCost(edge, value))) }
+    }),
+    forall(fn(inv, f, candidate, value, slot, op, r#use) {
+        { when: RASpill(inv, f, candidate, value, slot) & RAUse(inv, f, op, r#use, value),
+          then: RACandidateExtra.has(inv, f, candidate, costs_one(make_RALoadCost(op, value))) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value, reason) {
+        { when: RARepairRequest(inv, f, candidate, op, slot, value, reason) & (reason != "spill value"),
+          then: RACandidateExtra.has(inv, f, candidate, costs_one(make_RAMoveCost(op, slot, value))) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index, saved, savedIndex, file, width, offset, merging,
+        savedWidth, savedOffset, savedMerging) {
+        { when: RAChosenRegister(inv, f, candidate, value, class, index) &
+                TMDLAbiRegister(inv, "callee-saved", saved, savedIndex) &
+                TMDLClass(inv, class, file, width, offset, merging) &
+                TMDLClass(inv, saved, file, savedWidth, savedOffset, savedMerging) &
+                (index < (savedIndex + savedWidth)) & (savedIndex < (index + width)),
+          then: RACandidateExtra.has(inv, f, candidate, costs_one(make_RASaveCost(saved, savedIndex, false))) &
+                RACandidateExtra.has(inv, f, candidate, costs_one(make_RASaveCost(saved, savedIndex, true))) }
+    }),
+    forall(fn(inv, f, op, candidate, block, latest) {
+        { when: RAMovable(inv, f, op) & RAPlace(inv, f, candidate, op, block) & RAPlace(inv, f, 1, op, latest) &
+                (block != latest) & ids_not_contains(RALoopBlocks.get(inv, f), latest),
+          then: RACandidateExtra.has(inv, f, candidate, costs_one(make_RASpeculationCost(op))) }
+    }),
+];
+
+pub let ra_select_best = [
+    forall(fn(inv, f, candidate, cost) {
+        { when: RAControlComplete(inv, f, candidate) & RABindingsComplete(inv, f) &
+                (ids_length(RAColorErrors.get(inv, f, candidate)) == 0) &
+                (cost == costs_length(RACandidateExtra.get(inv, f, candidate))),
+          then: RACandidateScore(inv, f, candidate, cost) & RABestCost.has(inv, f, cost) }
+    }),
+];
+
+pub let ra_select_choice = [
+    forall(fn(inv, f, candidate, cost) {
+        { when: RACandidateScore(inv, f, candidate, cost) & RABestCost.has(inv, f, cost),
+          then: RABestCandidate.has(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, region, candidate) {
+        { when: RAFunction(inv, f, region) & RABestCandidate.has(inv, f, candidate),
+          then: RASelectedCandidate(inv, f, candidate) }
+    }),
+];
+
+pub let ra_select_abi = [
+    // Generic returns still observe the ABI return link even before final encoding.
+    forall(fn(inv, f, op, control, class, index) {
+        { when: RAReturn(inv, f, op, control) & TMDLAbiRegister(inv, "ra", class, index),
+          then: RANativePhysicalRead(inv, f, op, class, index) }
+    }),
+    forall(fn(inv, f, op, control, class, index) {
+        { when: RAReturn(inv, f, op, control) & RAFrameSaveInstalled(f, class, index),
+          then: RANativePhysicalRead(inv, f, op, class, index) }
+    }),
+];

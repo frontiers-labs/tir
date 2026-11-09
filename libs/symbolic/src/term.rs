@@ -11,7 +11,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use smallvec::SmallVec;
 use std::sync::Arc;
-use tir_egglog::{Core, EGraph, Read, Value as EggValue, Write};
+use tir_egglog::{Core, EGraph, Read, Signature, Value as EggValue, Write, WriteState};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(u32);
@@ -260,7 +260,7 @@ impl<T> Segmented<T> {
 /// handles are interned in a fixed order for the two resource-state constants.
 pub struct Terms {
     engine: Rc<RefCell<EGraph>>,
-    minted: AtomicU32,
+    minted: Arc<AtomicU32>,
     entities: Arc<AtomicU32>,
     indexes_dirty: Arc<AtomicBool>,
     ctors: Segmented<&'static TypeCtor>,
@@ -307,7 +307,7 @@ impl Terms {
             engine,
             entities,
             indexes_dirty,
-            minted: AtomicU32::new(0),
+            minted: Arc::new(AtomicU32::new(0)),
             ctors: Segmented::new(),
             by_address: RwLock::default(),
             defaults: Segmented::new(),
@@ -328,6 +328,77 @@ impl Terms {
                 .expect("an integer type");
         }
         terms
+            .register_ir_primitives()
+            .unwrap_or_else(|error| panic!("IR primitives: {error}"));
+        terms
+    }
+
+    fn register_ir_primitives(&self) -> Result<(), tir_egglog::Error> {
+        let mut engine = self.engine.borrow_mut();
+        let db = engine.database_mut();
+        let integer = db.sort("i64")?;
+        let string = db.sort("String")?;
+        let natural = db.sort("BigInt")?;
+        for (name, counter) in [
+            ("fresh-ir-id", self.entities.clone()),
+            ("fresh-ir-type-id", self.minted.clone()),
+        ] {
+            db.add_primitive_in(
+                name,
+                Signature {
+                    inputs: vec![],
+                    output: integer,
+                },
+                WriteState::valid_contexts(),
+                move |ctx, _| Some(ctx.base(i64::from(counter.fetch_add(1, Ordering::Relaxed)))),
+            );
+        }
+        db.add_primitive(
+            "i64-hex",
+            Signature {
+                inputs: vec![integer],
+                output: string,
+            },
+            |ctx, args| Some(ctx.base(format!("{:016x}", ctx.base_value::<i64>(args[0]) as u64))),
+        );
+        db.add_primitive(
+            "hex-i64",
+            Signature {
+                inputs: vec![string],
+                output: integer,
+            },
+            |ctx, args| {
+                let value = u64::from_str_radix(&ctx.base_value::<String>(args[0]), 16).ok()?;
+                Some(ctx.base(value as i64))
+            },
+        );
+        db.add_primitive(
+            "nat-i64",
+            Signature {
+                inputs: vec![natural],
+                output: integer,
+            },
+            |ctx, args| {
+                let value = ctx
+                    .base_value::<tir_egglog::sort::BigInt>(args[0])
+                    .to_string()
+                    .parse::<u64>()
+                    .ok()?;
+                Some(ctx.base(i64::try_from(value).ok()?))
+            },
+        );
+        db.add_primitive(
+            "hex-big",
+            Signature {
+                inputs: vec![string],
+                output: natural,
+            },
+            |ctx, args| {
+                let value = u128::from_str_radix(&ctx.base_value::<String>(args[0]), 16).ok()?;
+                Some(ctx.base(value.to_string().parse::<tir_egglog::sort::BigInt>().ok()?))
+            },
+        );
+        Ok(())
     }
 
     /// The structural expression named by a type handle.
