@@ -229,8 +229,9 @@ fn mnemonic_specificity(
     (arity, reg_specificity, imm_bits)
 }
 
-struct TargetTables {
-    register_index_map: HashMap<(String, String), u32>,
+pub(super) struct TargetTables {
+    pub(super) transfer: TransferTables,
+    pub(super) register_index_map: HashMap<(String, String), u32>,
     pc_classes: HashSet<String>,
     flag_classes: HashSet<String>,
     fp_fields: HashMap<String, FpField>,
@@ -240,20 +241,22 @@ struct TargetTables {
     register_files: HashMap<String, String>,
     float_classes: HashSet<String>,
     class_sizes: HashMap<String, usize>,
-    reg_kinds: HashMap<String, (bool, u32)>,
+    pub(super) reg_kinds: HashMap<String, (bool, u32)>,
 }
 
-struct InstrEmitCtx<'a> {
-    inst: &'a ast::Instruction,
+pub(super) struct InstrEmitCtx<'a> {
+    pub(super) inst: &'a ast::Instruction,
+    dialect: &'a str,
     op_name: &'a str,
-    ops: &'a [(String, Type)],
+    pub(super) ops: &'a [(String, Type)],
     mnemonic_name: &'a str,
     definition_ident: &'a proc_macro2::Ident,
-    ops_map: &'a HashMap<String, Type>,
-    operand_constraints: &'a HashMap<String, OperandConstraint>,
-    defined_register_operands: &'a [String],
-    read_register_operands: &'a HashSet<String>,
+    pub(super) ops_map: &'a HashMap<String, Type>,
+    pub(super) operand_constraints: &'a HashMap<String, OperandConstraint>,
+    pub(super) defined_register_operands: &'a [String],
+    pub(super) read_register_operands: &'a HashSet<String>,
     implicit_reads: &'a [(String, u32)],
+    pub(super) isa_param_values: &'a HashMap<String, i64>,
 }
 
 fn instruction_attributes(ops: &[(String, Type)]) -> Vec<AttrSpec> {
@@ -262,7 +265,7 @@ fn instruction_attributes(ops: &[(String, Type)]) -> Vec<AttrSpec> {
             name: name.clone(),
             ty: match ty {
                 Type::Struct(_) => "?Register",
-                Type::Integer | Type::Bits(_) => "Integer",
+                Type::Integer | Type::Bits(_) => "Int",
                 Type::String => "String",
                 _ => unreachable!("HM type vars should not appear as operand types"),
             }
@@ -272,7 +275,10 @@ fn instruction_attributes(ops: &[(String, Type)]) -> Vec<AttrSpec> {
         .collect()
 }
 
-fn instruction_ports(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<(String, bool)> {
+pub(super) fn instruction_ports(
+    tables: &TargetTables,
+    ctx: &InstrEmitCtx<'_>,
+) -> Vec<(String, bool)> {
     let mut ports: Vec<(String, bool)> = vec![];
     for (name, ty) in ctx.ops {
         if !matches!(ty, Type::Struct(_)) {
@@ -303,9 +309,61 @@ fn instruction_ports(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<(Stri
 fn instruction_values(
     tables: &TargetTables,
     ctx: &InstrEmitCtx<'_>,
+    allocation: (&mut allocation::Compiler, &str),
 ) -> (Vec<ValueSpec>, Vec<ValueSpec>, String) {
     let ports = instruction_ports(tables, ctx);
-    let fields = |def| {
+    let mut fields = |def| {
+        let direction = if def { "out" } else { "in" };
+        let mut index = 0;
+        for (name, _) in ports.iter().filter(|(_, d)| *d == def) {
+            allocation.0.fact(
+                "TMDLInstructionSlot",
+                vec![
+                    allocation.1.into(),
+                    direction.into(),
+                    index.into(),
+                    name.into(),
+                    true.into(),
+                    false.into(),
+                    false.into(),
+                ],
+            );
+            index += 1;
+        }
+        allocation.0.fact(
+            "TMDLInstructionSlot",
+            vec![
+                allocation.1.into(),
+                direction.into(),
+                index.into(),
+                "control".into(),
+                true.into(),
+                false.into(),
+                true.into(),
+            ],
+        );
+        index += 1;
+        allocation.0.fact(
+            "TMDLInstructionSlot",
+            vec![
+                allocation.1.into(),
+                direction.into(),
+                index.into(),
+                "state".into(),
+                false.into(),
+                true.into(),
+                false.into(),
+            ],
+        );
+        allocation.0.fact(
+            "TMDLInstructionStateSlot",
+            vec![allocation.1.into(), direction.into(), index.into()],
+        );
+        index += 1;
+        allocation.0.fact(
+            "TMDLInstructionSlotCount",
+            vec![allocation.1.into(), direction.into(), index.into()],
+        );
         let mut values: Vec<_> = ports
             .iter()
             .filter(|(_, d)| *d == def)
@@ -336,11 +394,15 @@ fn instruction_program_ts(
     numeric_params: &HashMap<String, i64>,
     register_index_map: &HashMap<(String, String), u32>,
     behavior_ctx: &RustBehaviorCtx<'_>,
-) -> proc_macro2::TokenStream {
+) -> (proc_macro2::TokenStream, bool) {
     let unsupported_lowering = quote! {
         tir::backend::exec::Program::Unsupported(
             "failed to convert behavior to executable expression",
         )
+    };
+    let supported = |program: Option<proc_macro2::TokenStream>| match program {
+        Some(program) => (program, true),
+        None => (unsupported_lowering.clone(), false),
     };
     let program = if let Some(branch_val) = branch_value.as_ref() {
         // Conditional control transfer: `synthesize_branch_value` folds the
@@ -358,29 +420,30 @@ fn instruction_program_ts(
             value: Box::new((*branch_val).clone()),
             span: branch_if.span,
         });
-        emit_behavior_exec(
+        supported(emit_behavior_exec(
             &normalized,
             trap_handler,
             numeric_params,
             register_index_map,
             behavior_ctx,
-        )
-        .unwrap_or(unsupported_lowering)
+        ))
     } else if uses_todo {
-        quote! {
-            tir::backend::exec::Program::Unsupported(
-                "instruction semantics are not modeled (todo)",
-            )
-        }
+        (
+            quote! {
+                tir::backend::exec::Program::Unsupported(
+                    "instruction semantics are not modeled (todo)",
+                )
+            },
+            false,
+        )
     } else {
-        emit_behavior_exec(
+        supported(emit_behavior_exec(
             &inst.behavior,
             trap_handler,
             numeric_params,
             register_index_map,
             behavior_ctx,
-        )
-        .unwrap_or(unsupported_lowering)
+        ))
     };
 
     // Control-flow kind, derived from the behavior's `PC::pc` writes: every
@@ -441,6 +504,22 @@ fn emit_assembly_template(
         })
         .count();
     let parse_steps = asm_parse_steps(&actions, ctx.ops_map, ctx.operand_constraints);
+    if index == 0 && !custom_assembly {
+        for action in &actions {
+            if let AsmAction::Operand(name) = action
+                && let Some(Type::Struct(class)) = ctx.ops_map.get(name)
+            {
+                out.allocation.fact(
+                    "TMDLSlotClass",
+                    vec![
+                        format!("{}.{}", ctx.dialect, ctx.op_name).into(),
+                        name.into(),
+                        class.into(),
+                    ],
+                );
+            }
+        }
+    }
 
     let print_parts = compile_asm_printer_template(template, ctx.mnemonic_name);
 
@@ -647,6 +726,7 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables {
         .cloned()
         .collect();
     TargetTables {
+        transfer: TransferTables::new(files),
         fp_fields,
         fp_flag_registers,
         effect_classes,
@@ -661,6 +741,7 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables {
     }
 }
 struct InstrOutputs<'a> {
+    allocation: &'a mut allocation::Compiler,
     instruction_defs: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_parsers_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_parser_candidates:
@@ -936,6 +1017,7 @@ fn emit_instruction(
     let read_register_operands = infer_read_register_operands(&inst.behavior, &ops);
     let instr_ctx = InstrEmitCtx {
         inst,
+        dialect,
         op_name,
         ops: &ops,
         mnemonic_name,
@@ -945,9 +1027,12 @@ fn emit_instruction(
         defined_register_operands: &defined_register_operands,
         read_register_operands: &read_register_operands,
         implicit_reads: &implicit_reads,
+        isa_param_values: &isa_param_values,
     };
     let copy_ports = copy_ports(&inst.behavior, &ops, &tables.register_files);
-    let (operands, results, scheme) = instruction_values(tables, &instr_ctx);
+    let opcode = format!("{dialect}.{op_name}");
+    let (operands, results, scheme) =
+        instruction_values(tables, &instr_ctx, (out.allocation, &opcode));
 
     // An instruction that writes `PC::pc` transfers control, so it is a
     // terminator: its successors are the blocks its attributes reference
@@ -983,8 +1068,12 @@ fn emit_instruction(
         ));
     }
 
-    let implicit_items =
-        implicit_register_items(inst, &tables.register_index_map, &tables.pc_classes);
+    let implicit_items = implicit_register_items(
+        inst,
+        &tables.register_index_map,
+        &tables.pc_classes,
+        (out.allocation, &opcode),
+    );
     let implicit_or_update_items = implicit_or_update_items(
         inst,
         &ops,
@@ -992,6 +1081,7 @@ fn emit_instruction(
         &tables.register_index_map,
         &tables.register_files,
         &tables.fp_flag_registers,
+        (out.allocation, &opcode),
     );
 
     // One fact, two readers: the `InstrInfo::effects` derived from the
@@ -1083,7 +1173,7 @@ fn emit_instruction(
         isa_param_values: &isa_param_values,
         reg_kinds: &tables.reg_kinds,
     };
-    let program = instruction_program_ts(
+    let (program, program_effects) = instruction_program_ts(
         inst,
         branch_value.as_ref(),
         uses_todo,
@@ -1126,6 +1216,7 @@ fn emit_instruction(
                 &operand_constraints,
                 &resolved_params,
                 &encoding_ctx,
+                (out.allocation, &format!("{dialect}.{op_name}")),
             )
         })
         .transpose()?
@@ -1171,6 +1262,46 @@ fn emit_instruction(
         sched_tables,
         &inst.name,
     );
+    let dialect = options.dialect;
+    out.allocation.fact(
+        "TMDLOpcode",
+        vec![(&opcode).into(), op_name.into(), dialect.into()],
+    );
+    out.allocation.fact(
+        "TMDLOpcodeFeatureCount",
+        vec![(&opcode).into(), inst.for_isas.len().into()],
+    );
+    if uncond_pc {
+        out.allocation
+            .fact("TMDLOpaqueTransferKind", vec![(&opcode).into()]);
+    }
+    let required_features = &inst.for_isas;
+    for feature in required_features {
+        out.allocation
+            .fact("TMDLOpcodeFeature", vec![(&opcode).into(), feature.into()]);
+    }
+    if !reads_memory
+        && !writes_memory
+        && !uncond_pc
+        && !cond_pc
+        && implicit_items.is_empty()
+        && implicit_or_update_items.is_empty()
+        && instruction_total_values(&inst.behavior)
+        && program_effects
+    {
+        out.allocation.fact("TMDLPureKind", vec![(&opcode).into()]);
+    }
+    if encode_ident.is_some() {
+        for facts in instruction_transfer_recipes(
+            tables,
+            &instr_ctx,
+            &numeric_params,
+            &isa_param_values,
+            &opcode,
+        ) {
+            out.allocation.facts(facts);
+        }
+    }
     if let Some(cases) = sched_tables.latency_cases.get(&inst.name) {
         let cases = emit_latency_cases(
             cases,
@@ -1294,6 +1425,7 @@ pub(super) fn emit_instructions<'a>(
     instruction_files: &[&'a ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     sched_tables: &SchedTables,
+    allocation: &mut allocation::Compiler,
     options: InstructionOptions<'_>,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let InstructionOptions {
@@ -1345,6 +1477,7 @@ pub(super) fn emit_instructions<'a>(
 
     for inst in instruction_files.iter().flat_map(|f| f.instructions()) {
         let mut out = InstrOutputs {
+            allocation,
             instruction_defs: &mut instruction_defs,
             instruction_parsers_impls: &mut instruction_parsers_impls,
             instruction_parser_candidates: &mut instruction_parser_candidates,
@@ -1496,4 +1629,49 @@ fn find_trap_handler<'a>(
         }
     }
     None
+}
+
+fn instruction_total_values(expression: &ast::Expr) -> bool {
+    match expression {
+        ast::Expr::Block(block) => block.stmts.iter().all(instruction_total_values),
+        ast::Expr::Assign(assignment) => {
+            matches!(assignment.dest.as_ref(), ast::Expr::Ident(_))
+                && instruction_total_values(&assignment.value)
+        }
+        ast::Expr::Let(binding) => instruction_total_values(&binding.value),
+        ast::Expr::Ident(_) | ast::Expr::Lit(ast::Lit::Int(_)) => true,
+        ast::Expr::Field(field) => {
+            matches!(field.base.as_ref(), ast::Expr::Ident(base) if base.name == "self")
+        }
+        ast::Expr::Binary(binary) => {
+            matches!(
+                binary.op,
+                ast::BinOp::Add
+                    | ast::BinOp::Sub
+                    | ast::BinOp::Mul
+                    | ast::BinOp::Equal
+                    | ast::BinOp::NotEqual
+                    | ast::BinOp::LessThan
+                    | ast::BinOp::GreaterThan
+                    | ast::BinOp::LessThenEqual
+                    | ast::BinOp::GreaterThanEqual
+                    | ast::BinOp::UnsignedLessThan
+                    | ast::BinOp::UnsignedGreaterThan
+                    | ast::BinOp::UnsignedLessThenEqual
+                    | ast::BinOp::UnsignedGreaterThanEqual
+                    | ast::BinOp::BitwiseAnd
+                    | ast::BinOp::BitwiseOr
+                    | ast::BinOp::BitwiseXor
+            ) && instruction_total_values(&binary.lhs)
+                && instruction_total_values(&binary.rhs)
+        }
+        ast::Expr::Unary(unary) => instruction_total_values(&unary.x),
+        ast::Expr::Call(call) => {
+            matches!(
+                call.callee.as_ref(),
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::SExt | ast::BuiltinFunction::ZExt)
+            ) && call.arguments.iter().all(instruction_total_values)
+        }
+        _ => false,
+    }
 }

@@ -39,6 +39,7 @@ pub(super) fn implicit_register_items(
     inst: &ast::Instruction,
     register_index_map: &HashMap<(String, String), u32>,
     pc_classes: &HashSet<String>,
+    allocation: (&mut allocation::Compiler, &str),
 ) -> Vec<proc_macro2::TokenStream> {
     let mut reads = HashSet::new();
     collect_register_path_reads(&inst.behavior, &mut reads);
@@ -61,16 +62,24 @@ pub(super) fn implicit_register_items(
         let Some(index) = register_index_map.get(&path) else {
             continue;
         };
-        let role = match (
-            reads.contains(&path) || conditional_writes.contains(&path),
-            writes.contains(&path),
-        ) {
+        let read = reads.contains(&path) || conditional_writes.contains(&path);
+        let write = writes.contains(&path);
+        let index = *index as u16;
+        for (active, table) in [(read, "TMDLFixedRead"), (write, "TMDLFixedWrite")] {
+            if active {
+                allocation.0.fact(
+                    table,
+                    vec![allocation.1.into(), (&path.0).into(), index.into()],
+                );
+            }
+        }
+        let role = match (read, write) {
             (true, true) => quote! { ReadWrite },
             (false, true) => quote! { Def },
             _ => quote! { Use },
         };
         let class_id = reg_class_id(&path.0);
-        let index_lit = proc_macro2::Literal::u16_unsuffixed(*index as u16);
+        let index_lit = proc_macro2::Literal::u16_unsuffixed(index);
         items.push(quote! {
             tir::attributes::ImplicitReg {
                 class: #class_id,
@@ -89,6 +98,7 @@ pub(super) fn implicit_or_update_items(
     register_index_map: &HashMap<(String, String), u32>,
     register_files: &HashMap<String, String>,
     fp_flag_registers: &HashSet<(String, String)>,
+    allocation: (&mut allocation::Compiler, &str),
 ) -> Vec<proc_macro2::TokenStream> {
     if !operands
         .iter()
@@ -158,6 +168,10 @@ pub(super) fn implicit_or_update_items(
     if accesses != 2 {
         return Vec::new();
     }
+    allocation.0.fact(
+        "TMDLImplicitOrUpdate",
+        vec![allocation.1.into(), (&class).into(), (index as u16).into()],
+    );
     let class_id = reg_class_id(&class);
     let index_lit = proc_macro2::Literal::u16_unsuffixed(index as u16);
     vec![quote! { (#class_id, #index_lit) }]

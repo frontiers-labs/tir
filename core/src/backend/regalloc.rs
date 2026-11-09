@@ -1,6 +1,8 @@
 use crate::analysis::defuse::PhysReg;
 use tir::{AnalysisManager, Context, OpId, Pass, PassError};
 
+mod engine;
+
 /// Architectural metadata for one register class.
 #[derive(Debug, Clone)]
 pub struct RegClassInfo {
@@ -233,10 +235,10 @@ impl Pass for RegisterAllocationPass {
     }
     fn run(
         &mut self,
-        _op: OpId,
-        _context: &Context,
+        op: OpId,
+        context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        Ok(())
+        engine::run(context, op)
     }
 }

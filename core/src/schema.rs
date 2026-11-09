@@ -211,3 +211,8 @@ pub fn type_schema_json() -> String {
     out.push(']');
     out
 }
+
+/// Allocation rules compiled against the structural IR schema.
+pub const REGALLOC_PROGRAM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/regalloc.bin"));
+
+include!(concat!(env!("OUT_DIR"), "/regalloc-schema.rs"));

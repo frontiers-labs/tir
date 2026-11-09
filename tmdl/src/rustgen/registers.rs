@@ -143,7 +143,7 @@ pub(super) fn reg_class_id(class_name: &str) -> proc_macro2::TokenStream {
     quote! { RegClass::#variant.id() }
 }
 
-fn register_view(rc: &ast::RegisterClass) -> proc_macro2::TokenStream {
+fn register_view(rc: &ast::RegisterClass) -> (proc_macro2::TokenStream, u32, bool) {
     let bit_offset = match rc.parameters.get("BIT_OFFSET") {
         Some((_ty, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => parse_literal_value(li) as u32,
         _ => 0,
@@ -153,14 +153,19 @@ fn register_view(rc: &ast::RegisterClass) -> proc_macro2::TokenStream {
         Some((_ty, Some(ast::Expr::Lit(ast::Lit::Str(s))))) if s.value() == "merge"
     );
     let off_lit = proc_macro2::Literal::u32_unsuffixed(bit_offset);
-    quote! {
-        tir::backend::regalloc::RegisterView { bit_offset: #off_lit, merge: #merge }
-    }
+    (
+        quote! {
+            tir::backend::regalloc::RegisterView { bit_offset: #off_lit, merge: #merge }
+        },
+        bit_offset,
+        merge,
+    )
 }
 
 pub(super) fn emit_register_info(
     files: &[ast::File],
     dialect: &str,
+    allocation: &mut allocation::Compiler,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let dialect_lit = proc_macro2::Literal::string(dialect);
     let classes: HashMap<String, &ast::RegisterClass> = files
@@ -170,25 +175,47 @@ pub(super) fn emit_register_info(
         .collect();
     let mut class_entries = Vec::new();
     let mut class_variants = Vec::new();
-    for rc in files.iter().flat_map(|f| f.register_classes()) {
+    for (order, rc) in files.iter().flat_map(|f| f.register_classes()).enumerate() {
+        allocation.fact("TMDLClassOrder", vec![(&rc.name).into(), order.into()]);
+        allocation.fact("TMDLClassDialect", vec![(&rc.name).into(), dialect.into()]);
         class_variants.push(format_ident!("{}", rc.name));
         let name_lit = proc_macro2::Literal::string(&rc.name);
         let file_lit = proc_macro2::Literal::string(rc.register_file(&classes));
-        let view = register_view(rc);
+        let (view, bit_offset, merge) = register_view(rc);
         // A `GROUP_SIZE` class param declares how many consecutive file indices
         // one register covers (RVV LMUL>1 group classes); default 1.
         let group_width = match rc.parameters.get("GROUP_SIZE") {
             Some((_ty, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => {
-                proc_macro2::Literal::u16_unsuffixed(parse_literal_value(li).max(1) as u16)
+                parse_literal_value(li).max(1) as u16
             }
-            _ => proc_macro2::Literal::u16_unsuffixed(1),
+            _ => 1u16,
         };
+        allocation.fact(
+            "TMDLClass",
+            vec![
+                (&rc.name).into(),
+                rc.register_file(&classes).into(),
+                group_width.into(),
+                bit_offset.into(),
+                merge.into(),
+            ],
+        );
+        let group_width = proc_macro2::Literal::u16_unsuffixed(group_width);
         let mut indices = rc
             .resolve_registers()
             .filter_map(|reg| reg.encoding_index())
             .collect::<Vec<_>>();
         indices.sort_unstable();
         indices.dedup();
+        for index in &indices {
+            allocation.fact("TMDLRegister", vec![(&rc.name).into(), (*index).into()]);
+        }
+        for (index, name) in rc.register_name_tables().isa_names {
+            allocation.fact(
+                "TMDLRegisterName",
+                vec![(&rc.name).into(), name.into(), index.into()],
+            );
+        }
         let index_lits = indices
             .iter()
             .map(|i| proc_macro2::Literal::u16_unsuffixed(*i));
@@ -242,6 +269,11 @@ pub(super) fn emit_register_info(
             }
             _ => continue,
         };
+        let width_fact = allocation::Compiler::insert(
+            "TMDLRegisterWidth",
+            &[quote! { #name_lit }, quote! { i64::from(#width_ts) }],
+        );
+        allocation.profile(width_fact);
         width_entries.push(quote! { (#name_lit, #width_ts) });
     }
 

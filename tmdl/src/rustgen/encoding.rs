@@ -140,16 +140,6 @@ fn lower_shape(
     Ok(lowered)
 }
 
-fn emit_guard(
-    inst: &ast::Instruction,
-    shape: &EncodingShape,
-    ctx: &crate::shapes::Context,
-) -> Result<proc_macro2::TokenStream, TMDLError> {
-    let predicate = crate::shapes::lower_guard(&shape.guard, ctx)
-        .map_err(|reason| TMDLError::Codegen(format!("instruction '{}': {reason}", inst.name)))?;
-    Ok(emit_predicate(&predicate))
-}
-
 fn emit_predicate(predicate: &crate::shapes::Predicate) -> proc_macro2::TokenStream {
     use crate::shapes::Predicate;
     match predicate {
@@ -239,14 +229,26 @@ pub(super) fn emit_instruction_encoder(
     constraints: &HashMap<String, OperandConstraint>,
     resolved_params: &HashMap<String, (Type, Option<ast::Expr>)>,
     ctx: &crate::shapes::Context,
+    allocation: (&mut allocation::Compiler, &str),
 ) -> Result<Option<proc_macro2::TokenStream>, TMDLError> {
+    let (allocation, opcode) = allocation;
     if shapes.is_empty() {
         return Ok(None);
     }
 
     let mut shape_specs = Vec::new();
-    for shape in shapes {
+    for (shape_id, shape) in shapes.iter().enumerate() {
         let lowered = lower_shape(inst, shape, ops_map, resolved_params)?;
+        let predicate = crate::shapes::lower_guard(&shape.guard, ctx).map_err(|reason| {
+            TMDLError::Codegen(format!("instruction '{}': {reason}", inst.name))
+        })?;
+        allocation.shape(
+            opcode,
+            shape_id,
+            &predicate,
+            lowered.width_bytes,
+            lowered.const_word,
+        );
         // Register operand: encode the allocated physical index; reject
         // anything that did not get one. Immediate operand: fit-check when the
         // field is narrower than 64 bits (immediates written in assembly may be
@@ -255,6 +257,14 @@ pub(super) fn emit_instruction_encoder(
         // stay zero and they are recorded as fixups instead.
         let mut spec_fields: Vec<proc_macro2::TokenStream> = Vec::new();
         for (name, fields) in &lowered.reg_fields {
+            allocation.field(
+                opcode,
+                shape_id,
+                name,
+                spec_fields.len(),
+                None,
+                OperandConstraint::default(),
+            );
             let name_lit = proc_macro2::Literal::string(name);
             let runs = emit_field_runs(fields);
             spec_fields.push(quote! {
@@ -298,6 +308,14 @@ pub(super) fn emit_instruction_encoder(
             let constraint = constraints.get(name.as_str()).copied().unwrap_or_default();
             let align_mask = proc_macro2::Literal::u128_suffixed(u128::from(constraint.align - 1));
             let nonzero = constraint.nonzero;
+            allocation.field(
+                opcode,
+                shape_id,
+                name,
+                spec_fields.len(),
+                bounded,
+                constraint,
+            );
             spec_fields.push(quote! {
                 tir::backend::binary::EncodeField {
                     attr: #name_lit,
@@ -341,7 +359,7 @@ pub(super) fn emit_instruction_encoder(
             });
         }
 
-        let guard = emit_guard(inst, shape, ctx)?;
+        let guard = emit_predicate(&predicate);
         let const_word = proc_macro2::Literal::u128_suffixed(lowered.const_word);
         let width_bytes = proc_macro2::Literal::u8_unsuffixed(lowered.width_bytes);
         shape_specs.push(quote! {

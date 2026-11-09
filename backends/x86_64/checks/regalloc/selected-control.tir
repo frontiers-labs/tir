@@ -1,0 +1,30 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s --implicit-check-not=scf. --implicit-check-not=son.
+
+// CHECK-LABEL: func.func @choose(
+// CHECK-DAG: x86_64.add
+// CHECK-DAG: x86_64.sub
+// CHECK-DAG: cfg.switch
+// CHECK-LABEL: func.func @swap(
+// CHECK-DAG: x86_64.sub
+// CHECK-DAG: cfg.cond_br
+
+module {
+  %f = func.func @choose(%p: !i1, %x: !i64, %y: !i64) -> !i64 {
+    %r = scf.switch %p {
+      %a = x86_64.add %x, %y : !i64
+      -> %a
+    } {
+      %b = x86_64.sub %x, %y : !i64
+      -> %b
+    }
+    -> %r
+  }
+  %f = func.func @swap(%p: !i1, %false: !i1, %x: !i64, %y: !i64) -> !i64 {
+    %last_p, %last_a, %last_b = scf.loop (%q = %p, %a = %x, %b = %y) {
+      -> %q, %false, %b, %a, %q, %a, %b
+    }
+    %out = x86_64.sub %last_a, %last_b : !i64
+    -> %out
+  }
+  module_end
+}

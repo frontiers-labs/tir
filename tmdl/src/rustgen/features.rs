@@ -10,7 +10,10 @@ pub(super) fn isa_param_definers(files: &[ast::File], param: &str) -> Vec<(Strin
     definers
 }
 
-pub(super) fn emit_features(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLError> {
+pub(super) fn emit_features(
+    files: &[ast::File],
+    allocation: &mut allocation::Compiler,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
     let mut enum_variants = vec![];
     let mut all_variants = vec![];
     let mut name_arms = vec![];
@@ -83,6 +86,15 @@ pub(super) fn emit_features(files: &[ast::File]) -> Result<proc_macro2::TokenStr
             }
         });
     }
+
+    let feature_fact = allocation::Compiler::insert("TMDLFeature", &[quote! { feature.name() }]);
+    let parameter_fact =
+        allocation::Compiler::insert("TMDLParameter", &[quote! { name }, quote! { value }]);
+    allocation.profile(quote! {
+        for feature in enabled { #feature_fact }
+        let params = isa_params(enabled);
+        for &(name, value) in &params { #parameter_fact }
+    });
 
     Ok(quote! {
         // Variants take their ISA's TMDL name verbatim (e.g. `PTX_7_0`, `X86_64`),

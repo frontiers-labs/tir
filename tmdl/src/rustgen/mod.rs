@@ -16,6 +16,8 @@ use crate::utils::{
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
 
+mod allocation;
+
 pub struct GeneratedRust {
     pub root: String,
     pub modules: Vec<(String, String)>,
@@ -33,11 +35,12 @@ pub fn generate_rust_modules<'a>(
     split_inputs: &[String],
 ) -> Result<GeneratedRust, TMDLError> {
     begin_sem_blob();
-    let features = emit_features(files)?;
-    let register_traits = emit_register_trait_helpers(files)?;
+    let mut allocation = allocation::Compiler::default();
+    let features = emit_features(files, &mut allocation)?;
+    let register_traits = emit_register_trait_helpers(files, &mut allocation)?;
     let registers = emit_register_parsers_and_printers(files, custom_assembly)?;
-    let register_info = emit_register_info(files, dialect)?;
-    let abi_info = emit_abi_info(files, item_cache)?;
+    let register_info = emit_register_info(files, dialect, &mut allocation)?;
+    let abi_info = emit_abi_info(files, item_cache, &mut allocation)?;
     let (machine_models, sched_tables) = emit_machine_models(files, item_cache)?;
     let split_files: Vec<&ast::File> = split_inputs
         .iter()
@@ -63,6 +66,7 @@ pub fn generate_rust_modules<'a>(
         &root_files,
         item_cache,
         &sched_tables,
+        &mut allocation,
         InstructionOptions {
             dialect,
             text_only,
@@ -111,6 +115,7 @@ pub fn generate_rust_modules<'a>(
             &[file],
             item_cache,
             &sched_tables,
+            &mut allocation,
             InstructionOptions {
                 dialect,
                 text_only,
@@ -155,7 +160,9 @@ pub fn generate_rust_modules<'a>(
         };
     };
 
+    let target_facts = allocation.finish();
     let final_rust = quote! {
+        #target_facts
         #sem_program_store
 
         #features
@@ -339,3 +346,10 @@ mod behavior;
 use behavior::*;
 mod encoding;
 use encoding::*;
+
+mod transfers;
+use transfers::*;
+mod proofs;
+use proofs::*;
+mod transfer_proof;
+use transfer_proof::*;

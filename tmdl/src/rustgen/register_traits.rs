@@ -22,6 +22,7 @@ pub(super) fn fp_field(traits: &[ast::RegisterTrait]) -> Option<FpField> {
 
 pub(super) fn emit_register_trait_helpers(
     files: &[ast::File],
+    allocation: &mut allocation::Compiler,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let mut hardwired_patterns = Vec::new();
     let mut hardwired_fields = Vec::new();
@@ -39,6 +40,7 @@ pub(super) fn emit_register_trait_helpers(
             }
         }
         if let Some(idx) = rc.hardwired_zero_register_index() {
+            allocation.fact("TMDLHardwiredZero", vec![(&rc.name).into(), idx.into()]);
             let idx_lit = proc_macro2::Literal::u16_unsuffixed(idx);
             hardwired_patterns.push(quote! { (#class_lit, #idx_lit) });
         }
