@@ -8,7 +8,7 @@ use tir::Operation;
 
 fn reprint(ir: &str) -> String {
     let context = fcc_context();
-    let module = tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(&context, ir)
+    let module = tir::parse::ir::parse_operation(&context, ir, &tir::builtin::MODULE)
         .expect("emitted IR should parse back");
     print_ir(&module)
 }
@@ -47,7 +47,9 @@ fn global_and_function_cannot_share_a_name() {
             Default::default(),
             tir::InsertionPoint::Root,
         );
-        (module.body()).context.insert(module.body().end(), op.id());
+        (tir::builtin::module_body(&module))
+            .context
+            .insert(tir::builtin::module_body(&module).end(), op.id());
         op
     };
     let region = context.create_region();
@@ -65,14 +67,20 @@ fn global_and_function_cannot_share_a_name() {
         tir::Operand::none(),
         vec![],
         Default::default(),
-        func.body().end(),
+        tir::func::func_body(&func).end(),
     );
     {
         let op = func;
-        (module.body()).context.insert(module.body().end(), op.id());
+        (tir::builtin::module_body(&module))
+            .context
+            .insert(tir::builtin::module_body(&module).end(), op.id());
         op
     };
-    tir::builtin::ops::module_end(&context, Default::default(), module.body().end());
+    tir::builtin::ops::module_end(
+        &context,
+        Default::default(),
+        tir::builtin::module_body(&module).end(),
+    );
 
     tir::verify_op_tree(&context, tir::Operation::id(&module))
         .expect_err("a data symbol and a function cannot share a name");

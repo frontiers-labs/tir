@@ -409,3 +409,10 @@ fn subnormal_name(value: SubnormalMode) -> &'static str {
 fn invalid(message: &str) -> Error {
     Error::VerificationError(message.to_string())
 }
+
+pub(super) fn operation_semantics(operation: &crate::OpHandle) -> std::sync::Arc<Semantics> {
+    match crate::Operation::attr(operation, "semantics") {
+        Some(AttributeValue::FpSemantics(semantics)) => semantics,
+        _ => panic!("floating operation must carry its semantics attribute"),
+    }
+}

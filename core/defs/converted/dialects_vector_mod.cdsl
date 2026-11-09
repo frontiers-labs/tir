@@ -1,0 +1,36 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type vector = Dialect;
+
+extern fn add_exec_model<N: Nat, T>(lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Optional<Index>) -> Vector<N, T>;
+extern fn add_verifier(operation: Operation, context: Context) -> Validation;
+extern fn sub_exec_model<N: Nat, T>(lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Optional<Index>) -> Vector<N, T>;
+extern fn sub_verifier(operation: Operation, context: Context) -> Validation;
+extern fn mul_exec_model<N: Nat, T>(lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Optional<Index>) -> Vector<N, T>;
+extern fn mul_verifier(operation: Operation, context: Context) -> Validation;
+type vector_len_attributes = Record<{ sew: AttrInt }>;
+
+pub let vector::add<N: Nat, T> = {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Optional<Index>) -> Vector<N, T>,
+    exec: add_exec_model<N, T>,
+    verify: add_verifier,
+};
+
+pub let vector::sub<N: Nat, T> = {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Optional<Index>) -> Vector<N, T>,
+    exec: sub_exec_model<N, T>,
+    verify: sub_verifier,
+};
+
+pub let vector::mul<N: Nat, T> = {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Optional<Index>) -> Vector<N, T>,
+    exec: mul_exec_model<N, T>,
+    verify: mul_verifier,
+};
+
+pub let vector::vector_len = {
+    signature: (avl: Index) -> Index,
+    attributes: { sew: { ty: AttrInt, codec: int_codec } },
+};

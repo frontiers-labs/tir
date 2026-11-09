@@ -1,9 +1,6 @@
-use tir::helpers::operation;
-use tir::{
-    Operation, ResourceAccess, ResourceEffect, ResourceEffects, Terminator, builtin::StateResource,
-};
+use tir::{ResourceAccess, ResourceEffect, ResourceEffects, Terminator, builtin::StateResource};
 
-use super::{ControlFlow, InstrInfo, MachineInstruction};
+use super::{ControlFlow, InstrInfo};
 
 const fn virtual_info(name: &'static str, control_flow: ControlFlow) -> InstrInfo {
     InstrInfo {
@@ -25,87 +22,41 @@ const fn virtual_call_info(name: &'static str) -> InstrInfo {
     }
 }
 
-operation! {
-    SectionOp {
-        name: "section",
-        dialect: "asm",
-        scheme: "() -> ()",
-        regions: R {
-            body: Region {}
-        }
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/backend_operations.cdsl",
+    hosts: {
+        section_end_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        symbol_end_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        symbol_address_iface_Pure => (tir :: Pure, &tir::PureCallbacks::DEFAULT),
+        symbol_address_iface_Speculatable => (tir :: Speculatable, &tir::SpeculatableCallbacks::DEFAULT),
+        block_end_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        vret_iface_Terminator => (Terminator, &tir::TerminatorCallbacks::DEFAULT),
+        vret_iface_MachineInstruction => (tir :: backend :: MachineInstruction, &VRET_MACHINE_INSTRUCTION),
+        vret_printer => vret_print,
+        vret_parser => vret_parse,
+        vbr_iface_Terminator => (Terminator, &VBR_TERMINATOR),
+        vbr_iface_MachineInstruction => (tir :: backend :: MachineInstruction, &VBR_MACHINE_INSTRUCTION),
+        vbr_printer => vbr_print,
+        vbr_parser => vbr_parse,
+        pcopy_iface_MachineInstruction => (tir :: backend :: MachineInstruction, &PCOPY_MACHINE_INSTRUCTION),
+        vcall_iface_MachineInstruction => (tir :: backend :: MachineInstruction, &VCALL_MACHINE_INSTRUCTION),
+        vcall_iface_ResourceEffects => (ResourceEffects, &CALL_RESOURCE_EFFECTS),
+        vcall_indirect_iface_MachineInstruction => (tir :: backend :: MachineInstruction, &VCALL_INDIRECT_MACHINE_INSTRUCTION),
+        vcall_indirect_iface_ResourceEffects => (ResourceEffects, &CALL_RESOURCE_EFFECTS),
+    },
 }
-
-operation! {
-    SectionEndOp {
-        name: "section_end",
-        dialect: "asm",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
-
-impl Terminator for SectionEndOp {}
-
-operation! {
-    SymbolOp {
-        name: "symbol",
-        dialect: "asm",
-        scheme: "() -> ()",
-        regions: R {
-            body: Region {}
-        }
-    }
-}
-
-operation! {
-    SymbolEndOp {
-        name: "symbol_end",
-        dialect: "asm",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
-
-impl Terminator for SymbolEndOp {}
 
 // A data definition directive (`.dword 42`, `.string "hi"`, `.space 16`).
 // `kind` names the directive, `value` holds the literal (Int or Str).
-operation! {
-    LiteralOp {
-        name: "literal",
-        dialect: "asm",
-        scheme: "() -> ()",
-        attributes: A {
-            kind: "Str",
-        }
-    }
-}
 
 // The address of a symbol, materialized inside a function. Module-level λ and δ
 // values are not reachable from machine code, so the module prologue rewrites
 // the uses of one into this op, and each target lowers it to the
 // relocation-bearing form its assembler spells.
-operation! {
-    SymbolAddressOp {
-        name: "symbol_address",
-        dialect: "asm",
-        scheme: "() -> ptr.p<_>",
-        attributes: A {
-            sym_name: "Str",
-        },
-        results: R { result },
-        interfaces: [tir::Pure, tir::Speculatable],
-    }
-}
-
-impl tir::Speculatable for SymbolAddressOp {}
-
-impl tir::Pure for SymbolAddressOp {}
 
 /// The address of `name`, as an opaque pointer.
-pub fn symbol_address_of(context: &tir::Context, name: &str) -> SymbolAddressOp {
-    SymbolAddressOp::new(
+pub fn symbol_address_of(context: &tir::Context, name: &str) -> crate::OpHandle {
+    r#symbol_address(
         context,
         tir::attributes::AttributeValue::Str((name).into()),
         tir::ptr::PtrType::opaque(context),
@@ -114,188 +65,117 @@ pub fn symbol_address_of(context: &tir::Context, name: &str) -> SymbolAddressOp 
     )
 }
 
-operation! {
-    DataRelocOp {
-        name: "data_reloc",
-        dialect: "asm",
-        scheme: "() -> ()",
-        attributes: A {
-            symbol: "Str",
-            width: "UInt",
-            addend: "Int",
-        }
-    }
+fn vret_print(op: &tir::OpHandle, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
+    super::print_branch(fmt, op)
 }
 
-operation! {
-    BlockEndOp {
-        name: "block_end",
-        dialect: "asm",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
+fn vret_parse(
+    parser: &mut tir::parse::text::Parser,
+    _context: &tir::Context,
+    _definition: &'static tir::OpDefSpec,
+) -> Result<tir::OpHandle, (tir::parse::Span, tir::Error)> {
+    Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
 }
 
-impl Terminator for BlockEndOp {}
-
-operation! {
-    VirtualReturnOp {
-        name: "vret",
-        dialect: "asm",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { values },
-        interfaces: [Terminator, tir::backend::MachineInstruction],
-    }
+fn vret_info(_op: &tir::OpHandle) -> &'static InstrInfo {
+    static INFO: InstrInfo = virtual_info("vret", ControlFlow::Unconditional);
+    &INFO
 }
 
-impl VirtualReturnOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        super::print_branch(fmt, self)
-    }
+const VRET_MACHINE_INSTRUCTION: super::MachineInstructionCallbacks =
+    super::MachineInstructionCallbacks {
+        info: vret_info,
+        instance: |op| op,
+        sched_on: None,
+        mnemonic: None,
+        width_bytes: None,
+        execute: None,
+        control_flow: None,
+    };
 
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        _context: &tir::Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
-        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
+fn vbr_info(_op: &tir::OpHandle) -> &'static InstrInfo {
+    static INFO: InstrInfo = virtual_info("vbr", ControlFlow::Unconditional);
+    &INFO
 }
 
-impl Terminator for VirtualReturnOp {}
+const VBR_MACHINE_INSTRUCTION: super::MachineInstructionCallbacks =
+    super::MachineInstructionCallbacks {
+        info: vbr_info,
+        instance: |op| op,
+        sched_on: None,
+        mnemonic: None,
+        width_bytes: None,
+        execute: None,
+        control_flow: None,
+    };
 
-impl MachineInstruction for VirtualReturnOp {
-    fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_info("vret", ControlFlow::Unconditional);
-        &INFO
-    }
+const VBR_TERMINATOR: tir::TerminatorCallbacks = tir::TerminatorCallbacks {
+    successors: Some(super::branch_successors),
+};
 
-    fn instance(&self) -> &tir::OpHandle {
-        &self.0
-    }
+fn vbr_print(op: &tir::OpHandle, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
+    super::print_branch(fmt, op)
 }
 
-operation! {
-    VirtualBranchOp {
-        name: "vbr",
-        dialect: "asm",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { dest_args },
-        attributes: A {
-            dest: "Block",
-        },
-        interfaces: [Terminator, tir::backend::MachineInstruction],
-    }
-}
-
-impl MachineInstruction for VirtualBranchOp {
-    fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_info("vbr", ControlFlow::Unconditional);
-        &INFO
-    }
-
-    fn instance(&self) -> &tir::OpHandle {
-        &self.0
-    }
-}
-
-impl Terminator for VirtualBranchOp {
-    fn successors(&self) -> Vec<tir::BlockId> {
-        super::branch_successors(self)
-    }
-}
-
-impl VirtualBranchOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        super::print_branch(fmt, self)
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        _context: &tir::Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
-        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
+fn vbr_parse(
+    parser: &mut tir::parse::text::Parser,
+    _context: &tir::Context,
+    _definition: &'static tir::OpDefSpec,
+) -> Result<tir::OpHandle, (tir::parse::Span, tir::Error)> {
+    Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
 }
 
 // A parallel copy: every result takes its source at once, as one point. The
 // register allocator splits the live ranges at a constrained instruction with
 // one (Hack's thesis, paper § 4) and sequences it on the assigned registers.
-operation! {
-    ParallelCopyOp {
-        name: "pcopy",
-        dialect: "asm",
-        scheme: "(_*) -> _*",
-        operands: O { sources },
-        results: R { copies },
-        interfaces: [tir::backend::MachineInstruction],
-    }
+
+fn pcopy_info(_op: &tir::OpHandle) -> &'static InstrInfo {
+    static INFO: InstrInfo = virtual_info("pcopy", ControlFlow::None);
+    &INFO
 }
 
-impl MachineInstruction for ParallelCopyOp {
-    fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_info("pcopy", ControlFlow::None);
-        &INFO
-    }
+const PCOPY_MACHINE_INSTRUCTION: super::MachineInstructionCallbacks =
+    super::MachineInstructionCallbacks {
+        info: pcopy_info,
+        instance: |op| op,
+        sched_on: None,
+        mnemonic: None,
+        width_bytes: None,
+        execute: None,
+        control_flow: None,
+    };
 
-    fn instance(&self) -> &tir::OpHandle {
-        &self.0
-    }
+fn vcall_info(_op: &tir::OpHandle) -> &'static InstrInfo {
+    static INFO: InstrInfo = virtual_call_info("vcall");
+    &INFO
 }
 
-operation! {
-    VirtualCallOp {
-        name: "vcall",
-        dialect: "asm",
-        scheme: "(_*) -> _*",
-        operands: O { args },
-        results: R { results },
-        attributes: A {
-            callee: "Str",
-            outgoing_stack_size: "UInt",
-        },
-        interfaces: [tir::backend::MachineInstruction, ResourceEffects],
-        state: "in_out",
-    }
+const VCALL_MACHINE_INSTRUCTION: super::MachineInstructionCallbacks =
+    super::MachineInstructionCallbacks {
+        info: vcall_info,
+        instance: |op| op,
+        sched_on: None,
+        mnemonic: None,
+        width_bytes: None,
+        execute: None,
+        control_flow: None,
+    };
+
+fn vcall_indirect_info(_op: &tir::OpHandle) -> &'static InstrInfo {
+    static INFO: InstrInfo = virtual_call_info("vcall_indirect");
+    &INFO
 }
 
-impl MachineInstruction for VirtualCallOp {
-    fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_call_info("vcall");
-        &INFO
-    }
-
-    fn instance(&self) -> &tir::OpHandle {
-        &self.0
-    }
-}
-
-operation! {
-    VirtualIndirectCallOp {
-        name: "vcall_indirect",
-        dialect: "asm",
-        scheme: "(backend.reg<_, _>, _*) -> _*",
-        operands: O { callee, args },
-        results: R { results },
-        attributes: A {
-            outgoing_stack_size: "UInt",
-        },
-        interfaces: [tir::backend::MachineInstruction, ResourceEffects],
-        state: "in_out",
-    }
-}
-
-impl MachineInstruction for VirtualIndirectCallOp {
-    fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_call_info("vcall_indirect");
-        &INFO
-    }
-
-    fn instance(&self) -> &tir::OpHandle {
-        &self.0
-    }
-}
+const VCALL_INDIRECT_MACHINE_INSTRUCTION: super::MachineInstructionCallbacks =
+    super::MachineInstructionCallbacks {
+        info: vcall_indirect_info,
+        instance: |op| op,
+        sched_on: None,
+        mnemonic: None,
+        width_bytes: None,
+        execute: None,
+        control_flow: None,
+    };
 
 fn call_effects(op: &tir::OpHandle) -> Vec<ResourceEffect> {
     [StateResource::Memory, StateResource::FpEnv]
@@ -321,14 +201,6 @@ fn call_effects(op: &tir::OpHandle) -> Vec<ResourceEffect> {
         .collect()
 }
 
-impl ResourceEffects for VirtualCallOp {
-    fn resource_effects(&self) -> Vec<ResourceEffect> {
-        call_effects(&self.0)
-    }
-}
-
-impl ResourceEffects for VirtualIndirectCallOp {
-    fn resource_effects(&self) -> Vec<ResourceEffect> {
-        call_effects(&self.0)
-    }
-}
+const CALL_RESOURCE_EFFECTS: tir::ResourceEffectsCallbacks = tir::ResourceEffectsCallbacks {
+    resource_effects: call_effects,
+};

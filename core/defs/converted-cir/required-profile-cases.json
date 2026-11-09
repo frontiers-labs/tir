@@ -1,0 +1,12 @@
+{
+  "attributes": {},
+  "bindings": "BindKind / BindTerm / BindSlice / BindIndex ordinary data",
+  "bounds": {},
+  "models": "typed flattened extern fn; Rust fn(&OpHandle,&mut SemGraph)->Option<NodeId>",
+  "sorts": {
+    "_": "Any",
+    "cir.va_list": "VaList",
+    "int<1>": "Int<1>"
+  },
+  "state_bundle": "States<StateResources>, removed from value ports and retained as state ports"
+}

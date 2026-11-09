@@ -1,0 +1,16 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let TupleType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let TupleType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let TupleType_ctor_id: (context: Context) -> CtorId;
+
+pub let spellings::TupleType: SpellingSpec = {
+    ctor_id: TupleType_ctor_id,
+    keys: ["tuple"],
+    parse: TupleType_parse,
+    print: TupleType_print,
+    variadic_tail: false,
+};

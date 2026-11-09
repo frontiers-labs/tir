@@ -1,8 +1,6 @@
 //! Context tests: staged regions, port growth, interning and spine bumps.
 
-use tir::{
-    builtin, func::FuncOp, scf, BlockHandle, Commutative, Context, OpId, Operation, Use, ValueId,
-};
+use tir::{builtin, scf, BlockHandle, Commutative, Context, OpId, Operation, Use, ValueId};
 
 use super::fixtures;
 
@@ -178,11 +176,12 @@ module_end
 }"#,
     );
     let func = fixtures::module_ops(context, module.id())[0];
-    let body = context
-        .get_op(func)
-        .as_op::<FuncOp>()
-        .expect("a func")
-        .body();
+    let body = tir::func::func_body(
+        &context
+            .get_op(func)
+            .as_operation(&tir::func::FUNC)
+            .expect("a func"),
+    );
     let [_, nest, ..] = body.op_ids()[..] else {
         panic!("the function body holds the constant and the nest");
     };
@@ -236,11 +235,12 @@ fn module_with_function(context: &Context) -> (OpId, OpId, BlockHandle) {
         "module {\n%fn_demo = func.func @demo() -> !i32 {\n}\nmodule_end\n}",
     );
     let func = fixtures::module_ops(context, module.id())[0];
-    let body = context
-        .get_op(func)
-        .as_op::<FuncOp>()
-        .expect("a func")
-        .body();
+    let body = tir::func::func_body(
+        &context
+            .get_op(func)
+            .as_operation(&tir::func::FUNC)
+            .expect("a func"),
+    );
     (module.id(), func, body)
 }
 
@@ -551,7 +551,7 @@ fn replacing_value_uses_reaches_a_nested_region() {
     );
     body.context.insert(
         body.end(),
-        scf::ForOp::new(
+        scf::r#for(
             &context,
             bound.id(),
             vec![],
@@ -598,11 +598,11 @@ fn custom_interface_for_existing_op() {
 
 #[test]
 fn identifies_operations_by_type() {
-    use tir::builtin::{BuiltinDialect, ModuleOp};
-    use tir::{DialectName, OperationName};
+    use tir::builtin::BuiltinDialect;
+    use tir::DialectName;
 
     let context = Context::new();
-    let module = ModuleOp::new(
+    let module = tir::builtin::r#module(
         &context,
         None,
         Default::default(),
@@ -610,9 +610,9 @@ fn identifies_operations_by_type() {
     );
     let instance = context.get_op(module.id());
 
-    assert!(instance.is::<ModuleOp>());
-    assert!(!instance.is::<tir::func::FuncOp>());
-    assert_eq!(instance.name(), OperationName::of::<ModuleOp>());
+    assert!(instance.is_operation(&tir::builtin::MODULE));
+    assert!(!instance.is_operation(&tir::func::FUNC));
+    assert_eq!(instance.name(), tir::builtin::MODULE.operation_name());
     assert_eq!(instance.dialect(), DialectName::of::<BuiltinDialect>());
 }
 
@@ -631,8 +631,8 @@ fn uses_of_lists_each_operand_slot() {
     body.context.insert(body.end(), c.id());
     let add = builtin::ops::addi(
         &context,
-        c.result(),
-        c.result(),
+        c.value_results()[0],
+        c.value_results()[0],
         i32_ty,
         Default::default(),
         tir::InsertionPoint::Root,
@@ -640,13 +640,13 @@ fn uses_of_lists_each_operand_slot() {
     body.context.insert(body.end(), add.id());
 
     assert_eq!(
-        context.uses_of(c.result()),
+        context.uses_of(c.value_results()[0]),
         [Use::new(add.id(), 0), Use::new(add.id(), 1)]
     );
-    assert_eq!(context.users_of(c.result()), [add.id(); 2]);
-    assert_eq!(context.use_count(c.result()), 2);
-    assert!(context.is_used(c.result()));
-    assert!(!context.is_used(add.result()));
+    assert_eq!(context.users_of(c.value_results()[0]), [add.id(); 2]);
+    assert_eq!(context.use_count(c.value_results()[0]), 2);
+    assert!(context.is_used(c.value_results()[0]));
+    assert!(!context.is_used(add.value_results()[0]));
 }
 
 fn add_fixture(context: &Context) -> (ValueId, ValueId, OpId) {
@@ -670,14 +670,14 @@ fn add_fixture(context: &Context) -> (ValueId, ValueId, OpId) {
     body.context.insert(body.end(), d.id());
     let add = builtin::ops::addi(
         context,
-        c.result(),
-        c.result(),
+        c.value_results()[0],
+        c.value_results()[0],
         i32_ty,
         Default::default(),
         tir::InsertionPoint::Root,
     );
     body.context.insert(body.end(), add.id());
-    (c.result(), d.result(), add.id())
+    (c.value_results()[0], d.value_results()[0], add.id())
 }
 
 #[test]

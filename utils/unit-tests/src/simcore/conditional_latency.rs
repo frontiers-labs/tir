@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 use tir::backend::{AsmDialect, MachineContext};
-use tir::helpers::{dialect, operation};
+use tir::helpers::dialect;
 use tir_sim::{Executor, ProgramImage};
 
 include!(concat!(env!("OUT_DIR"), "/latency.rs"));
@@ -60,7 +60,7 @@ fn fusion_pair(
     let mut slots = Vec::new();
     let mut pc = first_pc;
     for (index, src, imm) in specifications {
-        let op_id = AddImmOp::new(
+        let op_id = r#addi(
             &context,
             tir::Operand::none(),
             tir::Operand::none(),
@@ -202,7 +202,7 @@ fn add_imm_latency(imm: i64) -> u16 {
     use tir::Operation;
     let context = tir::Context::with_default_dialects();
     context.register_dialect::<LatencyDialect>();
-    let op = AddImmOp::new(
+    let op = r#addi(
         &context,
         tir::Operand::none(),
         tir::Operand::none(),
@@ -243,7 +243,7 @@ fn div_schedule(
         .into_iter()
         .map(|rhs| context.named_attribute("rhs", phys_attr((RegClass::Gpr.id(), rhs))))
         .collect();
-    let op = DivOp::new(
+    let op = r#div(
         &context,
         tir::Operand::none(),
         tir::Operand::none(),

@@ -9,7 +9,7 @@ mod isa {
     // Generated code: not everything is used by this asm-focused prototype.
     #![allow(dead_code, unused_variables, unused_mut, clippy::all)]
 
-    use tir::helpers::{dialect, operation};
+    use tir::helpers::dialect;
 
     include!(concat!(env!("OUT_DIR"), "/x86_64.rs"));
 

@@ -1,0 +1,26 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type builtin = Dialect;
+
+extern fn make_tuple_verifier(operation: Operation, context: Context) -> Validation;
+extern let make_tuple_iface_Interp: Interface;
+extern let make_tuple_iface_Speculatable: Interface;
+type tuple_get_attributes = Record<{ index: AttrUInt }>;
+extern fn tuple_get_verifier(operation: Operation, context: Context) -> Validation;
+extern let tuple_get_iface_Interp: Interface;
+extern let tuple_get_iface_Speculatable: Interface;
+
+pub let builtin::make_tuple = {
+    signature: (elements: Many<Any>) -> AnyTuple,
+    verify: make_tuple_verifier,
+    interfaces: [make_tuple_iface_Interp, make_tuple_iface_Speculatable],
+};
+
+pub let builtin::tuple_get = {
+    signature: (tuple: AnyTuple) -> Any,
+    attributes: { index: { ty: AttrUInt, codec: uint_codec } },
+    verify: tuple_get_verifier,
+    interfaces: [tuple_get_iface_Interp, tuple_get_iface_Speculatable],
+};

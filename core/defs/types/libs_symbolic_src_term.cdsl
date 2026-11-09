@@ -1,0 +1,115 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let base_INT_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_INT_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_FLOAT_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_FLOAT_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_UNIT_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_UNIT_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_TUPLE_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_TUPLE_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_STATE_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_STATE_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_NAT_ADD_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_NAT_ADD_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_RAW_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_RAW_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_ITER_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_ITER_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_SEM_STATE_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_SEM_STATE_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let base_NAMED_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let base_NAMED_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+
+pub let constructors::base_INT: ConstructorSpec = {
+    dialect: "builtin",
+    name: "i",
+    params: [{ name: "width", param: Param::One(Kind::Nat()) }],
+    kind: Kind::Data(),
+    validate: base_INT_validate,
+    carrier: base_INT_carrier,
+};
+
+pub let constructors::base_FLOAT: ConstructorSpec = {
+    dialect: "builtin",
+    name: "f",
+    params: [{ name: "exponent", param: Param::One(Kind::Nat()) }, { name: "mantissa", param: Param::One(Kind::Nat()) }],
+    kind: Kind::Data(),
+    validate: base_FLOAT_validate,
+    carrier: base_FLOAT_carrier,
+};
+
+pub let constructors::base_UNIT: ConstructorSpec = {
+    dialect: "builtin",
+    name: "unit",
+    params: [],
+    kind: Kind::Data(),
+    validate: base_UNIT_validate,
+    carrier: base_UNIT_carrier,
+};
+
+pub let constructors::base_TUPLE: ConstructorSpec = {
+    dialect: "builtin",
+    name: "tuple",
+    params: [{ name: "elements", param: Param::List(Kind::Data()) }],
+    kind: Kind::Data(),
+    validate: base_TUPLE_validate,
+    carrier: base_TUPLE_carrier,
+};
+
+pub let constructors::base_STATE: ConstructorSpec = {
+    dialect: "builtin",
+    name: "state",
+    params: [{ name: "resource", param: Param::One(Kind::Sym()) }],
+    kind: Kind::Ghost(),
+    validate: base_STATE_validate,
+    carrier: base_STATE_carrier,
+};
+
+pub let constructors::base_NAT_ADD: ConstructorSpec = {
+    dialect: "nat",
+    name: "add",
+    params: [{ name: "terms", param: Param::List(Kind::Nat()) }],
+    kind: Kind::Nat(),
+    validate: base_NAT_ADD_validate,
+    carrier: base_NAT_ADD_carrier,
+};
+
+pub let constructors::base_RAW: ConstructorSpec = {
+    dialect: "sem",
+    name: "raw",
+    params: [{ name: "width", param: Param::One(Kind::Nat()) }],
+    kind: Kind::Data(),
+    validate: base_RAW_validate,
+    carrier: base_RAW_carrier,
+};
+
+pub let constructors::base_ITER: ConstructorSpec = {
+    dialect: "sem",
+    name: "iter",
+    params: [{ name: "element", param: Param::One(Kind::Data()) }],
+    kind: Kind::Data(),
+    validate: base_ITER_validate,
+    carrier: base_ITER_carrier,
+};
+
+pub let constructors::base_SEM_STATE: ConstructorSpec = {
+    dialect: "sem",
+    name: "state",
+    params: [],
+    kind: Kind::Ghost(),
+    validate: base_SEM_STATE_validate,
+    carrier: base_SEM_STATE_carrier,
+};
+
+pub let constructors::base_NAMED: ConstructorSpec = {
+    dialect: "type",
+    name: "named",
+    params: [{ name: "name", param: Param::One(Kind::Sym()) }, { name: "args", param: Param::Any() }],
+    kind: Kind::Data(),
+    validate: base_NAMED_validate,
+    carrier: base_NAMED_carrier,
+};

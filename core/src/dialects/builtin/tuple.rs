@@ -2,7 +2,7 @@ use tir_symbolic::term::ctor;
 
 use crate::parse::common::Cursor;
 use crate::ty::{Terms, TypeArg, TypeSpelling};
-use crate::{Context, Error, Operation, TypeId, operation};
+use crate::{Context, Error, TypeId};
 
 use crate as tir;
 
@@ -30,10 +30,8 @@ impl TupleType {
     }
 
     pub fn spelling(_context: &Context) -> TypeSpelling {
-        TypeSpelling {
-            ctor: ctor::TUPLE,
-            keys: &["tuple"],
-            parse: |_, parser, context| {
+        {
+            const __TIR_TYPE_PARSE: ::tir::TypeParser = |_, parser, context| {
                 let elements = parser
                     .parse_delimited("<", ">", |parser| {
                         parser
@@ -41,11 +39,11 @@ impl TupleType {
                             .ok_or_else(|| (parser.span(), Error::ExpectedType))
                     })?
                     .ok_or_else(|| (parser.span(), Error::ExpectedToken("<")))?;
-                Ok(Self::new(context, elements))
-            },
-            print: |spellings, ty, fmt| {
+                Ok(TupleType::new(context, elements))
+            };
+            const __TIR_TYPE_PRINT: ::tir::TypePrinter = |spellings, ty, fmt| {
                 fmt.write("tuple<")?;
-                let tuple = Self::view(spellings, ty).expect("a tuple type");
+                let tuple = TupleType::view(spellings, ty).expect("a tuple type");
                 for (index, element) in tuple.0.into_iter().enumerate() {
                     if index > 0 {
                         fmt.write(", ")?;
@@ -53,8 +51,9 @@ impl TupleType {
                     spellings.print(element, fmt)?;
                 }
                 fmt.write(">")
-            },
-            variadic_tail: false,
+            };
+            const __TIR_TYPE_CTOR_ID: fn(&::tir::Context) -> ::tir::CtorId = |_context| ctor::TUPLE;
+            ::tir::helpers::type_spelling! { file: "defs/types/core_src_dialects_builtin_tuple.cdsl", binding: spellings::TupleType, context: _context, hosts: { TupleType_parse => __TIR_TYPE_PARSE, TupleType_print => __TIR_TYPE_PRINT, TupleType_ctor_id => __TIR_TYPE_CTOR_ID } }
         }
     }
 }
@@ -72,89 +71,84 @@ pub(crate) fn type_list(arg: Option<TypeArg>) -> Vec<TypeId> {
         .collect()
 }
 
-operation! {
-    MakeTupleOp {
-        name: "make_tuple",
-        dialect: "builtin",
-        scheme: "(_*) -> tuple<_>",
-        verifier: "true",
-        operands: O { elements },
-        results: R { result },
-        interfaces: [crate::interp::Interp, crate::Speculatable],
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_builtin_tuple.cdsl",
+    hosts: {
+        make_tuple_verifier => crate::builtin::make_tuple_verify_impl,
+        make_tuple_iface_Interp => (crate :: interp :: Interp, &crate::interp::__TIR_IFACE_MakeTupleOp_Interp),
+        make_tuple_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+        tuple_get_verifier => crate::builtin::tuple_get_verify_impl,
+        tuple_get_iface_Interp => (crate :: interp :: Interp, &crate::interp::__TIR_IFACE_TupleGetOp_Interp),
+        tuple_get_iface_Speculatable => (crate :: Speculatable, &crate::SpeculatableCallbacks::DEFAULT),
+    },
 }
 
-impl crate::Speculatable for MakeTupleOp {}
-
-impl tir::Verifiable for MakeTupleOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let Some(tuple) = TupleType::view(context, context.get_value(self.result()).ty()) else {
-            return Err(Error::VerificationError(
-                "make_tuple result must have tuple type".to_string(),
-            ));
-        };
-        let expected = tuple.elements();
-        if expected.len() != self.operands().len() {
+pub(crate) fn make_tuple_verify_impl(
+    operation: &tir::OpHandle,
+    context: &Context,
+) -> Result<(), Error> {
+    let Some(tuple) = TupleType::view(
+        context,
+        context
+            .get_value(crate::builtin::make_tuple_result(operation))
+            .ty(),
+    ) else {
+        return Err(Error::VerificationError(
+            "make_tuple result must have tuple type".to_string(),
+        ));
+    };
+    let expected = tuple.elements();
+    if expected.len() != operation.operands().len() {
+        return Err(Error::VerificationError(format!(
+            "make_tuple expected {} elements, got {}",
+            expected.len(),
+            operation.operands().len()
+        )));
+    }
+    for (index, (&value, expected_type)) in operation.operands().iter().zip(expected).enumerate() {
+        if context.get_value(value).ty() != expected_type {
             return Err(Error::VerificationError(format!(
-                "make_tuple expected {} elements, got {}",
-                expected.len(),
-                self.operands().len()
+                "make_tuple element {index} has the wrong type"
             )));
         }
-        for (index, (&value, expected_type)) in self.operands().iter().zip(expected).enumerate() {
-            if context.get_value(value).ty() != expected_type {
-                return Err(Error::VerificationError(format!(
-                    "make_tuple element {index} has the wrong type"
-                )));
-            }
-        }
-        Ok(())
     }
+    Ok(())
 }
 
-operation! {
-    TupleGetOp {
-        name: "tuple_get",
-        dialect: "builtin",
-        scheme: "(tuple<_>) -> _",
-        verifier: "true",
-        operands: O { tuple },
-        attributes: A {
-            index: "UInt",
-        },
-        results: R { result },
-        interfaces: [crate::interp::Interp, crate::Speculatable],
-    }
+pub fn tuple_get_tuple(operation: &tir::OpHandle) -> crate::ValueId {
+    operation.operands()[0]
 }
 
-impl crate::Speculatable for TupleGetOp {}
-
-impl TupleGetOp {
-    pub fn tuple(&self) -> crate::ValueId {
-        self.operands()[0]
+pub(crate) fn tuple_get_verify_impl(
+    operation: &tir::OpHandle,
+    context: &Context,
+) -> Result<(), Error> {
+    let Some(tuple) = TupleType::view(
+        context,
+        context
+            .get_value(crate::builtin::tuple_get_tuple(operation))
+            .ty(),
+    ) else {
+        return Err(Error::VerificationError(
+            "tuple_get operand must have tuple type".to_string(),
+        ));
+    };
+    let elements = tuple.elements();
+    let Some(&expected) = elements.get(crate::builtin::tuple_get_index(operation) as usize) else {
+        return Err(Error::VerificationError(format!(
+            "tuple_get index {} is out of bounds for {} elements",
+            crate::builtin::tuple_get_index(operation),
+            elements.len()
+        )));
+    };
+    if context
+        .get_value(crate::builtin::tuple_get_result(operation))
+        .ty()
+        != expected
+    {
+        return Err(Error::VerificationError(
+            "tuple_get result has the wrong type".to_string(),
+        ));
     }
-}
-
-impl tir::Verifiable for TupleGetOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let Some(tuple) = TupleType::view(context, context.get_value(self.tuple()).ty()) else {
-            return Err(Error::VerificationError(
-                "tuple_get operand must have tuple type".to_string(),
-            ));
-        };
-        let elements = tuple.elements();
-        let Some(&expected) = elements.get(self.index() as usize) else {
-            return Err(Error::VerificationError(format!(
-                "tuple_get index {} is out of bounds for {} elements",
-                self.index(),
-                elements.len()
-            )));
-        };
-        if context.get_value(self.result()).ty() != expected {
-            return Err(Error::VerificationError(
-                "tuple_get result has the wrong type".to_string(),
-            ));
-        }
-        Ok(())
-    }
+    Ok(())
 }

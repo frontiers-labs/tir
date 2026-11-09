@@ -1,0 +1,49 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let VARARGS_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let VARARGS_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let VarArgsType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let VarArgsType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let VarArgsType_ctor_id: (context: Context) -> CtorId;
+extern let FN_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let FN_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let FnType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let FnType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let FnType_ctor_id: (context: Context) -> CtorId;
+
+pub let constructors::VARARGS: ConstructorSpec = {
+    dialect: "builtin",
+    name: "varargs",
+    params: [],
+    kind: Kind::Data(),
+    validate: VARARGS_validate,
+    carrier: VARARGS_carrier,
+};
+
+pub let spellings::VarArgsType: SpellingSpec = {
+    ctor_id: VarArgsType_ctor_id,
+    keys: ["varargs"],
+    parse: VarArgsType_parse,
+    print: VarArgsType_print,
+    variadic_tail: true,
+};
+
+pub let constructors::FN: ConstructorSpec = {
+    dialect: "builtin",
+    name: "fn",
+    params: [{ name: "params", param: Param::List(Kind::Data()) }, { name: "ret", param: Param::One(Kind::Data()) }],
+    kind: Kind::Data(),
+    validate: FN_validate,
+    carrier: FN_carrier,
+};
+
+pub let spellings::FnType: SpellingSpec = {
+    ctor_id: FnType_ctor_id,
+    keys: ["fn"],
+    parse: FnType_parse,
+    print: FnType_print,
+    variadic_tail: false,
+};

@@ -5,10 +5,7 @@ use crate::{
     builtin::BuiltinDialect,
     dialects::{cfg::CfgDialect, func::FuncDialect, scf::ScfDialect, state::StateDialect},
     ir_formatter::IRFormatter,
-    operation::{
-        ImplementsOpInterface, OpHandle, OpInterfaceConverter, OpNameId, downcast_op_interface,
-        op_interface_converter,
-    },
+    operation::{OpHandle, OpInterfaceConverter, OpNameId, downcast_op_interface},
     parse::text::Parser as IRParser,
     ptr::PtrDialect,
     region::{RegionHandle, RegionId},
@@ -62,6 +59,7 @@ struct Registry {
 }
 struct OpName {
     identity: (&'static str, &'static str),
+    definition: Option<&'static crate::OpDefSpec>,
 }
 #[derive(Clone)]
 pub struct Names(Rc<RefCell<Registry>>);
@@ -135,13 +133,15 @@ impl Context {
         let segment_sizes = names.intern("operand_segment_sizes");
         let mut op_names = Vec::new();
         let mut op_name_ids = HashMap::new();
-        for schema in crate::schema::OP_SCHEMAS {
+        for definition in crate::schema::OP_DEFINITIONS {
+            let schema = definition.schema;
             op_name_ids
                 .entry((schema.dialect, schema.name))
                 .or_insert_with(|| {
                     let id = OpNameId::new(op_names.len() as u32);
                     op_names.push(OpName {
                         identity: (schema.dialect, schema.name),
+                        definition: Some(definition),
                     });
                     id
                 });
@@ -240,8 +240,12 @@ impl Context {
             return *id;
         }
         let id = OpNameId::new(registry.op_names.len() as u32);
+        let definition = crate::schema::OP_DEFINITIONS.iter().find(|definition| {
+            definition.schema.dialect == dialect && definition.schema.name == name
+        });
         registry.op_names.push(OpName {
             identity: (dialect, name),
+            definition,
         });
         registry.op_name_ids.insert((dialect, name), id);
         id
@@ -395,48 +399,59 @@ impl Context {
             })
     }
 
+    pub fn register_operation(&self, definition: &'static crate::OpDefSpec) {
+        let (dialect, name) = (definition.schema.dialect, definition.schema.name);
+        let id = self.intern_op_name(dialect, name);
+        self.registry_mut().op_names[id.index()].definition = Some(definition);
+        for &(interface, interface_name, converter) in definition.interfaces {
+            self.register_interface(dialect, name, interface(), interface_name(), converter);
+        }
+    }
     pub fn register_op_interface<I: ?Sized + 'static>(
         &self,
         dialect: &'static str,
-        op_name: &'static str,
+        name: &'static str,
         converter: OpInterfaceConverter,
     ) {
-        let name = self.intern_op_name(dialect, op_name).index();
-        let interface = std::any::TypeId::of::<I>();
+        self.register_interface(
+            dialect,
+            name,
+            std::any::TypeId::of::<I>(),
+            std::any::type_name::<I>(),
+            converter,
+        );
+    }
+    fn register_interface(
+        &self,
+        dialect: &'static str,
+        name: &'static str,
+        interface: std::any::TypeId,
+        interface_name: &'static str,
+        converter: OpInterfaceConverter,
+    ) {
+        let id = self.intern_op_name(dialect, name);
         let mut registry = self.registry_mut();
-        if registry.interfaces.len() <= name {
-            registry.interfaces.resize_with(name + 1, Vec::new);
+        if registry.interfaces.len() <= id.index() {
+            registry.interfaces.resize_with(id.index() + 1, Vec::new);
         }
-        let held = &mut registry.interfaces[name];
-        match held.iter_mut().find(|(ty, _)| *ty == interface) {
-            Some(entry) => entry.1 = converter,
-            None => held.push((interface, converter)),
+        let held = &mut registry.interfaces[id.index()];
+        if let Some(entry) = held.iter_mut().find(|(ty, _)| *ty == interface) {
+            entry.1 = converter;
+        } else {
+            held.push((interface, converter));
         }
         drop(registry);
         self.engine()
             .update(|mut state| {
-                state.add(
-                    "Implements",
-                    (format!("{dialect}.{op_name}"), std::any::type_name::<I>()),
-                )?;
+                state.add("Implements", (format!("{dialect}.{name}"), interface_name))?;
                 Ok(())
             })
             .unwrap_or_else(|error| panic!("operation interface: {error}"));
         self.invalidate_indexes();
     }
 
-    pub fn register_operation_interface<Op, I>(&self)
-    where
-        Op: ImplementsOpInterface<I>,
-        I: ?Sized + 'static,
-    {
-        self.register_op_interface::<I>(Op::dialect(), Op::name(), op_interface_converter::<Op, I>);
-    }
-
     pub(crate) fn get_dyn_op(&self, op: OpHandle) -> Box<dyn Operation> {
-        let dialect_name = self.op_identity(op.id).0;
-        let dialect = self.registry().dialects.get(dialect_name).unwrap().clone();
-        dialect.get_dyn_op(op)
+        Box::new(op)
     }
 
     pub(crate) fn get_op_interface<I: ?Sized + 'static>(&self, op: OpHandle) -> Option<Box<I>> {
@@ -858,6 +873,9 @@ impl Context {
             .op_name_ids
             .get(&(dialect, name))
             .unwrap_or_else(|| panic!("registered op kind"))
+    }
+    pub fn operation_definition(&self, op: OpId) -> Option<&'static crate::OpDefSpec> {
+        self.registry().op_names[self.op_name_id(op).index()].definition
     }
     pub(crate) fn op_identity(&self, op: OpId) -> (&'static str, &'static str) {
         self.registry().op_names[self.op_name_id(op).index()].identity

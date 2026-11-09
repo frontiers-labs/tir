@@ -1,0 +1,33 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type scf = Dialect;
+
+extern let loop_iface_ExitScope: Interface;
+extern let switch_iface_ExitScope: Interface;
+extern let for_iface_ExitScope: Interface;
+extern fn for_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn for_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let scf::r#loop = {
+    signature: (inits: Many<Any>) -> (results: Many<Any>,),
+    interfaces: [loop_iface_ExitScope],
+    regions: { body: { kind: RegionKind::Nodes(), variadic: false } },
+    bindings: { kind: BindKind::Theta(), predicate: BindTerm::Region({ name: "body", ports: false, slice: BindSlice::One({ n: false, offset: 0 }) }), chains: [{ name: "carried", terms: [BindTerm::Operands(["inits"]), BindTerm::Region({ name: "body", ports: true, slice: BindSlice::All() }), BindTerm::Region({ name: "body", ports: false, slice: BindSlice::Range({ n: false, offset: 1 }, Optional::Some({ n: true, offset: 1 })) }), BindTerm::Region({ name: "body", ports: false, slice: BindSlice::Range({ n: true, offset: 1 }, Optional::None()) }), BindTerm::Results(BindSlice::All())] }] },
+};
+
+pub let scf::r#switch = {
+    signature: (predicate: AnyInt, inputs: Many<Any>) -> (results: Many<Any>,),
+    interfaces: [switch_iface_ExitScope],
+    regions: { arms: { kind: RegionKind::Nodes(), variadic: true } },
+    bindings: { kind: BindKind::Gamma(), predicate: BindTerm::Operands(["predicate"]), chains: [{ name: "forwarded", terms: [BindTerm::Operands(["inputs"]), BindTerm::Region({ name: "arms", ports: true, slice: BindSlice::All() })] }, { name: "joined", terms: [BindTerm::Region({ name: "arms", ports: false, slice: BindSlice::All() }), BindTerm::Results(BindSlice::All())] }] },
+};
+
+pub let scf::r#for<C> = {
+    signature: (lb: Count<C>, inits: Many<Any>, ub: Count<C>, step: Count<C>) -> (results: Many<Any>,),
+    interfaces: [for_iface_ExitScope],
+    regions: { body: { kind: RegionKind::Nodes(), variadic: false } },
+    bindings: { kind: BindKind::Theta(), predicate: BindTerm::Region({ name: "body", ports: false, slice: BindSlice::One({ n: false, offset: 0 }) }), chains: [{ name: "carried", terms: [BindTerm::Operands(["lb", "inits"]), BindTerm::Region({ name: "body", ports: true, slice: BindSlice::All() }), BindTerm::Region({ name: "body", ports: false, slice: BindSlice::Range({ n: false, offset: 1 }, Optional::Some({ n: true, offset: 1 })) }), BindTerm::Region({ name: "body", ports: false, slice: BindSlice::Range({ n: true, offset: 1 }, Optional::None()) }), BindTerm::Results(BindSlice::All())] }], counted: { induction : 0, lb: "lb", ub: "ub", step: "step" } },
+    assembly: { print: for_printer, parse: for_parser },
+};

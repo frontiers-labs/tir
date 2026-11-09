@@ -1,4 +1,4 @@
-use tir::helpers::{dialect, operation};
+use tir::helpers::dialect;
 
 mod ptx_asm;
 
@@ -7,20 +7,16 @@ include!(concat!(env!("OUT_DIR"), "/ptx.rs"));
 dialect! {
     PtxDialect {
         name: "ptx",
-        operations: [LabelOp],
+        operations: [LABEL],
         operation_file: concat!(env!("OUT_DIR"), "/ptx_ops.rs"),
     }
 }
 
-operation! {
-    LabelOp {
-        name: "label",
-        dialect: "ptx",
-        scheme: "() -> ()",
-        attributes: A {
-            name: "Str",
-        }
-    }
+tir::helpers::op_def! {
+    file: "../core/defs/converted-gpu/ptx_mod.cdsl",
+    hosts: {
+
+    },
 }
 
 /// The PTX target, selected via `--march=ptx`. PTX is a text pseudo-ISA: the
@@ -104,14 +100,14 @@ impl tir::backend::TargetMachine for PtxTarget {
         &self,
         context: &tir::Context,
         text: &str,
-    ) -> Option<Result<tir::builtin::ModuleOp, String>> {
+    ) -> Option<Result<tir::OpHandle, String>> {
         Some(ptx_asm::parse(context, text))
     }
 
     fn print_asm_text(
         &self,
         context: &tir::Context,
-        module: &tir::builtin::ModuleOp,
+        module: &tir::OpHandle,
     ) -> Option<Result<String, String>> {
         Some(ptx_asm::print(context, module))
     }

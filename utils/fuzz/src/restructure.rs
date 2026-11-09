@@ -13,11 +13,10 @@
 use tir::BlockHandle;
 
 use tir::builtin::ops as b;
-use tir::builtin::{IntegerType, ModuleOp};
+use tir::builtin::IntegerType;
 use tir::cfg::ops as cb;
 use tir::func::ops as func_ops;
-use tir::func::FuncOp;
-use tir::{Context, IRFormatter, Operation, PassManager};
+use tir::{Context, IRFormatter, OpHandle, Operation, PassManager};
 
 /// How many backward edges a run may take.
 const FUEL: i64 = 16;
@@ -57,23 +56,27 @@ pub fn check(data: &[u8]) {
     compare_execution(&program.pruned(), &source, &render(&context, &module));
 }
 
-fn restructure(context: &Context, module: &ModuleOp) -> Result<(), tir::PassError> {
+fn restructure(context: &Context, module: &OpHandle) -> Result<(), tir::PassError> {
     let mut passes = PassManager::new();
     passes
-        .nest::<FuncOp>()
+        .nest(&tir::func::FUNC)
         .add_pass(tir::passes::RestructureNodesPass::new());
     passes.run(context, module.id())
 }
 
-fn has_branches(context: &Context, module: &ModuleOp) -> bool {
-    module.body().iter(context.clone()).any(|op| {
+fn has_branches(context: &Context, module: &OpHandle) -> bool {
+    b::module_body(module).iter(context.clone()).any(|op| {
         op.clone()
-            .as_op::<FuncOp>()
-            .is_some_and(|func| func.regions().any(|region| !region.is_nodes()))
+            .as_operation(&tir::func::FUNC)
+            .is_some_and(|func| {
+                func.regions()
+                    .iter()
+                    .any(|&region| !context.get_region(region).is_nodes())
+            })
     })
 }
 
-fn render(context: &Context, module: &ModuleOp) -> String {
+fn render(context: &Context, module: &OpHandle) -> String {
     let mut rendered = String::new();
     let mut formatter = IRFormatter::new(&mut rendered);
     tir::print_ir(module, context, &mut formatter).expect("print");
@@ -247,7 +250,7 @@ impl Program {
         Program { blocks }
     }
 
-    fn build(&self, context: &Context) -> ModuleOp {
+    fn build(&self, context: &Context) -> OpHandle {
         let integer = IntegerType::new(context, 64);
         let boolean = IntegerType::new(context, 1);
         let parameters = [
@@ -278,10 +281,13 @@ impl Program {
             Default::default(),
             entry.end(),
         )
-        .result();
-        let fuel = b::constant(context, FUEL, integer, Default::default(), entry.end()).result();
-        let spent = b::constant(context, 1, integer, Default::default(), entry.end()).result();
-        let empty = b::constant(context, 0, integer, Default::default(), entry.end()).result();
+        .value_results()[0];
+        let fuel =
+            b::constant(context, FUEL, integer, Default::default(), entry.end()).value_results()[0];
+        let spent =
+            b::constant(context, 1, integer, Default::default(), entry.end()).value_results()[0];
+        let empty =
+            b::constant(context, 0, integer, Default::default(), entry.end()).value_results()[0];
         cb::br(
             context,
             vec![seed, fuel],
@@ -343,14 +349,14 @@ impl Program {
                 Default::default(),
                 block.end(),
             )
-            .result();
+            .value_results()[0];
             // A backward edge burns fuel; once it is out, only the forward edge
             // is taken, so the program halts however tangled the graph is.
             let (condition, backward) = match left <= index {
                 true => (remaining, empty),
                 false => (value, seed),
             };
-            let condition = b::CmpIOp::new(
+            let condition = b::cmpi(
                 context,
                 condition,
                 backward,
@@ -359,7 +365,7 @@ impl Program {
                 Default::default(),
                 block.end(),
             )
-            .result();
+            .value_results()[0];
             cb::cond_br(
                 context,
                 condition,
@@ -381,11 +387,11 @@ impl Program {
             tir::InsertionPoint::Root,
         );
         let module = b::module(context, None, Default::default(), tir::InsertionPoint::Root);
-        (module.body())
+        (b::module_body(&module))
             .context
-            .insert(module.body().end(), func.id());
-        module.body().context.insert(
-            module.body().end(),
+            .insert(b::module_body(&module).end(), func.id());
+        b::module_body(&module).context.insert(
+            b::module_body(&module).end(),
             b::module_end(context, Default::default(), tir::InsertionPoint::Root).id(),
         );
         module

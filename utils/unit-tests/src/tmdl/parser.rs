@@ -54,7 +54,7 @@ instruction HSum for [Test] {
 #[test]
 fn functional_pipeline_lowers_and_executes() {
     let generated = generate_source("hsum.tmdl", HSUM, "test");
-    let offset = generated.offset_after("impl tir::sem::AsSemExpr for HSumOp");
+    let offset = generated.offset_after("fn __tir_hsum_machine_semantic(");
     let ops = decode_sem_ops(&generated.blob, offset, &generated.kinds);
 
     let symbol_ids: Vec<u32> = ops

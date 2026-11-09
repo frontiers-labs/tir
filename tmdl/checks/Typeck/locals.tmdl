@@ -32,5 +32,5 @@ instruction Log2OfRegister for [Test] {
     behavior { rd = rs1 - log2Ceil(rs2); }
 }
 
-// CHECK-DAG: LocalBindingOp
-// CHECK-DAG: Log2OfRegisterOp
+// CHECK-DAG: pub static LOCALBINDING: tir::OpDefSpec
+// CHECK-DAG: pub static LOG2REG: tir::OpDefSpec

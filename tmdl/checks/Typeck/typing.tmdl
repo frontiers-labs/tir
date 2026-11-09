@@ -117,11 +117,11 @@ instruction WidthOfLet for [Test] : RegReg {
 // SMT-DAG: (ite (= ((_ sign_extend 24) ((_ extract 7 0) (read_gpr st rs1))) (read_gpr st rs1))
 
 // CHECK-DAG: SymKind::Extract
-// CHECK-DAG: TruncByteOp
-// CHECK-DAG: AddOneOp
-// CHECK-DAG: LetTypedOp
-// CHECK-DAG: WidenLetOp
+// CHECK-DAG: pub static TRUNCBYTE: tir::OpDefSpec
+// CHECK-DAG: pub static ADDONE: tir::OpDefSpec
+// CHECK-DAG: pub static LETTYPED: tir::OpDefSpec
+// CHECK-DAG: pub static WIDENLET: tir::OpDefSpec
 // CHECK-DAG: RegAttrIndex("rs1")
-// CHECK-DAG: SextByteOp
-// CHECK-DAG: FitsGuardOp
-// CHECK-DAG: WidthOfLetOp
+// CHECK-DAG: pub static SEXTBYTE: tir::OpDefSpec
+// CHECK-DAG: pub static FITSGUARD: tir::OpDefSpec
+// CHECK-DAG: pub static WIDTHOFLET: tir::OpDefSpec

@@ -1,0 +1,28 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type fp = Dialect;
+
+type round_attributes = Record<{ contract: AttrEvaluationContract }>;
+extern fn round_verifier(operation: Operation, context: Context) -> Validation;
+extern let round_iface_RegionBinding: Interface;
+extern let round_iface_ResourceEffects: Interface;
+extern fn round_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn round_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern let fence_iface_Interp: Interface;
+extern let fence_iface_SameOperandAndResultType: Interface;
+
+pub let fp::round = {
+    signature: (captures: Many<Any>) -> (results: Many<Any>,),
+    attributes: { contract: { ty: AttrEvaluationContract, codec: evaluationcontract_codec } },
+    verify: round_verifier,
+    interfaces: [round_iface_RegionBinding, round_iface_ResourceEffects],
+    regions: { reference: { kind: RegionKind::Nodes(), variadic: false } },
+    assembly: { print: round_printer, parse: round_parser },
+};
+
+pub let fp::fence<E: Nat, M: Nat> = {
+    signature: (input: Float<E, M>) -> Float<E, M>,
+    interfaces: [fence_iface_Interp, fence_iface_SameOperandAndResultType],
+};

@@ -36,11 +36,6 @@ tmdl/src/json/expr.rs::from tmdl/src/json.rs::from
 # required fusion counters, stage groups and micro-ops from a different model.
 tmdl/src/json.rs::from tmdl/src/json.rs::from
 
-# ForOp, WhileOp and DoOp parse different operation schemas and region orders:
-# cond/step/body, cond/body, and body/cond. Existing label and region helpers
-# already share the common parsing; their typed builders remain distinct.
-fcc/src/cir.rs::custom_parse fcc/src/cir.rs::custom_parse
-
 # These tests check different directive contracts: conjunction of REQUIRES,
 # negated REQUIRES, and negated UNSUPPORTED with the opposite gating result.
 utils/lit/src/lib.rs::requires_multiple_features_is_and utils/lit/src/lib.rs::requires_negation

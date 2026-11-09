@@ -13,14 +13,13 @@ use fcc::diagnostics::{Span, intern_file};
 use fcc::lexer::Token;
 use fcc::parser::parse;
 use fcc::sema::{TypedAst, analyze};
-use tir::builtin::ModuleOp;
-use tir::{Context, Operation};
+use tir::{Context, OpHandle, Operation};
 use tir_bench::{BatchSize, Criterion, criterion_group, criterion_main};
 
 // The analyzed unit and the context its types are interned in, which the unit
 // is generated into.
 type AstInput = (Context, TypedAst);
-type IrInput = (Context, ModuleOp);
+type IrInput = (Context, OpHandle);
 
 fn gen_source(funcs: usize, stmts: usize) -> String {
     let mut src = String::new();

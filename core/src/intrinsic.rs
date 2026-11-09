@@ -7,6 +7,7 @@ use crate::{Context, PassError, TargetEnv};
 /// Implementations use the ordinary [`Context`] rewrite APIs. Successful
 /// expansion must remove the intrinsic, preserve its values and effects, and
 /// produce ordinary operations for the remaining legalization and selection.
+#[tir_macros::operation_interface]
 pub trait Intrinsic {
     fn expand(&self, context: &Context, env: Option<&TargetEnv>) -> Result<(), PassError>;
 }

@@ -1,0 +1,19 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type test = Dialect;
+
+
+
+pub let test::theta = {
+    signature: (inits: Many<Any>) -> (results: Many<Any>,),
+    regions: { body: { kind: RegionKind::Nodes(), variadic: false } },
+    bindings: { kind: BindKind::Theta(), predicate: BindTerm::Region({ name: "body", ports: false, slice: BindSlice::One({ n: false, offset: 0 }) }), chains: [{ name: "carried", terms: [BindTerm::Operands(["inits"]), BindTerm::Region({ name: "body", ports: true, slice: BindSlice::All() }), BindTerm::Region({ name: "body", ports: false, slice: BindSlice::Range({ n: false, offset: 1 }, Optional::Some({ n: true, offset: 1 })) }), BindTerm::Region({ name: "body", ports: false, slice: BindSlice::Range({ n: true, offset: 1 }, Optional::None()) }), BindTerm::Results(BindSlice::All())] }] },
+};
+
+pub let test::gamma = {
+    signature: (predicate: AnyInt, inputs: Many<Any>) -> (results: Many<Any>,),
+    regions: { arms: { kind: RegionKind::Nodes(), variadic: true } },
+    bindings: { kind: BindKind::Gamma(), predicate: BindTerm::Operands(["predicate"]), chains: [{ name: "forwarded", terms: [BindTerm::Operands(["inputs"]), BindTerm::Region({ name: "arms", ports: true, slice: BindSlice::All() })] }, { name: "joined", terms: [BindTerm::Region({ name: "arms", ports: false, slice: BindSlice::All() }), BindTerm::Results(BindSlice::All())] }] },
+};

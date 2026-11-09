@@ -1,0 +1,30 @@
+pub extern type TypeDefinitions;
+pub enum Kind { Data, Ghost, Nat, Sym, Bool };
+pub enum Param { One(Kind), Opt(Kind), List(Kind), Fields, Any };
+pub extern type Terms;
+pub extern type TypeArgs;
+pub extern type Validation;
+pub extern type Carrier;
+pub extern type Context;
+pub extern type CtorId;
+pub extern type Mnemonic;
+pub extern type Parser;
+pub extern type ParseResult;
+pub extern type Spellings;
+pub extern type TypeId;
+pub extern type Formatter;
+pub extern type PrintResult;
+pub type ConstructorSpec = Record<{
+    dialect: String, name: String,
+    params: List<Record<{ name: String, param: Param }>>,
+    kind: Kind,
+    validate: (terms: Terms, args: TypeArgs) -> Validation,
+    carrier: (terms: Terms, args: TypeArgs) -> Carrier,
+}>;
+pub type SpellingSpec = Record<{
+    ctor_id: (context: Context) -> CtorId,
+    keys: List<String>,
+    parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult,
+    print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult,
+    variadic_tail: Bool,
+}>;

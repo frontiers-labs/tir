@@ -15,7 +15,7 @@ fn canonical_nan_arithmetic_folds_to_the_canonical_payload() {
     let ty = FloatType::f64(&context);
     let lhs = context.create_value(ty, None);
     let rhs = context.create_value(ty, None);
-    let op = ops::AddOp::new(
+    let op = ops::add(
         &context,
         lhs.id(),
         rhs.id(),
@@ -56,7 +56,7 @@ fn rounded_float_conversion_folds_to_its_numeric_value() {
     let context = Context::with_default_dialects();
     let input_type = FloatType::f64(&context);
     let input = context.create_value(input_type, None);
-    let op = ops::ConvertOp::new(
+    let op = ops::convert(
         &context,
         input.id(),
         tir::attributes::AttributeValue::FpSemantics(context.intern_fp_semantics(
@@ -92,7 +92,7 @@ fn canonical_nan_float_conversion_folds_to_the_canonical_payload() {
     let context = Context::with_default_dialects();
     let input_type = FloatType::f64(&context);
     let input = context.create_value(input_type, None);
-    let op = ops::ConvertOp::new(
+    let op = ops::convert(
         &context,
         input.id(),
         tir::attributes::AttributeValue::FpSemantics(context.intern_fp_semantics(
@@ -134,7 +134,7 @@ fn rounded_integer_conversion_folds_to_its_numeric_value() {
     let context = Context::with_default_dialects();
     let input_type = FloatType::f64(&context);
     let input = context.create_value(input_type, None);
-    let op = ops::ToSiOp::new(
+    let op = ops::to_si(
         &context,
         input.id(),
         tir::attributes::AttributeValue::FpSemantics(context.intern_fp_semantics(
@@ -173,7 +173,7 @@ fn fixed_fp_ops_fold_via_exact_semantics() {
     let f32_ty = FloatType::f32(&context);
     let lhs = context.create_value(f32_ty, None);
     let rhs = context.create_value(f32_ty, None);
-    let op = ops::MulOp::new(
+    let op = ops::mul(
         &context,
         lhs.id(),
         rhs.id(),
@@ -209,7 +209,7 @@ fn preserve_payload_arithmetic_exposes_an_exact_bit_observation() {
     let ty = FloatType::f64(&context);
     let lhs = context.create_value(ty, None);
     let rhs = context.create_value(ty, None);
-    let op = ops::AddOp::new(
+    let op = ops::add(
         &context,
         lhs.id(),
         rhs.id(),
@@ -230,11 +230,7 @@ fn preserve_payload_arithmetic_exposes_an_exact_bit_observation() {
     );
 
     let mut graph = SemGraph::new();
-    let root = context
-        .get_op(op.id())
-        .as_dyn_op()
-        .semantic_expr(&mut graph)
-        .unwrap();
+    let root = context.get_op(op.id()).semantic_expr(&mut graph).unwrap();
     assert_eq!(*graph.get_node(root), SymKind::AsFloat);
     let bits = graph.children(root).next().unwrap();
     assert_eq!(*graph.get_node(bits), SymKind::Bitcast);

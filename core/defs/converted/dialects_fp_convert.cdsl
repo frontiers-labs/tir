@@ -1,0 +1,81 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type fp = Dialect;
+
+type convert_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn convert_exec_model<StateResources>(self: convert_attributes, input: AnyFloat, state: States<StateResources>) -> (result: AnyFloat, state: States<StateResources>,);
+extern fn convert_verifier(operation: Operation, context: Context) -> Validation;
+extern let convert_iface_ResourceEffects: Interface;
+extern let convert_iface_HasResourceSemantics: Interface;
+extern let convert_iface_Speculatable: Interface;
+extern let convert_iface_Interp: Interface;
+type from_si_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn from_si_exec_model<StateResources>(self: from_si_attributes, input: AnyInt, state: States<StateResources>) -> (result: AnyFloat, state: States<StateResources>,);
+extern fn from_si_verifier(operation: Operation, context: Context) -> Validation;
+extern let from_si_iface_ResourceEffects: Interface;
+extern let from_si_iface_HasResourceSemantics: Interface;
+extern let from_si_iface_Speculatable: Interface;
+extern let from_si_iface_Interp: Interface;
+type from_ui_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn from_ui_exec_model<StateResources>(self: from_ui_attributes, input: AnyInt, state: States<StateResources>) -> (result: AnyFloat, state: States<StateResources>,);
+extern fn from_ui_verifier(operation: Operation, context: Context) -> Validation;
+extern let from_ui_iface_ResourceEffects: Interface;
+extern let from_ui_iface_HasResourceSemantics: Interface;
+extern let from_ui_iface_Speculatable: Interface;
+extern let from_ui_iface_Interp: Interface;
+type to_si_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn to_si_exec_model<StateResources>(self: to_si_attributes, input: AnyFloat, state: States<StateResources>) -> (result: AnyInt, state: States<StateResources>,);
+extern fn to_si_verifier(operation: Operation, context: Context) -> Validation;
+extern let to_si_iface_ResourceEffects: Interface;
+extern let to_si_iface_HasResourceSemantics: Interface;
+extern let to_si_iface_Speculatable: Interface;
+extern let to_si_iface_Interp: Interface;
+type to_ui_attributes = Record<{ semantics: AttrFpSemantics }>;
+extern fn to_ui_exec_model<StateResources>(self: to_ui_attributes, input: AnyFloat, state: States<StateResources>) -> (result: AnyInt, state: States<StateResources>,);
+extern fn to_ui_verifier(operation: Operation, context: Context) -> Validation;
+extern let to_ui_iface_ResourceEffects: Interface;
+extern let to_ui_iface_HasResourceSemantics: Interface;
+extern let to_ui_iface_Speculatable: Interface;
+extern let to_ui_iface_Interp: Interface;
+
+pub let fp::convert<StateResources> = {
+    signature: (input: AnyFloat, state: States<StateResources>) -> (result: AnyFloat, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: convert_exec_model<StateResources>,
+    verify: convert_verifier,
+    interfaces: [convert_iface_ResourceEffects, convert_iface_HasResourceSemantics, convert_iface_Speculatable, convert_iface_Interp],
+};
+
+pub let fp::from_si<StateResources> = {
+    signature: (input: AnyInt, state: States<StateResources>) -> (result: AnyFloat, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: from_si_exec_model<StateResources>,
+    verify: from_si_verifier,
+    interfaces: [from_si_iface_ResourceEffects, from_si_iface_HasResourceSemantics, from_si_iface_Speculatable, from_si_iface_Interp],
+};
+
+pub let fp::from_ui<StateResources> = {
+    signature: (input: AnyInt, state: States<StateResources>) -> (result: AnyFloat, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: from_ui_exec_model<StateResources>,
+    verify: from_ui_verifier,
+    interfaces: [from_ui_iface_ResourceEffects, from_ui_iface_HasResourceSemantics, from_ui_iface_Speculatable, from_ui_iface_Interp],
+};
+
+pub let fp::to_si<StateResources> = {
+    signature: (input: AnyFloat, state: States<StateResources>) -> (result: AnyInt, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: to_si_exec_model<StateResources>,
+    verify: to_si_verifier,
+    interfaces: [to_si_iface_ResourceEffects, to_si_iface_HasResourceSemantics, to_si_iface_Speculatable, to_si_iface_Interp],
+};
+
+pub let fp::to_ui<StateResources> = {
+    signature: (input: AnyFloat, state: States<StateResources>) -> (result: AnyInt, state: States<StateResources>,),
+    attributes: { semantics: { ty: AttrFpSemantics, codec: fpsemantics_codec } },
+    exec: to_ui_exec_model<StateResources>,
+    verify: to_ui_verifier,
+    interfaces: [to_ui_iface_ResourceEffects, to_ui_iface_HasResourceSemantics, to_ui_iface_Speculatable, to_ui_iface_Interp],
+};

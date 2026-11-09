@@ -3,14 +3,11 @@ use tir::BlockHandle;
 use tir::RegionHandle;
 
 use tir::attributes::AttributeValue;
-use tir::{
-    BlockId, InsertionPoint, NewOpParts, Operation,
-    builtin::{ModuleEndOp, ModuleOp},
-    parse::tokens::Parser,
-};
+use tir::{BlockId, InsertionPoint, NewOpParts, builtin::module_body, parse::tokens::Parser};
 
 use crate::backend::{
-    LiteralOp, MachineInstruction, SectionOp, SymbolEndOp, SymbolOp, lex, lexer::Token,
+    MachineInstruction, lex, lexer::Token, literal, section, section_body, symbol, symbol_body,
+    symbol_end,
 };
 
 pub type AsmInstructionParser =
@@ -42,19 +39,20 @@ impl AsmParser {
     }
 
     #[allow(clippy::result_unit_err)]
-    pub fn parse_asm(&self, context: &tir::Context, src: &str) -> Result<ModuleOp, ()> {
-        let module = ModuleOp::new(context, None, Default::default(), InsertionPoint::Root);
+    pub fn parse_asm(&self, context: &tir::Context, src: &str) -> Result<crate::OpHandle, ()> {
+        let module =
+            tir::builtin::r#module(context, None, Default::default(), InsertionPoint::Root);
 
         let tokens = lex(src)?;
 
         let mut parser = Parser::new(&tokens);
 
-        let module_body = module.body();
-        let section_op = SectionOp::new(context, None, Default::default(), module_body.end());
-        ModuleEndOp::new(context, Default::default(), module_body.end());
-        let section_body = section_op.body();
+        let module_block = module_body(&module);
+        let section_op = section(context, None, Default::default(), module_block.end());
+        tir::builtin::r#module_end(context, Default::default(), module_block.end());
+        let section_block = section_body(&section_op);
         let mut insertion = InsertionPoint::Block {
-            block: section_body.id(),
+            block: section_block.id(),
             position: 0,
         };
 
@@ -76,7 +74,7 @@ impl AsmParser {
                     let name = parser.bump();
                     match name {
                         Some(Token::Ident(name)) => {
-                            let global_op = SymbolOp::new(
+                            let global_op = symbol(
                                 context,
                                 None,
                                 NewOpParts {
@@ -86,18 +84,21 @@ impl AsmParser {
                                     )],
                                 },
                                 InsertionPoint::Block {
-                                    block: section_body.id(),
+                                    block: section_block.id(),
                                     position: 0,
                                 },
                             );
-                            SymbolEndOp::new(context, Default::default(), global_op.body().end());
+                            symbol_end(context, Default::default(), symbol_body(&global_op).end());
                             insertion = InsertionPoint::Block {
-                                block: global_op.body().id(),
+                                block: symbol_body(&global_op).id(),
                                 position: 0,
                             };
 
-                            cur_region = global_op.regions().next();
-                            cur_entry = Some(global_op.body());
+                            cur_region = global_op
+                                .regions()
+                                .first()
+                                .map(|&region| context.get_region(region));
+                            cur_entry = Some(symbol_body(&global_op));
                             at_entry = true;
                             block_has_content = false;
                             entry_named = false;
@@ -147,7 +148,7 @@ impl AsmParser {
                                 Some(Token::HexNumber(n)) => parse_hex(n)?,
                                 _ => return Err(()),
                             };
-                            LiteralOp::new(
+                            literal(
                                 context,
                                 AttributeValue::Str(kind.into()),
                                 NewOpParts {
@@ -167,7 +168,7 @@ impl AsmParser {
                             let Some(Token::StringLit(value)) = parser.bump() else {
                                 return Err(());
                             };
-                            LiteralOp::new(
+                            literal(
                                 context,
                                 AttributeValue::Str(kind.into()),
                                 NewOpParts {
@@ -231,7 +232,7 @@ impl AsmParser {
         }
 
         if !labels.is_empty() {
-            resolve_labels(context, &module.body(), &labels);
+            resolve_labels(context, &module_body(&module), &labels);
         }
 
         Ok(module)

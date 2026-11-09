@@ -57,8 +57,8 @@ instruction Add for [TestIsa] : Binary {
     let child = fs::read_to_string(dir.join("arithmetic.rs")).unwrap();
     assert!(root.contains("mod arithmetic"));
     assert!(root.contains("include!(\"arithmetic.rs\")"));
-    assert!(!root.contains("operation! {\n    AddOp"));
-    assert!(child.contains("operation! {\n    AddOp"));
+    assert!(!root.contains("pub static ADD"));
+    assert!(child.contains("pub static ADD"));
 
     fs::remove_dir_all(dir).unwrap();
 }

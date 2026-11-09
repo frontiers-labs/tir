@@ -458,6 +458,7 @@ impl InstrInfo {
     }
 }
 
+#[tir_macros::operation_interface]
 pub trait MachineInstruction {
     fn info(&self) -> &'static InstrInfo;
     fn instance(&self) -> &tir::OpHandle;
@@ -492,15 +493,70 @@ pub trait MachineInstruction {
     }
 }
 
+/// Resource effects from instruction metadata and its explicit FP environment effect.
+pub fn machine_resource_effects(
+    operation: &tir::OpHandle,
+    reads_memory: bool,
+    writes_memory: bool,
+    fp_environment: bool,
+) -> Vec<tir::ResourceEffect> {
+    let effect = |resource, access| tir::ResourceEffect {
+        resource,
+        access,
+        observed: operation
+            .state_operands()
+            .into_iter()
+            .filter(|value| {
+                operation
+                    .context
+                    .state_resource(operation.context.get_value(*value).ty())
+                    == Some(resource)
+            })
+            .collect(),
+        produced: operation
+            .state_results()
+            .into_iter()
+            .filter(|value| {
+                operation
+                    .context
+                    .state_resource(operation.context.get_value(*value).ty())
+                    == Some(resource)
+            })
+            .collect(),
+    };
+    let mut effects = Vec::new();
+    if reads_memory || writes_memory {
+        effects.push(effect(
+            tir::builtin::StateResource::Memory,
+            if writes_memory {
+                tir::ResourceAccess::Change
+            } else {
+                tir::ResourceAccess::Read
+            },
+        ));
+    }
+    if fp_environment {
+        effects.push(effect(
+            tir::builtin::StateResource::FpEnv,
+            tir::ResourceAccess::Change,
+        ));
+    }
+    effects
+}
+
 /// Print instruction data as SSA and physical operands as assembly attributes.
-pub fn print_machine_op<T: tir::Operation + MachineInstruction>(
+pub fn print_machine_op(
     fmt: &mut tir::IRFormatter,
-    op: &T,
+    op: &tir::OpHandle,
 ) -> Result<(), std::fmt::Error> {
-    let handle = op.handle();
+    let handle = op;
+    let info = op
+        .clone()
+        .as_interface::<dyn MachineInstruction>()
+        .map(|instruction| instruction.info());
     let context = &handle.context;
     tir::region_format::print_result_prefix(fmt, handle)?;
-    fmt.write(format!("{}.{}", T::dialect(), T::name()))?;
+    fmt.write(format!("{}.{}", op.dialect(), op.name()))?;
     let values = handle.value_operands();
     if !values.is_empty() {
         fmt.write(" ")?;
@@ -530,7 +586,7 @@ pub fn print_machine_op<T: tir::Operation + MachineInstruction>(
         fmt.write(format!("{name} = "))?;
         match &attr.value {
             AttributeValue::Register(RegisterAttr::Physical { class, index })
-                if op.info().asm.is_some_and(|desc| {
+                if info.and_then(|info|info.asm).is_some_and(|desc| {
                     desc.parse.iter().any(|step| {
                         matches!(step, asm_desc::ParseStep::Register(field, expected, _) if *field == name && expected == class)
                     })
@@ -549,11 +605,12 @@ pub fn print_machine_op<T: tir::Operation + MachineInstruction>(
 }
 
 /// Parse the instruction-specific IR syntax emitted by [`print_machine_op`].
-pub fn parse_machine_op<T: tir::Operation>(
+pub fn parse_machine_op(
     parser: &mut tir::parse::text::Parser,
     context: &tir::Context,
+    definition: &'static tir::OpDefSpec,
     info: &InstrInfo,
-) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
+) -> Result<tir::OpHandle, (tir::parse::Span, tir::Error)> {
     let mut operands = Vec::new();
     while let Some(name) = parser.parse_value_ref() {
         operands.push(parser.resolve_value(context, name));
@@ -598,18 +655,19 @@ pub fn parse_machine_op<T: tir::Operation>(
         })?
         .unwrap_or_default();
     let segments = context.intern("operand_segment_sizes");
-    if !attributes.iter().any(|attr| attr.name == segments)
-        && let Some(schema) = crate::OP_SCHEMAS
+    if !attributes.iter().any(|attr| attr.name == segments) {
+        let sizes = definition
+            .schema
+            .operands
             .iter()
-            .find(|s| s.dialect == T::dialect() && s.name == T::name())
-    {
-        let sizes = schema.operands.iter().enumerate().map(|(index, field)| {
-            UInt(if field.variadic {
-                (operands.len() - value_count) as u64
-            } else {
-                u64::from(index < value_count)
-            })
-        });
+            .enumerate()
+            .map(|(index, field)| {
+                UInt(if field.variadic {
+                    (operands.len() - value_count) as u64
+                } else {
+                    u64::from(index < value_count)
+                })
+            });
         attributes.push(NamedAttribute::new(segments, Array(sizes.collect())));
     }
     let mut results = Vec::new();
@@ -624,16 +682,17 @@ pub fn parse_machine_op<T: tir::Operation>(
             }
         }
     }
-    Ok(T::from_op_instance_dyn(context.add_operation(
+    Ok(context.add_operation(
         tir::InsertionPoint::Root,
-        tir::NewOp::new::<T>(
+        tir::NewOp::for_definition(
+            definition,
             context.clone(),
             operands,
             results,
             Vec::new(),
             tir::NewOpParts { attributes },
         ),
-    )))
+    ))
 }
 
 /// Hand `new` the state ports `old` carried, so a lowering that replaces one
@@ -672,9 +731,9 @@ pub fn put_on_chain(
 /// chain, a merge of several, or the re-naming of a merge. They carry the
 /// mid-end's memory order into machine IR and assemble to nothing.
 pub fn names_memory_state(op: &tir::OpHandle) -> bool {
-    op.is::<tir::state::EntryStateOp>()
-        || op.is::<tir::state::JoinOp>()
-        || op.is::<tir::state::SplitOp>()
+    op.is_operation(&tir::state::ENTRY_STATE)
+        || op.is_operation(&tir::state::JOIN)
+        || op.is_operation(&tir::state::SPLIT)
 }
 
 fn print_register(
@@ -691,11 +750,8 @@ fn print_register(
 /// Print a virtual branch/terminator op for debugging: its mnemonic, operands as
 /// `%N`, then each block-reference attribute as `^bbN`. Shared by the targets'
 /// virtual branch ops so successor formatting is not duplicated per target.
-pub fn print_branch<T: tir::Operation>(
-    fmt: &mut tir::IRFormatter,
-    op: &T,
-) -> Result<(), std::fmt::Error> {
-    fmt.write(format!("{}.{}", T::dialect(), T::name()))?;
+pub fn print_branch(fmt: &mut tir::IRFormatter, op: &tir::OpHandle) -> Result<(), std::fmt::Error> {
+    fmt.write(format!("{}.{}", op.dialect(), op.name()))?;
     for (i, value) in op.operands().iter().enumerate() {
         fmt.write(if i == 0 { " " } else { ", " })?;
         fmt.write(format!("%{}", value.number()))?;
@@ -714,7 +770,7 @@ pub fn print_branch<T: tir::Operation>(
 /// branch selection); the virtual branch op carries its `dest` the same way. A
 /// register-indirect or return transfer references no block and so has no static
 /// successors. Shared by the generated `Terminator` impls.
-pub fn branch_successors(op: &dyn tir::Operation) -> Vec<tir::BlockId> {
+pub fn branch_successors(op: &tir::OpHandle) -> Vec<tir::BlockId> {
     op.attributes()
         .iter()
         .filter_map(|attr| match &attr.value {
@@ -740,7 +796,7 @@ pub(crate) fn fallthrough_branch(
                     && instruction.info().effects == MemoryEffects::NONE
                     && registers.defs.is_empty()
                     && registers.phys_defs.is_empty()
-                    && branch_successors(op.as_dyn_op().as_ref()) == [next])
+                    && branch_successors(&op) == [next])
                 .then_some(op_id);
             }
             _ => return None,
@@ -750,14 +806,14 @@ pub(crate) fn fallthrough_branch(
 }
 
 /// The IEEE-754 bit pattern of an `fp.constant` f64.
-pub fn f64_constant_bits(context: &tir::Context, op: &crate::fp::ops::ConstantOp) -> Option<i64> {
-    let ty = context.get_value(op.result()).ty();
+pub fn f64_constant_bits(context: &tir::Context, op: &crate::OpHandle) -> Option<i64> {
+    let ty = context.get_value(op.results()[0]).ty();
     let is_f64 =
         crate::builtin::FloatType::view(context, ty).is_some_and(|float| float.bit_width() == 64);
     if !is_f64 {
         return None;
     }
-    Some(op.bits() as i64)
+    Some(crate::fp::constant_bits(op) as i64)
 }
 
 pub fn int_attr(op: &impl tir::Operation, name: &str) -> Option<i64> {
@@ -785,7 +841,7 @@ pub enum AsmItem {
     /// Notation, not code: a terminator, a memory-state name, a type
     /// definition, or a declaration resolved at link time.
     Skip,
-    Section(SectionOp),
+    Section(tir::OpHandle),
     Symbol,
     Literal,
     DataReloc,
@@ -793,30 +849,30 @@ pub enum AsmItem {
 }
 
 pub fn asm_item(op: &tir::OpHandle) -> AsmItem {
-    if op.is::<crate::builtin::ModuleEndOp>()
-        || op.is::<SectionEndOp>()
-        || op.is::<SymbolEndOp>()
-        || op.is::<BlockEndOp>()
+    if op.is_operation(&crate::builtin::MODULE_END)
+        || op.is_operation(&SECTION_END)
+        || op.is_operation(&SYMBOL_END)
+        || op.is_operation(&BLOCK_END)
         || names_memory_state(op)
-        || op.is::<crate::func::DeclareOp>()
-        || op.is::<crate::builtin::TypeDefOp>()
+        || op.is_operation(&crate::func::DECLARE)
+        || op.is_operation(&crate::builtin::DEF)
         || op
             .clone()
-            .as_op::<crate::builtin::GlobalOp>()
-            .is_some_and(|global| global.is_external())
+            .as_operation(&crate::builtin::GLOBAL)
+            .is_some_and(|global| crate::builtin::global_is_external(&global))
     {
         return AsmItem::Skip;
     }
-    if let Some(section) = op.clone().as_op::<SectionOp>() {
+    if let Some(section) = op.clone().as_operation(&SECTION) {
         return AsmItem::Section(section);
     }
-    if op.is::<SymbolOp>() {
+    if op.is_operation(&SYMBOL) {
         return AsmItem::Symbol;
     }
-    if op.is::<LiteralOp>() {
+    if op.is_operation(&LITERAL) {
         return AsmItem::Literal;
     }
-    if op.is::<DataRelocOp>() {
+    if op.is_operation(&DATA_RELOC) {
         return AsmItem::DataReloc;
     }
     AsmItem::Instruction
@@ -842,19 +898,19 @@ dialect! {
     AsmDialect {
         name: "asm",
         operations: [
-            SectionOp,
-            SectionEndOp,
-            SymbolOp,
-            SymbolEndOp,
-            LiteralOp,
-            DataRelocOp,
-            SymbolAddressOp,
-            BlockEndOp,
-            VirtualReturnOp,
-            VirtualBranchOp,
-            ParallelCopyOp,
-            VirtualCallOp,
-            VirtualIndirectCallOp,
+            SECTION,
+            SECTION_END,
+            SYMBOL,
+            SYMBOL_END,
+            LITERAL,
+            DATA_RELOC,
+            SYMBOL_ADDRESS,
+            BLOCK_END,
+            VRET,
+            VBR,
+            PCOPY,
+            VCALL,
+            VCALL_INDIRECT,
         ],
     }
 }
@@ -863,12 +919,12 @@ pub fn emit_uncond_branch(
     context: &tir::Context,
     dest: tir::BlockId,
     args: &[tir::ValueId],
-) -> Box<dyn tir::Operation> {
-    Box::new(VirtualBranchOp::new(
+) -> tir::OpHandle {
+    r#vbr(
         context,
         args.to_vec(),
         tir::attributes::AttributeValue::Block(dest),
         Default::default(),
         tir::InsertionPoint::Root,
-    ))
+    )
 }

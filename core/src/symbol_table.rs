@@ -15,7 +15,7 @@ use tir_adt::IndexMap;
 
 use crate::analysis::{Analysis, AnalysisManager};
 use crate::attributes::AttributeValue;
-use crate::builtin::{NamedType, TypeDefOp};
+use crate::builtin::{self, DEF, NamedType};
 use crate::ty::TypeArg;
 use crate::{Context, OpId, Operation, Symbol, TypeId, Visibility};
 
@@ -102,17 +102,16 @@ impl SymbolTable {
     }
 
     /// The `type.def` called `!name`.
-    pub fn type_definition(&self, context: &Context, name: &str) -> Option<TypeDefOp> {
+    pub fn type_definition(&self, context: &Context, name: &str) -> Option<crate::OpHandle> {
         let entry = self.lookup(&format!("!{name}")).first()?;
-        context.get_op(entry.op).as_op::<TypeDefOp>()
+        context.get_op(entry.op).as_operation(&DEF)
     }
 
     /// The body `ty` stands for, when it is a named type with a complete
     /// definition here.
     pub fn expand(&self, context: &Context, ty: TypeId) -> Option<TypeId> {
         let named = NamedType::view(context, ty)?;
-        self.type_definition(context, named.name())?
-            .expand(named.args())
+        builtin::def_expand(&self.type_definition(context, named.name())?, named.args())
     }
 
     fn verify_type_definitions(&self, context: &Context) -> Result<(), crate::Error> {
@@ -120,10 +119,10 @@ impl SymbolTable {
             let Some(name) = name.strip_prefix('!') else {
                 continue;
             };
-            let Some(definition) = context.get_op(entries[0].op).as_op::<TypeDefOp>() else {
+            let Some(definition) = context.get_op(entries[0].op).as_operation(&DEF) else {
                 continue;
             };
-            let Some(body) = definition.body() else {
+            let Some(body) = builtin::def_body(&definition) else {
                 continue;
             };
             let mut error = None;
@@ -139,7 +138,7 @@ impl SymbolTable {
                         error = Some(format!("type `!{name}` contains itself by value"));
                     } else if self
                         .type_definition(context, named.name())
-                        .is_some_and(|inner| inner.body().is_none())
+                        .is_some_and(|inner| builtin::def_body(&inner).is_none())
                     {
                         error = Some(format!(
                             "type `!{name}` holds the incomplete type `!{}` by value",
@@ -175,12 +174,12 @@ pub fn merge_modules(context: &Context, into: OpId, from: OpId) -> Result<(), cr
         context.get_region(region).block_ids()[0]
     };
     let (target, source) = (context.get_block(body(into)), context.get_block(body(from)));
-    let definitions: Vec<(TypeDefOp, TypeDefOp)> = source
+    let definitions: Vec<(crate::OpHandle, crate::OpHandle)> = source
         .op_ids()
         .into_iter()
         .filter_map(|op| {
-            let definition = context.get_op(op).as_op::<TypeDefOp>()?;
-            let existing = table.type_definition(context, &definition.sym_name())?;
+            let definition = context.get_op(op).as_operation(&DEF)?;
+            let existing = table.type_definition(context, &builtin::def_sym_name(&definition))?;
             Some((existing, definition))
         })
         .collect();
@@ -189,18 +188,21 @@ pub fn merge_modules(context: &Context, into: OpId, from: OpId) -> Result<(), cr
         let mut memo = HashMap::new();
         let differing: Vec<String> = definitions
             .iter()
-            .filter(|(_, definition)| !renames.contains_key(&definition.sym_name()))
+            .filter(|(_, definition)| !renames.contains_key(&builtin::def_sym_name(definition)))
             .filter(|(existing, definition)| {
-                let (Some(old), Some(new)) = (existing.body(), definition.body()) else {
+                let (Some(old), Some(new)) =
+                    (builtin::def_body(existing), builtin::def_body(definition))
+                else {
                     return false;
                 };
                 old != rename_type(context, new, &renames, &mut memo)
-                    || existing.params() != definition.params()
-                    || existing.layout_options() != definition.layout_options()
-                    || existing.layout_region().is_some()
-                    || definition.layout_region().is_some()
+                    || builtin::def_params(existing) != builtin::def_params(definition)
+                    || builtin::def_layout_options(existing)
+                        != builtin::def_layout_options(definition)
+                    || builtin::def_layout_region(existing).is_some()
+                    || builtin::def_layout_region(definition).is_some()
             })
-            .map(|(_, definition)| definition.sym_name())
+            .map(|(_, definition)| builtin::def_sym_name(definition))
             .collect();
         if differing.is_empty() {
             break;
@@ -219,12 +221,12 @@ pub fn merge_modules(context: &Context, into: OpId, from: OpId) -> Result<(), cr
     // Parsing `from` gave each shared name its body's kind; a renamed one
     // takes it along, and `into`'s keep their own.
     for (existing, definition) in &definitions {
-        let Some(renamed) = renames.get(&definition.sym_name()) else {
+        let Some(renamed) = renames.get(&builtin::def_sym_name(definition)) else {
             continue;
         };
         for (name, body) in [
-            (renamed.clone(), definition.body()),
-            (existing.sym_name(), existing.body()),
+            (renamed.clone(), builtin::def_body(definition)),
+            (builtin::def_sym_name(existing), builtin::def_body(existing)),
         ] {
             if let Some(body) = body {
                 crate::builtin::define(context, &name, body);
@@ -239,14 +241,15 @@ pub fn merge_modules(context: &Context, into: OpId, from: OpId) -> Result<(), cr
     let mut moved = Vec::new();
     for op in source.op_ids() {
         let instance = context.get_op(op);
-        if instance.is::<crate::builtin::ModuleEndOp>() {
+        if instance.is_operation(&builtin::MODULE_END) {
             continue;
         }
-        if let Some(definition) = instance.as_op::<TypeDefOp>()
-            && let Some(existing) = table.type_definition(context, &definition.sym_name())
-            && !renames.contains_key(&definition.sym_name())
+        if let Some(definition) = instance.as_operation(&DEF)
+            && let Some(existing) =
+                table.type_definition(context, &builtin::def_sym_name(&definition))
+            && !renames.contains_key(&builtin::def_sym_name(&definition))
         {
-            if existing.body().is_some() || definition.body().is_none() {
+            if builtin::def_body(&existing).is_some() || builtin::def_body(&definition).is_none() {
                 erase(op)?;
                 continue;
             }
@@ -280,8 +283,8 @@ fn rename_types_in(context: &Context, roots: &[OpId], renames: &HashMap<String, 
         }
         let renamed = instance
             .clone()
-            .as_op::<TypeDefOp>()
-            .and_then(|definition| renames.get(&definition.sym_name()));
+            .as_operation(&DEF)
+            .and_then(|definition| renames.get(&builtin::def_sym_name(&definition)));
         let attributes = instance
             .attributes()
             .into_iter()

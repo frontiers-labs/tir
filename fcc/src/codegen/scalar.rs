@@ -46,14 +46,14 @@ impl FnCodegen<'_> {
     }
 
     pub(super) fn float_constant(&self, bits: u64, ty: TypeId) -> ValueId {
-        fp::ConstantOp::new(
+        fp::constant(
             self.context,
             tir::attributes::AttributeValue::UInt(bits),
             ty,
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     pub(super) fn float_zero(&self, ty: TypeId) -> ValueId {
@@ -84,7 +84,7 @@ impl FnCodegen<'_> {
             self.builder.end(),
         );
         Slot {
-            ptr: op.result(),
+            ptr: op.results()[0],
             elem,
         }
     }
@@ -103,7 +103,8 @@ impl FnCodegen<'_> {
             {
                 let target = lower_type(self.context, self.typed, target);
                 LoweredExpr::Value(
-                    p::null(self.context, target, Default::default(), self.builder.end()).result(),
+                    p::null(self.context, target, Default::default(), self.builder.end()).results()
+                        [0],
                 )
             } else if matches!(self.typed.types().kind(source), TypeKind::Array(_, _))
                 && matches!(self.typed.types().kind(target), TypeKind::Pointer(_))
@@ -139,7 +140,7 @@ impl FnCodegen<'_> {
         if self.typed.integer_width(source).is_some() && target_floating {
             let target_ty = lower_type(self.context, self.typed, target);
             return if self.typed.integer_is_signed(source) == Some(true) {
-                fp::FromSiOp::new(
+                fp::from_si(
                     self.context,
                     value,
                     tir::attributes::AttributeValue::FpSemantics(self.arithmetic_semantics()),
@@ -149,9 +150,9 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             } else {
-                fp::FromUiOp::new(
+                fp::from_ui(
                     self.context,
                     value,
                     tir::attributes::AttributeValue::FpSemantics(self.arithmetic_semantics()),
@@ -161,13 +162,13 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             };
         }
         if source_floating && let Some(target_width) = self.typed.integer_width(target) {
             let target_ty = lower_type(self.context, self.typed, target);
             return if self.typed.integer_is_signed(target) == Some(true) {
-                fp::ToSiOp::new(
+                fp::to_si(
                     self.context,
                     value,
                     tir::attributes::AttributeValue::FpSemantics(
@@ -179,13 +180,13 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             } else if target_width < 64 {
                 // Every value an unsigned type narrower than 64 bits can hold is
                 // also representable as a signed 64-bit integer, so the truncated
                 // signed conversion is exact and avoids a narrow unsigned conversion.
                 let wide = IntegerType::new(self.context, 64);
-                let converted = fp::ToSiOp::new(
+                let converted = fp::to_si(
                     self.context,
                     value,
                     tir::attributes::AttributeValue::FpSemantics(
@@ -197,7 +198,7 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result();
+                .results()[0];
                 b::trunci(
                     self.context,
                     converted,
@@ -205,9 +206,9 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             } else {
-                fp::ToUiOp::new(
+                fp::to_ui(
                     self.context,
                     value,
                     tir::attributes::AttributeValue::FpSemantics(
@@ -219,7 +220,7 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             };
         }
         if source_floating && target_floating {
@@ -227,7 +228,7 @@ impl FnCodegen<'_> {
             return if self.context.get_value(value).ty() == target_ty {
                 value
             } else {
-                fp::ConvertOp::new(
+                fp::convert(
                     self.context,
                     value,
                     tir::attributes::AttributeValue::FpSemantics(self.arithmetic_semantics()),
@@ -237,7 +238,7 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             };
         }
         if let Some(source_width) = self.typed.integer_width(source)
@@ -279,7 +280,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result(),
+            .results()[0],
             Ordering::Greater => b::extui(
                 self.context,
                 value,
@@ -287,7 +288,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result(),
+            .results()[0],
             Ordering::Less => b::trunci(
                 self.context,
                 value,
@@ -295,7 +296,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result(),
+            .results()[0],
             Ordering::Equal => value,
         }
     }
@@ -319,7 +320,7 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             };
         }
         // A signed `int` or wider overflows only in undefined behavior: the
@@ -341,7 +342,7 @@ impl FnCodegen<'_> {
                 },
                 self.builder.end(),
             )
-            .result(),
+            .results()[0],
             AstKind::Sub | AstKind::SubAssign if nsw => b::subi(
                 self.context,
                 lhs,
@@ -355,7 +356,7 @@ impl FnCodegen<'_> {
                 },
                 self.builder.end(),
             )
-            .result(),
+            .results()[0],
             AstKind::Add | AstKind::AddAssign => bin!(b::addi),
             AstKind::Sub | AstKind::SubAssign => bin!(b::subi),
             AstKind::Mul | AstKind::MulAssign => bin!(b::muli),
@@ -394,7 +395,7 @@ impl FnCodegen<'_> {
             (AstKind::Ne, _) => Predicate::Ne,
             _ => unreachable!(),
         };
-        b::CmpIOp::new(
+        b::cmpi(
             self.context,
             lhs,
             rhs,
@@ -403,7 +404,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     fn pointer_as_address(&mut self, pointer: ValueId) -> ValueId {
@@ -418,7 +419,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     fn address_as_pointer(&mut self, address: ValueId) -> ValueId {
@@ -431,7 +432,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     pub(super) fn null_pointer(&mut self) -> ValueId {
@@ -441,7 +442,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     pub(super) fn lower_pointer_compare(
@@ -450,7 +451,7 @@ impl FnCodegen<'_> {
         lhs: ValueId,
         rhs: ValueId,
     ) -> ValueId {
-        p::CmpOp::new(
+        p::cmp(
             self.context,
             lhs,
             rhs,
@@ -459,7 +460,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     pub(super) fn lower_floating_compare(
@@ -477,7 +478,7 @@ impl FnCodegen<'_> {
             AstKind::Ne => Predicate::Une,
             _ => unreachable!(),
         };
-        fp::CmpOp::new(
+        fp::cmp(
             self.context,
             lhs,
             rhs,
@@ -489,7 +490,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     pub(super) fn lower_floating_binary(
@@ -512,7 +513,7 @@ impl FnCodegen<'_> {
     ) -> ValueId {
         macro_rules! emit {
             ($builder:ident) => {
-                fp::$builder::new(
+                fp::$builder(
                     self.context,
                     lhs,
                     rhs,
@@ -523,14 +524,14 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             };
         }
         match kind {
-            AstKind::Add | AstKind::AddAssign => emit!(AddOp),
-            AstKind::Sub | AstKind::SubAssign => emit!(SubOp),
-            AstKind::Mul | AstKind::MulAssign => emit!(MulOp),
-            AstKind::Div | AstKind::DivAssign => emit!(DivOp),
+            AstKind::Add | AstKind::AddAssign => emit!(add),
+            AstKind::Sub | AstKind::SubAssign => emit!(sub),
+            AstKind::Mul | AstKind::MulAssign => emit!(mul),
+            AstKind::Div | AstKind::DivAssign => emit!(div),
             _ => unreachable!(),
         }
     }
@@ -564,7 +565,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result();
+        .results()[0];
         let offset = b::muli(
             self.context,
             index,
@@ -573,7 +574,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result();
+        .results()[0];
         let offset = if subtract {
             let zero = b::constant(
                 self.context,
@@ -582,7 +583,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result();
+            .results()[0];
             b::subi(
                 self.context,
                 zero,
@@ -591,7 +592,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result()
+            .results()[0]
         } else {
             offset
         };
@@ -603,7 +604,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     pub(super) fn lower_pointer_difference(
@@ -628,7 +629,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result();
+        .results()[0];
         let size = source_type_layout(self.typed, *pointee).0;
         if size != 1 {
             let divisor = b::constant(
@@ -638,7 +639,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result();
+            .results()[0];
             count = b::divsi(
                 self.context,
                 count,
@@ -647,7 +648,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result();
+            .results()[0];
         }
         let result_width = self.typed.integer_width(result_ty).unwrap();
         self.resize(count, pointer_width, result_width, true)
@@ -666,7 +667,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result();
+        .results()[0];
         p::ptradd(
             self.context,
             base,
@@ -675,6 +676,6 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 }

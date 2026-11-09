@@ -4,7 +4,7 @@
 
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
 
-// CHECK-LABEL: impl tir::backend::MachineInstruction for TStoreWritebackOp
+// CHECK-LABEL: static INFO_TSTOREWRITEBACK: tir::backend::InstrInfo
 // CHECK: sources: &[
 // CHECK: effects: &[
 // CHECK: tir::backend::exec::Dest::Reg("rs1")

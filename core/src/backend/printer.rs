@@ -2,11 +2,11 @@ use std::error::Error;
 use std::fmt::{self, Display};
 
 use tir::attributes::AttributeValue;
-use tir::builtin::ModuleOp;
-use tir::{Context, OpHandle, Operation};
+use tir::builtin::module_body;
+use tir::{Context, OpHandle};
 
 use crate::backend::{
-    AsmItem, DataRelocOp, LiteralOp, MachineInstruction, as_int_attr, as_string_attr,
+    AsmItem, DATA_RELOC, LITERAL, MachineInstruction, as_int_attr, as_string_attr, section_body,
     symbol_body_blocks,
 };
 
@@ -73,12 +73,12 @@ impl AsmPrinter {
     pub fn print_module(
         &self,
         context: &Context,
-        module: &ModuleOp,
+        module: &crate::OpHandle,
     ) -> Result<String, AsmPrintError> {
         let mut out = String::new();
         self.print_block(
             context,
-            module.body(),
+            module_body(module),
             &mut out,
             &crate::backend::RegAssignment::default(),
         )?;
@@ -130,7 +130,7 @@ impl AsmPrinter {
                 out.push_str(&name);
                 out.push('\n');
             }
-            self.print_block(context, section.body(), out, assignment)?;
+            self.print_block(context, section_body(&section), out, assignment)?;
             return Ok(());
         }
 
@@ -183,7 +183,7 @@ impl AsmPrinter {
 
         if matches!(item, AsmItem::Literal) {
             let kind = as_string_attr(op.attr("kind")).ok_or(AsmPrintError::UnsupportedOp {
-                op: LiteralOp::name(),
+                op: LITERAL.schema.name,
             })?;
             out.push_str("\t.");
             out.push_str(&kind);
@@ -191,7 +191,7 @@ impl AsmPrinter {
                 "byte" | "half" | "word" | "dword" | "space" => {
                     let value =
                         as_int_attr(op.attr("value")).ok_or(AsmPrintError::UnsupportedOp {
-                            op: LiteralOp::name(),
+                            op: LITERAL.schema.name,
                         })?;
                     out.push(' ');
                     out.push_str(&value.to_string());
@@ -200,7 +200,7 @@ impl AsmPrinter {
                 _ => {
                     let value =
                         as_string_attr(op.attr("value")).ok_or(AsmPrintError::UnsupportedOp {
-                            op: LiteralOp::name(),
+                            op: LITERAL.schema.name,
                         })?;
                     out.push_str(" \"");
                     out.push_str(&escape_asm_string(&value));
@@ -212,7 +212,7 @@ impl AsmPrinter {
 
         if matches!(item, AsmItem::DataReloc) {
             let unsupported = || AsmPrintError::UnsupportedOp {
-                op: DataRelocOp::name(),
+                op: DATA_RELOC.schema.name,
             };
             let symbol = as_string_attr(op.attr("symbol")).ok_or_else(unsupported)?;
             let directive = match as_int_attr(op.attr("width")) {

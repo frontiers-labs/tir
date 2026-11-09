@@ -130,8 +130,8 @@ fn decoder_round_trips_golden_words() {
             .unwrap_or_else(|| panic!("failed to decode {asm} ({w:#010x})"));
         bb.context.insert(bb.end(), id);
     }
-    tir::backend::SymbolEndOp::new(&context, Default::default(), bb.end());
-    let symbol = tir::backend::SymbolOp::new(
+    tir::backend::symbol_end(&context, Default::default(), bb.end());
+    let symbol = tir::backend::symbol(
         &context,
         Some(region.id()),
         tir::NewOpParts {
@@ -144,10 +144,16 @@ fn decoder_round_trips_golden_words() {
     );
     {
         let op = symbol;
-        (module.body()).context.insert(module.body().end(), op.id());
+        (tir::builtin::module_body(&module))
+            .context
+            .insert(tir::builtin::module_body(&module).end(), op.id());
         op
     };
-    tir::builtin::ops::module_end(&context, Default::default(), module.body().end());
+    tir::builtin::ops::module_end(
+        &context,
+        Default::default(),
+        tir::builtin::module_body(&module).end(),
+    );
 
     let writer = tir::backend::binary::BinaryWriter::new();
     let format = target.object_format().unwrap();

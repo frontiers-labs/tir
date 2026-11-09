@@ -1,0 +1,38 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let VEC_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let VEC_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let VL_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let VL_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let VectorType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let VectorType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let VectorType_ctor_id: (context: Context) -> CtorId;
+
+pub let constructors::VEC: ConstructorSpec = {
+    dialect: "vector",
+    name: "v",
+    params: [{ name: "length", param: Param::One(Kind::Nat()) }, { name: "element", param: Param::One(Kind::Data()) }],
+    kind: Kind::Data(),
+    validate: VEC_validate,
+    carrier: VEC_carrier,
+};
+
+pub let constructors::VL: ConstructorSpec = {
+    dialect: "vector",
+    name: "vl",
+    params: [],
+    kind: Kind::Nat(),
+    validate: VL_validate,
+    carrier: VL_carrier,
+};
+
+pub let spellings::VectorType: SpellingSpec = {
+    ctor_id: VectorType_ctor_id,
+    keys: ["vec"],
+    parse: VectorType_parse,
+    print: VectorType_print,
+    variadic_tail: false,
+};

@@ -436,7 +436,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result(),
+            .results()[0],
             _ => {
                 return Err(unsupported(
                     self.ast,

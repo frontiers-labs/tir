@@ -1,0 +1,20 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type builtin = Dialect;
+
+type global_attributes = Record<{ sym_name: String }>;
+extern fn global_verifier(operation: Operation, context: Context) -> Validation;
+extern let global_iface_Symbol: Interface;
+extern let global_iface_Global: Interface;
+extern fn global_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn global_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let builtin::global = {
+    signature: () -> AnyPtr,
+    attributes: { sym_name: { ty: String, codec: str_codec } },
+    verify: global_verifier,
+    interfaces: [global_iface_Symbol, global_iface_Global],
+    assembly: { print: global_printer, parse: global_parser },
+};

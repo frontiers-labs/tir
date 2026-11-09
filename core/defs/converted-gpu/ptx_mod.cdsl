@@ -1,0 +1,12 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type ptx = Dialect;
+
+type label_attributes = Record<{ name: String }>;
+
+pub let ptx::label = {
+    signature: () -> (),
+    attributes: { name: { ty: String, codec: str_codec } },
+};

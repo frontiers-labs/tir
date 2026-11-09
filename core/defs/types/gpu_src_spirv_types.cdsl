@@ -1,0 +1,49 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let POINTER_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let POINTER_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let PointerType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let PointerType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let PointerType_ctor_id: (context: Context) -> CtorId;
+extern let RUNTIME_ARRAY_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let RUNTIME_ARRAY_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let RuntimeArrayType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let RuntimeArrayType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let RuntimeArrayType_ctor_id: (context: Context) -> CtorId;
+
+pub let constructors::POINTER: ConstructorSpec = {
+    dialect: "spirv",
+    name: "ptr",
+    params: [{ name: "pointee", param: Param::One(Kind::Data()) }, { name: "storage_class", param: Param::One(Kind::Sym()) }],
+    kind: Kind::Data(),
+    validate: POINTER_validate,
+    carrier: POINTER_carrier,
+};
+
+pub let spellings::PointerType: SpellingSpec = {
+    ctor_id: PointerType_ctor_id,
+    keys: ["ptr"],
+    parse: PointerType_parse,
+    print: PointerType_print,
+    variadic_tail: false,
+};
+
+pub let constructors::RUNTIME_ARRAY: ConstructorSpec = {
+    dialect: "spirv",
+    name: "rtarray",
+    params: [{ name: "element", param: Param::One(Kind::Data()) }, { name: "stride", param: Param::One(Kind::Nat()) }],
+    kind: Kind::Data(),
+    validate: RUNTIME_ARRAY_validate,
+    carrier: RUNTIME_ARRAY_carrier,
+};
+
+pub let spellings::RuntimeArrayType: SpellingSpec = {
+    ctor_id: RuntimeArrayType_ctor_id,
+    keys: ["rtarray"],
+    parse: RuntimeArrayType_parse,
+    print: RuntimeArrayType_print,
+    variadic_tail: false,
+};

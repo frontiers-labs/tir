@@ -11,8 +11,8 @@ use std::any::Any;
 pub struct OperationName(&'static str);
 
 impl OperationName {
-    pub fn of<T: Operation>() -> Self {
-        Self(T::name())
+    pub const fn new(name: &'static str) -> Self {
+        Self(name)
     }
 
     /// Returns the textual spelling used by IR parsers and printers.
@@ -41,8 +41,8 @@ impl DialectName {
         Self(T::name())
     }
 
-    pub fn of_operation<T: Operation>() -> Self {
-        Self(T::dialect())
+    pub const fn new(name: &'static str) -> Self {
+        Self(name)
     }
 
     /// Returns the textual spelling used by IR parsers and printers.
@@ -68,10 +68,6 @@ pub type OpInterfaceConverter = fn(OpHandle) -> ErasedOpInterface;
 
 struct InterfaceValue<I: ?Sized + 'static>(Box<I>);
 
-pub trait ImplementsOpInterface<I: ?Sized + 'static>: Operation {
-    fn into_interface(self: Box<Self>) -> Box<I>;
-}
-
 pub fn erase_op_interface<I: ?Sized + 'static>(value: Box<I>) -> ErasedOpInterface {
     Box::new(InterfaceValue::<I>(value))
 }
@@ -81,15 +77,6 @@ pub fn downcast_op_interface<I: ?Sized + 'static>(erased: ErasedOpInterface) -> 
         .downcast::<InterfaceValue<I>>()
         .ok()
         .map(|boxed| boxed.0)
-}
-
-pub fn op_interface_converter<Op, I>(instance: OpHandle) -> ErasedOpInterface
-where
-    Op: ImplementsOpInterface<I>,
-    I: ?Sized + 'static,
-{
-    let op = Box::new(Op::from_op_instance(instance));
-    erase_op_interface(ImplementsOpInterface::<I>::into_interface(op))
 }
 
 id_newtype!(OpId);
@@ -108,58 +95,25 @@ id_newtype!(OpId);
 ///
 /// # Example
 ///
-/// Defining and using a custom operation:
+/// Constructing an operation:
 /// ```rust
-/// use tir_macros::operation;
-///
-/// operation! {
-///     BarOp {
-///         name: "bar",
-///         dialect: "foo",
-///         scheme: "() -> ()",
-///     }
-/// }
+/// let context = tir::Context::with_default_dialects();
+/// let module = tir::builtin::module(
+///     &context, None, Default::default(), tir::InsertionPoint::Root,
+/// );
+/// assert!(context.has_operation(module.id));
 /// ```
-///
-/// This macro generates a BarOp structure and constructors taking an insertion point.
 ///
 /// Because all operations implement this trait, generic IR passes can inspect,
 /// transform, or analyze any construct in the IR using the same programming model.
-pub trait Operation: 'static + Any + Verifiable + OpDefVerifiable {
-    fn name() -> &'static str
-    where
-        Self: Sized;
-    fn dialect() -> &'static str
-    where
-        Self: Sized;
-
+pub trait Operation: Verifiable + OpDefVerifiable {
+    fn handle(&self) -> &OpHandle;
     fn id(&self) -> OpId {
         self.handle().id
     }
-
-    /// The handle naming this op's storage. The `operation!` macro wires this to
-    /// the newtype field; most trait methods delegate to it by default so
-    /// generated ops carry no per-op copies of the plumbing.
-    #[doc(hidden)]
-    fn handle(&self) -> &OpHandle;
-
-    fn from_op_instance(instance: OpHandle) -> Self
-    where
-        Self: Sized;
-
-    fn from_op_instance_dyn(instance: OpHandle) -> Box<dyn Operation>
-    where
-        Self: Sized;
-
-    fn into_any(self: Box<Self>) -> Box<dyn Any>;
-
-    fn print<'a, 'b: 'a>(&'a self, fmt: &'a mut IRFormatter<'b>) -> Result<(), std::fmt::Error>;
-    fn parse<'src>(
-        parser: &mut IRParser<'src>,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (Span, Error)>
-    where
-        Self: Sized;
+    fn print<'a, 'b: 'a>(&'a self, fmt: &'a mut IRFormatter<'b>) -> Result<(), std::fmt::Error> {
+        (self.handle().definition().ok_or(std::fmt::Error)?.print)(self.handle(), fmt)
+    }
 
     fn regions(&self) -> ContextIterator<RegionId> {
         let handle = self.handle();
@@ -199,29 +153,23 @@ pub trait Operation: 'static + Any + Verifiable + OpDefVerifiable {
         self.handle().attr(name)
     }
 
-    fn semantic_expr(&self, _g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
-        None
+    fn semantic_expr(&self, g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
+        self.handle()
+            .definition()?
+            .semantic
+            .and_then(|build| build(self.handle(), g))
     }
-
-    /// Where the op yields poison, a one-bit expression over its operands as
-    /// [`Operation::semantic_expr`] reads them: the `poison:` of its
-    /// definition. Poison is deferred undefined behavior; only a use of the
-    /// result is undefined.
-    fn poison_expr(&self, _g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
-        None
+    fn poison_expr(&self, g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
+        self.handle()
+            .definition()?
+            .poison
+            .and_then(|build| build(self.handle(), g))
     }
-
-    /// What must hold for the op to run, a one-bit expression over its
-    /// operands: the `requires:` of its definition. Running it where it fails
-    /// is undefined behavior at once.
-    fn requires_expr(&self, _g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
-        None
-    }
-
-    fn register_interfaces(_context: &Context)
-    where
-        Self: Sized,
-    {
+    fn requires_expr(&self, g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
+        self.handle()
+            .definition()?
+            .requires
+            .and_then(|build| build(self.handle(), g))
     }
 
     fn parent_block(&self) -> Option<BlockId> {
@@ -320,8 +268,27 @@ pub trait OpDefVerifiable {
     fn verify_attributes(&self, context: &Context) -> Result<(), crate::Error>;
 }
 
+/// Parse an operation using its registered definition.
+pub type OpParseFn = for<'src> fn(
+    &mut IRParser<'src>,
+    &Context,
+    &'static OpDefSpec,
+) -> Result<OpHandle, (Span, Error)>;
+/// Verify a registered operation contract.
+pub type OpVerifyFn = fn(&OpHandle, &Context) -> Result<(), Error>;
+/// Build an operation's scalar semantic graph.
+pub type OpSemanticFn = fn(&OpHandle, &mut crate::sem::SemGraph) -> Option<crate::NodeId>;
+/// Resolve a named semantic fragment.
+pub type OpSpliceFn = fn(&OpHandle, &str, &mut crate::sem::SemGraph) -> Option<crate::NodeId>;
+/// Interface identity and its existing erased converter.
+pub type OpInterfaceEntry = (
+    fn() -> std::any::TypeId,
+    fn() -> &'static str,
+    OpInterfaceConverter,
+);
+
 /// Static operand/result specification for [`OpDefVerifiable`], emitted per op by
-/// the `operation!` macro. The verification engine lives in core so a generated
+/// the `op_def!` macro. The verification engine lives in core so a generated
 /// op carries only this table instead of an inlined copy of the engine. Types
 /// are not checked here: the op's scheme is, by [`crate::check_types`].
 pub struct OpDefSpec {
@@ -330,6 +297,15 @@ pub struct OpDefSpec {
     /// what the op actually holds, so an op declaring blocks cannot be handed
     /// an unordered region.
     pub region_kinds: &'static [crate::RegionKind],
+    pub print: fn(&OpHandle, &mut IRFormatter<'_>) -> Result<(), std::fmt::Error>,
+    pub parse: OpParseFn,
+    pub verify: Option<OpVerifyFn>,
+    pub verify_bindings: Option<OpVerifyFn>,
+    pub semantic: Option<OpSemanticFn>,
+    pub poison: Option<OpSemanticFn>,
+    pub requires: Option<OpSemanticFn>,
+    pub splice: Option<OpSpliceFn>,
+    pub interfaces: &'static [OpInterfaceEntry],
 }
 
 fn verify_def_value(
@@ -659,7 +635,8 @@ pub struct NewOp {
 
 impl NewOp {
     /// The op a constructor assembled: its ports, and in `parts` the attributes.
-    pub fn new<T: Operation>(
+    pub fn for_definition(
+        definition: &'static OpDefSpec,
         context: Context,
         operands: Vec<ValueId>,
         results: Vec<ValueId>,
@@ -667,7 +644,7 @@ impl NewOp {
         parts: NewOpParts,
     ) -> Self {
         Self::assemble(
-            (T::dialect(), T::name()),
+            (definition.schema.dialect, definition.schema.name),
             context,
             operands,
             results,
@@ -676,7 +653,7 @@ impl NewOp {
         )
     }
 
-    fn assemble(
+    pub(crate) fn assemble(
         identity: (&'static str, &'static str),
         context: Context,
         operands: Vec<ValueId>,
@@ -703,8 +680,7 @@ impl NewOp {
         regions: Vec<RegionId>,
         attributes: Vec<crate::attributes::NamedAttribute>,
     ) -> Self {
-        let (dialect, name) = identity;
-        let name = context.intern_op_name(dialect, name);
+        let name = context.intern_op_name(identity.0, identity.1);
         NewOp {
             name,
             operands,
@@ -825,16 +801,14 @@ impl OpHandle {
     }
 
     /// Returns whether this operation has type `T`.
-    pub fn is<T: Operation>(&self) -> bool {
-        self.identity() == (T::dialect(), T::name())
+    pub fn definition(&self) -> Option<&'static OpDefSpec> {
+        self.context().operation_definition(self.id)
     }
-
-    pub fn as_op<T: Operation + Sized>(self) -> Option<T> {
-        if self.is::<T>() {
-            Some(T::from_op_instance(self))
-        } else {
-            None
-        }
+    pub fn is_operation(&self, definition: &OpDefSpec) -> bool {
+        self.identity() == (definition.schema.dialect, definition.schema.name)
+    }
+    pub fn as_operation(self, definition: &OpDefSpec) -> Option<Self> {
+        self.is_operation(definition).then_some(self)
     }
 
     pub fn as_dyn_op(self) -> Box<dyn Operation> {
@@ -876,5 +850,48 @@ impl GetFromContext for OpId {
 
     fn get_from_context(&self, context: &crate::Context) -> Self::Item {
         context.get_op(*self)
+    }
+}
+
+impl Operation for OpHandle {
+    fn handle(&self) -> &OpHandle {
+        self
+    }
+}
+impl Verifiable for OpHandle {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        let definition = self.definition().ok_or_else(|| {
+            Error::UnknownOperation(self.dialect().to_string(), self.name().to_string())
+        })?;
+        match definition.verify {
+            Some(verify) => verify(self, context),
+            None => Ok(()),
+        }
+    }
+}
+impl OpDefVerifiable for OpHandle {
+    fn verify_operands(&self, context: &Context) -> Result<(), Error> {
+        let spec = self.definition().ok_or_else(|| {
+            Error::UnknownOperation(self.dialect().to_string(), self.name().to_string())
+        })?;
+        verify_opdef_operands(context, self, spec.schema.name, spec)?;
+        if let Some(verify) = spec.verify_bindings {
+            verify(self, context)?;
+        }
+        Ok(())
+    }
+    fn verify_attributes(&self, context: &Context) -> Result<(), Error> {
+        let spec = self.definition().ok_or_else(|| {
+            Error::UnknownOperation(self.dialect().to_string(), self.name().to_string())
+        })?;
+        verify_opdef_attributes(context, self, spec.schema.name, spec.schema.attributes)
+    }
+}
+impl OpDefSpec {
+    pub const fn operation_name(&self) -> OperationName {
+        OperationName::new(self.schema.name)
+    }
+    pub const fn dialect_name(&self) -> DialectName {
+        DialectName::new(self.schema.dialect)
     }
 }

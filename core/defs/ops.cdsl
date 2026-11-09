@@ -1,0 +1,40 @@
+pub extern type Dialect = Type;
+pub extern type Interface = Type;
+pub extern type Operation = Type;
+pub extern type Context = Type;
+pub extern type Validation = Type;
+pub extern type Int<W: Nat>;
+pub extern type Ptr<P>;
+pub extern type States<R>;
+pub extern type IrSort<T>;
+pub extern type Attribute<T>;
+
+pub extern let int_sort<W: Nat>: IrSort<Int<W>>;
+pub extern let ptr_sort<P>: IrSort<Ptr<P>>;
+pub extern let states_sort<R>: IrSort<States<R>>;
+pub extern let flag_codec: Attribute<Bool>;
+pub let flag = fn(default: Bool) {
+    { ty: Bool, default: default, codec: flag_codec }
+};
+
+pub extern fn add<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+pub extern fn bit_and<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+pub extern fn bit_xor<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+pub extern fn udiv<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Int<W>;
+pub extern fn slt<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+pub extern fn ult<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+pub extern fn ne<W: Nat>(lhs: Int<W>, rhs: Int<W>) -> Bool;
+pub extern fn zero<W: Nat>() -> Int<W>;
+pub extern fn bool_and(lhs: Bool, rhs: Bool) -> Bool;
+pub extern fn bool_or(lhs: Bool, rhs: Bool) -> Bool;
+
+pub extern let Terminator: Interface;
+pub extern let Additive: Interface;
+pub extern let Commutative: Interface;
+pub extern let SameOperandAndResultType: Interface;
+pub extern let IntegerArithmetic: Interface;
+pub extern let Speculatable: Interface;
+pub extern let MemoryRead: Interface;
+pub extern let ResourceEffects: Interface;
+pub extern let Interp: Interface;
+pub enum RegionKind { Blocks, Nodes, Any };

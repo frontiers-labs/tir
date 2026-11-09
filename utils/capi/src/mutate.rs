@@ -48,7 +48,7 @@ pub unsafe extern "C" fn tir_parse_op(
             return TIR_INVALID_ID;
         };
         match tir::parse::ir::parse_op(ctx, src) {
-            Ok(op) => op.id().number(),
+            Ok(op) => op.id.number(),
             Err((span, err)) => {
                 set_error(format!("failed to parse op at byte {}: {err:?}", span.0));
                 TIR_INVALID_ID

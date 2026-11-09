@@ -1,0 +1,134 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type fp = Dialect;
+
+type rounding_constant_attributes = Record<{ mode: String }>;
+extern fn rounding_constant_exec_model(self: rounding_constant_attributes) -> FpRounding;
+extern fn rounding_constant_verifier(operation: Operation, context: Context) -> Validation;
+extern let rounding_constant_iface_ConstantLike: Interface;
+extern let rounding_constant_iface_Interp: Interface;
+extern let rounding_constant_iface_Speculatable: Interface;
+extern fn get_round_verifier(operation: Operation, context: Context) -> Validation;
+extern let get_round_iface_ResourceEffects: Interface;
+extern let get_round_iface_HasResourceSemantics: Interface;
+extern let get_round_iface_Interp: Interface;
+extern fn set_round_verifier(operation: Operation, context: Context) -> Validation;
+extern let set_round_iface_ResourceEffects: Interface;
+extern let set_round_iface_HasResourceSemantics: Interface;
+extern let set_round_iface_Interp: Interface;
+extern fn get_flags_verifier(operation: Operation, context: Context) -> Validation;
+extern let get_flags_iface_ResourceEffects: Interface;
+extern let get_flags_iface_HasResourceSemantics: Interface;
+extern let get_flags_iface_Interp: Interface;
+extern fn clear_flags_verifier(operation: Operation, context: Context) -> Validation;
+extern let clear_flags_iface_ResourceEffects: Interface;
+extern let clear_flags_iface_HasResourceSemantics: Interface;
+extern let clear_flags_iface_Interp: Interface;
+type raise_flags_attributes = Record<{ trapping: Bool }>;
+extern fn raise_flags_verifier(operation: Operation, context: Context) -> Validation;
+extern let raise_flags_iface_ResourceEffects: Interface;
+extern let raise_flags_iface_HasResourceSemantics: Interface;
+extern let raise_flags_iface_Interp: Interface;
+extern fn get_traps_verifier(operation: Operation, context: Context) -> Validation;
+extern let get_traps_iface_ResourceEffects: Interface;
+extern let get_traps_iface_HasResourceSemantics: Interface;
+extern let get_traps_iface_Interp: Interface;
+extern fn set_traps_verifier(operation: Operation, context: Context) -> Validation;
+extern let set_traps_iface_ResourceEffects: Interface;
+extern let set_traps_iface_HasResourceSemantics: Interface;
+extern let set_traps_iface_Interp: Interface;
+extern fn save_verifier(operation: Operation, context: Context) -> Validation;
+extern let save_iface_ResourceEffects: Interface;
+extern let save_iface_HasResourceSemantics: Interface;
+extern let save_iface_Interp: Interface;
+extern fn restore_verifier(operation: Operation, context: Context) -> Validation;
+extern let restore_iface_ResourceEffects: Interface;
+extern let restore_iface_HasResourceSemantics: Interface;
+extern let restore_iface_Interp: Interface;
+extern fn hold_verifier(operation: Operation, context: Context) -> Validation;
+extern let hold_iface_ResourceEffects: Interface;
+extern let hold_iface_HasResourceSemantics: Interface;
+extern let hold_iface_Interp: Interface;
+type update_attributes = Record<{ trapping: Bool }>;
+extern fn update_verifier(operation: Operation, context: Context) -> Validation;
+extern let update_iface_ResourceEffects: Interface;
+extern let update_iface_HasResourceSemantics: Interface;
+extern let update_iface_Interp: Interface;
+
+pub let fp::rounding_constant = {
+    signature: () -> FpRounding,
+    attributes: { mode: { ty: String, codec: str_codec } },
+    exec: rounding_constant_exec_model,
+    verify: rounding_constant_verifier,
+    interfaces: [rounding_constant_iface_ConstantLike, rounding_constant_iface_Interp, rounding_constant_iface_Speculatable],
+};
+
+pub let fp::get_round<StateResources> = {
+    signature: (state: States<StateResources>) -> (result: FpRounding, state: States<StateResources>,),
+    verify: get_round_verifier,
+    interfaces: [get_round_iface_ResourceEffects, get_round_iface_HasResourceSemantics, get_round_iface_Interp],
+};
+
+pub let fp::set_round<StateResources> = {
+    signature: (mode: FpRounding, state: States<StateResources>) -> (state: States<StateResources>,),
+    verify: set_round_verifier,
+    interfaces: [set_round_iface_ResourceEffects, set_round_iface_HasResourceSemantics, set_round_iface_Interp],
+};
+
+pub let fp::get_flags<StateResources> = {
+    signature: (state: States<StateResources>) -> (flags: Int<5>, state: States<StateResources>,),
+    verify: get_flags_verifier,
+    interfaces: [get_flags_iface_ResourceEffects, get_flags_iface_HasResourceSemantics, get_flags_iface_Interp],
+};
+
+pub let fp::clear_flags<StateResources> = {
+    signature: (flags: Int<5>, state: States<StateResources>) -> (state: States<StateResources>,),
+    verify: clear_flags_verifier,
+    interfaces: [clear_flags_iface_ResourceEffects, clear_flags_iface_HasResourceSemantics, clear_flags_iface_Interp],
+};
+
+pub let fp::raise_flags<StateResources> = {
+    signature: (flags: Int<5>, state: States<StateResources>) -> (state: States<StateResources>,),
+    attributes: { trapping: { ty: Bool, codec: bool_codec } },
+    verify: raise_flags_verifier,
+    interfaces: [raise_flags_iface_ResourceEffects, raise_flags_iface_HasResourceSemantics, raise_flags_iface_Interp],
+};
+
+pub let fp::get_traps<StateResources> = {
+    signature: (state: States<StateResources>) -> (traps: Int<5>, state: States<StateResources>,),
+    verify: get_traps_verifier,
+    interfaces: [get_traps_iface_ResourceEffects, get_traps_iface_HasResourceSemantics, get_traps_iface_Interp],
+};
+
+pub let fp::set_traps<StateResources> = {
+    signature: (traps: Int<5>, state: States<StateResources>) -> (state: States<StateResources>,),
+    verify: set_traps_verifier,
+    interfaces: [set_traps_iface_ResourceEffects, set_traps_iface_HasResourceSemantics, set_traps_iface_Interp],
+};
+
+pub let fp::save<StateResources> = {
+    signature: (state: States<StateResources>) -> (snapshot: FpEnv, state: States<StateResources>,),
+    verify: save_verifier,
+    interfaces: [save_iface_ResourceEffects, save_iface_HasResourceSemantics, save_iface_Interp],
+};
+
+pub let fp::restore<StateResources> = {
+    signature: (snapshot: FpEnv, state: States<StateResources>) -> (state: States<StateResources>,),
+    verify: restore_verifier,
+    interfaces: [restore_iface_ResourceEffects, restore_iface_HasResourceSemantics, restore_iface_Interp],
+};
+
+pub let fp::hold<StateResources> = {
+    signature: (state: States<StateResources>) -> (snapshot: FpEnv, state: States<StateResources>,),
+    verify: hold_verifier,
+    interfaces: [hold_iface_ResourceEffects, hold_iface_HasResourceSemantics, hold_iface_Interp],
+};
+
+pub let fp::update<StateResources> = {
+    signature: (snapshot: FpEnv, state: States<StateResources>) -> (state: States<StateResources>,),
+    attributes: { trapping: { ty: Bool, codec: bool_codec } },
+    verify: update_verifier,
+    interfaces: [update_iface_ResourceEffects, update_iface_HasResourceSemantics, update_iface_Interp],
+};

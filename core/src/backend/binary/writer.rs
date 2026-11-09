@@ -7,15 +7,16 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use tir::builtin::{GlobalOp, ModuleOp, SymbolDifference};
-use tir::{BlockId, Context, Operation};
+use tir::builtin::{self, SymbolDifference};
+use tir::{BlockId, Context};
 
 use super::format::ObjectFormatInfo;
 use super::{
     FixupTarget, ObjReloc, ObjSection, ObjSymbol, ObjectFile, SectionKind, SymBinding, SymKind,
 };
 use crate::backend::{
-    AsmItem, DataRelocOp, InstrInfo, LiteralOp, MachineInstruction, as_int_attr, as_string_attr,
+    AsmItem, DATA_RELOC, InstrInfo, LITERAL, MachineInstruction, as_int_attr, as_string_attr,
+    section_body,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,11 +110,11 @@ impl BinaryWriter {
     pub fn write_module(
         &self,
         context: &Context,
-        module: &ModuleOp,
+        module: &crate::OpHandle,
         fmt: &ObjectFormatInfo,
     ) -> Result<ObjectFile, BinaryEmitError> {
         let mut state = ObjectEmission::default();
-        self.walk_block(context, module.body(), &mut state, fmt)?;
+        self.walk_block(context, builtin::module_body(module), &mut state, fmt)?;
         self.finish(state, fmt)
     }
 
@@ -150,7 +151,7 @@ impl BinaryWriter {
         state: &mut ObjectEmission,
         fmt: &ObjectFormatInfo,
     ) -> Result<(), BinaryEmitError> {
-        if let Some(global) = op.clone().as_op::<GlobalOp>() {
+        if let Some(global) = op.clone().as_operation(&builtin::GLOBAL) {
             return emit_global(&global, state, fmt);
         }
         match crate::backend::asm_item(op) {
@@ -159,7 +160,7 @@ impl BinaryWriter {
                 let name = as_string_attr(op.attr("name")).unwrap_or_else(|| ".text".to_string());
                 let enclosing = state.current_section;
                 state.current_section = Some(ensure_section(&mut state.obj, &name));
-                self.walk_block(context, section.body(), state, fmt)?;
+                self.walk_block(context, section_body(&section), state, fmt)?;
                 state.current_section = enclosing;
                 Ok(())
             }
@@ -375,19 +376,16 @@ fn resolve_symbol_differences(state: &mut ObjectEmission) -> Result<(), BinaryEm
 }
 
 fn emit_global(
-    global: &GlobalOp,
+    global: &crate::OpHandle,
     state: &mut ObjectEmission,
     fmt: &ObjectFormatInfo,
 ) -> Result<(), BinaryEmitError> {
-    if global.is_external() {
+    if builtin::global_is_external(global) {
         return Ok(());
     }
-    let align = global
-        .align()
-        .expect("global definitions have an alignment");
-    let bytes = global.bytes();
-    let name = global
-        .section()
+    let align = builtin::global_align(global).expect("global definitions have an alignment");
+    let bytes = builtin::global_bytes_attr(global);
+    let name = builtin::global_section(global)
         .unwrap_or_else(|| if bytes.is_some() { ".data" } else { ".bss" }.to_string());
     let section = ensure_section(&mut state.obj, &name);
     let data = &mut state.obj.sections[section];
@@ -400,18 +398,18 @@ fn emit_global(
             size
         }
         None => {
-            let size = global.size().expect("zero-filled globals have a size");
+            let size = builtin::global_size(global).expect("zero-filled globals have a size");
             data.data.resize((offset + size) as usize, 0);
             size
         }
     };
     data.align = data.align.max(align);
-    for (relative, symbol, addend, width) in global.relocations() {
+    for (relative, symbol, addend, width) in builtin::global_relocations(global) {
         let r_type = u8::try_from(width)
             .ok()
             .and_then(fmt.absolute_reloc)
             .ok_or_else(|| BinaryEmitError::UnsupportedOp {
-                op: GlobalOp::name().to_string(),
+                op: builtin::GLOBAL.schema.name.to_string(),
             })?;
         data.relocs.push(ObjReloc {
             offset: offset + relative,
@@ -421,17 +419,15 @@ fn emit_global(
         });
     }
     for mut difference in
-        global
-            .symbol_differences()
-            .map_err(|_| BinaryEmitError::CannotEncode {
-                op: GlobalOp::name().to_string(),
-            })?
+        builtin::global_symbol_differences(global).map_err(|_| BinaryEmitError::CannotEncode {
+            op: builtin::GLOBAL.schema.name.to_string(),
+        })?
     {
         difference.offset += offset;
         state.symbol_differences.push((section, difference));
     }
     state.obj.symbols.push(ObjSymbol {
-        name: global.sym_name(),
+        name: builtin::global_sym_name(global),
         section: Some(section),
         value: offset,
         size,
@@ -446,7 +442,7 @@ fn emit_global(
 
 fn emit_literal(op: &tir::OpHandle, state: &mut ObjectEmission) -> Result<(), BinaryEmitError> {
     let unsupported = || BinaryEmitError::UnsupportedOp {
-        op: LiteralOp::name().to_string(),
+        op: LITERAL.schema.name.to_string(),
     };
     let kind = as_string_attr(op.attr("kind")).ok_or_else(unsupported)?;
     let bytes = match kind.as_str() {
@@ -496,7 +492,7 @@ fn emit_data_reloc(
     fmt: &ObjectFormatInfo,
 ) -> Result<(), BinaryEmitError> {
     let unsupported = || BinaryEmitError::UnsupportedOp {
-        op: DataRelocOp::name().to_string(),
+        op: DATA_RELOC.schema.name.to_string(),
     };
     let symbol = as_string_attr(op.attr("symbol")).ok_or_else(unsupported)?;
     let width = as_int_attr(op.attr("width"))

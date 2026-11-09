@@ -159,8 +159,8 @@ fn chains_over_ssa_ops() {
     let b = block;
     let dead = ops::constant(&context, 7, i32, Default::default(), b.end());
     let sum = ops::addi(&context, arg_id, arg_id, i32, Default::default(), b.end());
-    let sum_val = sum.result();
-    let call = tir::func::CallOp::new(
+    let sum_val = sum.value_results()[0];
+    let call = tir::func::r#call(
         &context,
         tir::Operand::none(),
         vec![sum_val],
@@ -174,7 +174,7 @@ fn chains_over_ssa_ops() {
         },
         b.end(),
     );
-    let call_result = call.result();
+    let call_result = call.value_results()[0];
     let ret = func_ops::r#return(&context, call_result, vec![], Default::default(), b.end());
 
     let am = AnalysisManager::new();
@@ -192,7 +192,7 @@ fn chains_over_ssa_ops() {
     assert_eq!(du.defs_of(call_result.number()), [call.id()]);
     assert_eq!(context.users_of(call_result), [ret.id()]);
 
-    assert!(!context.is_used(dead.result()));
+    assert!(!context.is_used(dead.value_results()[0]));
     assert_eq!(context.use_count(arg_id), 2);
 }
 

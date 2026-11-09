@@ -15,8 +15,7 @@ use tir::Context;
 use tir::analysis::defuse::execution_regs;
 use tir::backend::TargetMachine;
 use tir::backend::binary::{ObjectFile, SectionKind};
-use tir::backend::{ControlFlow, MachineInstruction, SectionOp, SymbolOp};
-use tir::builtin::ModuleOp;
+use tir::backend::{ControlFlow, MachineInstruction};
 use tir_sim::scoreboard::{self, Prf, ScoreboardInstr, TimingConfig, phys_regs};
 
 use crate::common::{InputKind, TargetArgs, parse_module};
@@ -97,7 +96,12 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         target.register_widths()
     };
     let mut op_ids = Vec::new();
-    collect_instructions(&context, module.body(), true, &mut op_ids);
+    collect_instructions(
+        &context,
+        tir::builtin::module_body(&module),
+        true,
+        &mut op_ids,
+    );
     let layout = encoded_instruction_layout(target.as_ref(), &context, &module, op_ids.len())?;
 
     let mut base = Vec::with_capacity(op_ids.len());
@@ -178,7 +182,7 @@ fn static_unroll_stride(layout: &[(u64, u16, Vec<u8>)]) -> u64 {
 fn encoded_instruction_layout(
     target: &dyn TargetMachine,
     context: &Context,
-    module: &ModuleOp,
+    module: &tir::OpHandle,
     expected: usize,
 ) -> Result<Option<InstructionLayout>, Box<dyn Error>> {
     let Some(format) = target.object_format() else {
@@ -222,11 +226,11 @@ fn collect_instructions(
 ) {
     for op_id in block.op_ids() {
         let op = context.get_op(op_id);
-        if let Some(section) = op.clone().as_op::<SectionOp>() {
-            collect_instructions(context, section.body(), true, out);
+        if let Some(section) = op.clone().as_operation(&tir::backend::SECTION) {
+            collect_instructions(context, tir::backend::section_body(&section), true, out);
             boundary_before = true;
-        } else if let Some(symbol) = op.clone().as_op::<SymbolOp>() {
-            collect_instructions(context, symbol.body(), true, out);
+        } else if let Some(symbol) = op.clone().as_operation(&tir::backend::SYMBOL) {
+            collect_instructions(context, tir::backend::symbol_body(&symbol), true, out);
             boundary_before = true;
         } else if let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() {
             out.push((op_id, boundary_before));

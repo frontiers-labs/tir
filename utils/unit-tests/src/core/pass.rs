@@ -3,8 +3,7 @@
 use std::collections::HashMap;
 
 use tir::{
-    builtin::{ops, AddIOp, IntegerType},
-    func::FuncOp,
+    builtin::{ops, IntegerType},
     AnalysisManager, Context, OpId, Operation, OperationRef, Pass, PassError, PassManager,
     PassTarget, Symbol,
 };
@@ -20,7 +19,7 @@ impl Pass for AddToSubPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<AddIOp>()
+        PassTarget::operation(&tir::builtin::ADDI)
     }
 
     fn run(
@@ -30,9 +29,11 @@ impl Pass for AddToSubPass {
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let op = OperationRef::new(context.get_op(op));
-        let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
+        let add = op
+            .as_operation(&tir::builtin::ADDI)
+            .expect("target guarantees AddIOp");
         let operands = add.operands();
-        let result_ty = context.get_value(add.result()).ty();
+        let result_ty = context.get_value(add.value_results()[0]).ty();
         let new_op = ops::subi(
             context,
             operands[0],
@@ -56,7 +57,7 @@ impl Pass for BreakIRPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<AddIOp>()
+        PassTarget::operation(&tir::builtin::ADDI)
     }
 
     fn run(
@@ -81,7 +82,7 @@ impl Pass for ReplaceThenErasePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<AddIOp>()
+        PassTarget::operation(&tir::builtin::ADDI)
     }
 
     fn run(
@@ -91,9 +92,11 @@ impl Pass for ReplaceThenErasePass {
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let op = OperationRef::new(context.get_op(op));
-        let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
+        let add = op
+            .as_operation(&tir::builtin::ADDI)
+            .expect("target guarantees AddIOp");
         let operands = add.operands();
-        let result_ty = context.get_value(add.result()).ty();
+        let result_ty = context.get_value(add.value_results()[0]).ty();
         let new_op = ops::subi(
             context,
             operands[0],
@@ -138,7 +141,7 @@ impl Pass for TouchPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation(&tir::func::FUNC)
     }
 
     fn run(
@@ -148,8 +151,10 @@ impl Pass for TouchPass {
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let op = OperationRef::new(context.get_op(op));
-        let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
-        func.body()
+        let func = op
+            .as_operation(&tir::func::FUNC)
+            .expect("target guarantees FuncOp");
+        tir::func::func_body(&func)
             .set_attr("touched", tir::attributes::AttributeValue::Bool(true));
         Ok(())
     }
@@ -162,9 +167,9 @@ const ADD_ITS_ARGUMENT: &str = r#"func.func @demo(%0: !i32) -> !i32 {
   func.return %1
 }"#;
 
-fn parse_func(source: &str) -> (Context, FuncOp) {
+fn parse_func(source: &str) -> (Context, tir::OpHandle) {
     let context = Context::with_default_dialects();
-    let func = tir::parse::ir::parse_ir::<FuncOp>(&context, source).expect("parse");
+    let func = tir::parse::ir::parse_operation(&context, source, &tir::func::FUNC).expect("parse");
     (context, func)
 }
 
@@ -303,12 +308,12 @@ fn a_root_whose_replacement_was_erased_ends_the_pipeline_without_a_root() {
   func.return %0
 }"#,
     );
-    let add_id = func.body().op_ids()[0];
+    let add_id = tir::func::func_body(&func).op_ids()[0];
     let mut pm = PassManager::new();
     pm.add_pass(ReplaceThenErasePass);
     pm.run(&context, add_id)
         .expect("erasing the replaced root is a valid rewrite");
-    assert_eq!(func.body().op_ids().len(), 1);
+    assert_eq!(tir::func::func_body(&func).op_ids().len(), 1);
 }
 
 #[test]
@@ -323,11 +328,11 @@ func.func @demo(%0: !i32, %1: !i32) -> !i32 {
 module_end
 }"#,
     );
-    let func_body = func.body();
+    let func_body = tir::func::func_body(&func);
     let add_id = func_body.op_ids()[0];
 
     let mut pm = PassManager::new();
-    pm.nest::<FuncOp>().add_pass(AddToSubPass);
+    pm.nest(&tir::func::FUNC).add_pass(AddToSubPass);
 
     pm.run(&context, module.id())
         .expect("pass pipeline should succeed");
@@ -362,7 +367,7 @@ fn erasing_an_op_drops_its_operand_uses() {
   func.return %2
 }"#,
     );
-    let body = func.body();
+    let body = tir::func::func_body(&func);
 
     let neg_id = body.op_ids()[0];
     let neg_ref = OperationRef::new(context.get_op(neg_id));
@@ -411,7 +416,7 @@ fn count_ops(context: &Context, op: tir::OpId) -> usize {
     total
 }
 
-fn restructure_source(source: &str) -> (Context, FuncOp, usize) {
+fn restructure_source(source: &str) -> (Context, tir::OpHandle, usize) {
     let (context, func) = parse_func(source);
     let before = count_ops(&context, func.id());
     let mut manager = PassManager::new();
@@ -453,9 +458,9 @@ fn cloning_a_region_with_a_mapping_binds_arguments_and_outside_values() {
     let context = Context::with_default_dialects();
     let i32 = IntegerType::new(&context, 32);
     let outside = context.create_block(Vec::new());
-    let x = ops::constant(&context, 1, i32, Default::default(), outside.end()).result();
-    let y = ops::constant(&context, 2, i32, Default::default(), outside.end()).result();
-    let z = ops::constant(&context, 3, i32, Default::default(), outside.end()).result();
+    let x = ops::constant(&context, 1, i32, Default::default(), outside.end()).value_results()[0];
+    let y = ops::constant(&context, 2, i32, Default::default(), outside.end()).value_results()[0];
+    let z = ops::constant(&context, 3, i32, Default::default(), outside.end()).value_results()[0];
     let region = context.create_region();
     let argument = context.create_value(i32, None);
     let block = context.create_block(vec![argument.clone()]);
@@ -491,7 +496,7 @@ impl Pass for CountingPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation(&tir::func::FUNC)
     }
 
     fn run(
@@ -503,8 +508,10 @@ impl Pass for CountingPass {
         let op = OperationRef::new(context.get_op(op));
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if run <= self.edits {
-            let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
-            func.body()
+            let func = op
+                .as_operation(&tir::func::FUNC)
+                .expect("target guarantees FuncOp");
+            tir::func::func_body(&func)
                 .set_attr("round", tir::attributes::AttributeValue::Int(run as i64));
         }
         Ok(())
@@ -553,7 +560,7 @@ impl Pass for PeerCountPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation(&tir::func::FUNC)
     }
 
     fn run(
@@ -569,7 +576,7 @@ impl Pass for PeerCountPass {
             .get_region(context.get_op(module).regions()[0])
             .op_ids()
             .into_iter()
-            .filter(|peer| *peer != id && context.get_op(*peer).is::<FuncOp>())
+            .filter(|peer| *peer != id && context.get_op(*peer).is_operation(&tir::func::FUNC))
             .map(|peer| {
                 context
                     .get_region(context.get_op(peer).regions()[0])
@@ -581,11 +588,13 @@ impl Pass for PeerCountPass {
         attributes
             .push(context.named_attribute("peer_ops", tir::attributes::AttributeValue::Int(peers)));
         context.set_op_attributes(id, attributes);
-        let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
+        let func = op
+            .as_operation(&tir::func::FUNC)
+            .expect("target guarantees FuncOp");
         let i32_ty = IntegerType::new(context, 32);
         context.insert(
             tir::InsertionPoint::Block {
-                block: func.body().id(),
+                block: tir::func::func_body(&func).id(),
                 position: 0,
             },
             ops::constant(
@@ -617,7 +626,7 @@ module_end
 fn module_text(context: &Context, module: tir::OpId) -> String {
     let module = context
         .get_op(module)
-        .as_op::<tir::builtin::ModuleOp>()
+        .as_operation(&tir::builtin::MODULE)
         .unwrap();
     let mut out = String::new();
     let mut fmt = tir::IRFormatter::new(&mut out);
@@ -629,7 +638,7 @@ fn run_peer_count(workers: usize) -> (String, Vec<i64>) {
     let (context, module) = fixtures::parse(TWO_FUNCTIONS);
     let mut pm = PassManager::new();
     pm.set_workers(workers);
-    pm.nest::<FuncOp>().add_pass(PeerCountPass);
+    pm.nest(&tir::func::FUNC).add_pass(PeerCountPass);
     pm.run(&context, module.id())
         .expect("the pass keeps the IR valid");
     let counts = fixtures::module_ops(&context, module.id())
@@ -662,7 +671,7 @@ impl Pass for SlowFirstPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation(&tir::func::FUNC)
     }
 
     fn run(
@@ -672,13 +681,25 @@ impl Pass for SlowFirstPass {
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let op = OperationRef::new(context.get_op(op));
-        let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
-        let delay = if func.symbol_name() == "a" { 30 } else { 0 };
+        let func = op
+            .as_operation(&tir::func::FUNC)
+            .expect("target guarantees FuncOp");
+        let delay = if func
+            .clone()
+            .as_interface::<dyn Symbol>()
+            .expect("func is a symbol")
+            .symbol_name()
+            == "a"
+        {
+            30
+        } else {
+            0
+        };
         std::thread::sleep(std::time::Duration::from_millis(delay));
         let i32_ty = IntegerType::new(context, 32);
         context.insert(
             tir::InsertionPoint::Block {
-                block: func.body().id(),
+                block: tir::func::func_body(&func).id(),
                 position: 0,
             },
             ops::constant(
@@ -701,7 +722,7 @@ fn tasks_commit_in_callable_order_whatever_order_they_finish_in() {
         let (context, module) = fixtures::parse(TWO_FUNCTIONS);
         let mut pm = PassManager::new();
         pm.set_workers(workers);
-        pm.nest::<FuncOp>().add_pass(SlowFirstPass);
+        pm.nest(&tir::func::FUNC).add_pass(SlowFirstPass);
         pm.run(&context, module.id())
             .expect("the pass keeps the IR valid");
         module_text(&context, module.id())
@@ -726,7 +747,7 @@ impl Pass for TouchSiblingPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation(&tir::func::FUNC)
     }
 
     fn run(
@@ -742,15 +763,16 @@ impl Pass for TouchSiblingPass {
             .get_region(context.get_op(module).regions()[0])
             .op_ids()
             .into_iter()
-            .filter(|peer| context.get_op(*peer).is::<FuncOp>())
+            .filter(|peer| context.get_op(*peer).is_operation(&tir::func::FUNC))
             .collect();
         for target in [id, functions[0]] {
-            context
-                .get_op(target)
-                .as_op::<FuncOp>()
-                .expect("a function")
-                .body()
-                .set_attr("touched", tir::attributes::AttributeValue::Bool(true));
+            tir::func::func_body(
+                &context
+                    .get_op(target)
+                    .as_operation(&tir::func::FUNC)
+                    .expect("a function"),
+            )
+            .set_attr("touched", tir::attributes::AttributeValue::Bool(true));
         }
         Ok(())
     }
@@ -763,7 +785,7 @@ fn overlapping_write_sets_are_refused_before_anything_commits() {
     let (context, module) = fixtures::parse(TWO_FUNCTIONS);
     let before = module_text(&context, module.id());
     let mut pm = PassManager::new();
-    pm.nest::<FuncOp>().add_pass(TouchSiblingPass);
+    pm.nest(&tir::func::FUNC).add_pass(TouchSiblingPass);
     let error = pm
         .run(&context, module.id())
         .expect_err("two tasks edited one block");
@@ -778,7 +800,7 @@ fn a_function_task_rebuilds_an_analysis_its_earlier_pass_invalidated() {
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut pm = PassManager::new();
     pm.set_workers(2);
-    let functions = pm.nest::<FuncOp>();
+    let functions = pm.nest(&tir::func::FUNC);
     functions.add_pass(RecordOpCountPass { seen: seen.clone() });
     functions.add_pass(SlowFirstPass);
     functions.add_pass(RecordOpCountPass { seen: seen.clone() });
@@ -814,7 +836,7 @@ impl Pass for RecordOpCountPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation(&tir::func::FUNC)
     }
 
     fn run(
@@ -824,8 +846,20 @@ impl Pass for RecordOpCountPass {
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let op = OperationRef::new(context.get_op(op));
-        let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
-        let name: &'static str = if func.symbol_name() == "a" { "a" } else { "b" };
+        let func = op
+            .as_operation(&tir::func::FUNC)
+            .expect("target guarantees FuncOp");
+        let name: &'static str = if func
+            .clone()
+            .as_interface::<dyn Symbol>()
+            .expect("func is a symbol")
+            .symbol_name()
+            == "a"
+        {
+            "a"
+        } else {
+            "b"
+        };
         let count = analyses.get::<OpCount>(context, op.op().id).0;
         self.seen.lock().unwrap().push((name, count));
         Ok(())
@@ -845,7 +879,7 @@ impl Pass for ThreeRoundsPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation(&tir::func::FUNC)
     }
 
     fn run(
@@ -856,10 +890,10 @@ impl Pass for ThreeRoundsPass {
     ) -> Result<(), PassError> {
         let op = OperationRef::new(context.get_op(op));
         self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let body = op
-            .as_op::<FuncOp>()
-            .expect("target guarantees FuncOp")
-            .body();
+        let body = tir::func::func_body(
+            &op.as_operation(&tir::func::FUNC)
+                .expect("target guarantees FuncOp"),
+        );
         let round = match body.attr("round") {
             Some(tir::attributes::AttributeValue::Int(round)) => round,
             _ => 0,
@@ -878,7 +912,7 @@ fn a_fixpoint_inside_a_function_task_runs_until_the_version_settles() {
     let runs = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let mut pm = PassManager::new();
     pm.set_workers(2);
-    pm.nest::<FuncOp>()
+    pm.nest(&tir::func::FUNC)
         .fixpoint(10)
         .add_pass(ThreeRoundsPass { runs: runs.clone() });
     pm.run(&context, module.id())
@@ -900,11 +934,10 @@ fn sibling_roots_replaced_in_one_block_commit_without_conflict() {
     );
     let mut pm = PassManager::new();
     pm.set_workers(2);
-    pm.nest::<AddIOp>().add_pass(AddToSubPass);
+    pm.nest(&tir::builtin::ADDI).add_pass(AddToSubPass);
     pm.run(&context, func.id())
         .expect("each task replaces only its own root");
-    let names: Vec<_> = func
-        .body()
+    let names: Vec<_> = tir::func::func_body(&func)
         .op_ids()
         .into_iter()
         .map(|op| context.get_op(op).name().as_str())

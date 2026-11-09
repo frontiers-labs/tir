@@ -2,9 +2,9 @@
 
 use tir::{
     attributes::AttributeValue,
-    builtin::{ops, FloatType, IntegerType, ModuleOp, UnitType},
+    builtin::{ops, FloatType, IntegerType, UnitType},
     func::ops as func_ops,
-    parse::ir::parse_ir,
+    parse::ir::parse_operation,
     ptr::PtrType,
     scoped_dict, Context, DataLayout, Endianness, Operation, TargetEnv,
 };
@@ -13,7 +13,7 @@ use super::fixtures;
 
 fn layout(context: &Context, spec: &str) -> DataLayout {
     let src = format!("module {{layout.spec = {spec}}} {{\n  module_end\n}}");
-    let module = parse_ir::<ModuleOp>(context, &src).expect("parse module");
+    let module = parse_operation(context, &src, &tir::builtin::MODULE).expect("parse module");
     DataLayout::for_op(context, module.id()).expect("layout in scope")
 }
 
@@ -141,7 +141,7 @@ fn a_target_default_needs_no_enclosing_scope() {
 
 fn target_env(context: &Context, spec: &str) -> TargetEnv {
     let src = format!("module {{target_env = {spec}}} {{\n  module_end\n}}");
-    let module = parse_ir::<ModuleOp>(context, &src).expect("parse module");
+    let module = parse_operation(context, &src, &tir::builtin::MODULE).expect("parse module");
     TargetEnv::for_op(context, module.id()).expect("environment in scope")
 }
 
@@ -227,7 +227,11 @@ fn a_nested_op_reads_the_enclosing_scope() {
         },
         tir::InsertionPoint::Root,
     );
-    let nested = ops::module_end(&context, Default::default(), module.body().end());
+    let nested = ops::module_end(
+        &context,
+        Default::default(),
+        tir::builtin::module_body(&module).end(),
+    );
 
     let resolved = scoped_dict(&context, nested.id(), "layout.spec").expect("module scope");
 
@@ -269,7 +273,7 @@ fn an_inner_scope_overrides_one_nested_entry() {
                 dict([("types", dict([("i32", dict([("abi", 8.into())]))]))]),
             )],
         },
-        module.body().end(),
+        tir::builtin::module_body(&module).end(),
     );
 
     let resolved = scoped_dict(&context, func.id(), "layout.spec").expect("module scope");
@@ -303,7 +307,7 @@ fn an_inner_scope_replaces_an_array_entry() {
             attributes: vec![context
                 .named_attribute("target_env", dict([("features", vec!["c".into()].into())]))],
         },
-        module.body().end(),
+        tir::builtin::module_body(&module).end(),
     );
 
     let resolved = scoped_dict(&context, nested.id(), "target_env").expect("module scope");

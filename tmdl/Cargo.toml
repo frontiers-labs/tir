@@ -5,6 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tir-cdsl = { workspace = true, features = ["rust-output"] }
 ariadne.workspace = true
 clap = { workspace = true, features = ["derive"] }
 quote.workspace = true

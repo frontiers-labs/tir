@@ -14,6 +14,7 @@ pub enum Visibility {
 /// An operation that defines a named entity in the enclosing module's symbol
 /// table. Functions are overloadable and key on their argument types; data
 /// symbols carry no signature and own their name outright.
+#[tir_macros::operation_interface]
 pub trait Symbol {
     fn symbol_name(&self) -> String;
 
@@ -36,6 +37,7 @@ pub trait Symbol {
 /// (e.g. InstCombine) to choose among equivalent forms. The default models one
 /// cheap instruction; expensive ops override it. Exposed as an interface so the
 /// cost is reachable from a `dyn Operation` without the concrete type.
+#[tir_macros::operation_interface]
 pub trait OpCost {
     fn cost(&self) -> u32 {
         1
@@ -45,6 +47,7 @@ pub trait OpCost {
 /// An operation that yields a compile-time constant, exposed generically so
 /// rewriters can read the value without knowing the concrete constant op: an
 /// integer, or the bits of a value of another type.
+#[tir_macros::operation_interface]
 pub trait ConstantLike {
     fn constant_value(&self) -> APInt;
 }
@@ -53,6 +56,7 @@ pub trait ConstantLike {
 /// automatically for any op that declares `sem` (evaluating it through the
 /// semantic interpreter); ops that fold but lack a semantic expression implement it
 /// by hand.
+#[tir_macros::operation_interface]
 pub trait ConstantFold {
     /// `operands[i]` is the constant value of operand `i`. Returns the folded
     /// result, or `None` when this op cannot fold these operands.
@@ -62,8 +66,10 @@ pub trait ConstantFold {
 /// An operation that produces its results and does nothing else: no memory
 /// effect, no control flow, no machine state. Dead code elimination may erase
 /// one whose results go unread, whether or not it declares semantics.
+#[tir_macros::operation_interface]
 pub trait Pure {}
 
+#[tir_macros::operation_interface]
 pub trait Commutative {
     fn is_commutative(&self) -> bool {
         true
@@ -75,17 +81,21 @@ pub trait Commutative {
 /// returns the other wherever that one has the result's type. A definition the
 /// e-graph builds value identity from (`docs/design/instcombine.md`), declared
 /// rather than proved, and read off the operation's name alone.
+#[tir_macros::operation_interface]
 pub trait Additive {}
 
 /// An operation computing `lhs - rhs` modulo 2^W, W the result's width: a
 /// constant added to `lhs` moves to the result, one added to `rhs` moves to it
 /// negated, and a zero `rhs` returns `lhs` wherever `lhs` has the result's
 /// type. Read the way [`Additive`] is.
+#[tir_macros::operation_interface]
 pub trait Subtractive {}
 
 /// An arithmetic operation over integer values.
+#[tir_macros::operation_interface]
 pub trait IntegerArithmetic {}
 
+#[tir_macros::operation_interface]
 pub trait Terminator {
     fn successors(&self) -> Vec<BlockId> {
         Vec::new()
@@ -96,6 +106,7 @@ pub trait Terminator {
 /// forwarding values to their block arguments. Lets a CFG analysis read the edge
 /// targets and the values flowing along each edge without knowing the concrete
 /// branch op.
+#[tir_macros::operation_interface]
 pub trait BranchTerminator {
     /// One entry per outgoing control-flow edge: the successor block and the values
     /// forwarded to its block arguments, in argument order.
@@ -114,6 +125,7 @@ pub trait BranchTerminator {
 /// one. A loop that carries only the recurrence answers `None`: the counter is then not
 /// a value of the IR, and naming a `ValueId` for it would oblige the implementor to
 /// materialize one.
+#[tir_macros::operation_interface]
 pub trait CountedLoop {
     /// The counter's value on the first iteration.
     fn lower_bound(&self) -> ValueId;
@@ -132,6 +144,7 @@ pub trait CountedLoop {
 /// `cond_br %c` enters its true successor when `%c` is 1 and its false successor when
 /// `%c` is 0. The CFG analog of [`Gamma`], letting a flow-sensitive analysis recover
 /// the predicate gating a merge without knowing the concrete branch op.
+#[tir_macros::operation_interface]
 pub trait BranchGuard {
     /// For each guarded successor edge, the value known to equal a boolean when that
     /// edge is taken (`true` => 1, `false` => 0).
@@ -141,6 +154,7 @@ pub trait BranchGuard {
 /// A [`BranchTerminator`] choosing its successor edge by value: edge `i` is taken
 /// where the selector equals case `i`, and the last edge where it equals none.
 /// The CFG analog of a [`Gamma`] naming its cases.
+#[tir_macros::operation_interface]
 pub trait CaseGuard {
     fn selector(&self) -> ValueId;
     /// The selector bits taking each edge but the last.
@@ -149,17 +163,20 @@ pub trait CaseGuard {
 
 /// An operation whose operands and results all carry one type.
 /// Checked by [`verify_opdef_operands`](crate::verify_opdef_operands).
+#[tir_macros::operation_interface]
 pub trait SameOperandAndResultType {}
 
 /// Identifies an operation that creates a memory location eligible for local SSA
 /// promotion. Implementations describe the location generically rather than tying
 /// the promoting transforms to a concrete pointer dialect.
+#[tir_macros::operation_interface]
 pub trait PromotableAllocation {
     /// The SSA value that names the promotable memory location.
     fn promoted_location(&self) -> ValueId;
 }
 
 /// Identifies an operation that reads a value from a memory location.
+#[tir_macros::operation_interface]
 pub trait MemoryRead {
     /// The memory location being read.
     fn read_location(&self) -> ValueId;
@@ -168,6 +185,7 @@ pub trait MemoryRead {
 }
 
 /// Identifies an operation that writes a value to a memory location.
+#[tir_macros::operation_interface]
 pub trait MemoryWrite {
     /// The memory location being written.
     fn write_location(&self) -> ValueId;
@@ -199,6 +217,7 @@ pub struct ResourceEffect {
 }
 
 /// The execution resources an operation reads or changes.
+#[tir_macros::operation_interface]
 pub trait ResourceEffects {
     fn resource_effects(&self) -> Vec<ResourceEffect>;
 }
@@ -232,6 +251,7 @@ pub struct ResourceSemantics {
 }
 
 /// Exact value and resource-state semantics for an effectful operation.
+#[tir_macros::operation_interface]
 pub trait HasResourceSemantics {
     fn resource_semantics(&self) -> ResourceSemantics;
 }
@@ -255,6 +275,7 @@ pub struct Binding {
 
 /// An operation that maps explicit operands to one region's ports and that
 /// region's yields to its results without loop or branch control flow.
+#[tir_macros::operation_interface]
 pub trait RegionBinding {
     fn region(&self) -> RegionId;
     fn binding(&self) -> Binding;
@@ -263,6 +284,7 @@ pub trait RegionBinding {
 /// A structured conditional over unordered arms (γ): the predicate picks the
 /// arm, every arm reads the forwarded operands through its own ports, and the
 /// chosen arm's results become the op's.
+#[tir_macros::operation_interface]
 pub trait Gamma {
     /// The selector slot in the operation operand list.
     fn predicate_slot(&self) -> usize;
@@ -297,6 +319,7 @@ pub trait Gamma {
 /// values through its ports and produces a predicate, the values the next
 /// iteration carries, and the values the op produces once the predicate is
 /// false.
+#[tir_macros::operation_interface]
 pub trait Theta {
     /// The predicate slot in the body yield list.
     fn predicate_slot(&self) -> usize;
@@ -308,6 +331,7 @@ pub trait Theta {
 
 /// A λ node: a function definition or declaration, read through the value a
 /// call takes as its callee.
+#[tir_macros::operation_interface]
 pub trait Callable {
     /// The body, absent for a declaration.
     fn body(&self) -> Option<RegionId>;
@@ -317,6 +341,7 @@ pub trait Callable {
 }
 
 /// An application of a callable to a run of the op's value operands.
+#[tir_macros::operation_interface]
 pub trait Apply {
     fn callee(&self) -> ValueId;
     /// The indices of the arguments among the op's value operands.
@@ -325,6 +350,7 @@ pub trait Apply {
 
 /// A δ node: a data object with an address, and an initializer image when it
 /// defines one here.
+#[tir_macros::operation_interface]
 pub trait Global {
     fn address(&self) -> ValueId;
     fn initializer(&self) -> Option<Vec<u8>>;
@@ -334,11 +360,13 @@ pub trait Global {
 /// function of its operands, attributes and the states it takes, though no
 /// semantics says which: two over equal inputs are one, so a rewrite may match
 /// it and replace it as a term.
+#[tir_macros::operation_interface]
 pub trait Congruent {}
 
 /// An operation that cannot trap, so it may run whether or not control would
 /// have reached it: a loop cone may hoist it, and a lowering may evaluate it on
 /// a path the source did not take.
+#[tir_macros::operation_interface]
 pub trait Speculatable {
     /// Whether this instance may execute on a path that did not demand it.
     fn is_speculatable(&self) -> bool {
@@ -358,6 +386,7 @@ pub enum ExitTarget {
 /// An operation leaving an enclosing structured op from inside its subtree
 /// (a `break` or `continue`), naming the target by kind or label rather than by
 /// a token value, and carrying the values the target's ports take.
+#[tir_macros::operation_interface]
 pub trait NonLocalExit {
     fn target(&self) -> ExitTarget;
     fn values(&self) -> Vec<ValueId>;
@@ -372,6 +401,7 @@ pub enum ExitScopeKind {
 
 /// An operation a [`NonLocalExit`] can target: what kind of scope it is, and
 /// the label it carries, if any.
+#[tir_macros::operation_interface]
 pub trait ExitScope {
     fn exit_scope(&self) -> ExitScopeKind;
     fn label(&self) -> Option<String> {

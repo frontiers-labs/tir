@@ -23,14 +23,12 @@ pub fn construct_dialect(item: TokenStream) -> TokenStream {
 
     quote! {
         pub struct #struct_name {
-            dyn_converters: std::collections::HashMap<tir::OperationName, fn(tir::OpHandle) -> Box<dyn tir::Operation>>,
-            parsers: std::collections::HashMap<&'static str, fn(&mut tir::parse::text::Parser<'_>, &tir::Context) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)>>,
+            parsers: std::collections::HashMap<&'static str, fn(&mut tir::parse::text::Parser<'_>, &tir::Context) -> Result<tir::OpHandle, (tir::parse::Span, tir::Error)>>,
         }
 
         impl tir::Dialect for #struct_name {
             fn new() -> std::sync::Arc<dyn tir::Dialect> {
                 std::sync::Arc::new(#struct_name {
-                    dyn_converters: std::collections::HashMap::new(),
                     parsers: std::collections::HashMap::new(),
                 })
             }
@@ -43,13 +41,11 @@ pub fn construct_dialect(item: TokenStream) -> TokenStream {
             #register_types
 
             fn get_dyn_op(&self, op: tir::OpHandle) -> Box<dyn tir::Operation> {
-               assert_eq!(op.dialect(), tir::DialectName::of::<Self>());
-               let converter = self.dyn_converters.get(&op.name()).unwrap();
-               converter(op)
+               Box::new(op)
             }
 
             fn get_parser(&self, name: &str)
-            -> Result<fn(&mut tir::parse::text::Parser<'_>, &tir::Context) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)>, tir::Error> {
+            -> Result<fn(&mut tir::parse::text::Parser<'_>, &tir::Context) -> Result<tir::OpHandle, (tir::parse::Span, tir::Error)>, tir::Error> {
                 self.parsers.get(name).cloned().ok_or(tir::Error::UnknownOperation(#name.to_string(), name.to_string()))
             }
         }
@@ -199,10 +195,9 @@ fn make_register_operations(dialect: &Ident, operations: &[Ident]) -> proc_macro
         .iter()
         .map(|name| {
             quote! {
-                assert_eq!(tir::DialectName::of_operation::<#name>(), tir::DialectName::of::<#dialect>());
-                self.dyn_converters.insert(tir::OperationName::of::<#name>(), #name::from_op_instance_dyn);
-                self.parsers.insert(<#name as tir::Operation>::name(), #name::parse);
-                #name::register_interfaces(context);
+                assert_eq!(#name.schema.dialect,<#dialect as tir::Dialect>::name());
+                context.register_operation(&#name);
+                self.parsers.insert(#name.schema.name,|parser,context|(#name.parse)(parser,context,&#name));
             }
         })
         .collect::<Vec<_>>();

@@ -1,0 +1,479 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type spirv = Dialect;
+
+
+
+pub let spirv::ImageTexelPointer = {
+    signature: (image: Any, coordinate: Any, sample: Any) -> Any,
+};
+
+pub let spirv::GenericPtrMemSemantics = {
+    signature: (pointer: Any) -> Any,
+};
+
+pub let spirv::VectorExtractDynamic = {
+    signature: (vector: Any, index: Any) -> Any,
+};
+
+pub let spirv::VectorInsertDynamic = {
+    signature: (vector: Any, component: Any, index: Any) -> Any,
+};
+
+pub let spirv::CopyObject = {
+    signature: (operand: Any) -> Any,
+};
+
+pub let spirv::Transpose = {
+    signature: (matrix: Any) -> Any,
+};
+
+pub let spirv::ConvertFToU = {
+    signature: (float_value: Any) -> Any,
+};
+
+pub let spirv::ConvertFToS = {
+    signature: (float_value: Any) -> Any,
+};
+
+pub let spirv::ConvertSToF = {
+    signature: (signed_value: Any) -> Any,
+};
+
+pub let spirv::ConvertUToF = {
+    signature: (unsigned_value: Any) -> Any,
+};
+
+pub let spirv::UConvert = {
+    signature: (unsigned_value: Any) -> Any,
+};
+
+pub let spirv::SConvert = {
+    signature: (signed_value: Any) -> Any,
+};
+
+pub let spirv::FConvert = {
+    signature: (float_value: Any) -> Any,
+};
+
+pub let spirv::QuantizeToF16 = {
+    signature: (value: Any) -> Any,
+};
+
+pub let spirv::ConvertPtrToU = {
+    signature: (pointer: Any) -> Any,
+};
+
+pub let spirv::SatConvertSToU = {
+    signature: (signed_value: Any) -> Any,
+};
+
+pub let spirv::SatConvertUToS = {
+    signature: (unsigned_value: Any) -> Any,
+};
+
+pub let spirv::ConvertUToPtr = {
+    signature: (integer_value: Any) -> Any,
+};
+
+pub let spirv::PtrCastToGeneric = {
+    signature: (pointer: Any) -> Any,
+};
+
+pub let spirv::GenericCastToPtr = {
+    signature: (pointer: Any) -> Any,
+};
+
+pub let spirv::Bitcast = {
+    signature: (operand: Any) -> Any,
+};
+
+pub let spirv::SNegate = {
+    signature: (operand: Any) -> Any,
+};
+
+pub let spirv::FNegate = {
+    signature: (operand: Any) -> Any,
+};
+
+pub let spirv::IAdd = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FAdd = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::ISub = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FSub = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::IMul = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FMul = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::UDiv = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::SDiv = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FDiv = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::UMod = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::SRem = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::SMod = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FRem = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FMod = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::VectorTimesScalar = {
+    signature: (vector: Any, scalar: Any) -> Any,
+};
+
+pub let spirv::MatrixTimesScalar = {
+    signature: (matrix: Any, scalar: Any) -> Any,
+};
+
+pub let spirv::VectorTimesMatrix = {
+    signature: (vector: Any, matrix: Any) -> Any,
+};
+
+pub let spirv::MatrixTimesVector = {
+    signature: (matrix: Any, vector: Any) -> Any,
+};
+
+pub let spirv::MatrixTimesMatrix = {
+    signature: (leftmatrix: Any, rightmatrix: Any) -> Any,
+};
+
+pub let spirv::OuterProduct = {
+    signature: (vector_1: Any, vector_2: Any) -> Any,
+};
+
+pub let spirv::Dot = {
+    signature: (vector_1: Any, vector_2: Any) -> Any,
+};
+
+pub let spirv::IAddCarry = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::ISubBorrow = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::UMulExtended = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::SMulExtended = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::Any = {
+    signature: (vector: Any) -> Any,
+};
+
+pub let spirv::All = {
+    signature: (vector: Any) -> Any,
+};
+
+pub let spirv::IsNan = {
+    signature: (x: Any) -> Any,
+};
+
+pub let spirv::IsInf = {
+    signature: (x: Any) -> Any,
+};
+
+pub let spirv::IsFinite = {
+    signature: (x: Any) -> Any,
+};
+
+pub let spirv::IsNormal = {
+    signature: (x: Any) -> Any,
+};
+
+pub let spirv::SignBitSet = {
+    signature: (x: Any) -> Any,
+};
+
+pub let spirv::LessOrGreater = {
+    signature: (x: Any, y: Any) -> Any,
+};
+
+pub let spirv::Ordered = {
+    signature: (x: Any, y: Any) -> Any,
+};
+
+pub let spirv::Unordered = {
+    signature: (x: Any, y: Any) -> Any,
+};
+
+pub let spirv::LogicalEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::LogicalNotEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::LogicalOr = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::LogicalAnd = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::LogicalNot = {
+    signature: (operand: Any) -> Any,
+};
+
+pub let spirv::Select = {
+    signature: (condition: Any, object_1: Any, object_2: Any) -> Any,
+};
+
+pub let spirv::IEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::INotEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::UGreaterThan = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::SGreaterThan = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::UGreaterThanEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::SGreaterThanEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::ULessThan = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::SLessThan = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::ULessThanEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::SLessThanEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FOrdEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FUnordEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FOrdNotEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FUnordNotEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FOrdLessThan = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FUnordLessThan = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FOrdGreaterThan = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FUnordGreaterThan = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FOrdLessThanEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FUnordLessThanEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FOrdGreaterThanEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::FUnordGreaterThanEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::ShiftRightLogical = {
+    signature: (base: Any, shift: Any) -> Any,
+};
+
+pub let spirv::ShiftRightArithmetic = {
+    signature: (base: Any, shift: Any) -> Any,
+};
+
+pub let spirv::ShiftLeftLogical = {
+    signature: (base: Any, shift: Any) -> Any,
+};
+
+pub let spirv::BitwiseOr = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::BitwiseXor = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::BitwiseAnd = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::Not = {
+    signature: (operand: Any) -> Any,
+};
+
+pub let spirv::BitFieldInsert = {
+    signature: (base: Any, insert: Any, offset: Any, count: Any) -> Any,
+};
+
+pub let spirv::BitFieldSExtract = {
+    signature: (base: Any, offset: Any, count: Any) -> Any,
+};
+
+pub let spirv::BitFieldUExtract = {
+    signature: (base: Any, offset: Any, count: Any) -> Any,
+};
+
+pub let spirv::BitReverse = {
+    signature: (base: Any) -> Any,
+};
+
+pub let spirv::BitCount = {
+    signature: (base: Any) -> Any,
+};
+
+pub let spirv::AtomicLoad = {
+    signature: (pointer: Any, memory: Any, semantics: Any) -> Any,
+};
+
+pub let spirv::AtomicExchange = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicCompareExchange = {
+    signature: (pointer: Any, memory: Any, equal: Any, unequal: Any, value: Any, comparator: Any) -> Any,
+};
+
+pub let spirv::AtomicCompareExchangeWeak = {
+    signature: (pointer: Any, memory: Any, equal: Any, unequal: Any, value: Any, comparator: Any) -> Any,
+};
+
+pub let spirv::AtomicIIncrement = {
+    signature: (pointer: Any, memory: Any, semantics: Any) -> Any,
+};
+
+pub let spirv::AtomicIDecrement = {
+    signature: (pointer: Any, memory: Any, semantics: Any) -> Any,
+};
+
+pub let spirv::AtomicIAdd = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicISub = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicSMin = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicUMin = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicSMax = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicUMax = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicAnd = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicOr = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicXor = {
+    signature: (pointer: Any, memory: Any, semantics: Any, value: Any) -> Any,
+};
+
+pub let spirv::AtomicFlagTestAndSet = {
+    signature: (pointer: Any, memory: Any, semantics: Any) -> Any,
+};
+
+pub let spirv::CopyLogical = {
+    signature: (operand: Any) -> Any,
+};
+
+pub let spirv::PtrEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::PtrNotEqual = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};
+
+pub let spirv::PtrDiff = {
+    signature: (operand_1: Any, operand_2: Any) -> Any,
+};

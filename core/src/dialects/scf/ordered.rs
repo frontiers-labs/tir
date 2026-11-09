@@ -7,123 +7,133 @@
 use crate as tir;
 use crate::binding;
 use crate::parse::common::Cursor;
-use crate::{Context, CountedLoop, Error, ExitScope, ExitScopeKind, Operation, ValueId, operation};
+use crate::{Context, CountedLoop, Error, ExitScope, ExitScopeKind, ValueId};
 
-operation! {
-    OrderedForOp {
-        name: "ordered_for",
-        dialect: "scf",
-        scheme: "forall C: index | int<_>. (C, _*, C, C) -> _*",
-        format: "custom",
-        verifier: "true",
-        operands: O { lb, inits, ub, step },
-        results: R { results },
-        regions: R {
-            body: Region {
-                kind: Blocks,
-            }
-        },
-        interfaces: [ExitScope, CountedLoop],
-    }
+tir::helpers::op_def! {
+    file: "defs/converted/dialects_scf_ordered.cdsl",
+    hosts: {
+        ordered_for_verifier => crate::scf::ordered_for_verify_impl,
+        ordered_for_iface_ExitScope => (ExitScope, &crate::scf::__TIR_IFACE_OrderedForOp_ExitScope),
+        ordered_for_iface_CountedLoop => (CountedLoop, &crate::scf::__TIR_IFACE_OrderedForOp_CountedLoop),
+        ordered_for_printer => crate::scf::ordered_for_custom_print,
+        ordered_for_parser => |parser, context, _definition| crate::scf::ordered_for_custom_parse(parser, context),
+    },
 }
 
-impl ExitScope for OrderedForOp {
-    fn exit_scope(&self) -> ExitScopeKind {
-        ExitScopeKind::Loop
-    }
+pub(crate) fn ordered_for_exitscope_exit_scope(__operation: &tir::OpHandle) -> ExitScopeKind {
+    ExitScopeKind::Loop
 }
 
-impl CountedLoop for OrderedForOp {
-    fn lower_bound(&self) -> ValueId {
-        self.0.value_operands()[0]
-    }
-    fn upper_bound(&self) -> ValueId {
-        let operands = self.0.value_operands();
-        operands[operands.len() - 2]
-    }
-    fn step(&self) -> ValueId {
-        let operands = self.0.value_operands();
-        operands[operands.len() - 1]
-    }
-    fn induction(&self) -> Option<usize> {
-        Some(0)
-    }
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_OrderedForOp_ExitScope: crate::ExitScopeCallbacks =
+    crate::ExitScopeCallbacks {
+        exit_scope: crate::scf::ordered_for_exitscope_exit_scope,
+        label: None,
+    };
+
+pub(crate) fn ordered_for_countedloop_lower_bound(operation: &tir::OpHandle) -> ValueId {
+    operation.value_operands()[0]
 }
 
-impl OrderedForOp {
-    /// What the ports past the counter take on the first iteration: the
-    /// declared inits, then the states threading has carried in.
-    pub fn inits(&self) -> Vec<ValueId> {
-        let operands = self.0.operands();
-        operands[1..operands.len() - 2].to_vec()
-    }
-
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.clone();
-        let body = context.get_region(self.0.regions()[0]);
-        let ports: Vec<ValueId> = body.ports().iter().map(tir::Value::id).collect();
-        let inits = self.inits();
-        tir::region_format::print_result_prefix(fmt, &self.0)?;
-        fmt.write(format!(
-            "scf.ordered_for %{} = %{} to %{} step %{}",
-            ports[0].number(),
-            self.lower_bound().number(),
-            self.upper_bound().number(),
-            CountedLoop::step(self).number()
-        ))?;
-        binding::print_port_bindings(fmt, &ports[1..], &inits)?;
-        tir::region_format::print_op_region(fmt, &context, self, 0)
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let counter_name = parser
-            .parse_value_ref()
-            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
-            .to_string();
-        binding::expect(parser, "=")?;
-        let lb = binding::value(parser, context)?;
-        binding::expect(parser, "to")?;
-        let ub = binding::value(parser, context)?;
-        binding::expect(parser, "step")?;
-        let step = binding::value(parser, context)?;
-        let bound = binding::parse_port_bindings(parser, context)?;
-
-        let counter_type = context.get_value(lb).ty();
-        let counter = context.create_value(counter_type, None);
-        parser.define_value(&counter_name, counter.id());
-        let mut ports = vec![counter];
-        ports.extend(bound.ports.iter().cloned());
-        let body = parser.parse_region_with_entry_args(context, ports)?.id();
-
-        let mut result_types = vec![counter_type];
-        result_types.extend(bound.ports.iter().map(tir::Value::ty));
-        Ok(Box::new(OrderedForOp::new(
-            context,
-            lb,
-            bound.inits,
-            ub,
-            step,
-            result_types,
-            Some(body),
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
-    }
+pub(crate) fn ordered_for_countedloop_upper_bound(operation: &tir::OpHandle) -> ValueId {
+    let operands = operation.value_operands();
+    operands[operands.len() - 2]
 }
 
-impl tir::Verifiable for OrderedForOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_body(context, self)
-    }
+pub(crate) fn ordered_for_countedloop_step(operation: &tir::OpHandle) -> ValueId {
+    let operands = operation.value_operands();
+    operands[operands.len() - 1]
 }
 
-fn verify_body(context: &Context, op: &OrderedForOp) -> Result<(), Error> {
-    let body = context.get_region(op.0.regions()[0]);
+pub(crate) fn ordered_for_countedloop_induction(__operation: &tir::OpHandle) -> Option<usize> {
+    Some(0)
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) static __TIR_IFACE_OrderedForOp_CountedLoop: crate::CountedLoopCallbacks =
+    crate::CountedLoopCallbacks {
+        lower_bound: crate::scf::ordered_for_countedloop_lower_bound,
+        upper_bound: crate::scf::ordered_for_countedloop_upper_bound,
+        step: crate::scf::ordered_for_countedloop_step,
+        induction: Some(crate::scf::ordered_for_countedloop_induction),
+    };
+
+/// What the ports past the counter take on the first iteration: the
+/// declared inits, then the states threading has carried in.
+pub fn ordered_for_inits(operation: &tir::OpHandle) -> Vec<ValueId> {
+    let operands = operation.operands();
+    operands[1..operands.len() - 2].to_vec()
+}
+
+pub(crate) fn ordered_for_custom_print(
+    operation: &tir::OpHandle,
+    fmt: &mut tir::IRFormatter,
+) -> Result<(), std::fmt::Error> {
+    let context = operation.context.clone();
+    let body = context.get_region(operation.regions()[0]);
+    let ports: Vec<ValueId> = body.ports().iter().map(tir::Value::id).collect();
+    let inits = crate::scf::ordered_for_inits(operation);
+    tir::region_format::print_result_prefix(fmt, operation)?;
+    fmt.write(format!(
+        "scf.ordered_for %{} = %{} to %{} step %{}",
+        ports[0].number(),
+        crate::scf::ordered_for_countedloop_lower_bound(operation).number(),
+        crate::scf::ordered_for_countedloop_upper_bound(operation).number(),
+        ordered_for_countedloop_step(operation).number()
+    ))?;
+    binding::print_port_bindings(fmt, &ports[1..], &inits)?;
+    tir::region_format::print_op_region(fmt, &context, operation, 0)
+}
+
+pub(crate) fn ordered_for_custom_parse(
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+) -> Result<tir::OpHandle, (tir::parse::Span, Error)> {
+    let counter_name = parser
+        .parse_value_ref()
+        .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
+        .to_string();
+    binding::expect(parser, "=")?;
+    let lb = binding::value(parser, context)?;
+    binding::expect(parser, "to")?;
+    let ub = binding::value(parser, context)?;
+    binding::expect(parser, "step")?;
+    let step = binding::value(parser, context)?;
+    let bound = binding::parse_port_bindings(parser, context)?;
+
+    let counter_type = context.get_value(lb).ty();
+    let counter = context.create_value(counter_type, None);
+    parser.define_value(&counter_name, counter.id());
+    let mut ports = vec![counter];
+    ports.extend(bound.ports.iter().cloned());
+    let body = parser.parse_region_with_entry_args(context, ports)?.id();
+
+    let mut result_types = vec![counter_type];
+    result_types.extend(bound.ports.iter().map(tir::Value::ty));
+    Ok(r#ordered_for(
+        context,
+        lb,
+        bound.inits,
+        ub,
+        step,
+        result_types,
+        Some(body),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    ))
+}
+
+pub(crate) fn ordered_for_verify_impl(
+    operation: &tir::OpHandle,
+    context: &Context,
+) -> Result<(), Error> {
+    verify_body(context, operation)
+}
+
+fn verify_body(context: &Context, op: &crate::OpHandle) -> Result<(), Error> {
+    let body = context.get_region(op.regions()[0]);
     let ports = body.ports();
-    let inits = op.inits();
+    let inits = crate::scf::ordered_for_inits(op);
     let fail = |message: String| Err(Error::VerificationError(message));
     if ports.len() != inits.len() + 1 {
         return fail(format!(
@@ -140,7 +150,7 @@ fn verify_body(context: &Context, op: &OrderedForOp) -> Result<(), Error> {
             ));
         }
     }
-    let results = op.0.value_results();
+    let results = op.value_results();
     if results.len() != ports.len() {
         return fail(format!(
             "scf.ordered_for carries {} ports but has {} results",
@@ -154,7 +164,7 @@ fn verify_body(context: &Context, op: &OrderedForOp) -> Result<(), Error> {
     let Some(latch) = entry.op_ids().last().map(|&id| context.get_op(id)) else {
         return fail("scf.ordered_for body has no terminator".into());
     };
-    if !latch.is::<crate::scf::YieldOp>() {
+    if !latch.is_operation(&crate::scf::YIELD) {
         return fail("an scf.ordered_for body must end in scf.yield".into());
     }
     let yielded = latch.value_operands();

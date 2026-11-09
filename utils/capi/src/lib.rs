@@ -24,7 +24,6 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
-use tir::builtin::ModuleOp;
 use tir::{Context, IRFormatter, OpHandle, OpId, Operation, PassManager};
 
 /// Sentinel returned by id-producing functions on failure.
@@ -185,7 +184,7 @@ pub unsafe extern "C" fn tir_parse_module(
                 let Some(src) = str_from_raw(src, len) else {
                     return TIR_INVALID_ID;
                 };
-                match tir::parse::ir::parse_ir::<ModuleOp>(ctx, src) {
+                match tir::parse::ir::parse_operation(ctx, src, &tir::builtin::MODULE) {
                     Ok(module) => module.id().number(),
                     Err((span, err)) => {
                         set_error(format!("parse failed at byte {}: {err:?}", span.0));

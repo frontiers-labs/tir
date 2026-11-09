@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 
 use tir::attributes::AttributeValue;
-use tir::builtin::{FloatType, IntegerType, ModuleOp as BuiltinModuleOp, UnitType, ops as bops};
+use tir::builtin::{FloatType, IntegerType, UnitType, ops as bops};
 use tir::cfg::ops as cbops;
-use tir::func::{FuncOp, ops as func_ops};
+use tir::func::ops as func_ops;
 use tir::vector::VectorType;
-use tir::{BlockHandle, Context, Operation, TypeId, ValueId};
+use tir::{BlockHandle, Context, OpHandle, Operation, TypeId, ValueId};
 
 use super::*;
 
@@ -13,11 +13,11 @@ const MAGIC: u32 = 0x0723_0203;
 
 type Result<T> = std::result::Result<T, String>;
 
-pub fn write_binary(_context: &Context, _root: &BuiltinModuleOp) -> Result<Vec<u8>> {
+pub fn write_binary(_context: &Context, _root: &OpHandle) -> Result<Vec<u8>> {
     Err("SPIR-V binary emission is unavailable during the IR migration".into())
 }
 
-pub fn read_binary(context: &Context, bytes: &[u8]) -> Result<BuiltinModuleOp> {
+pub fn read_binary(context: &Context, bytes: &[u8]) -> Result<OpHandle> {
     if !bytes.len().is_multiple_of(4) {
         return Err("SPIR-V binary length is not a multiple of four".into());
     }
@@ -78,7 +78,7 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn read(mut self) -> Result<BuiltinModuleOp> {
+    fn read(mut self) -> Result<OpHandle> {
         self.collect_metadata()?;
         self.collect_types()?;
         let root = bops::module(
@@ -90,19 +90,19 @@ impl<'a> Reader<'a> {
         let region = self.context.create_region();
         let block = self.context.create_block(vec![]);
         region.add_block(block.id());
-        ModuleOp::new(
+        super::r#module(
             self.context,
             AttributeValue::Str(version_string(self.version).into()),
             AttributeValue::Str(self.addressing_model()?.into()),
             AttributeValue::Str(self.memory_model()?.into()),
             Some(region.id()),
             Default::default(),
-            root.body().end(),
+            bops::module_body(&root).end(),
         );
         let body = block;
         for inst in self.instructions.clone() {
             if inst.opcode == 17 {
-                CapabilityOp::new(
+                super::r#Capability(
                     self.context,
                     AttributeValue::Str(capability_name(inst.operands[0])?.into()),
                     Default::default(),
@@ -113,8 +113,8 @@ impl<'a> Reader<'a> {
         self.read_globals(&body)?;
         self.read_entries(&body)?;
         self.read_functions(&body)?;
-        ModuleEndOp::new(self.context, Default::default(), body.end());
-        let root_body = root.body();
+        super::r#module_end(self.context, Default::default(), body.end());
+        let root_body = bops::module_body(&root);
 
         bops::module_end(self.context, Default::default(), root_body.end());
         Ok(root)
@@ -198,7 +198,7 @@ impl<'a> Reader<'a> {
                 .unwrap_or_else(|| format!("global_{id}"));
             let storage = storage_class(o[2])?;
             let decorations = self.ir_decorations(id)?;
-            let op = GlobalVariableOp::new(
+            let op = super::r#GlobalVariable(
                 self.context,
                 tir::attributes::AttributeValue::Str((name).into()),
                 tir::attributes::AttributeValue::Str((storage.name()).into()),
@@ -207,7 +207,7 @@ impl<'a> Reader<'a> {
                 Default::default(),
                 body.end(),
             );
-            self.values.insert(id, op.result());
+            self.values.insert(id, op.value_results()[0]);
         }
         Ok(())
     }
@@ -228,7 +228,7 @@ impl<'a> Reader<'a> {
                         )
                     })
                     .collect();
-                EntryPointOp::new(
+                super::r#EntryPoint(
                     self.context,
                     tir::attributes::AttributeValue::Str(
                         (execution_model_name(inst.operands[0])?).into(),
@@ -244,7 +244,7 @@ impl<'a> Reader<'a> {
                     .get(&inst.operands[0])
                     .cloned()
                     .unwrap_or_else(|| format!("function_{}", inst.operands[0]));
-                ExecutionModeOp::new(
+                super::r#ExecutionMode(
                     self.context,
                     tir::attributes::AttributeValue::Str((function).into()),
                     tir::attributes::AttributeValue::Str(
@@ -311,7 +311,7 @@ impl<'a> Reader<'a> {
         &mut self,
         instructions: &[RawInst],
         insertion: tir::InsertionPoint,
-    ) -> Result<FuncOp> {
+    ) -> Result<OpHandle> {
         let header = &instructions[0].operands;
         let return_type = self.type_ref(header[0])?;
         let function_id = header[1];
@@ -378,27 +378,27 @@ impl<'a> Reader<'a> {
             let (_op_id, result) = match inst.opcode {
                 43 => {
                     let ty = self.type_ref(o[0])?;
-                    let op = ConstantOp::new(
+                    let op = super::r#Constant(
                         self.context,
                         decode_constant(self.context, ty, &o[2..])?,
                         ty,
                         Default::default(),
                         block.end(),
                     );
-                    (op.id(), Some((o[1], op.result())))
+                    (op.id(), Some((o[1], op.value_results()[0])))
                 }
                 61 => {
-                    let op = LoadOp::new(
+                    let op = super::r#Load(
                         self.context,
                         self.value_ref(o[2])?,
                         self.type_ref(o[0])?,
                         Default::default(),
                         block.end(),
                     );
-                    (op.id(), Some((o[1], op.result())))
+                    (op.id(), Some((o[1], op.value_results()[0])))
                 }
                 62 => {
-                    let op = StoreOp::new(
+                    let op = super::r#Store(
                         self.context,
                         self.value_ref(o[0])?,
                         self.value_ref(o[1])?,
@@ -408,7 +408,7 @@ impl<'a> Reader<'a> {
                     (op.id(), None)
                 }
                 65 => {
-                    let op = AccessChainOp::new(
+                    let op = super::r#AccessChain(
                         self.context,
                         self.value_ref(o[2])?,
                         o[3..]
@@ -419,10 +419,10 @@ impl<'a> Reader<'a> {
                         Default::default(),
                         block.end(),
                     );
-                    (op.id(), Some((o[1], op.result())))
+                    (op.id(), Some((o[1], op.value_results()[0])))
                 }
                 81 => {
-                    let op = CompositeExtractOp::new(
+                    let op = super::r#CompositeExtract(
                         self.context,
                         self.value_ref(o[2])?,
                         AttributeValue::Array(
@@ -436,10 +436,10 @@ impl<'a> Reader<'a> {
                         Default::default(),
                         block.end(),
                     );
-                    (op.id(), Some((o[1], op.result())))
+                    (op.id(), Some((o[1], op.value_results()[0])))
                 }
                 224 => {
-                    let op = ControlBarrierOp::new(
+                    let op = super::r#ControlBarrier(
                         self.context,
                         self.value_ref(o[0])?,
                         self.value_ref(o[1])?,
@@ -450,7 +450,7 @@ impl<'a> Reader<'a> {
                     (op.id(), None)
                 }
                 225 => {
-                    let op = MemoryBarrierOp::new(
+                    let op = super::r#MemoryBarrier(
                         self.context,
                         self.value_ref(o[0])?,
                         self.value_ref(o[1])?,
@@ -501,7 +501,7 @@ impl<'a> Reader<'a> {
                     )
                 }
                 253 => (
-                    ReturnOp::new(
+                    super::r#Return(
                         self.context,
                         tir::Operand::none(),
                         Default::default(),
@@ -511,7 +511,7 @@ impl<'a> Reader<'a> {
                     None,
                 ),
                 254 => (
-                    ReturnOp::new(
+                    super::r#Return(
                         self.context,
                         self.value_ref(o[0])?,
                         Default::default(),

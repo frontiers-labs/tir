@@ -1,0 +1,80 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type cir = Dialect;
+
+extern fn for_verifier(operation: Operation, context: Context) -> Validation;
+extern let for_iface_ExitScope: Interface;
+extern fn for_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn for_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern fn while_verifier(operation: Operation, context: Context) -> Validation;
+extern let while_iface_ExitScope: Interface;
+extern fn while_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn while_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern fn do_verifier(operation: Operation, context: Context) -> Validation;
+extern let do_iface_ExitScope: Interface;
+extern fn do_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn do_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern let condition_iface_Terminator: Interface;
+extern let yield_iface_Terminator: Interface;
+extern let break_iface_Terminator: Interface;
+extern let break_iface_NonLocalExit: Interface;
+extern let continue_iface_Terminator: Interface;
+extern let continue_iface_NonLocalExit: Interface;
+
+pub let cir::va_start = {
+    signature: () -> VaList,
+};
+
+pub let cir::va_arg = {
+    signature: (list: VaList) -> Any,
+};
+
+pub let cir::va_end = {
+    signature: (list: VaList) -> (),
+};
+
+pub let cir::r#for = {
+    signature: () -> (),
+    verify: for_verifier,
+    interfaces: [for_iface_ExitScope],
+    regions: { condition_region: { kind: RegionKind::Blocks(), variadic: false }, step_region: { kind: RegionKind::Blocks(), variadic: false }, body_region: { kind: RegionKind::Blocks(), variadic: false } },
+    assembly: { print: for_printer, parse: for_parser },
+};
+
+pub let cir::r#while = {
+    signature: () -> (),
+    verify: while_verifier,
+    interfaces: [while_iface_ExitScope],
+    regions: { condition_region: { kind: RegionKind::Blocks(), variadic: false }, body_region: { kind: RegionKind::Blocks(), variadic: false } },
+    assembly: { print: while_printer, parse: while_parser },
+};
+
+pub let cir::r#do = {
+    signature: () -> (),
+    verify: do_verifier,
+    interfaces: [do_iface_ExitScope],
+    regions: { body_region: { kind: RegionKind::Blocks(), variadic: false }, condition_region: { kind: RegionKind::Blocks(), variadic: false } },
+    assembly: { print: do_printer, parse: do_parser },
+};
+
+pub let cir::condition = {
+    signature: (condition: Int<1>) -> (),
+    interfaces: [condition_iface_Terminator],
+};
+
+pub let cir::r#yield = {
+    signature: () -> (),
+    interfaces: [yield_iface_Terminator],
+};
+
+pub let cir::r#break = {
+    signature: () -> (),
+    interfaces: [break_iface_Terminator, break_iface_NonLocalExit],
+};
+
+pub let cir::r#continue = {
+    signature: () -> (),
+    interfaces: [continue_iface_Terminator, continue_iface_NonLocalExit],
+};

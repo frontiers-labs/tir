@@ -2,17 +2,14 @@
 //! mismatch is attributed to the pass rather than to whatever compiles its
 //! output.
 
-use tir::builtin::ModuleOp;
-use tir::func::FuncOp;
 use tir::interp::{self, Value};
 use tir::utils::APInt;
-use tir::{Context, Operation};
+use tir::{Context, OpHandle, Operation};
 
-pub fn evaluate(context: &Context, module: &ModuleOp, arguments: &[i64]) -> Option<i64> {
-    let func = module
-        .body()
+pub fn evaluate(context: &Context, module: &OpHandle, arguments: &[i64]) -> Option<i64> {
+    let func = tir::builtin::module_body(module)
         .iter(context.clone())
-        .find_map(|op| op.as_op::<FuncOp>())?;
+        .find_map(|op| op.as_operation(&tir::func::FUNC))?;
     let arguments = arguments
         .iter()
         .map(|&value| Value::Int(APInt::new_signed(64, value)))

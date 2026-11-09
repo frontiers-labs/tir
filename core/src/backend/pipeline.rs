@@ -1,5 +1,5 @@
 use crate::backend::{TargetMachine, isel::InstructionSelectPass};
-use tir::{Context, PassError, PassManager, builtin::ModuleOp};
+use tir::{Context, PassError, PassManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopAfter {
@@ -35,7 +35,7 @@ pub fn build_pipeline(
 pub fn lower_and_emit(
     _target: &dyn TargetMachine,
     _context: &Context,
-    _module: &ModuleOp,
+    _module: &crate::OpHandle,
     _isel: InstructionSelectPass,
     _oracles: Oracles,
     _emit: impl FnMut(&Context, &tir::OpHandle) -> Result<(), String>,

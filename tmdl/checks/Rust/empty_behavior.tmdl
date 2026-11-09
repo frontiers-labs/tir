@@ -17,4 +17,4 @@ instruction Nop for [Test] {
     behavior { }
 }
 
-// CHECK: NopOp
+// CHECK: pub static NOP: tir::OpDefSpec

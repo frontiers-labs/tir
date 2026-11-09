@@ -241,7 +241,7 @@ fn arm64_branch_link_writes_the_link_register_and_pc() {
 
     let mut ex = Executor::new(64);
     MachineContext::write_pc(&mut ex, 0x2000);
-    let bl = tir_arm64::BranchLinkOp::new(
+    let bl = tir_arm64::bl(
         &context,
         tir::Operand::none(),
         AttributeValue::Int(3),

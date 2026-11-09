@@ -1,0 +1,21 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type son = Dialect;
+
+extern fn branch_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn branch_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let son::merge = {
+    signature: (incoming: Many<Control>) -> (control: Control,),
+};
+
+pub let son::edge<StateResources> = {
+    signature: (control: Control, arguments: Many<Any>, state: States<StateResources>) -> (edge: Control,),
+};
+
+pub let son::branch = {
+    signature: (control: Control, predicate: Int<1>) -> (taken: Control, fallthrough: Control,),
+    assembly: { print: branch_printer, parse: branch_parser },
+};

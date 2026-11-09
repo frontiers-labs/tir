@@ -1,0 +1,99 @@
+{
+  "attributes": {
+    "?Array": {
+      "codec": "_array_codec",
+      "type": "Optional<AttrArray>"
+    },
+    "?Dict": {
+      "codec": "_dict_codec",
+      "type": "Optional<AttrDict>"
+    },
+    "?Flag": {
+      "codec": "_flag_codec",
+      "type": "Optional<Bool>"
+    },
+    "?Type": {
+      "codec": "_type_codec",
+      "type": "Optional<AttrType>"
+    },
+    "Block": {
+      "codec": "block_codec",
+      "type": "AttrBlock"
+    },
+    "Bool": {
+      "codec": "bool_codec",
+      "type": "Bool"
+    },
+    "EvaluationContract": {
+      "codec": "evaluationcontract_codec",
+      "type": "AttrEvaluationContract"
+    },
+    "FpSemantics": {
+      "codec": "fpsemantics_codec",
+      "type": "AttrFpSemantics"
+    },
+    "Int": {
+      "codec": "int_codec",
+      "type": "AttrInt"
+    },
+    "Predicate in FLOAT": {
+      "codec": "predicate_codec",
+      "type": "AttrPredicate"
+    },
+    "Predicate in INTEGER": {
+      "codec": "predicate_codec",
+      "type": "AttrPredicate"
+    },
+    "Predicate in POINTER": {
+      "codec": "predicate_codec",
+      "type": "AttrPredicate"
+    },
+    "Str": {
+      "codec": "str_codec",
+      "type": "String"
+    },
+    "Type": {
+      "codec": "type_codec",
+      "type": "AttrType"
+    },
+    "UInt": {
+      "codec": "uint_codec",
+      "type": "AttrUInt"
+    }
+  },
+  "bindings": "BindKind / BindTerm / BindSlice / BindIndex ordinary data",
+  "bounds": {
+    "Count<C>": "forall C: index | int<_>"
+  },
+  "models": "typed flattened extern fn; Rust fn(&OpHandle,&mut SemGraph)->Option<NodeId>",
+  "sorts": {
+    "C": "Count<C>",
+    "T": "T",
+    "_": "Any",
+    "_*": "Many<Any>",
+    "_?": "Optional<Any>",
+    "backend.reg<_, _>": "AnyReg",
+    "float<E, M>": "Float<E, M>",
+    "float<_, _>": "AnyFloat",
+    "fn<_, _>": "AnyFn",
+    "fp.env": "FpEnv",
+    "fp.rounding": "FpRounding",
+    "index": "Index",
+    "index?": "Optional<Index>",
+    "int<1>": "Int<1>",
+    "int<5>": "Int<5>",
+    "int<64>": "Int<64>",
+    "int<8>": "Int<8>",
+    "int<W>": "Int<W>",
+    "int<_>": "AnyInt",
+    "layout.fields": "LayoutFields",
+    "layout.type": "LayoutType",
+    "ptr.p<_>": "AnyPtr",
+    "son.control": "Control",
+    "son.control*": "Many<Control>",
+    "state<_>*": "Many<AnyState>",
+    "tuple<_>": "AnyTuple",
+    "vector.v<N, T>": "Vector<N, T>"
+  },
+  "state_bundle": "States<StateResources>, removed from value ports and retained as state ports"
+}

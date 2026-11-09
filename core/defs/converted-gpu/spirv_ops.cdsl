@@ -1,0 +1,84 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type spirv = Dialect;
+
+type module_attributes = Record<{ version: String, addressing_model: String, memory_model: String }>;
+extern let module_end_iface_Terminator: Interface;
+type Capability_attributes = Record<{ name: String }>;
+type GlobalVariable_attributes = Record<{ sym_name: String, storage_class: String, decorations: AttrDict }>;
+type EntryPoint_attributes = Record<{ execution_model: String, function: String, interfaces: AttrArray }>;
+type ExecutionMode_attributes = Record<{ function: String, mode: String, values: AttrArray }>;
+type Constant_attributes = Record<{ value: AttrAny }>;
+type CompositeExtract_attributes = Record<{ indices: AttrArray }>;
+extern fn AccessChain_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn AccessChain_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern let Return_iface_Terminator: Interface;
+
+pub let spirv::module = {
+    signature: () -> (),
+    attributes: { version: { ty: String, codec: str_codec }, addressing_model: { ty: String, codec: str_codec }, memory_model: { ty: String, codec: str_codec } },
+    regions: { body: { kind: RegionKind::Blocks(), variadic: false } },
+};
+
+pub let spirv::module_end = {
+    signature: () -> (),
+    interfaces: [module_end_iface_Terminator],
+};
+
+pub let spirv::Capability = {
+    signature: () -> (),
+    attributes: { name: { ty: String, codec: str_codec } },
+};
+
+pub let spirv::GlobalVariable = {
+    signature: () -> Any,
+    attributes: { sym_name: { ty: String, codec: str_codec }, storage_class: { ty: String, codec: str_codec }, decorations: { ty: AttrDict, codec: dict_codec } },
+};
+
+pub let spirv::EntryPoint = {
+    signature: () -> (),
+    attributes: { execution_model: { ty: String, codec: str_codec }, function: { ty: String, codec: str_codec }, interfaces: { ty: AttrArray, codec: array_codec } },
+};
+
+pub let spirv::ExecutionMode = {
+    signature: () -> (),
+    attributes: { function: { ty: String, codec: str_codec }, mode: { ty: String, codec: str_codec }, values: { ty: AttrArray, codec: array_codec } },
+};
+
+pub let spirv::Constant = {
+    signature: () -> Any,
+    attributes: { value: { ty: AttrAny, codec: any_codec } },
+};
+
+pub let spirv::Load = {
+    signature: (pointer: Any) -> Any,
+};
+
+pub let spirv::Store = {
+    signature: (pointer: Any, value: Any) -> (),
+};
+
+pub let spirv::ControlBarrier = {
+    signature: (execution_scope: Any, memory_scope: Any, memory_semantics: Any) -> (),
+};
+
+pub let spirv::MemoryBarrier = {
+    signature: (memory_scope: Any, memory_semantics: Any) -> (),
+};
+
+pub let spirv::CompositeExtract = {
+    signature: (composite: Any) -> Any,
+    attributes: { indices: { ty: AttrArray, codec: array_codec } },
+};
+
+pub let spirv::AccessChain = {
+    signature: (base: Any, indices: Many<Any>) -> Any,
+    assembly: { print: AccessChain_printer, parse: AccessChain_parser },
+};
+
+pub let spirv::Return = {
+    signature: (value: Optional<Any>) -> (),
+    interfaces: [Return_iface_Terminator],
+};

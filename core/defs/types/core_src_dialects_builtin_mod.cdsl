@@ -1,0 +1,60 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let IntegerType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let IntegerType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let IntegerType_ctor_id: (context: Context) -> CtorId;
+extern let FloatType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let FloatType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let FloatType_ctor_id: (context: Context) -> CtorId;
+extern let INDEX_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let INDEX_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let IndexType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let IndexType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let IndexType_ctor_id: (context: Context) -> CtorId;
+extern let UnitType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let UnitType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let UnitType_ctor_id: (context: Context) -> CtorId;
+
+pub let spellings::IntegerType: SpellingSpec = {
+    ctor_id: IntegerType_ctor_id,
+    keys: ["i"],
+    parse: IntegerType_parse,
+    print: IntegerType_print,
+    variadic_tail: false,
+};
+
+pub let spellings::FloatType: SpellingSpec = {
+    ctor_id: FloatType_ctor_id,
+    keys: ["f", "bf"],
+    parse: FloatType_parse,
+    print: FloatType_print,
+    variadic_tail: false,
+};
+
+pub let constructors::INDEX: ConstructorSpec = {
+    dialect: "builtin",
+    name: "index",
+    params: [],
+    kind: Kind::Data(),
+    validate: INDEX_validate,
+    carrier: INDEX_carrier,
+};
+
+pub let spellings::IndexType: SpellingSpec = {
+    ctor_id: IndexType_ctor_id,
+    keys: ["index"],
+    parse: IndexType_parse,
+    print: IndexType_print,
+    variadic_tail: false,
+};
+
+pub let spellings::UnitType: SpellingSpec = {
+    ctor_id: UnitType_ctor_id,
+    keys: ["unit"],
+    parse: UnitType_parse,
+    print: UnitType_print,
+    variadic_tail: false,
+};

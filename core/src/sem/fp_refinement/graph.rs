@@ -6,9 +6,9 @@ use crate::fp::{
     AccuracyRequirement, ArithmeticSemantics, EvaluationContract, ScopedFacts, Semantics,
     TransformPermissions,
 };
-use crate::{Context, OpId, Operation, ValueId};
+use crate::{Context, OpId, ValueId};
 
-use super::{ContractionCandidate, ContractionProposal, FusedForm, RefinementError, RoundOp};
+use super::{ContractionCandidate, ContractionProposal, FusedForm, RefinementError};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ReferenceSnapshot(GraphSnapshot);
@@ -33,9 +33,9 @@ struct MatchedContraction {
 
 pub(super) fn contraction_proposals(
     context: &Context,
-    round: &RoundOp,
+    round: &crate::OpHandle,
 ) -> Result<Vec<ContractionProposal>, RefinementError> {
-    let reference = round.reference_region();
+    let reference = crate::fp::round_reference_region(round);
     let captures = round.operands();
     let aliases = capture_aliases(&captures);
     let boundaries = reference
@@ -139,8 +139,8 @@ enum CanonicalAttribute {
 }
 
 impl ReferenceSnapshot {
-    pub fn capture(context: &Context, round: &RoundOp) -> Result<Self, RefinementError> {
-        let reference = round.reference_region();
+    pub fn capture(context: &Context, round: &crate::OpHandle) -> Result<Self, RefinementError> {
+        let reference = crate::fp::round_reference_region(round);
         let captures = round.operands();
         let aliases = capture_aliases(&captures);
         let boundaries = reference
@@ -156,10 +156,10 @@ impl ReferenceSnapshot {
 
     pub(crate) fn capture_contraction(
         context: &Context,
-        round: &RoundOp,
+        round: &crate::OpHandle,
         candidate: &ContractionCandidate,
     ) -> Result<(Self, ContractionSite), RefinementError> {
-        let reference = round.reference_region();
+        let reference = crate::fp::round_reference_region(round);
         let captures = round.operands();
         let aliases = capture_aliases(&captures);
         let boundaries = reference
@@ -196,10 +196,10 @@ impl ReferenceSnapshot {
 impl CandidateSnapshot {
     pub fn capture(
         context: &Context,
-        round: &RoundOp,
+        round: &crate::OpHandle,
         candidate: &ContractionCandidate,
     ) -> Result<Self, RefinementError> {
-        let yielded = round.reference_region().results();
+        let yielded = crate::fp::round_reference_region(round).results();
         if candidate.result_mapping.len() != yielded.len()
             || candidate
                 .result_mapping
@@ -633,7 +633,7 @@ impl<'a> GraphBuilder<'a> {
             return Err(RefinementError::StaleOperation);
         }
         let handle = self.context.get_op(operation);
-        let nested_round = handle.clone().as_op::<RoundOp>();
+        let nested_round = handle.clone().as_operation(&crate::fp::ROUND);
         if !handle.regions().is_empty() && nested_round.is_none() {
             return Err(RefinementError::UnsupportedForm);
         }

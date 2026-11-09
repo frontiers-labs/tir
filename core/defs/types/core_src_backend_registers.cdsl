@@ -1,0 +1,27 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let REG_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let REG_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let RegClassType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let RegClassType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let RegClassType_ctor_id: (context: Context) -> CtorId;
+
+pub let constructors::REG: ConstructorSpec = {
+    dialect: "backend",
+    name: "reg",
+    params: [{ name: "target", param: Param::One(Kind::Sym()) }, { name: "class", param: Param::One(Kind::Sym()) }],
+    kind: Kind::Data(),
+    validate: REG_validate,
+    carrier: REG_carrier,
+};
+
+pub let spellings::RegClassType: SpellingSpec = {
+    ctor_id: RegClassType_ctor_id,
+    keys: [],
+    parse: RegClassType_parse,
+    print: RegClassType_print,
+    variadic_tail: false,
+};

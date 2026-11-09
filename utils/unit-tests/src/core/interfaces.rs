@@ -114,7 +114,7 @@ fn a_call_declares_conservative_resource_effects() {
         .op_ids()
         .into_iter()
         .map(|op| context.get_op(op))
-        .find(|op| op.is::<tir::func::CallOp>())
+        .find(|op| op.is_operation(&tir::func::CALL))
         .expect("the body holds the call");
 
     let effects = call

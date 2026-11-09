@@ -32,7 +32,7 @@ pub fn fcc_context() -> tir::Context {
 }
 
 /// Run the frontend pipeline down to CIR under the default language options.
-pub fn lower(source: &str) -> (tir::Context, tir::builtin::ModuleOp) {
+pub fn lower(source: &str) -> (tir::Context, tir::OpHandle) {
     let options = Default::default();
     let unit = fcc::parser::parse(&lex("<test>", source), options).expect("parse");
     let context = fcc_context();
@@ -41,7 +41,7 @@ pub fn lower(source: &str) -> (tir::Context, tir::builtin::ModuleOp) {
     (context, module)
 }
 
-pub fn print_ir(module: &tir::builtin::ModuleOp) -> String {
+pub fn print_ir(module: &tir::OpHandle) -> String {
     let mut out = String::new();
     let mut fmt = tir::IRFormatter::new(&mut out);
     tir::Operation::print(module, &mut fmt).expect("print");

@@ -1,0 +1,27 @@
+mod library;
+use library::*;
+extern type constructors = TypeDefinitions;
+extern type spellings = TypeDefinitions;
+
+extern let PTR_validate: (terms: Terms, args: TypeArgs) -> Validation;
+extern let PTR_carrier: (terms: Terms, args: TypeArgs) -> Carrier;
+extern let PtrType_parse: (mnemonic: Mnemonic, parser: Parser, context: Context) -> ParseResult;
+extern let PtrType_print: (spellings: Spellings, ty: TypeId, formatter: Formatter) -> PrintResult;
+extern let PtrType_ctor_id: (context: Context) -> CtorId;
+
+pub let constructors::PTR: ConstructorSpec = {
+    dialect: "ptr",
+    name: "p",
+    params: [{ name: "pointee", param: Param::Opt(Kind::Data()) }],
+    kind: Kind::Data(),
+    validate: PTR_validate,
+    carrier: PTR_carrier,
+};
+
+pub let spellings::PtrType: SpellingSpec = {
+    ctor_id: PtrType_ctor_id,
+    keys: ["p"],
+    parse: PtrType_parse,
+    print: PtrType_print,
+    variadic_tail: false,
+};

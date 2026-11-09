@@ -7,6 +7,8 @@
 //! folding via [`Operation::semantic_expr`].
 
 use crate::{NodeId, OpId, Operation, TypeId};
+mod recipe;
+pub use recipe::{SemRecipe, SemRecipeStep, build_defined_recipe, build_recipe, build_recipe_with};
 
 pub use tir_symbolic::lang::{
     AtomicRmwOp, BuildError, Continuation, MemOrdering, Memory, SCALAR_OPS, ScalarOp,

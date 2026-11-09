@@ -1,0 +1,804 @@
+{
+  "count": 133,
+  "operations": [
+    {
+      "declaration_sha256": "3ad9e4c91701b008046b195d4499ce2b496b0f0c4aa19c58eb334176c214b031",
+      "fields_sha256": "f6bee1422eac1d9ccc1c309f6cdee7a941f5e88b7dff5a37f6be258808fdccb1",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.module"
+    },
+    {
+      "declaration_sha256": "4439106e6894547ba5bc90a478d556b8b9c4a9f99e8f3b935330ab0a132705f2",
+      "fields_sha256": "1ba99166baed81db7a5fccedfbf078fb300db9123d306b9840278e2b9e09c210",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.module_end"
+    },
+    {
+      "declaration_sha256": "f60d7555cfa583d1578ddf0fa973cbde687fbf815f0496f18e2fd7058c1b7f27",
+      "fields_sha256": "0ed6723a8415323ba528af30b393d6038660e60d6a57a56c886985d554658b2a",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.Capability"
+    },
+    {
+      "declaration_sha256": "b00fa842c2ca64641a92374893447ff5091b28af7b3935c13eea92855cfc0215",
+      "fields_sha256": "8f1b77e3edce3607fa1f3d3e462449f2ef22cdd5bd5689ce53a874801bfd667c",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.GlobalVariable"
+    },
+    {
+      "declaration_sha256": "bf9a44b80e87d8d4a1e4505f365531a1c91353c71e871dc5bdb47fdf0e69e223",
+      "fields_sha256": "91453c2550f1306825298031f55e97a1ecd6e9ed7ae50f2d077b29820bed4eb8",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.EntryPoint"
+    },
+    {
+      "declaration_sha256": "d3fd0f423f18ad9bf6e39ffa3f0231cbaf463030edbc3dd1900852492e36448f",
+      "fields_sha256": "7419e2f03ab834157d7f7cdbf5ae813a1bb6b9975fb49b7a92d404e0c1469dd1",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.ExecutionMode"
+    },
+    {
+      "declaration_sha256": "6b89635abf1547559baacd81d9663691730609a42efb65712cdd786e12063dc1",
+      "fields_sha256": "da37c52483601e56d6122b549b09856de8a8dae1a5ae1563afaeb6525df87564",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.Constant"
+    },
+    {
+      "declaration_sha256": "82044c2aac2c079728c06f1c8bb55f09bf8ef647c604b588d6416086e5f33ddc",
+      "fields_sha256": "73d3f56408ce6995f7b18f3370c84f8d1a0046057a142075eff14a8b3f5268ec",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.Load"
+    },
+    {
+      "declaration_sha256": "c6d26fc36e19d6f4fae11f31428eeb2930ada8c4d2444495279da669726a723c",
+      "fields_sha256": "f8b512e222fcf4a55ba48522d471b0be9ff61321b16c2a25f5cf66039a1c553d",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.Store"
+    },
+    {
+      "declaration_sha256": "99c759e4579e4a9641658eb61bb08284237425c3c31a0886ed362ace815aae89",
+      "fields_sha256": "659371a6c84b71e0c8a72aca075ae956fcd999ea7ae094b8a3bf8ad3df828436",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.ControlBarrier"
+    },
+    {
+      "declaration_sha256": "b4b90aa311bc9633f231f07b9588d7940a39d136bb7284465e40262f2f157e26",
+      "fields_sha256": "abc4af9852e1bd95d3777d5154c07c7587a35c2c05fcc8d01d268a12bd3b574c",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.MemoryBarrier"
+    },
+    {
+      "declaration_sha256": "d8a010163e11771a52967fc7c8d30ea7d409be2e91d0c3fe8325e4a3ded38574",
+      "fields_sha256": "3f548088d3d1d76e0df5115f6616b22c3c51c4c7075d36aaf0442a1401b1a0f1",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.CompositeExtract"
+    },
+    {
+      "declaration_sha256": "0c4305e30083125110f419efdff05730b811aeef4c89e11cee7d48537b550f61",
+      "fields_sha256": "3f8de63760becc2e40e189b1de57eb28f8b0d967487212afc07e87d2c18c29e1",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.AccessChain"
+    },
+    {
+      "declaration_sha256": "1a066f93b638b78c13c452b04a86e851460c3a339fa0ffdb8b2f81f14eefeb59",
+      "fields_sha256": "d184c32c66dced3199a94de160fc50ad16b45cb012e83c809c147ee4c8fa2472",
+      "file": "gpu/src/spirv/ops.rs",
+      "identity": "spirv.Return"
+    },
+    {
+      "declaration_sha256": "7b0b26ecc22c405961d44877a9be59ac6d5809fb15392f3c5fba41e693c71859",
+      "fields_sha256": "5330f33d01711d504682125a2672d3482f40e488a3b8346954dfcc14e5bef150",
+      "file": "gpu/src/ptx/mod.rs",
+      "identity": "ptx.label"
+    },
+    {
+      "declaration_sha256": "615d676c398763ed04335e5aef84ae38e2a7e1a30694ae32a16b94c2eed346f4",
+      "fields_sha256": "ed3ac1fd58fa7098e791058ca119ad0b50fba52fc20988d1b8bb5d9d78f18b01",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ImageTexelPointer"
+    },
+    {
+      "declaration_sha256": "bdf601de41e6e876cc1dd0eb372b7c3c03cd561bbd20d9f82284b05266b72cbb",
+      "fields_sha256": "d7e9c57ae655dee3e914a1f7a5e5878bc76069114a27afdc9b0c2aef9550bedf",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.GenericPtrMemSemantics"
+    },
+    {
+      "declaration_sha256": "5b678d02c0f220a6e5fb5de0c8a4e84e2b68045d2865094bcf64def854e7ce98",
+      "fields_sha256": "36f762223c9de349263e8ba7a5b2b11e1283b899bb90aa88970c54460587c0e1",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.VectorExtractDynamic"
+    },
+    {
+      "declaration_sha256": "acf6d559476491f2832b900cea1b24810c994e70e515e8a5c656148fa8ac2d2f",
+      "fields_sha256": "e12799306a758ffcb9a48cc5ad29e7842112b77c1833bb71f65054f0e7f859ec",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.VectorInsertDynamic"
+    },
+    {
+      "declaration_sha256": "9ea88aab63fc2238f43a795997ca490d62ce774b871cd8d7db847b1a6075ad44",
+      "fields_sha256": "fcba37b3c5527c3fdd82b91fa9f8f1d57127c4b4dffd53f9a3521ab5a19e0080",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.CopyObject"
+    },
+    {
+      "declaration_sha256": "9ad36d88794356585875172e293ee73121b74fac68c89aeba9f7636e723e9098",
+      "fields_sha256": "b42241ece25c08747bd39c0f8ed1528490aa48612075bc16fe4c9ba0c4ed3c96",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.Transpose"
+    },
+    {
+      "declaration_sha256": "91648f3028dfa4771949aec5336327ea2f8db32b2337df5acb118f278c924425",
+      "fields_sha256": "17dceedaa82b98e22b84a867eb695d939b33aad01472bba8260f8f62bdae5b26",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ConvertFToU"
+    },
+    {
+      "declaration_sha256": "60b04583c9cc96147c7541fba0a9c19f25f3a490627b43df7ec82b84ac15a12e",
+      "fields_sha256": "4321f2991bc852aa2e8826394b6efc49cba9c53f10323e17006e34bf233c09f2",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ConvertFToS"
+    },
+    {
+      "declaration_sha256": "cf8d36b25451c42c77c301d47240319bed2d91c05dfc7b34558cc80c2d5ca5c0",
+      "fields_sha256": "45f4dde52e8f33e0274d0b0b0d35dd6eac2f09e18d8c302371d86b8d77bf7e71",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ConvertSToF"
+    },
+    {
+      "declaration_sha256": "ce42e884cc98be50ac7a777fda86c519193794e7bed7d5415889095a2d1584c6",
+      "fields_sha256": "2f49f9fed2000e6f8c7c3ecf30c737686b2bd79d16f1de18fe711b8d3125897d",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ConvertUToF"
+    },
+    {
+      "declaration_sha256": "2c4e09b627009c2394d4dbc3490686e134b025dcd74138c45e2b4703ecd78ac6",
+      "fields_sha256": "8acce59f12af2a8310f193b92b9798f0fce2a043f6d1f00b1c345a642d3f68ac",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.UConvert"
+    },
+    {
+      "declaration_sha256": "284e130105baa5b1f94189d7642e98e473b14e55ab6ff3f042f5a7b613a512dd",
+      "fields_sha256": "1e535bd2a0d3f31f61b2df400c14026dbb17458ad169c23c022af9d986dc5f1f",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SConvert"
+    },
+    {
+      "declaration_sha256": "482c6eec601843bd30a22425e4c4b846f0b43b48d5cb657e97174b279a15a0c4",
+      "fields_sha256": "7c5f0fc88edbffb20539daa00d6ed62df53c252cb9ceaef5313a21333f9df2d4",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FConvert"
+    },
+    {
+      "declaration_sha256": "899607af923ab5bd0b70f6705a29b09cf72ff4b9d2dc27b13add72e4f4d12796",
+      "fields_sha256": "087349bd00eb5d3e98c4afbd6dfdd47704bbc7ffc16e23653f02b5c8b69d8873",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.QuantizeToF16"
+    },
+    {
+      "declaration_sha256": "abf68e394fdb0eae48c93857f688d6b992e5408b587f346487b932a720b0bf78",
+      "fields_sha256": "01d9fdfbde52c975626c0514256aed3839d8f265e44a055eb0c2bd8e9c23549e",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ConvertPtrToU"
+    },
+    {
+      "declaration_sha256": "4ed48f00de20a15f8ee44a679179a51d7508ee5f0822796910aa82293ee6bf8d",
+      "fields_sha256": "6f2afe6c80fa8606cf72a426e8b7f553a2956e6e9bd3209af3d692c21d4a325e",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SatConvertSToU"
+    },
+    {
+      "declaration_sha256": "11d7084cca44f231a33abdce7d8bfc1e97e4991ea5124235c4c8a9810f56009b",
+      "fields_sha256": "88f8acb6e1e45d281562b67497c6629822bfc8f51ecd66aff572e45b9df6fb5a",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SatConvertUToS"
+    },
+    {
+      "declaration_sha256": "998792743e98cc1edac2f7177846263cfad816dd690ab98aef3a91a6e9f16bb0",
+      "fields_sha256": "dbd732adf6f1e267c90561b1b60281033858d17e16121c8506414251e5d1a9ed",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ConvertUToPtr"
+    },
+    {
+      "declaration_sha256": "1721390a85ab84501d7a4e49ddde7927a367c25d8d2d56f5d2851bc69f9d8d7d",
+      "fields_sha256": "ffcde35d8c7ca2353c0f492b138f3be3f48d4fea3ff626e1727f3dd11efdc9fb",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.PtrCastToGeneric"
+    },
+    {
+      "declaration_sha256": "96dcffe421ce757d4a9c89475c6b738887e346c14b19a4c0c96634f9dbdc05d8",
+      "fields_sha256": "a9781b6e621ca3f29ee0d7203d9155c9978ebc556163326a57b265d4a080fd6f",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.GenericCastToPtr"
+    },
+    {
+      "declaration_sha256": "8cbe00e6019fa0dfdf5fc6bb9c1080a8d9861596b563c9d2ce9ea89c6985e4f5",
+      "fields_sha256": "b0c463efb231ffe542f59a330cb3e394d96e8ca5f139279282c47087d2b216a4",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.Bitcast"
+    },
+    {
+      "declaration_sha256": "cf13ba43a5c62d9596e588b1245943b547b35f305095ddeb9e4b61f322ac9358",
+      "fields_sha256": "3a841a403e20173fb9d7676e46303a1983235fa8e06410af0c30c1f7fd079278",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SNegate"
+    },
+    {
+      "declaration_sha256": "cc04808e6298d4d1c5a33db9351f2cf49ed80cc77a9b87e0f363e4548de466dd",
+      "fields_sha256": "9d15d25269cabbdd5c623a3a0518ca031d7abc6cb112089c55d0a85889ad6784",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FNegate"
+    },
+    {
+      "declaration_sha256": "09cf2c704210c9f45ea450177b8ce92ab9d88fd8ffe8588888e55488a23839bf",
+      "fields_sha256": "f9ed2c01e8630ec066204d2a0aaceba266e53ac567065abfac365fc46f77c1ef",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.IAdd"
+    },
+    {
+      "declaration_sha256": "0a9cc7c62b2702bedbe1d6d5587c30e1780ee520494a221fb17406a79b8805e0",
+      "fields_sha256": "997b1f1f1edcace91a5ddf9e2ff53aa50132d01d0b451081e2f392c298f4e4d0",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FAdd"
+    },
+    {
+      "declaration_sha256": "b53a0d37de5182ffa4cdf4c82a9fdf286386d416677d8716f9cefde21f7a997c",
+      "fields_sha256": "e262c586e25a1b1c05bdf69fbd2772dde8f56f0392446169d35434eaa2fd408f",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ISub"
+    },
+    {
+      "declaration_sha256": "40879b1e02d7a3a478f801b3510320670efe4b515d8027e194af9ddaaff57ddc",
+      "fields_sha256": "667c0fcec2753aea07030b2d0913c034c80b56f0b8275e136fc046935ccbabdc",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FSub"
+    },
+    {
+      "declaration_sha256": "de11d4c2df92476f77f64e0a2165879634cdcd7b261f9d3da866ce90afa798da",
+      "fields_sha256": "1de0a061fa21c53ae0c0a76af6cb701330c11fb491c4d929893af14f7091f18d",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.IMul"
+    },
+    {
+      "declaration_sha256": "5ba9ff2e13f933b0788c628fd96ed2c4c64a98547f83d15fc25d8f0467fd902f",
+      "fields_sha256": "2b414cbf2999f90d2f0dc0af2c9c5b231c5f606931eaa71b9963827396f28acc",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FMul"
+    },
+    {
+      "declaration_sha256": "4bd9f02f58b00e7e185dc238dfb07e6aef0ee9c660b37e3d2a3a033359e60a8c",
+      "fields_sha256": "6cca59eec9673b2e54b0ced57da3285c48d2098630959284d954def7508235ef",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.UDiv"
+    },
+    {
+      "declaration_sha256": "66aeced8b4b1ce10efb2661aa5a09159a5a2aff1bdad618f0f85d9e5ceb2e636",
+      "fields_sha256": "31d7c69827bbc962dc555bb58430bdeeb88eb8c2e346ac34ae3894d3e8ae1aae",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SDiv"
+    },
+    {
+      "declaration_sha256": "1b98f56f28aa7f95f75cfe0d16bfbb93143857de87e6febac31a9077a2c5e175",
+      "fields_sha256": "ff55b68092cdf53f9b1faae76940f35fff8f4ba1414bc1477c7531cf4b322008",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FDiv"
+    },
+    {
+      "declaration_sha256": "9c0f71155ab871d3033290b27126da1db9bfb04d79db3e612c04a1f8e29e1435",
+      "fields_sha256": "ed8eb81457375b3dd8611146d069a60d8ebc0f3d87c874247776258a84cf9382",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.UMod"
+    },
+    {
+      "declaration_sha256": "0a38a79f6747986ae54c0913c545a9f3c03cdaea57a75d9c6dbaf2f27798defb",
+      "fields_sha256": "9b7a6463860931a721a12312d76c11b7f07c7603f1093be6d71799b2f3863c64",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SRem"
+    },
+    {
+      "declaration_sha256": "7724fe1344b60139abfd3fc7a7c308d06e1efbc6f512e1f667cf64d40f0545c5",
+      "fields_sha256": "941172938099a4fcbbf3c674fbce698dcc8b2e6f53979e53cb3426d37d0e82f1",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SMod"
+    },
+    {
+      "declaration_sha256": "59c0beb115d6ffc1dcf838eba50ac89284383c83b7404b2d3ad2299b7c3dc584",
+      "fields_sha256": "95dc80e9b800ed4784346e2475ae988302a3a037f19203348afd7f9c731cea7a",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FRem"
+    },
+    {
+      "declaration_sha256": "ddc4b4845ae2913b2411415fc73bf753116df0d2fd10f3a7e4f140f10fafa779",
+      "fields_sha256": "aa5ea5b84aaf5df201cfee29b96484b73e246bb843390236742497173ac9534b",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FMod"
+    },
+    {
+      "declaration_sha256": "302761abb52adb80bd264ba9c7d707d5311833bd4b11fac87af5e33f48e3046d",
+      "fields_sha256": "10f354172f0c3bdda3cac56771549738ac667975d69295f14acaad873851b470",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.VectorTimesScalar"
+    },
+    {
+      "declaration_sha256": "da959f1a35b52e5e7f539e623d08a30241501824cee1b5b3f0d266d0fc763331",
+      "fields_sha256": "5d05e290ea40d139dc1a4c97511b20df144e763bfb66d48f160b8d7573b82589",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.MatrixTimesScalar"
+    },
+    {
+      "declaration_sha256": "f05086b498f477fb97de9bed631634a95923364edf554c2301c8832725d3255e",
+      "fields_sha256": "5b13f4b03528abe9aa40d51006fff2adfd25883305544827c9fc1129506106d2",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.VectorTimesMatrix"
+    },
+    {
+      "declaration_sha256": "38f2bdf88bc17ddf48263c9662707b2ae8810a16ea60dac634b6d79b614323b5",
+      "fields_sha256": "3d62759fedbab547488b3b150f5017287c0748bb4f8174af995341840fcc5832",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.MatrixTimesVector"
+    },
+    {
+      "declaration_sha256": "2907daadd59a6a8a80697535349c507e9fb3fc07adbe2475f5cc5261883ccfcb",
+      "fields_sha256": "bbea57a9aae06fb953109e885f0c251c93f52f0c8f74dd46a7c359b6e5b6e8ee",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.MatrixTimesMatrix"
+    },
+    {
+      "declaration_sha256": "58032a0f633879fee11765f168fddd83ce2550fe0db730357047d6b14b15fed3",
+      "fields_sha256": "a8e470804d8e198a4164f3888a843ac36860beb1587f268e6817285dab251266",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.OuterProduct"
+    },
+    {
+      "declaration_sha256": "6a443ba2265f7214ca353b52a2892d4b471fe197fe333321cb4e343f7f1f13ee",
+      "fields_sha256": "7f8ca0f1e6e472150cbe914bb21d68a7b8dfb90f2ed2ba7cda633c8bb00e7975",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.Dot"
+    },
+    {
+      "declaration_sha256": "dca10c0117290db9611db8ee55d45b1bb0544afd0c387887a47d168137076a28",
+      "fields_sha256": "1c4427a22a1f13795ea32dfb52b2d4e58c4eb67bd2dde76a1c6739667a9bbe79",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.IAddCarry"
+    },
+    {
+      "declaration_sha256": "02d357af018a982663ab5c9ce10afe91eb28a5e10fce505c91d8eaad373df0f9",
+      "fields_sha256": "aa4b8be9d7bcc4bd4deb01b20c85ac53cad2fbd549e3749ada40e1134a37777a",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ISubBorrow"
+    },
+    {
+      "declaration_sha256": "c90ef8f184922e0564557ee410ef751fb2cfda390a2360d64656e47d53ead385",
+      "fields_sha256": "95c00dd842e77fee04e45927abdcdf9b3d56e52042322f155ba6b45b89ab6980",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.UMulExtended"
+    },
+    {
+      "declaration_sha256": "3c11181fe86c23908723559de589df57cf6b1512ef369eb767739c2649059431",
+      "fields_sha256": "cbda1b3f959a678bb4b16940b6a66b10a44a65781b02f4851bc6f1742b08f59e",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SMulExtended"
+    },
+    {
+      "declaration_sha256": "3d2fd42f9f9ca526d6ec1be855d7d81629c80def22c7ff403343b6c960370ad0",
+      "fields_sha256": "004ae7fb9c2b96cf0bb277120fc2d0733e923ba01ac0b32ff37c51ab63903584",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.Any"
+    },
+    {
+      "declaration_sha256": "3e42bf45413b2e6efe24efa05d337debb0fe0bdbc2d85454ec75a4f228a0d940",
+      "fields_sha256": "f7d84e59cf80284d4fa5fd65a94b1186df6c20cc330a47c5e0e7787ce243096e",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.All"
+    },
+    {
+      "declaration_sha256": "4b809e79b606f1788910aed0efe7b158b1482e6e8386fddb4f6d603eed63a8cb",
+      "fields_sha256": "52edb4d969abf65dcf796747e01a87990c13c5ee9df8d0fc3e47b850fc1ad8ff",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.IsNan"
+    },
+    {
+      "declaration_sha256": "8227a9aaece311905a2bf6ce46524583d08bed8617d569a2959e468ec0ec0b1d",
+      "fields_sha256": "c57a061d5abfb6cc559f3dff865bdcd9261fb6c6ab28a512a6c732c29fe096a2",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.IsInf"
+    },
+    {
+      "declaration_sha256": "3cce184e88935d61438b7f9efe8326c9774500a66aac3882883752abac75142f",
+      "fields_sha256": "9dbff3e225a8acc41d5cddbba1a5d956aa83ccfaa38e4bedd8cc3e5bdba7ce3e",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.IsFinite"
+    },
+    {
+      "declaration_sha256": "582d05f3eb39e550845c22d69794bd28802b56918932cbec5a2cd5d94760e223",
+      "fields_sha256": "2ded1cc6e7710e246a69f5eeff40c967542982a5b15212dd484e343f2c52e645",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.IsNormal"
+    },
+    {
+      "declaration_sha256": "b8bd613e4257dd8ce5aa1efc7ccf125edf51651786edfd3da4e0e4b832d18662",
+      "fields_sha256": "328c497729bdb8e85808b37756f14c2ab0b5611936d12b37ace3ec2a21eeb5dc",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SignBitSet"
+    },
+    {
+      "declaration_sha256": "222001776fe79515cc88576c40ce8e3eb9e57b649366b5ae57c6c9a64a972d3d",
+      "fields_sha256": "a3fbb3db092e86d29caa8a8659e85940d8c19dcce6b696f7e6450b3bef57d721",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.LessOrGreater"
+    },
+    {
+      "declaration_sha256": "894f9afcf857a1ae2ea8694b676b1b9e803bb1a637af1df55743ccd8174e2b40",
+      "fields_sha256": "5dcb958b212105c055dbd458f9c2de5e9c70af8461be46092b69204e3d62d9d8",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.Ordered"
+    },
+    {
+      "declaration_sha256": "78b68c2bc0e760f4feaad10ef4138998c4dc8f369114180284b5db483dee3529",
+      "fields_sha256": "87bd44f8e185066e7d21d44c212709b1efe1f6167bf4cdeb8324993b214574a6",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.Unordered"
+    },
+    {
+      "declaration_sha256": "7096c3715bee1033e4da8777dbde8c3f166643a0fd80843f962d2caaca8c1967",
+      "fields_sha256": "ed7ab9fdee3cb85e5ab1ce30cc0bfea07a769df5285047eaaf57404f8504b0df",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.LogicalEqual"
+    },
+    {
+      "declaration_sha256": "41951772d98c5b4ff6232a2dd98b24fd882c6f44a3ef8a5f91d0fd633448ccda",
+      "fields_sha256": "5dcda42aeaa5634bc3ca969229edef2e63491f194bf691771d69dd88b15ce3a4",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.LogicalNotEqual"
+    },
+    {
+      "declaration_sha256": "bd0d9b9391cce13aca920d0f0b69c6e67de274519d1dd30e893b4b0095a08a7b",
+      "fields_sha256": "a777d071d0b690d6fa8c79f1eb2bb0d5013e967092def7e4d9b35a942551ec5d",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.LogicalOr"
+    },
+    {
+      "declaration_sha256": "f920f507440f495e96fac5f280c819da7f59efe0f451692ef45149b7e242e7cf",
+      "fields_sha256": "05136eabda11bc7699c8482234a3ceff9c45eb28f4bc424ab6fcca695df44bf7",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.LogicalAnd"
+    },
+    {
+      "declaration_sha256": "059ed8be04dc522f68b45e48aaea01bc95c9ba7081052e10c1bcf318bfdc412b",
+      "fields_sha256": "6fb58b7f7e667ae36192d78ec7b9d24bbd3ac1db2b645bbae89c308f7908c423",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.LogicalNot"
+    },
+    {
+      "declaration_sha256": "5ff9f5395ba091550552297b8a72f397f0a2f5ac118b4d66906f8d1bb6d542f7",
+      "fields_sha256": "691c29be1ee758c3ff7dbda89cd294297d37d845a931f5716b7da98896520e6b",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.Select"
+    },
+    {
+      "declaration_sha256": "abe8211fefc0ab23627c6df3548e702d7ccbb37ff77226dafbcffe1d309181bc",
+      "fields_sha256": "e2eee3399498251819d36aeeb46b525b4afbeb56943cad25e1f4dcd8b78821d8",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.IEqual"
+    },
+    {
+      "declaration_sha256": "c5c18d64ea35558b8e522e010513db58a42d378c57b8192f9df4dc6f3edf0e10",
+      "fields_sha256": "12e04c2e870b7eaa017f956af8a65a93a4e570d3467318509d00a682c6bdfe2e",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.INotEqual"
+    },
+    {
+      "declaration_sha256": "ae69a87b6abf6fc35f8410e444e8bc205b6ad50e0725a2a2bb7fb1191f20dabc",
+      "fields_sha256": "0254651c146d173a6bd82a9bc1496ee0653288cd583c7f0e5d407186fdfc9b25",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.UGreaterThan"
+    },
+    {
+      "declaration_sha256": "fc7b993505ebf47fd517ec7e7a7d09b62d06f03a7689ca2930a8aca2d5c8c76d",
+      "fields_sha256": "8a89ce2e4df02d92e11ee89d8d86e05fa5eb7305705541b059956bba768f28b7",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SGreaterThan"
+    },
+    {
+      "declaration_sha256": "3e2be32e1f12a6497d8fd79bbb5c17d348d73d05ec98d61f6ad8ce3ebc873ee2",
+      "fields_sha256": "d826de20ebdee742faf8679a57ee6dc447d150fd80a1a499474521d35efd184e",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.UGreaterThanEqual"
+    },
+    {
+      "declaration_sha256": "e96a7ff0bff5f3ccb03069aae179ad5f42ccbc81fe508c7a359f90cfeaf7c274",
+      "fields_sha256": "64deb5243a8997cce2bd653fd6f383db17c2b3332d36c02470fffe1552485aed",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SGreaterThanEqual"
+    },
+    {
+      "declaration_sha256": "790328ed2feb2d3ea082ae8af5664dee26a55944504c82630e2d9e4be77c9813",
+      "fields_sha256": "38455e19d1ec6c94cfe53b5d75d5fd9e79d4a62156c02916ec8962d60f0b437f",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ULessThan"
+    },
+    {
+      "declaration_sha256": "232aa81b45da91f44bc17cb2fe5641eabf8fff9503103bbd4b4673447994cef5",
+      "fields_sha256": "f08753800d39aa22dbf9ff7b3fe92f2a54d3a373f47790b724fdbb26a0612701",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SLessThan"
+    },
+    {
+      "declaration_sha256": "764c8ecfbe915757fc2f35275d0bfb0431da2951b69f745a81cd2b2db47b839d",
+      "fields_sha256": "69aabedd91b04ced7343fc903f5716cb59a968dafe8070c6fd689f1a962a9518",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ULessThanEqual"
+    },
+    {
+      "declaration_sha256": "044a09dced66cf47add11b771d885e5e4327df44de4587732f1617d13b41555e",
+      "fields_sha256": "d567561fe7ded61edcb4fe221964c8e3759619a07400a29de48397ef9a55852e",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.SLessThanEqual"
+    },
+    {
+      "declaration_sha256": "e3b704e2b5bac426ef815946a5a187d0a95391e3c00063f3efb6f419b9427bef",
+      "fields_sha256": "08c6fcf6594b3f87c04f9e03f3f852ce544cec6c4f5a6f81a32535ace967f1fa",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FOrdEqual"
+    },
+    {
+      "declaration_sha256": "306b1e2093afa494f923dd7bb7b5605205502858bc8490ad672270891ab83f5c",
+      "fields_sha256": "f8223908e3d243544315cd8a3fd2e6825645466672a454f241e525609c3b03fc",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FUnordEqual"
+    },
+    {
+      "declaration_sha256": "c8169ed41c1b1a986363e57dc8aad32b0cd6a22447222cea0cae82079246e57b",
+      "fields_sha256": "bb013ece0641303e91202e0e840580b7073c9ea350f6c5c7f59cccbe58423f43",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FOrdNotEqual"
+    },
+    {
+      "declaration_sha256": "ee01be23945a445c976d79299e36186eb6ddd7ab85b76e18bbbf768b6970d175",
+      "fields_sha256": "f622c68a1ee8d8f6608fccac35e8401fe5c702b825b03bcf28b69607634c403d",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FUnordNotEqual"
+    },
+    {
+      "declaration_sha256": "3290a4f9f46878dcaf9d3406a4fd28894493225e3549ccdb4d6bad1b98fdac3e",
+      "fields_sha256": "64baf28e54209a07a41a619d09d2f133e817fbe22aaf0f27524ce3aa245a1318",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FOrdLessThan"
+    },
+    {
+      "declaration_sha256": "7e0005a6f6779b0fb96bb7e694bc932c9acb8b819db734177b5ce93781e85a1e",
+      "fields_sha256": "71c110e465ea2f59d6a8381cd3c22051e8c80ea016501f8ebd1c493a4199a003",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FUnordLessThan"
+    },
+    {
+      "declaration_sha256": "3f9ce66826fc7384d7749da7b0e202cacb33a9096f69183540fbc623b8872c01",
+      "fields_sha256": "b60644b0274a984111beda6a5e8e58af0fe542892e9237cc52b148b46831c1b2",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FOrdGreaterThan"
+    },
+    {
+      "declaration_sha256": "2ab42addb0e9bd0f88ac7bb0eb884465a6d2a4a1ea304c583d18f86ce88097e7",
+      "fields_sha256": "8886e6e399e556ab64f50232adc86bc890d51c9372ce5cb7e0164a187362d56b",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FUnordGreaterThan"
+    },
+    {
+      "declaration_sha256": "678c9f11a61c52672fc46b80e92c713f6f73e06fc5dcc5b22249deb02d692ab7",
+      "fields_sha256": "01ffef76f48c532717f86dfe8d1b1a50e5b2c642e70b4c0e4ade9a30fb511f74",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FOrdLessThanEqual"
+    },
+    {
+      "declaration_sha256": "9635b859dd555ffe39ab557cba63e9d4b34144f6805635a73ec3b88c04881bf2",
+      "fields_sha256": "4c5d6f3d07d0fc0c283bb49ac0f28746779861766cb98ebaf067311850ca7300",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FUnordLessThanEqual"
+    },
+    {
+      "declaration_sha256": "07386f076543565cfb542277f7f0654f329aa83b09b1c17ae04f6883c4026295",
+      "fields_sha256": "fff7d3279637999dd00f4ff3313044033d8c8b5b391759d58bac1cde13578556",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FOrdGreaterThanEqual"
+    },
+    {
+      "declaration_sha256": "46bcdfd9e0290da07f0a10ffe096b16e86630fb90e58203700db3567825e9d62",
+      "fields_sha256": "781d98f079d3c2c0a51f41ec66236b70e61b1f5ab7d67cc7f334a7b48b7d063b",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.FUnordGreaterThanEqual"
+    },
+    {
+      "declaration_sha256": "32fd154e2797b67bda082f42148c9ea68bc135f4f9211b0a6e79bfadb4686071",
+      "fields_sha256": "6cec5ab5ed9d05864efdc6aab5ce7e3b5d9dd57e300c5ce459214fde4fd02cd6",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ShiftRightLogical"
+    },
+    {
+      "declaration_sha256": "f05e8ec000b4fb4a78cb0a9c03593804ba37a3ca2d5c65e2502c6631cde0b7e7",
+      "fields_sha256": "079ab1d3ac251500029009eeec9b73ee119e4b420ec1447026ba3fb7e2e83e50",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ShiftRightArithmetic"
+    },
+    {
+      "declaration_sha256": "ad92896803afc98eb9db711dc387024eb4ce64f008dfe97a0d73351502ae0c8d",
+      "fields_sha256": "f3ec847c646c62ba80c36d0dd9ce413838b15ebf0ba809510879d5fea09a4f5c",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.ShiftLeftLogical"
+    },
+    {
+      "declaration_sha256": "5eff35f21f162440d638cb7f701bf569c21363cd536f02d7f45807895fd38ed7",
+      "fields_sha256": "bbe5f32abb85e6523db3fadf9f74b823ec494ab23b8307dd8c605eba8d89773c",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.BitwiseOr"
+    },
+    {
+      "declaration_sha256": "67d1547f862bcac67807c189f54c385fb557c3b004833839ad26f2e917d07067",
+      "fields_sha256": "aa22b291962302c4520130342a5541a185de1f937d947643557d1d74d23a46e4",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.BitwiseXor"
+    },
+    {
+      "declaration_sha256": "83a1c9f60eee8a1bbfebfdaa086e311fa695938a04f3149373f52d7dd0734fdc",
+      "fields_sha256": "8a012b80372d3f5b061f6b7813e496a797858ef71fdbeb2c564bb4fb2d4ca9b1",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.BitwiseAnd"
+    },
+    {
+      "declaration_sha256": "b583f9a8c9c08601964f7227959ad872bfd196ae5e39d705c1e9fe9145a7669b",
+      "fields_sha256": "63506cb8ed6d99153a6961518fe9c61d10bb6fea76332893ee1770764813db60",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.Not"
+    },
+    {
+      "declaration_sha256": "7089c1dd3da6345d69764293be1ed4949896a0c1dd5ef10b533bf0290286433d",
+      "fields_sha256": "feed736429543cabd20f410808d74a67eb55686cf560d57404f3f7c793147114",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.BitFieldInsert"
+    },
+    {
+      "declaration_sha256": "b3eab3bb2b17d3c5c9c09b3e2c0112f859129e6b1725df6713610d92f6726bfd",
+      "fields_sha256": "7da245b63cc07e36786fc5b0c9f7e3ac4d1b2136251a0394b417ff15fe57333f",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.BitFieldSExtract"
+    },
+    {
+      "declaration_sha256": "9dbfe12ce9cb0ae41fe2f7d6470760749b69f621c9fb156bb566405c040916dc",
+      "fields_sha256": "a48a19193ca5cffa60d28983388ca7206949f8c03da46dadb5b6b6e3c5408996",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.BitFieldUExtract"
+    },
+    {
+      "declaration_sha256": "e421330cc6a192663b78a3f99dac84516b6806938cb0c6d8560406014553b952",
+      "fields_sha256": "1fc3149ca49606201f063895a78f5f35bf160c175a2129716866b146561af5a2",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.BitReverse"
+    },
+    {
+      "declaration_sha256": "10eeffacd3e80d2fd309a8870aa876d1b88a2860f2cb1c3157d0136afcfe5763",
+      "fields_sha256": "e11a9947db87de6379eb8ed882abd4d5fcc9c4c811a0d415ba5d386df7ebd11d",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.BitCount"
+    },
+    {
+      "declaration_sha256": "f08a6beaa5a89c8554fb6827bf45b012e508c2ffd66d6531b20cfe75a262d9b5",
+      "fields_sha256": "ab49b3c6cfda26735ac7e7582ce3ff292c798857e4d691a07784f97173663edb",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicLoad"
+    },
+    {
+      "declaration_sha256": "0957ce5df8a14b8bf3f3e6ba4298372d97bb27475fefa5c329702b709f6f888b",
+      "fields_sha256": "38aea35828723f9ff89b6de322fa401ca78fcde6b7f0abb1b2c68b2a943dcec4",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicExchange"
+    },
+    {
+      "declaration_sha256": "119bfcd3e5736d37d1395375e0cfb1035715476aaa9e03977126d06a67d98b17",
+      "fields_sha256": "85ba427c196c0aa9b77f34ff37f2abc5fad8f6da14669727e21c8d72ee51d394",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicCompareExchange"
+    },
+    {
+      "declaration_sha256": "2872bcaf7414dbb34197636466dbea84d0fbeea8cac2bf673be9ebc18850e21a",
+      "fields_sha256": "70ba101b166efb2c1d308de5f8bf90e6a2aa07c6cbd406d1f061ea08e4fcd2cf",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicCompareExchangeWeak"
+    },
+    {
+      "declaration_sha256": "bbe1acd15f888d09e6f0ecae76442993d4777cd09236feb30ec085e3dc483dc9",
+      "fields_sha256": "41835da6d5b5261e9ad559e00fe9adaef93707e1dcaa73ed0d90cf45ca707337",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicIIncrement"
+    },
+    {
+      "declaration_sha256": "2e6e2b5621688e479542e58fd43e468364ec54bedd3df46fb91bb9927d9ebeda",
+      "fields_sha256": "a21fdaa78d055386abe4d46d64e75d55e41a61b69519b4331202a0e3014a441c",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicIDecrement"
+    },
+    {
+      "declaration_sha256": "2880f30ee46f69276d3944f64e81a3d65ddf226bc07a7cee64651e57b03a98eb",
+      "fields_sha256": "ece19413e602640885954544d7a7524e759017ac606f8e17c52038442b6c9863",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicIAdd"
+    },
+    {
+      "declaration_sha256": "14ded8bdcbd53ceacf1ac2517d0dccbd36266c924ddef4d434bf81e86e9e087b",
+      "fields_sha256": "17dc53b026c7230a450cfe1b528f1c67882d72d994c5f6ace858b6a31caef061",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicISub"
+    },
+    {
+      "declaration_sha256": "faa376dab181a0bca2115f5049c86abc00c974bae88f5a187633c5f83855b11b",
+      "fields_sha256": "8932fa493c8989be604cec1c443b17afa67b38f2acc61887e1d3e99714d09962",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicSMin"
+    },
+    {
+      "declaration_sha256": "247d141b7d116db4d68e12636ac607713b83da5e58c58a037a9ce8f355f1343f",
+      "fields_sha256": "3a2f0cff2797e67ed6b31a04556867f8b88a7780ef58bdfa392ba59fda1c03d1",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicUMin"
+    },
+    {
+      "declaration_sha256": "1a0bf366e5ea38811091bd3ea3c4d28c92c7049c51ee5d40f913b4e7941846bc",
+      "fields_sha256": "10ec5bd89857f90454576a220c19fd7bbc368c5a7902620de708920534e181cf",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicSMax"
+    },
+    {
+      "declaration_sha256": "f52e1b03f25541086f1b58386600e4fb4b0f016c1a57dc8d2458799c0a1a0866",
+      "fields_sha256": "8af35e44aa61e3c38aa105266b691c089d17a06c934787f89fad53ed99218a84",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicUMax"
+    },
+    {
+      "declaration_sha256": "bb853f201b755432b265753aaafbb4e05b3c8060e95f2f88801847c08731b003",
+      "fields_sha256": "96803570dd8af58ba5a57480de71e17a5989708c214c4dee809a807594f7b006",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicAnd"
+    },
+    {
+      "declaration_sha256": "4d9a172e05c729f015339fcd91592305a62d66bdedff51de1fceacbe89841a95",
+      "fields_sha256": "c6e6853e1e2abd78f4e2698e6a4ac184547453e660558f6438dc90abc058d33f",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicOr"
+    },
+    {
+      "declaration_sha256": "1bd2696f5233fb52e77d71278f2385ede3f1b48ce04298b242490c26c804c462",
+      "fields_sha256": "5725bf48275b46c2fddd75a37075f28ad1077ccf2e8872db54b521246e275e98",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicXor"
+    },
+    {
+      "declaration_sha256": "821535fdc4affeea62cafffb0ddd8afe759a5e245be2c5c646a36440b1675da7",
+      "fields_sha256": "40fd509a6e2ed429bc0bc4e7a11bdf5a7879a4a2751abe3af75368905c98c521",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.AtomicFlagTestAndSet"
+    },
+    {
+      "declaration_sha256": "8016004d560cf672b8f6f97a99475a7beec62c1b8c24b74e7e63636564484e79",
+      "fields_sha256": "bf86fb43f04466ce52911aeb2277e5f1c086ea457e9716bc834c99daf803e68f",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.CopyLogical"
+    },
+    {
+      "declaration_sha256": "a58fd8f846eaddcd43a58d7eed5727a1f8d3b314f5f8009a801531c31117cc3c",
+      "fields_sha256": "fe8c9ff3b6692bfbd4e91833bcfba924d971c0acbfdfefe4684a9843636ab8bd",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.PtrEqual"
+    },
+    {
+      "declaration_sha256": "ee1b1fce2338a85cc7eb0801fc084a16ba25c5827c62785a25d6e8dd3418b36e",
+      "fields_sha256": "b9f8df1e0a049f5dbae7ebaf79c5ef80b04924827b4681301c011bb98aab77dc",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.PtrNotEqual"
+    },
+    {
+      "declaration_sha256": "180b8ef03f5a6b4280fcda47df97a576428e7386c2f5340c9040be63344e5e07",
+      "fields_sha256": "1983abf8bb719e064578c444ab101f5efc3a84503cd0c49ba076e8b45ed69831",
+      "file": "gpu/src/spirv/generated.rs",
+      "identity": "spirv.PtrDiff"
+    }
+  ],
+  "source_contract": "Every source field captured verbatim in inventory; generated signatures, codecs, callbacks, recipes, regions and binding data are derived from that payload."
+}

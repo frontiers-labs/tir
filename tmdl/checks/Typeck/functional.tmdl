@@ -68,9 +68,9 @@ instruction VAddVX for [RVV] : VArithVV {
     }
 }
 
-// CHECK-DAG: VAddOp
-// CHECK-DAG: VRedSumOp
-// CHECK-DAG: VIdOp
-// CHECK-DAG: VSlideUpOp
-// CHECK-DAG: VAddMaskedOp
-// CHECK-DAG: VAddVXOp
+// CHECK-DAG: pub static VADD_VV: tir::OpDefSpec
+// CHECK-DAG: pub static VREDSUM_VS: tir::OpDefSpec
+// CHECK-DAG: pub static VID_V: tir::OpDefSpec
+// CHECK-DAG: pub static VSLIDEUP_VX: tir::OpDefSpec
+// CHECK-DAG: pub static VADD_VV_MASKED: tir::OpDefSpec
+// CHECK-DAG: pub static VADD_VX: tir::OpDefSpec

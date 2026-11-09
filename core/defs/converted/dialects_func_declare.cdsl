@@ -1,0 +1,18 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type func = Dialect;
+
+type declare_attributes = Record<{ sym_name: String }>;
+extern let declare_iface_Symbol: Interface;
+extern let declare_iface_Callable: Interface;
+extern fn declare_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn declare_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+
+pub let func::declare = {
+    signature: () -> AnyFn,
+    attributes: { sym_name: { ty: String, codec: str_codec } },
+    interfaces: [declare_iface_Symbol, declare_iface_Callable],
+    assembly: { print: declare_printer, parse: declare_parser },
+};

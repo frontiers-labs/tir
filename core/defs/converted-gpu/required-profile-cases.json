@@ -1,0 +1,29 @@
+{
+  "attributes": {
+    "Array": {
+      "codec": "array_codec",
+      "type": "AttrArray"
+    },
+    "Dict": {
+      "codec": "dict_codec",
+      "type": "AttrDict"
+    },
+    "Str": {
+      "codec": "str_codec",
+      "type": "String"
+    },
+    "any": {
+      "codec": "any_codec",
+      "type": "AttrAny"
+    }
+  },
+  "bindings": "BindKind / BindTerm / BindSlice / BindIndex ordinary data",
+  "bounds": {},
+  "models": "typed flattened extern fn; Rust fn(&OpHandle,&mut SemGraph)->Option<NodeId>",
+  "sorts": {
+    "_": "Any",
+    "_*": "Many<Any>",
+    "_?": "Optional<Any>"
+  },
+  "state_bundle": "States<StateResources>, removed from value ports and retained as state ports"
+}

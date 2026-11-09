@@ -35,7 +35,7 @@ fn control_flow_derived_from_pc_writes() {
             .control_flow()
     };
 
-    let beq = tir_riscv::BranchEqOp::new(
+    let beq = tir_riscv::beq(
         &context,
         tir::Operand::none(),
         tir::Operand::none(),
@@ -54,7 +54,7 @@ fn control_flow_derived_from_pc_writes() {
     );
     assert_eq!(cf(&beq), ControlFlow::Conditional);
     // jal writes PC unconditionally (and the link register).
-    let jal = tir_riscv::JumpAndLinkOp::new(
+    let jal = tir_riscv::jal(
         &context,
         tir::Operand::none(),
         imm.clone(),
@@ -67,7 +67,7 @@ fn control_flow_derived_from_pc_writes() {
         tir::InsertionPoint::Root,
     );
     assert_eq!(cf(&jal), ControlFlow::Unconditional);
-    let jalr = tir_riscv::JumpAndLinkRegOp::new(
+    let jalr = tir_riscv::jalr(
         &context,
         tir::Operand::none(),
         tir::Operand::none(),
@@ -84,7 +84,7 @@ fn control_flow_derived_from_pc_writes() {
         tir::InsertionPoint::Root,
     );
     assert_eq!(cf(&jalr), ControlFlow::Unconditional);
-    let add = tir_riscv::AddOp::new(
+    let add = tir_riscv::add(
         &context,
         tir::Operand::none(),
         tir::Operand::none(),
@@ -103,7 +103,7 @@ fn control_flow_derived_from_pc_writes() {
     );
     assert_eq!(cf(&add), ControlFlow::None);
     // auipc reads PC but never writes it.
-    let auipc = tir_riscv::AddUpperImmToPCOp::new(
+    let auipc = tir_riscv::auipc(
         &context,
         tir::Operand::none(),
         imm.clone(),
@@ -117,7 +117,7 @@ fn control_flow_derived_from_pc_writes() {
     );
     assert_eq!(cf(&auipc), ControlFlow::None);
 
-    let b_eq = tir_arm64::BranchEqOp::new(
+    let b_eq = tir_arm64::b_eq(
         &context,
         tir::Operand::none(),
         imm.clone(),
@@ -128,7 +128,7 @@ fn control_flow_derived_from_pc_writes() {
         tir::InsertionPoint::Root,
     );
     assert_eq!(cf(&b_eq), ControlFlow::Conditional);
-    let ret = tir_arm64::ReturnOp::new(
+    let ret = tir_arm64::ret(
         &context,
         tir::Operand::none(),
         tir::Operand::none(),
@@ -141,7 +141,7 @@ fn control_flow_derived_from_pc_writes() {
         tir::InsertionPoint::Root,
     );
     assert_eq!(cf(&ret), ControlFlow::Unconditional);
-    let bl = tir_arm64::BranchLinkOp::new(
+    let bl = tir_arm64::bl(
         &context,
         tir::Operand::none(),
         imm,

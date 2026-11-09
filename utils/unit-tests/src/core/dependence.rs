@@ -8,10 +8,10 @@ use tir::analysis::defuse::CLOBBERS_ATTR;
 use tir::attributes::{AttributeRole, AttributeValue, ImplicitReg, RegisterAttr};
 use tir::backend::dependence::Dependences;
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
-use tir::backend::{verify_machine_ir, RegAssignment, RegClassType, SymbolOp};
+use tir::backend::{verify_machine_ir, RegAssignment, RegClassType};
 use tir::{BlockHandle, Context, OpId, Operation, ValueId};
 
-use super::fixtures::{asm_symbol, machine_op, r, reg_class};
+use super::fixtures::{asm_symbol, r, reg_class};
 
 /// The one-register flag file the test opcodes touch implicitly, standing for
 /// x86 `EFLAGS`.
@@ -33,16 +33,21 @@ static READS_FLAGS: [ImplicitReg; 1] = [ImplicitReg {
     role: AttributeRole::Use,
 }];
 
-machine_op!(DefOp, "dep", "def", &[]);
-machine_op!(UpdateParamOp, "dep", "update_param", rs, &[]);
-machine_op!(SetFlagsOp, "dep", "set_flags", rs, &WRITES_FLAGS);
-machine_op!(ReadFlagsOp, "dep", "read_flags", rs, &READS_FLAGS);
+tir::helpers::op_def! {
+    file: "../../core/defs/converted-tests/src_core_dependence.cdsl",
+    hosts: {
+        def_iface_MachineInstruction => (tir :: backend :: MachineInstruction, & super :: fixtures :: instr_info ! ( "def" , & [ ] )),
+        update_param_iface_MachineInstruction => (tir :: backend :: MachineInstruction, & super :: fixtures :: instr_info ! ( "update_param" , & [ ] )),
+        set_flags_iface_MachineInstruction => (tir :: backend :: MachineInstruction, & super :: fixtures :: instr_info ! ( "set_flags" , & WRITES_FLAGS )),
+        read_flags_iface_MachineInstruction => (tir :: backend :: MachineInstruction, & super :: fixtures :: instr_info ! ( "read_flags" , & READS_FLAGS )),
+    },
+}
 
 fn context() -> Context {
     let context = Context::with_default_dialects();
-    DefOp::register_interfaces(&context);
-    SetFlagsOp::register_interfaces(&context);
-    ReadFlagsOp::register_interfaces(&context);
+    context.register_operation(&DEF);
+    context.register_operation(&SET_FLAGS);
+    context.register_operation(&READ_FLAGS);
     context
 }
 
@@ -51,7 +56,7 @@ fn result_of(context: &Context, op: OpId) -> ValueId {
 }
 
 fn def_reg(context: &Context) -> (OpId, ValueId) {
-    let op = DefOp::new(
+    let op = r#def(
         context,
         vec![RegClassType::new(context, r())],
         Default::default(),
@@ -62,7 +67,7 @@ fn def_reg(context: &Context) -> (OpId, ValueId) {
 }
 
 fn flag_def(context: &Context, source: ValueId) -> OpId {
-    SetFlagsOp::new(
+    r#set_flags(
         context,
         source,
         vec![RegClassType::new(context, r())],
@@ -73,7 +78,7 @@ fn flag_def(context: &Context, source: ValueId) -> OpId {
 }
 
 fn flag_use(context: &Context, source: ValueId) -> OpId {
-    ReadFlagsOp::new(
+    r#read_flags(
         context,
         source,
         vec![RegClassType::new(context, r())],
@@ -89,7 +94,7 @@ fn graph(context: &Context, block: &BlockHandle, assignment: &RegAssignment) -> 
 
 /// `def -> %v` and `set_flags %v`, laid out in the order asked for.
 struct DefinitionAndRead {
-    symbol: SymbolOp,
+    symbol: tir::OpHandle,
     block: BlockHandle,
     define: OpId,
     read: OpId,
@@ -241,14 +246,14 @@ proptest::proptest! {
     #[ignore = "IR migration: the fixture requires multiple definitions of one block parameter"]
     fn parameter_updates_admit_topological_orders(count in 1usize..16, seed in proptest::prelude::any::<u64>()) {
         let context = context();
-        UpdateParamOp::register_interfaces(&context);
+        context.register_operation(&UPDATE_PARAM);
         let ty = RegClassType::new(&context, r());
         let parameter = context.create_value(ty, None);
         let value = parameter.id();
         let block = context.create_block(vec![parameter]);
         let mut updates = Vec::new();
         for _ in 0..count {
-            let update = UpdateParamOp::new(&context, value, vec![ty], Default::default(), tir::InsertionPoint::Root)
+            let update = r#update_param(&context, value, vec![ty], Default::default(), tir::InsertionPoint::Root)
                 .id();
             context.set_op_result(update, 0, value);
             context.insert(block.end(), update);

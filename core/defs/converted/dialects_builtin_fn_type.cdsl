@@ -1,0 +1,20 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type builtin = Dialect;
+
+extern let fn_to_ptr_iface_Pure: Interface;
+extern let fn_to_ptr_iface_Speculatable: Interface;
+extern let ptr_to_fn_iface_Pure: Interface;
+extern let ptr_to_fn_iface_Speculatable: Interface;
+
+pub let builtin::fn_to_ptr = {
+    signature: (callee: AnyFn) -> AnyPtr,
+    interfaces: [fn_to_ptr_iface_Pure, fn_to_ptr_iface_Speculatable],
+};
+
+pub let builtin::ptr_to_fn = {
+    signature: (address: AnyPtr) -> AnyFn,
+    interfaces: [ptr_to_fn_iface_Pure, ptr_to_fn_iface_Speculatable],
+};

@@ -1,0 +1,63 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type layout = Dialect;
+
+type sizeof_attributes = Record<{ ty: Optional<AttrType> }>;
+extern fn sizeof_exec_model(self: sizeof_attributes, args: Many<Any>) -> AnyInt;
+extern let sizeof_iface_ConstantFold: Interface;
+extern let sizeof_iface_Interp: Interface;
+type alignof_attributes = Record<{ ty: Optional<AttrType> }>;
+extern fn alignof_exec_model(self: alignof_attributes, args: Many<Any>) -> AnyInt;
+extern let alignof_iface_ConstantFold: Interface;
+extern let alignof_iface_Interp: Interface;
+type offsetof_attributes = Record<{ ty: AttrType, field: String }>;
+extern fn offsetof_exec_model(self: offsetof_attributes) -> AnyInt;
+extern let offsetof_iface_ConstantFold: Interface;
+extern let offsetof_iface_Interp: Interface;
+extern let field_iface_Interp: Interface;
+extern let result_iface_Terminator: Interface;
+extern let count_iface_Interp: Interface;
+extern let at_iface_Interp: Interface;
+
+pub let layout::sizeof = {
+    signature: (args: Many<Any>) -> AnyInt,
+    attributes: { ty: { ty: Optional<AttrType>, codec: _type_codec } },
+    exec: sizeof_exec_model,
+    interfaces: [sizeof_iface_ConstantFold, sizeof_iface_Interp],
+};
+
+pub let layout::alignof = {
+    signature: (args: Many<Any>) -> AnyInt,
+    attributes: { ty: { ty: Optional<AttrType>, codec: _type_codec } },
+    exec: alignof_exec_model,
+    interfaces: [alignof_iface_ConstantFold, alignof_iface_Interp],
+};
+
+pub let layout::offsetof = {
+    signature: () -> AnyInt,
+    attributes: { ty: { ty: AttrType, codec: type_codec }, field: { ty: String, codec: str_codec } },
+    exec: offsetof_exec_model,
+    interfaces: [offsetof_iface_ConstantFold, offsetof_iface_Interp],
+};
+
+pub let layout::field = {
+    signature: (index: AnyInt, offset: AnyInt) -> (),
+    interfaces: [field_iface_Interp],
+};
+
+pub let layout::result = {
+    signature: (size: AnyInt, align: AnyInt) -> (),
+    interfaces: [result_iface_Terminator],
+};
+
+pub let layout::count = {
+    signature: (fields: LayoutFields) -> AnyInt,
+    interfaces: [count_iface_Interp],
+};
+
+pub let layout::at = {
+    signature: (fields: LayoutFields, index: AnyInt) -> LayoutType,
+    interfaces: [at_iface_Interp],
+};

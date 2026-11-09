@@ -1,0 +1,27 @@
+pub mod ops;
+mod library;
+use ops::*;
+use library::*;
+extern type func = Dialect;
+
+type func_attributes = Record<{ sym_name: String, ret_type: AttrType }>;
+extern fn func_verifier(operation: Operation, context: Context) -> Validation;
+extern let func_iface_Symbol: Interface;
+extern let func_iface_Callable: Interface;
+extern fn func_printer(operation: Operation, formatter: Formatter) -> PrintResult;
+extern fn func_parser(parser: Parser, context: Context, definition: Definition) -> ParseResult;
+extern let return_iface_Terminator: Interface;
+
+pub let func::func = {
+    signature: () -> AnyFn,
+    attributes: { sym_name: { ty: String, codec: str_codec }, ret_type: { ty: AttrType, codec: type_codec } },
+    verify: func_verifier,
+    interfaces: [func_iface_Symbol, func_iface_Callable],
+    regions: { body: { kind: RegionKind::Any(), variadic: false } },
+    assembly: { print: func_printer, parse: func_parser },
+};
+
+pub let func::r#return<StateResources> = {
+    signature: (value: Optional<Any>, state: States<StateResources>) -> (),
+    interfaces: [return_iface_Terminator],
+};

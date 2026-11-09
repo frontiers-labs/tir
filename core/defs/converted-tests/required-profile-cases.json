@@ -1,0 +1,19 @@
+{
+  "attributes": {
+    "?Register": {
+      "codec": "_register_codec",
+      "type": "Optional<AttrRegister>"
+    }
+  },
+  "bindings": "BindKind / BindTerm / BindSlice / BindIndex ordinary data",
+  "bounds": {},
+  "models": "typed flattened extern fn; Rust fn(&OpHandle,&mut SemGraph)->Option<NodeId>",
+  "sorts": {
+    "_*": "Many<Any>",
+    "_?": "Optional<Any>",
+    "backend.reg<_, _>*": "Many<AnyReg>",
+    "backend.reg<_, _>?": "Optional<AnyReg>",
+    "int<_>": "AnyInt"
+  },
+  "state_bundle": "States<StateResources>, removed from value ports and retained as state ports"
+}

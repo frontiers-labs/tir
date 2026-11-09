@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 pub use crate::dialects::layout::*;
 
 use crate::attributes::AttributeValue;
-use crate::builtin::{AggregateType, FloatType, NamedType, TypeDefOp};
+use crate::builtin::{self, AggregateType, DEF, FloatType, NamedType};
 use crate::interp::{ExecutionState, Value};
 use crate::scoped_attr::invalid_spec;
 use crate::ty::TypeArg;
@@ -259,19 +259,19 @@ fn aggregate_of(env: &LayoutEnv, ty: TypeId) -> Option<AggregateType> {
     }
     let named = NamedType::view(terms, ty)?;
     let definition = env.definition(named.name())?;
-    AggregateType::view(terms, definition.expand(named.args())?)
+    AggregateType::view(terms, builtin::def_expand(&definition, named.args())?)
 }
 
 impl LayoutEnv {
-    fn definition(&self, name: &str) -> Option<TypeDefOp> {
+    fn definition(&self, name: &str) -> Option<crate::OpHandle> {
         let op = *self.laid.definitions.get(name)?;
-        self.context.get_op(op).as_op::<TypeDefOp>()
+        self.context.get_op(op).as_operation(&DEF)
     }
 
     // The core definition of `name`.
-    fn core_definition(&self, name: &str) -> Option<(Context, TypeDefOp)> {
+    fn core_definition(&self, name: &str) -> Option<(Context, crate::OpHandle)> {
         let (context, definitions) = self.context.constructors()?;
-        let definition = context.get_op(*definitions.get(name)?).as_op()?;
+        let definition = context.get_op(*definitions.get(name)?).as_operation(&DEF)?;
         Some((context, definition))
     }
 }
@@ -313,8 +313,8 @@ fn parts(env: &LayoutEnv, ty: TypeId) -> Vec<TypeId> {
         return Vec::new();
     }
     let body = NamedType::view(terms, ty).and_then(|named| match env.definition(named.name()) {
-        Some(definition) => definition.expand(named.args()),
-        None => env.core_definition(named.name())?.1.expand(named.args()),
+        Some(definition) => builtin::def_expand(&definition, named.args()),
+        None => builtin::def_expand(&env.core_definition(named.name())?.1, named.args()),
     });
     if let Some(body) = body {
         return vec![body];
@@ -360,20 +360,20 @@ fn compute_uncached(env: &Rc<LayoutEnv>, spec: &Arc<LayoutSpec>, ty: TypeId) -> 
     if let Some(named) = &named
         && let Some(definition) = env.definition(named.name())
     {
-        let mut layout = match definition.layout_region() {
+        let mut layout = match builtin::def_layout_region(&definition) {
             Some(region) => {
                 let arguments = region_arguments(spec, &definition, named.args())?;
                 run_region(env, &env.context, region, arguments)?
             }
             None => {
-                let mut body = definition.expand(named.args())?;
-                if definition.packed() {
+                let mut body = builtin::def_expand(&definition, named.args())?;
+                if builtin::def_packed(&definition) {
                     body = AggregateType::packed(terms, body)?;
                 }
                 compute(env, spec, body)?
             }
         };
-        if let Some(align) = definition.align() {
+        if let Some(align) = builtin::def_align(&definition) {
             layout.align = layout.align.max(align);
             layout.preferred = layout.preferred.max(align);
             layout.size = align_to(layout.size, layout.align)?;
@@ -390,10 +390,10 @@ fn compute_uncached(env: &Rc<LayoutEnv>, spec: &Arc<LayoutSpec>, ty: TypeId) -> 
         None => return None,
     };
     let (context, definition) = env.core_definition(name)?;
-    if let Some(body) = definition.expand(args) {
+    if let Some(body) = builtin::def_expand(&definition, args) {
         return compute(env, spec, body);
     }
-    let region = definition.layout_region()?;
+    let region = builtin::def_layout_region(&definition)?;
     let arguments = region_arguments(spec, &definition, args)?;
     run_region(env, &context, region, arguments)
 }
@@ -402,15 +402,14 @@ fn compute_uncached(env: &Rc<LayoutEnv>, spec: &Arc<LayoutSpec>, ty: TypeId) -> 
 // parameter as `args` binds it or its default.
 fn region_arguments(
     spec: &Arc<LayoutSpec>,
-    definition: &TypeDefOp,
+    definition: &crate::OpHandle,
     args: &[TypeArg],
 ) -> Option<Vec<Value>> {
     let mut arguments = vec![Value::Layout(spec.clone())];
-    for (index, (_, kind)) in definition.params().iter().enumerate() {
-        let arg = args
-            .get(index)
-            .cloned()
-            .or_else(|| crate::builtin::type_arg_of(&definition.param_default(index)?));
+    for (index, (_, kind)) in builtin::def_params(definition).iter().enumerate() {
+        let arg = args.get(index).cloned().or_else(|| {
+            crate::builtin::type_arg_of(&builtin::def_param_default(definition, index)?)
+        });
         arguments.push(region_argument(kind, arg?)?);
     }
     Some(arguments)
@@ -505,7 +504,7 @@ fn enclosing_scopes(context: &Context, op: OpId) -> Option<Scopes> {
         if scopes.spec.is_none() && handle.attr(LAYOUT_SPEC).is_some() {
             scopes.spec = Some(id);
         }
-        if scopes.module.is_none() && handle.is::<crate::builtin::ModuleOp>() {
+        if scopes.module.is_none() && handle.is_operation(&crate::builtin::MODULE) {
             scopes.module = Some(id);
         }
         if scopes.module.is_some() && scopes.spec.is_some() {

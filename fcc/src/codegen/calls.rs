@@ -27,7 +27,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result(),
+            .results()[0],
         }
     }
 
@@ -53,7 +53,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result();
+            .results()[0];
             p::memcpy(
                 self.context,
                 destination,
@@ -105,7 +105,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result();
+            .results()[0];
             let size = b::constant(
                 self.context,
                 size as i64,
@@ -113,7 +113,7 @@ impl FnCodegen<'_> {
                 Default::default(),
                 self.builder.end(),
             )
-            .result();
+            .results()[0];
             p::memcpy(
                 self.context,
                 destination,
@@ -156,7 +156,7 @@ impl FnCodegen<'_> {
                         Default::default(),
                         self.builder.end(),
                     )
-                    .result()
+                    .results()[0]
                 })
                 .collect::<Vec<_>>();
             if parameter.grouped {
@@ -165,14 +165,14 @@ impl FnCodegen<'_> {
                     parameter.pieces.iter().map(|piece| piece.ty).collect(),
                 );
                 return Ok(vec![
-                    b::MakeTupleOp::new(
+                    b::make_tuple(
                         self.context,
                         values,
                         ty,
                         Default::default(),
                         self.builder.end(),
                     )
-                    .result(),
+                    .results()[0],
                 ]);
             }
             return Ok(values);
@@ -203,7 +203,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result();
+        .results()[0];
         for piece in pieces {
             let zero = match type_kind(self.context, piece.ty) {
                 ValueKind::Float => self.float_zero(piece.ty),
@@ -214,7 +214,7 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result(),
+                .results()[0],
                 ValueKind::Vector => unreachable!("ABI padding uses scalar carriers"),
             };
             let address = self.offset_address(destination, piece.offset);
@@ -235,7 +235,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result();
+        .results()[0];
         p::memcpy(
             self.context,
             destination,
@@ -265,20 +265,20 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             })
             .collect::<Vec<_>>();
         if let [value] = values.as_slice() {
             return *value;
         }
-        b::MakeTupleOp::new(
+        b::make_tuple(
             self.context,
             values,
             self.return_abi.ty,
             Default::default(),
             self.builder.end(),
         )
-        .result()
+        .results()[0]
     }
 
     pub(super) fn store_return_value(&mut self, value: Option<NodeId>) -> Result<(), Diagnostic> {
@@ -302,7 +302,7 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result();
+                .results()[0];
                 p::memcpy(
                     self.context,
                     slot.ptr,
@@ -349,7 +349,7 @@ impl FnCodegen<'_> {
             Default::default(),
             self.builder.end(),
         )
-        .result();
+        .results()[0];
         p::memcpy(
             self.context,
             self.indirect_return
@@ -456,7 +456,7 @@ impl FnCodegen<'_> {
                     Default::default(),
                     self.builder.end(),
                 )
-                .result()
+                .results()[0]
             }
             None => {
                 let name = name.clone().expect("direct call has a symbol name");
@@ -492,7 +492,7 @@ impl FnCodegen<'_> {
             let (size, align) = source_type_layout(self.typed, source_ty);
             let slot = self.alloca(elem, size, align);
             args.insert(0, slot.ptr);
-            func_ops::CallOp::new(
+            func_ops::call(
                 self.context,
                 callee,
                 args,
@@ -507,7 +507,7 @@ impl FnCodegen<'_> {
                 elem,
             }
         } else {
-            let result = func_ops::CallOp::new(
+            let result = func_ops::call(
                 self.context,
                 callee,
                 args,
@@ -517,7 +517,7 @@ impl FnCodegen<'_> {
                 parts,
                 self.builder.end(),
             )
-            .result();
+            .results()[0];
             if let Some(pieces) = sig.ret.aggregate.as_deref() {
                 let (size, align) = source_type_layout(self.typed, source_ty);
                 let (abi_size, abi_align) = abi_storage_layout(self.context, pieces)
@@ -527,7 +527,7 @@ impl FnCodegen<'_> {
                     let value = if pieces.len() == 1 {
                         result
                     } else {
-                        b::TupleGetOp::new(
+                        b::tuple_get(
                             self.context,
                             result,
                             tir::attributes::AttributeValue::UInt(index as u64),
@@ -535,7 +535,7 @@ impl FnCodegen<'_> {
                             Default::default(),
                             self.builder.end(),
                         )
-                        .result()
+                        .results()[0]
                     };
                     let address = self.offset_address(slot.ptr, piece.offset);
                     p::store(
