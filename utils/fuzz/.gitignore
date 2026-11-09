@@ -1,4 +1,6 @@
-target
-corpus
-artifacts
-coverage
+/target/
+/artifacts/
+/coverage/
+/corpus/*/*
+!/corpus/cdsl-source-fuzz/*.cdsl
+!/corpus/cdsl-eval-fuzz/*.seed

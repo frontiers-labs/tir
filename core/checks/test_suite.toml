@@ -1,6 +1,6 @@
 [suite]
 name = "TIR core IR and pass checks"
-glob = ["**/*.tir", "**/*.pdl", "!**/Inputs/**/*"]
+glob = ["**/*.tir", "!**/Inputs/**/*"]
 
 [suite.tools]
 tir = "tir"

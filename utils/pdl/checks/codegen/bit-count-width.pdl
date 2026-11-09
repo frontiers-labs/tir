@@ -1,9 +1,0 @@
-// IR migration: the Rust rewrite emitter was removed.
-// XFAIL: *
-// Bit counts run on the constant's own width, so the host function rebuilds the
-// APInt from the value and width the atoms bound.
-// RUN: tir-pdl %s --emit rust | filecheck %s
-
-rule count: builtin.muli(x: int<W>, c: const) => x where clz(c) == 7;
-
-// CHECK: APInt::new(args[1usize], args[0usize]).count_leading_zeros()

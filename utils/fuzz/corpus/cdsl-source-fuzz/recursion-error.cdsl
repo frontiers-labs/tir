@@ -1,0 +1,1 @@
+enum Unary{Z,S(Unary)};let rec f=fn(n:Unary)->Integer{match n{Unary::Z()=>0,Unary::S(t)=>{let rec g=fn(t:Unary)->Integer{f(t)};g(n)}}};

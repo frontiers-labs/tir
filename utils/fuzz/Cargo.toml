@@ -9,11 +9,11 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys.workspace = true
+tir-cdsl.workspace = true
 tmdl.workspace = true
 tir.workspace = true
 tir-riscv.workspace = true
 tir-arm64.workspace = true
-tir-pdl = { path = "../pdl", default-features = false }
 tir-jit.workspace = true
 
 [lib]
@@ -44,15 +44,22 @@ doc = false
 bench = false
 
 [[bin]]
-name = "pdl-fuzz"
-path = "fuzz_targets/pdl.rs"
+name = "restructure-fuzz"
+path = "fuzz_targets/restructure.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "restructure-fuzz"
-path = "fuzz_targets/restructure.rs"
+name = "cdsl-source-fuzz"
+path = "fuzz_targets/cdsl-source.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cdsl-eval-fuzz"
+path = "fuzz_targets/cdsl-eval.rs"
 test = false
 doc = false
 bench = false

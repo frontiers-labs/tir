@@ -1991,7 +1991,6 @@ dependencies = [
  "tir-egglog",
  "tir-ir-schema",
  "tir-macros",
- "tir-pdl",
  "tir-symbolic",
 ]
 
@@ -2038,6 +2037,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tir-cdsl"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "logos",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "tir-cli"
 version = "0.1.0"
 dependencies = [
@@ -2072,8 +2082,8 @@ dependencies = [
  "libfuzzer-sys",
  "tir",
  "tir-arm64",
+ "tir-cdsl",
  "tir-jit",
- "tir-pdl",
  "tir-riscv",
  "tmdl",
 ]
@@ -2144,21 +2154,6 @@ dependencies = [
 name = "tir-macros"
 version = "0.1.0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
- "tir-symbolic",
-]
-
-[[package]]
-name = "tir-pdl"
-version = "0.1.0"
-dependencies = [
- "ariadne",
- "chumsky",
- "clap",
- "logos",
- "prettyplease",
  "proc-macro2",
  "quote",
  "syn 2.0.118",

@@ -15,7 +15,6 @@ doctest = false
 tir-macros.workspace = true
 tir-egglog.workspace = true
 tir-ir-schema.workspace = true
-tir-pdl = { workspace = true, default-features = false }
 tir-symbolic.workspace = true
 tir-adt.workspace = true
 linkme.workspace = true

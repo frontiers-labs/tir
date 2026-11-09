@@ -1,7 +1,0 @@
-// Unrolling a loop is a structural transform, not a rewrite rule: the shape
-// re-grows every round and saturation never reaches a fixpoint.
-// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
-
-rule unroll: #theta(i: int<W>, n) => #theta(i, #theta(i, n));
-
-// CHECK: unrolls a loop under itself

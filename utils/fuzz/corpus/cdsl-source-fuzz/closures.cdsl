@@ -1,0 +1,1 @@
+let make=fn(x:Integer){fn(y:Integer){x+y}};let main={let x=40;let add=make(x);let x=0;add(2)};

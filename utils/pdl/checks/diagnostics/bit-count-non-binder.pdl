@@ -1,8 +1,0 @@
-// IR migration: the Rust rewrite emitter was removed.
-// XFAIL: *
-// Bit-count functions need a constant binder, not an expression.
-// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
-
-rule bad: builtin.muli(x: int<W>, c: const) => x where clz(c + 1) == 6;
-
-// CHECK: bit-count function requires a constant binder

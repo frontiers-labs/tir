@@ -1,0 +1,1 @@
+let value<T>=fn(record)->T{record.value};let main=value<Integer>({extra:false,value:42});
