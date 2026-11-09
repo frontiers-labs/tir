@@ -884,4 +884,3 @@ pub let ra_control_functions = [
           then: RAAllocatedFunction(inv, f) & RAAlreadyAllocated.has(inv, f, true) }
     }),
 ];
-

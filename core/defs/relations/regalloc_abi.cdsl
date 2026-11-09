@@ -352,4 +352,3 @@ pub let ra_abi_bind = [
                 RANativeClassifiedValues.has(inv, f, ids_one(value)) }
     }),
 ];
-

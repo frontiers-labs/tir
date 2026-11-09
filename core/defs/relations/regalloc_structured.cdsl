@@ -463,4 +463,3 @@ pub let ra_control_mandatory = [
           then: RAAllPathsDemand(inv, f, op, block) }
     }),
 ];
-

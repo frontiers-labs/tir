@@ -2428,4 +2428,3 @@ pub let ra_bind_require = [
           then: RAOutputPin(inv, f, op, value, class, index) }
     }),
 ];
-

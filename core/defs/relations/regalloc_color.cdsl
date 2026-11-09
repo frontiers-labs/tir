@@ -955,4 +955,3 @@ pub let ra_color_complete = [
           then: RAColorComplete(inv, f, candidate) }
     }),
 ];
-
