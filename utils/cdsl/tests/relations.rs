@@ -247,3 +247,57 @@ fn trusted_library_bindings_require_the_canonical_source_module() {
         tir_cdsl::Value::Foreign { .. }
     ));
 }
+
+#[test]
+fn typed_collection_updates_preserve_merges_and_ordered_deletion() {
+    let source = r#"
+        mod relational; use relational::*;
+        extern type Ids = Type;
+        let ids = container<Ids, Set<Integer>>();
+        let empty = primitive<()->Ids>("set-empty");
+        let insert = primitive<(xs:Ids,value:Integer)->Ids>("set-insert");
+        let union = primitive<(left:Ids,right:Ids)->Ids>("set-union");
+        let contains = predicate<(Ids,Integer)>("set-contains");
+        let input = relation<(Integer,Integer)>("Input");
+        let current = table<Integer,Ids>("Current", merge(fn(old:Expr<Ids>,new:Expr<Ids>)->Expr<Ids>{ union(old,new) }));
+        let rules = [
+            forall(fn(id,n){
+                {when:input(id,n),then:current.has(id,insert(empty(),n))}
+            }),
+            forall(fn(id,n){
+                {when:input(id,n) & (0 <= n) & contains(current.get(id),n),then:current.remove(id) & erase(input(id,n))}
+            }),
+        ];
+    "#;
+    let check = |source: &str| {
+        let mut sources = SourceMap::new("collections.cdsl", source);
+        relations::install(&mut sources);
+        compile(&sources)
+    };
+    let checked = check(source).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let declarations = [
+        relations::SchemaEntry::Container("ids"),
+        relations::SchemaEntry::Declaration("input"),
+        relations::SchemaEntry::Declaration("current"),
+    ];
+    assert_eq!(
+        relations::emit_schema(&checked, &declarations).unwrap(),
+        "(sort Ids (Set i64))\n(relation Input (i64 i64))\n(function Current (i64) Ids :merge (set-union old new))\n"
+    );
+    let rules = [
+        relations::SchemaEntry::Ruleset("update"),
+        relations::SchemaEntry::Rules("rules", "update"),
+    ];
+    assert_eq!(
+        relations::emit_schema_extension(&checked, &declarations, &rules).unwrap(),
+        "(ruleset update)\n(rule ((Input v0 v1)) ((set (Current v0) (set-insert (set-empty) v1))) :ruleset update)\n(rule ((Input v0 v1) (<= 0 v1) (set-contains (Current v0) v1)) ((delete (Current v0)) (delete (Input v0 v1))) :ruleset update)\n"
+    );
+    assert!(relations::emit_schema(&checked, &rules).is_err());
+    assert!(check(&source.replace("insert(empty(),n)", "insert(empty(),true)")).is_err());
+    let invalid = check(&source.replace(
+        "fn(old:Expr<Ids>,new:Expr<Ids>)->Expr<Ids>{ union(old,new) }",
+        "fn(old:Expr<Integer>,new:Expr<Integer>)->Expr<Integer>{ old + new }",
+    ))
+    .unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert!(relations::emit_schema(&invalid, &declarations).is_err());
+}

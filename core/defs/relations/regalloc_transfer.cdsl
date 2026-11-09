@@ -1,0 +1,2431 @@
+use ::relational::*;
+use ::Attr;
+use ::AttrList;
+use ::Attribute;
+use ::BigInt;
+use ::BlockLayout;
+use ::BlockParam;
+use ::BlockRegion;
+use ::Boundary;
+use ::DeclaredType;
+use ::DefinedValue;
+use ::Definition;
+use ::KindBoundary;
+use ::OpKind;
+use ::OpPlacement;
+use ::Operand;
+use ::Placement;
+use ::Result;
+use ::Successor;
+use ::SuccessorArg;
+use ::TypeExpr;
+use ::TypeHandle;
+use ::TypeHandleOf;
+use ::TypeList;
+use ::ValueDefinition;
+use ::ValueType;
+use ::regalloc::RANativeCall;
+use ::regalloc::RANativePhysicalRead;
+use ::regalloc::RANativePhysicalWrite;
+use ::regalloc::RATransferComplete;
+use ::regalloc::RAValueBits;
+use ::regalloc_bindings::RAHardwiredIndices;
+use ::regalloc_bindings::RANativeNames;
+use ::regalloc_bindings::RANativeSlot;
+use ::regalloc_bindings::RARecipeProfileEligible;
+use ::regalloc_color::RAChosenRegister;
+use ::regalloc_color::RAColorComplete;
+use ::regalloc_color::RAForcedRegister;
+use ::regalloc_color::RAInputPin;
+use ::regalloc_color::RAKnownResourceRef;
+use ::regalloc_color::RANoSpill;
+use ::regalloc_color::RAOutputPin;
+use ::regalloc_color::RARegisterRef;
+use ::regalloc_color::RARegisterRefs;
+use ::regalloc_color::RARepairRequest;
+use ::regalloc_color::RAResourceWrite;
+use ::regalloc_color::RASpill;
+use ::regalloc_color::RASpillDescriptor;
+use ::regalloc_color::RATiedOperands;
+use ::regalloc_color::RAValueClass;
+use ::regalloc_control::RAAt;
+use ::regalloc_control::RABlock;
+use ::regalloc_control::RAEntry;
+use ::regalloc_control::RAExit;
+use ::regalloc_control::RAFunction;
+use ::regalloc_control::RAIds;
+use ::regalloc_control::RAIncoming;
+use ::regalloc_control::RAJump;
+use ::regalloc_control::RAPin;
+use ::regalloc_control::RAPlace;
+use ::regalloc_control::RAPred;
+use ::regalloc_control::RAReturn;
+use ::regalloc_control::RASequence;
+use ::regalloc_control::RASource;
+use ::regalloc_control::RAUse;
+use ::regalloc_publish::RAIntegerType;
+use ::regalloc_publish::RASelectedCandidate;
+use ::tmdl_schema::TMDLAbiRegister;
+use ::tmdl_schema::TMDLClass;
+use ::tmdl_schema::TMDLClassDialect;
+use ::tmdl_schema::TMDLInstructionSlot;
+use ::tmdl_schema::TMDLInstructionSlotCount;
+use ::tmdl_schema::TMDLInstructionStateSlot;
+use ::tmdl_schema::TMDLRecipe;
+use ::tmdl_schema::TMDLRecipeAttribute;
+use ::tmdl_schema::TMDLRecipeExcluded;
+use ::tmdl_schema::TMDLRecipeOffset;
+use ::tmdl_schema::TMDLRecipeOffsetFactor;
+use ::tmdl_schema::TMDLRecipeRegister;
+use ::tmdl_schema::TMDLRecipeZeroOffset;
+use ::tmdl_schema::TMDLRegister;
+use ::tmdl_schema::TMDLRegisterWidth;
+use ::tmdl_schema::TMDLStackLayout;
+use ::tmdl_schema::TMDLStackLinkBytes;
+
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let recipes_union = primitive<(a0: RATransferRecipes, a1: RATransferRecipes) -> RATransferRecipes>("set-union");
+let names_union = primitive<(a0: RANativeNames, a1: RANativeNames) -> RANativeNames>("set-union");
+let min = primitive<(a0: Integer, a1: Integer) -> Integer>("min");
+let max = primitive<(a0: Integer, a1: Integer) -> Integer>("max");
+let registers_union = primitive<(a0: RARegisterRefs, a1: RARegisterRefs) -> RARegisterRefs>("set-union");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let recipes_empty = primitive<() -> RATransferRecipes>("set-empty");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let names_empty = primitive<() -> RANativeNames>("set-empty");
+let names_one = primitive<(a0: String) -> RANativeNames>("set-of");
+let shift_right = primitive<(a0: Integer, a1: Integer) -> Integer>(">>");
+let shift_left = primitive<(a0: Integer, a1: Integer) -> Integer>("<<");
+let recipes_one = primitive<(a0: RATransferRecipe) -> RATransferRecipes>("set-of");
+let recipes_length = primitive<(a0: RATransferRecipes) -> Integer>("set-length");
+let recipes_get = primitive<(a0: RATransferRecipes, a1: Integer) -> RATransferRecipe>("set-get");
+let i64_hex = primitive<(a0: Integer) -> String>("i64-hex");
+let ids_length = primitive<(a0: RAIds) -> Integer>("set-length");
+let hex_i64 = primitive<(a0: String) -> Integer>("hex-i64");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let sequence_of_5 = primitive<(a0: Integer, a1: Integer, a2: Integer, a3: Integer, a4: Integer) -> RASequence>("vec-of");
+let fresh_ir_id = primitive<() -> Integer>("fresh-ir-id");
+let sequence_of_4 = primitive<(a0: Integer, a1: Integer, a2: Integer, a3: Integer) -> RASequence>("vec-of");
+let ids_contains = predicate<(RAIds, Integer)>("set-contains");
+let ids_get = primitive<(a0: RAIds, a1: Integer) -> Integer>("set-get");
+let sequence_of_3 = primitive<(a0: Integer, a1: Integer, a2: Integer) -> RASequence>("vec-of");
+let sequence_of_2 = primitive<(a0: Integer, a1: Integer) -> RASequence>("vec-of");
+let registers_empty = primitive<() -> RARegisterRefs>("set-empty");
+let registers_one = primitive<(a0: RARegisterRef) -> RARegisterRefs>("set-of");
+let registers_not_contains = predicate<(RARegisterRefs, RARegisterRef)>("set-not-contains");
+let registers_length = primitive<(a0: RARegisterRefs) -> Integer>("set-length");
+let registers_get = primitive<(a0: RARegisterRefs, a1: Integer) -> RARegisterRef>("set-get");
+let ids_remove = primitive<(a0: RAIds, a1: Integer) -> RAIds>("set-remove");
+let nat_i64 = primitive<(a0: BigInt) -> Integer>("nat-i64");
+let fresh_ir_type_id = primitive<() -> Integer>("fresh-ir-type-id");
+let bigint = primitive<(a0: Integer) -> BigInt>("bigint");
+let make_PhysicalRegisterAttr = constructor(Attr::PhysicalRegisterAttr);
+let make_ResultDef = constructor(Definition::ResultDef);
+let make_ANil = constructor(AttrList::ANil);
+let make_ACons = constructor(AttrList::ACons);
+let make_IntegerAttr = constructor(Attr::IntegerAttr);
+let make_ListAttr = constructor(Attr::ListAttr);
+let make_OrdinaryBoundary = constructor(Boundary::OrdinaryBoundary);
+let make_BlockAttr = constructor(Attr::BlockAttr);
+let make_BlockParamDef = constructor(Definition::BlockParamDef);
+let make_InBlock = constructor(Placement::InBlock);
+let make_RASlot = constructor(RASpillDescriptor::RASlot);
+let make_RARegRef = constructor(RARegisterRef::RARegRef);
+let make_Apply = constructor(TypeExpr::Apply);
+let make_Ctor = constructor(TypeExpr::Ctor);
+let make_TCons = constructor(TypeList::TCons);
+let make_NatLit = constructor(TypeExpr::NatLit);
+let make_TNil = constructor(TypeList::TNil);
+
+// Repair the selected canonical CFG and restart allocation after a transaction.
+// Retain RATransferNative, RAGeneratedTemporary, RAAllocationPin,
+// RAAllocationOrder, RAFrameSlot, RAFrameEntryState, RAFrameJoinedState,
+// RAFrameMemory, RAFrameSaveInstalled and RAFrameInstalled across retries.
+pub enum RATransferOperand {
+    RATransferValue(Integer),
+    RATransferPhysical(String, Integer),
+    RATransferAbsent,
+};
+let make_RATransferValue = constructor(RATransferOperand::RATransferValue);
+let make_RATransferPhysical = constructor(RATransferOperand::RATransferPhysical);
+let make_RATransferAbsent = constructor(RATransferOperand::RATransferAbsent);
+
+pub enum RATransferRecipe {
+    RATR(String, Integer),
+};
+let make_RATR = constructor(RATransferRecipe::RATR);
+
+pub enum RATransferCopyIds {
+    RATCopy(Integer, Integer),
+};
+let make_RATCopy = constructor(RATransferCopyIds::RATCopy);
+
+pub enum RACFGPosition {
+    RACFGPos(Integer, Integer, Integer, Integer, Integer),
+};
+let make_RACFGPos = constructor(RACFGPosition::RACFGPos);
+
+pub enum RAFrameSlotInfo {
+    RAFS(Integer, Integer, Integer),
+};
+let make_RAFS = constructor(RAFrameSlotInfo::RAFS);
+
+pub enum RAFrameSaveIds {
+    RAFSaved(Integer, Integer, Integer, Integer),
+};
+let make_RAFSaved = constructor(RAFrameSaveIds::RAFSaved);
+
+pub enum RAFrameAdjustState {
+    RAFAS(Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer),
+};
+let make_RAFAS = constructor(RAFrameAdjustState::RAFAS);
+
+pub enum RAEdgeCopyState {
+    RAECS(Integer, Integer, Integer, Integer, RAIds, Integer),
+};
+let make_RAECS = constructor(RAEdgeCopyState::RAECS);
+
+pub enum RAAddressState {
+    RAAS(Integer, Integer, Integer, Integer, String, RATransferOperand, Integer, Integer, Integer),
+};
+let make_RAAS = constructor(RAAddressState::RAAS);
+
+pub extern type RATransferRecipes = Type;
+pub let ra_transfer_recipes_sort = container<RATransferRecipes, Set<RATransferRecipe>>();
+
+pub let RASignedIntegerType = relation<(TypeExpr,)>("RASignedIntegerType");
+pub let RATransferRequest = relation<(Integer, Integer, Integer, String, Integer, RATransferOperand, RATransferOperand, RATransferOperand, Integer, Integer, Integer, Integer)>("RATransferRequest");
+pub let RATransferRole = relation<(Integer, Integer, Integer, String, RATransferOperand)>("RATransferRole");
+pub let RATransferCompatible = relation<(Integer, String, String)>("RATransferCompatible");
+pub let RATransferExcludedIndices = table<(Integer, String, Integer, String), RAIds>("RATransferExcludedIndices", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferCandidate = relation<(Integer, Integer, Integer, String, Integer)>("RATransferCandidate");
+pub let RATransferCandidates = table<(Integer, Integer, Integer), RATransferRecipes>("RATransferCandidates", merge(fn(old, new) { recipes_union(old, new) }));
+pub let RATransferRecipeFields = table<(Integer, String, Integer), RANativeNames>("RATransferRecipeFields", merge(fn(old, new) { names_union(old, new) }));
+pub let RATransferMatchedFields = table<(Integer, Integer, Integer, String, Integer), RANativeNames>("RATransferMatchedFields", merge(fn(old, new) { names_union(old, new) }));
+pub let RATransferOffset = relation<(Integer, Integer, Integer, String, Integer, Integer)>("RATransferOffset");
+pub let RATransferChosen = relation<(Integer, Integer, Integer, String, Integer)>("RATransferChosen");
+pub let RATransferField = relation<(Integer, Integer, Integer, String, Integer, String, Integer)>("RATransferField");
+pub let RATransferFieldValue = relation<(Integer, Integer, Integer, String, Integer, Integer)>("RATransferFieldValue");
+pub let RATransferScan = relation<(Integer, Integer, Integer, String, Integer, Integer)>("RATransferScan");
+pub let RATransferSegments = table<(Integer, Integer, Integer, String, Integer), AttrList>("RATransferSegments", unique);
+pub let RATransferEmitOperand = relation<(Integer, Integer, Integer, Integer, Integer)>("RATransferEmitOperand");
+pub let RATransferEmitDefinition = relation<(Integer, Integer, Integer, Definition, TypeExpr)>("RATransferEmitDefinition");
+pub let RATransferEmitAttribute = relation<(Integer, Integer, Integer, String, Attr)>("RATransferEmitAttribute");
+pub let RATransferEraseOperand = relation<(Integer, Integer, Integer, Integer)>("RATransferEraseOperand");
+pub let RATransferEraseDefinition = relation<(Integer, Integer, Integer, Definition)>("RATransferEraseDefinition");
+pub let RATransferEraseAttribute = relation<(Integer, Integer, Integer, String)>("RATransferEraseAttribute");
+pub let RATransferTransaction = relation<(Integer, Integer, Integer)>("RATransferTransaction");
+pub let RATransferChanges = table<(Integer, Integer), RAIds>("RATransferChanges", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferReady = relation<(Integer, Integer, Integer)>("RATransferReady");
+pub let RATransferProgress = relation<(Integer, Integer, Integer)>("RATransferProgress");
+pub let RATransferError = relation<(Integer, Integer, Integer, String)>("RATransferError");
+pub let RATransferErrors = table<(Integer, Integer), RAIds>("RATransferErrors", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferRequests = table<(Integer, Integer), RAIds>("RATransferRequests", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferConstructed = table<(Integer, Integer), RAIds>("RATransferConstructed", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferSegmented = table<(Integer, Integer, Integer), RAIds>("RATransferSegmented", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferNative = relation<(Integer, Integer, String, Integer)>("RATransferNative");
+pub let RAGeneratedTemporary = relation<(Integer, Integer)>("RAGeneratedTemporary");
+pub let RATransferNumber = relation<(Integer, Integer, Integer, Integer, String, Integer)>("RATransferNumber");
+pub let RATransferGuard = relation<(Integer, Integer, Integer, Integer, Integer, Bool)>("RATransferGuard");
+pub let RATransferFirstShape = table<(Integer, Integer, Integer, Integer), Integer>("RATransferFirstShape", merge(fn(old, new) { min(old, new) }));
+pub let RATransferVerifyOps = table<(Integer, Integer, Integer), RAIds>("RATransferVerifyOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferVerifiedOps = table<(Integer, Integer, Integer), RAIds>("RATransferVerifiedOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferVerifyErrors = table<(Integer, Integer, Integer), RAIds>("RATransferVerifyErrors", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferVerifyError = relation<(Integer, Integer, Integer, Integer, String)>("RATransferVerifyError");
+pub let RATransfersVerified = relation<(Integer, Integer, Integer)>("RATransfersVerified");
+pub let RATransferInputCopy = table<(Integer, Integer, Integer, Integer, Integer), RATransferCopyIds>("RATransferInputCopy", unique);
+pub let RATransferOutputCopy = table<(Integer, Integer, Integer, Integer), RATransferCopyIds>("RATransferOutputCopy", unique);
+pub let RATransferSpilledValues = table<(Integer, Integer), RAIds>("RATransferSpilledValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferCopyInputRequest = relation<(Integer, Integer, Integer, Integer, Integer)>("RATransferCopyInputRequest");
+pub let RATransferCopyOutputRequest = relation<(Integer, Integer, Integer, Integer)>("RATransferCopyOutputRequest");
+pub let RATransferCopyTargetRank = table<(Integer, Integer, Integer, Integer), Integer>("RATransferCopyTargetRank", merge(fn(old, new) { min(old, new) }));
+pub let RATransferCopyTarget = relation<(Integer, Integer, Integer, Integer, String, Integer)>("RATransferCopyTarget");
+pub let RAFrameNonStackCallee = relation<(Integer, String, Integer)>("RAFrameNonStackCallee");
+pub let RAAllocationPin = relation<(Integer, Integer, String, Integer)>("RAAllocationPin");
+pub let RAAllocationOrder = relation<(Integer, Integer, Integer)>("RAAllocationOrder");
+pub let RATransferOrder = relation<(Integer, Integer, Integer, Integer)>("RATransferOrder");
+pub let RATransferRequestedPin = relation<(Integer, Integer, Integer, String, String, Integer)>("RATransferRequestedPin");
+pub let RATransferNewPin = relation<(Integer, Integer, Integer, String, Integer)>("RATransferNewPin");
+pub let RATransferEmitKind = relation<(Integer, Integer, Integer, String)>("RATransferEmitKind");
+pub let RATransferPlacement = relation<(Integer, Integer, Integer, Integer, RACFGPosition)>("RATransferPlacement");
+pub let RATransferBefore = relation<(Integer, Integer, Integer, Integer)>("RATransferBefore");
+pub let RATransferPreceding = table<(Integer, Integer, Integer), RAIds>("RATransferPreceding", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferEmitSuccessor = relation<(Integer, Integer, Integer, Integer, Integer)>("RATransferEmitSuccessor");
+pub let RATransferEraseSuccessor = relation<(Integer, Integer, Integer, Integer)>("RATransferEraseSuccessor");
+pub let RATransferEmitSuccessorArg = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RATransferEmitSuccessorArg");
+pub let RATransferEraseSuccessorArg = relation<(Integer, Integer, Integer, Integer, Integer)>("RATransferEraseSuccessorArg");
+pub let RATransferEmitBlock = relation<(Integer, Integer, Integer, Integer)>("RATransferEmitBlock");
+pub let RACFGParamCount = table<(Integer, Integer, Integer), Integer>("RACFGParamCount", merge(fn(old, new) { max(old, new) }));
+pub let RACFGSuccessors = table<(Integer, Integer, Integer), RAIds>("RACFGSuccessors", merge(fn(old, new) { ids_union(old, new) }));
+pub let RACFGSplitEdges = table<(Integer, Integer, Integer), RAIds>("RACFGSplitEdges", merge(fn(old, new) { ids_union(old, new) }));
+pub let RACFGSplitDestination = relation<(Integer, Integer, Integer, Integer, Integer)>("RACFGSplitDestination");
+pub let RACFGSwitchDests = table<(Integer, Integer, Integer, Integer), AttrList>("RACFGSwitchDests", unique);
+pub let RACFGSwitchCounts = table<(Integer, Integer, Integer, Integer), AttrList>("RACFGSwitchCounts", unique);
+pub let RATransferSplitEdge = relation<(Integer, Integer, Integer, Integer, Integer)>("RATransferSplitEdge");
+pub let RACFGSplitIds = table<(Integer, Integer, Integer, Integer), RATransferCopyIds>("RACFGSplitIds", unique);
+pub let RACFGSplitParam = table<(Integer, Integer, Integer, Integer, Integer), Integer>("RACFGSplitParam", unique);
+pub let RAMemoryType = relation<(TypeExpr,)>("RAMemoryType");
+pub let RAFrameSlot = table<(Integer, Integer), RAFrameSlotInfo>("RAFrameSlot", unique);
+pub let RAFrameExtent = table<(Integer, Integer), Integer>("RAFrameExtent", merge(fn(old, new) { max(old, new) }));
+pub let RAFrameEntryBias = table<Integer, Integer>("RAFrameEntryBias", unique);
+pub let RAFrameRequiredBytes = table<(Integer, Integer), Integer>("RAFrameRequiredBytes", merge(fn(old, new) { max(old, new) }));
+pub let RAFrameAllocatedValues = table<(Integer, Integer), RAIds>("RAFrameAllocatedValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFramePlannedSlot = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RAFramePlannedSlot");
+pub let RAFrameActive = relation<(Integer, Integer, Integer)>("RAFrameActive");
+pub let RAFrameEntryState = table<(Integer, Integer), RATransferCopyIds>("RAFrameEntryState", unique);
+pub let RAFrameJoinedState = table<(Integer, Integer), Integer>("RAFrameJoinedState", unique);
+pub let RAFrameKnownStates = table<(Integer, Integer), RAIds>("RAFrameKnownStates", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameBlockInput = relation<(Integer, Integer, Integer, Integer)>("RAFrameBlockInput");
+pub let RAFramePrefix = relation<(Integer, Integer, Integer, Integer)>("RAFramePrefix");
+pub let RAFrameBlockTail = relation<(Integer, Integer, Integer, Integer)>("RAFrameBlockTail");
+pub let RAFrameMemory = relation<(Integer, Integer, Integer)>("RAFrameMemory");
+pub let RAFramePending = relation<(Integer, Integer, Integer, String, Integer, RATransferOperand, RATransferOperand, Integer, Integer)>("RAFramePending");
+pub let RAFrameEvent = relation<(Integer, Integer, Integer, Integer, Integer)>("RAFrameEvent");
+pub let RAFrameEarlier = table<(Integer, Integer, Integer), RAIds>("RAFrameEarlier", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameLast = table<(Integer, Integer, Integer), RAIds>("RAFrameLast", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameEventInput = relation<(Integer, Integer, Integer, Integer)>("RAFrameEventInput");
+pub let RAFrameEvents = table<(Integer, Integer, Integer), RAIds>("RAFrameEvents", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameSpillIds = table<(Integer, Integer, Integer), RATransferCopyIds>("RAFrameSpillIds", unique);
+pub let RAFrameReloadIds = table<(Integer, Integer, Integer, Integer), RAFrameSaveIds>("RAFrameReloadIds", unique);
+pub let RAFrameReloadValue = relation<(Integer, Integer, Integer, Integer, Integer)>("RAFrameReloadValue");
+pub let RAFrameReloadNeeded = relation<(Integer, Integer, Integer, Integer)>("RAFrameReloadNeeded");
+pub let RAFrameSpillValue = relation<(Integer, Integer, Integer, String, Integer)>("RAFrameSpillValue");
+pub let RAFrameStoreAt = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RAFrameStoreAt");
+pub let RAFrameStateParam = relation<(Integer, Integer, Integer, Integer, Integer)>("RAFrameStateParam");
+pub let RACFGEdgeOperand = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RACFGEdgeOperand");
+pub let RACFGEdgeCount = table<(Integer, Integer, Integer, Integer), Integer>("RACFGEdgeCount", unique);
+pub let RACFGEdgeStart = table<(Integer, Integer, Integer, Integer), Integer>("RACFGEdgeStart", unique);
+pub let RATransferReplacedSlots = table<(Integer, Integer, Integer), RAIds>("RATransferReplacedSlots", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferRebuiltBranches = table<(Integer, Integer), RAIds>("RATransferRebuiltBranches", merge(fn(old, new) { ids_union(old, new) }));
+pub let RATransferReplaceOperand = relation<(Integer, Integer, Integer, Integer, Integer)>("RATransferReplaceOperand");
+pub let RAFrameCalleeRegister = relation<(Integer, Integer, String, Integer)>("RAFrameCalleeRegister");
+pub let RAFrameSaveInstalled = relation<(Integer, String, Integer)>("RAFrameSaveInstalled");
+pub let RAFrameNeeded = relation<(Integer, Integer, Integer)>("RAFrameNeeded");
+pub let RAFrameMissingSaves = table<(Integer, Integer), RARegisterRefs>("RAFrameMissingSaves", merge(fn(old, new) { registers_union(old, new) }));
+pub let RAFrameSavedRegisters = table<(Integer, Integer), RARegisterRefs>("RAFrameSavedRegisters", merge(fn(old, new) { registers_union(old, new) }));
+pub let RAFrameNewSave = table<(Integer, Integer, String, Integer), RAFrameSaveIds>("RAFrameNewSave", unique);
+pub let RAFrameNewRestore = table<(Integer, Integer, Integer, String, Integer), RATransferCopyIds>("RAFrameNewRestore", unique);
+pub let RAFrameSaveOffset = relation<(Integer, Integer, String, Integer, Integer, Integer, Integer, Integer)>("RAFrameSaveOffset");
+pub let RAFrameInstalled = relation<(Integer, Integer)>("RAFrameInstalled");
+pub let RAFrameInstalledFunctions = table<Integer, RAIds>("RAFrameInstalledFunctions", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameAddressLimit = table<(Integer, Integer), Integer>("RAFrameAddressLimit", merge(fn(old, new) { max(old, new) }));
+pub let RAFrameAddressDirections = table<Integer, RAIds>("RAFrameAddressDirections", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameAddressDomain = relation<(Integer, String, Integer, Integer, Integer, Integer)>("RAFrameAddressDomain");
+pub let RAFrameAdjustPlan = relation<(Integer, Integer, Integer, Integer, Integer)>("RAFrameAdjustPlan");
+pub let RAFrameAdjustment = relation<(RAFrameAdjustState,)>("RAFrameAdjustment");
+pub let RAFrameAdjustmentIds = table<RAFrameAdjustState, RATransferCopyIds>("RAFrameAdjustmentIds", unique);
+pub let RAFrameExpectedExits = table<(Integer, Integer), RAIds>("RAFrameExpectedExits", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameAdjustedExits = table<(Integer, Integer), RAIds>("RAFrameAdjustedExits", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameComplete = relation<(Integer, Integer, Integer)>("RAFrameComplete");
+pub let RAEdgeMatchingValues = table<(Integer, Integer, Integer), RAIds>("RAEdgeMatchingValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEdgeMovingValues = table<(Integer, Integer, Integer), RAIds>("RAEdgeMovingValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEdgeCyclicValues = table<(Integer, Integer), RAIds>("RAEdgeCyclicValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEdgeMove = relation<(Integer, Integer, Integer, Integer, Integer, Integer, Integer, String, Integer)>("RAEdgeMove");
+pub let RAEdgeDependency = relation<(Integer, Integer, Integer, Integer, Integer)>("RAEdgeDependency");
+pub let RAEdgeMoveReach = relation<(Integer, Integer, Integer, Integer, Integer)>("RAEdgeMoveReach");
+pub let RAEdgeCopiesComplete = relation<(Integer, Integer, Integer)>("RAEdgeCopiesComplete");
+pub let RAEdgeCopyStateRow = relation<(RAEdgeCopyState,)>("RAEdgeCopyStateRow");
+pub let RAEdgeBlockedMoves = table<RAEdgeCopyState, RAIds>("RAEdgeBlockedMoves", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEdgeNextMove = table<RAEdgeCopyState, Integer>("RAEdgeNextMove", merge(fn(old, new) { min(old, new) }));
+pub let RAEdgeStepIds = table<RAEdgeCopyState, RATransferCopyIds>("RAEdgeStepIds", unique);
+pub let RAEdgePending = table<(Integer, Integer), RAIds>("RAEdgePending", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEdgeCycleRemaining = table<(Integer, Integer, Integer), RAIds>("RAEdgeCycleRemaining", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEdgeCycleValue = table<(Integer, Integer, Integer), Integer>("RAEdgeCycleValue", merge(fn(old, new) { min(old, new) }));
+pub let RAEdgeCycleCopy = table<(Integer, Integer, Integer), RATransferCopyIds>("RAEdgeCycleCopy", unique);
+pub let RAAddressRepairRecipes = table<(Integer, Integer, Integer), RATransferRecipes>("RAAddressRepairRecipes", merge(fn(old, new) { recipes_union(old, new) }));
+pub let RAAddressRepair = relation<(Integer, Integer, Integer, Integer, String)>("RAAddressRepair");
+pub let RAAddressNeededType = relation<(Integer, Integer, Integer)>("RAAddressNeededType");
+pub let RAAddressKnownWidths = table<(Integer, Integer), RAIds>("RAAddressKnownWidths", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAAddressTypeId = table<(Integer, Integer, Integer), Integer>("RAAddressTypeId", unique);
+pub let RAAddressStateRow = relation<(RAAddressState,)>("RAAddressStateRow");
+pub let RAAddressIds = table<RAAddressState, RATransferCopyIds>("RAAddressIds", unique);
+pub let RATransferGeneratedOps = table<(Integer, Integer), RAIds>("RATransferGeneratedOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAFrameDirection = relation<(Integer, Integer)>("RAFrameDirection");
+pub let RAFrameKnownEntries = table<(Integer, Integer), RAIds>("RAFrameKnownEntries", merge(fn(old, new) { ids_union(old, new) }));
+pub enum RAFreshKey {
+    RAFreshNumbers(String, String, RASequence),
+    RAFreshAdjustment(RAFrameAdjustState),
+    RAFreshEdge(RAEdgeCopyState),
+    RAFreshAddress(RAAddressState),
+};
+let make_RAFreshNumbers = constructor(RAFreshKey::RAFreshNumbers);
+let make_RAFreshAdjustment = constructor(RAFreshKey::RAFreshAdjustment);
+let make_RAFreshEdge = constructor(RAFreshKey::RAFreshEdge);
+let make_RAFreshAddress = constructor(RAFreshKey::RAFreshAddress);
+
+pub let RAFreshId = table<(RAFreshKey, Integer), Integer>("RAFreshId", merge(fn(old, new) { min(old, new) }));
+pub let ra_transfer_index = [
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RATransferErrors.has(inv, f, ids_empty()) & RATransferRequests.has(inv, f, ids_empty()) &
+                RATransferConstructed.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, first, file, group, offset, firstMerge, second, secondMerge) {
+        { when: TMDLClass(inv, first, file, group, offset, firstMerge) &
+                TMDLClass(inv, second, file, group, offset, secondMerge),
+          then: RATransferCompatible(inv, first, second) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RATransferSpilledValues.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, value, descriptor) {
+        { when: RASelectedCandidate(inv, f, candidate) & RASpill(inv, f, candidate, value, descriptor),
+          then: RATransferSpilledValues.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, kind, recipe, name, class, input, output, role) {
+        { when: TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, role),
+          then: RATransferExcludedIndices.has(inv, kind, recipe, name, ids_empty()) }
+    }),
+    forall(fn(inv, kind, recipe, name, index) {
+        { when: TMDLRecipeExcluded(inv, kind, recipe, name, index),
+          then: RATransferExcludedIndices.has(inv, kind, recipe, name, ids_one(index)) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value, reason, class, index) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RARepairRequest(inv, f, candidate, op, slot, value, reason) &
+                RAInputPin(inv, f, op, slot, value, class, index),
+          then: RATransferCopyTargetRank.has(inv, f, op, slot, 0) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value, reason, result) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RARepairRequest(inv, f, candidate, op, slot, value, reason) &
+                RATiedOperands(inv, f, op, slot, result),
+          then: RATransferCopyTargetRank.has(inv, f, op, slot, 1) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RATransferChanges.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, block, op, point) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAAt(inv, f, candidate, block, op, point),
+          then: RATransferPlacement(inv, f, op, block, make_RACFGPos(point, 0, 0, 0, 0)) }
+    }),
+    forall(fn(inv, f, block) {
+        { when: RABlock(inv, f, block),
+          then: RACFGParamCount.has(inv, f, block, 0) }
+    }),
+    forall(fn(inv, f, block, slot, value) {
+        { when: RABlock(inv, f, block) & BlockParam(block, slot, value),
+          then: RACFGParamCount.has(inv, f, block, (slot + 1)) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RASource(inv, f, op, kind),
+          then: RACFGSuccessors.has(inv, f, op, ids_empty()) & RACFGSplitEdges.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, op, kind, dest, edge) {
+        { when: RASource(inv, f, op, kind) & Successor.has(op, edge, dest),
+          then: RACFGSuccessors.has(inv, f, op, ids_one(edge)) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RAFrameExtent.has(inv, f, 0) & RAFrameRequiredBytes.has(inv, f, 0) &
+                RAFrameAllocatedValues.has(inv, f, ids_empty()) & RAFrameKnownStates.has(inv, f, ids_empty()) &
+                RAFrameKnownEntries.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, bytes) {
+        { when: TMDLStackLinkBytes(inv, bytes),
+          then: RAFrameEntryBias.has(inv, bytes) }
+    }),
+    forall(fn(inv, f, candidate, value, offset, size, align) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RAFrameSlot.has(f, value, make_RAFS(offset, size, align)),
+          then: RAFrameAllocatedValues.has(inv, f, ids_one(value)) & RAFrameExtent.has(inv, f, (offset + size)) }
+    }),
+    forall(fn(inv, f, candidate, state, block) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAFrameJoinedState.has(f, block, state),
+          then: RAFrameKnownStates.has(inv, f, ids_one(block)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind) {
+        { when: RASelectedCandidate(inv, f, candidate) & RASource(inv, f, op, kind),
+          then: RATransferReplacedSlots.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RAFrameMissingSaves.has(inv, f, registers_empty()) &
+                RAFrameSavedRegisters.has(inv, f, registers_empty()) }
+    }),
+    forall(fn(inv, f, candidate, class, index) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAFrameSaveInstalled(f, class, index),
+          then: RAFrameSavedRegisters.has(inv, f, registers_one(make_RARegRef(class, index))) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RAFrameInstalledFunctions.has(inv, ids_empty()) & RAFrameAddressDirections.has(inv, ids_empty()) &
+                RAFrameExpectedExits.has(inv, f, ids_empty()) & RAFrameAdjustedExits.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, bytes) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAFrameInstalled(f, bytes),
+          then: RAFrameInstalledFunctions.has(inv, ids_one(f)) }
+    }),
+    forall(fn(inv, f, candidate, exit) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAExit(inv, f, exit),
+          then: RAFrameExpectedExits.has(inv, f, ids_one(exit)) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RAEdgeCyclicValues.has(inv, f, ids_empty()) & RAEdgePending.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, edge, kind) {
+        { when: RASource(inv, f, edge, kind),
+          then: RAEdgeMatchingValues.has(inv, f, edge, ids_empty()) &
+                RAEdgeMovingValues.has(inv, f, edge, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RAAddressKnownWidths.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, handle, bits, width) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                TypeHandleOf.has(
+                    make_Apply(make_Ctor("builtin.i"), make_TCons(make_NatLit(bits), make_TNil())), handle
+                ) &
+                (width == nat_i64(bits)),
+          then: RAAddressKnownWidths.has(inv, f, ids_one(width)) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RATransferGeneratedOps.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe),
+          then: RATransferGeneratedOps.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, candidate, ids, block) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAFrameEntryState.has(f, block, ids),
+          then: RAFrameKnownEntries.has(inv, f, ids_one(block)) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RATransferRebuiltBranches.has(inv, f, ids_empty()) }
+    }),
+];
+
+pub let ra_transfer_persist = [
+    forall(fn(inv, f, region, value) {
+        { when: RAFunction(inv, f, region) & RAGeneratedTemporary(f, value),
+          then: RANoSpill(inv, f, value) }
+    }),
+    forall(fn(inv, f, region, value, class, index) {
+        { when: RAFunction(inv, f, region) & RAAllocationPin(f, value, class, index),
+          then: RAForcedRegister(inv, f, value, class, index) }
+    }),
+];
+
+pub let ra_transfer_recipe_index = [
+    forall(fn(inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut) {
+        { when: RATransferRequest(
+            inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+        ),
+          then: RATransferRole(inv, f, op, "source", source) &
+                RATransferRole(inv, f, op, "destination", destination) &
+                RATransferRole(inv, f, op, "base", base) & RATransferCandidates.has(inv, f, op, recipes_empty()) &
+                RATransferRequests.has(inv, f, ids_one(op)) & RATransferSegmented.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, kind, recipe, transfer, width, address, align, features, parameters) {
+        { when: TMDLRecipe(inv, kind, recipe, transfer, width, address, align, features, parameters),
+          then: RATransferRecipeFields.has(inv, kind, recipe, names_empty()) }
+    }),
+    forall(fn(inv, kind, recipe, name, class, input, output, role) {
+        { when: TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, role),
+          then: RATransferRecipeFields.has(inv, kind, recipe, names_one(name)) }
+    }),
+    forall(fn(inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut, kind,
+        recipe, address, align, features, parameters) {
+        { when: RATransferRequest(
+            inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+        ) &
+                TMDLRecipe(inv, kind, recipe, transfer, width, address, align, features, parameters) &
+                RARecipeProfileEligible(inv, kind, recipe) & ((offset % align) == 0),
+          then: RATransferCandidate(inv, f, op, kind, recipe) &
+                RATransferMatchedFields.has(inv, f, op, kind, recipe, names_empty()) }
+    }),
+];
+
+pub let ra_transfer_recipe = [
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, control, stateIn, stateOut) {
+        { when: RATransferCandidate(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, 0, control, stateIn, stateOut
+                ) &
+                TMDLRecipeZeroOffset(inv, kind, recipe),
+          then: RATransferOffset(inv, f, op, kind, recipe, 0) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, control, stateIn,
+        stateOut, name, bits, align, nonzero, factor, raw) {
+        { when: RATransferCandidate(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+                ) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, true, align, nonzero) & (bits < 64) & (bits > 0) &
+                TMDLRecipeOffsetFactor(inv, kind, recipe, factor) & (raw == (offset * factor)) &
+                ((raw % align) == 0) & (shift_right(shift_left(raw, (64 - bits)), (64 - bits)) == raw),
+          then: RATransferOffset(inv, f, op, kind, recipe, raw) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, control, stateIn,
+        stateOut, name, align, nonzero, factor, raw) {
+        { when: RATransferCandidate(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+                ) &
+                TMDLRecipeOffset(inv, kind, recipe, name, 64, true, align, nonzero) &
+                TMDLRecipeOffsetFactor(inv, kind, recipe, factor) & (raw == (offset * factor)) &
+                ((raw % align) == 0),
+          then: RATransferOffset(inv, f, op, kind, recipe, raw) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, control, stateIn,
+        stateOut, name, bits, align, nonzero, factor, raw) {
+        { when: RATransferCandidate(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+                ) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, false, align, nonzero) & (bits < 63) &
+                (bits > 0) & TMDLRecipeOffsetFactor(inv, kind, recipe, factor) & (raw == (offset * factor)) &
+                ((raw % align) == 0) & (raw >= 0) & (raw < shift_left(1, bits)),
+          then: RATransferOffset(inv, f, op, kind, recipe, raw) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, raw, name, bits, signed, align) {
+        { when: RATransferOffset(inv, f, op, kind, recipe, raw) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, signed, align, true) & (raw != 0) &
+                RATransferMatchedFields.has(
+                    inv, f, op, kind, recipe, RATransferRecipeFields.get(inv, kind, recipe)
+                ),
+          then: RATransferCandidates.has(inv, f, op, recipes_one(make_RATR(kind, recipe))) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, raw, name, bits, signed, align) {
+        { when: RATransferOffset(inv, f, op, kind, recipe, raw) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, signed, align, false) &
+                RATransferMatchedFields.has(
+                    inv, f, op, kind, recipe, RATransferRecipeFields.get(inv, kind, recipe)
+                ),
+          then: RATransferCandidates.has(inv, f, op, recipes_one(make_RATR(kind, recipe))) }
+    }),
+    forall(fn(inv, f, op, kind, recipe) {
+        { when: RATransferOffset(inv, f, op, kind, recipe, 0) & TMDLRecipeZeroOffset(inv, kind, recipe) &
+                RATransferMatchedFields.has(
+                    inv, f, op, kind, recipe, RATransferRecipeFields.get(inv, kind, recipe)
+                ),
+          then: RATransferCandidates.has(inv, f, op, recipes_one(make_RATR(kind, recipe))) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, name, required, input, output, role, value, actual) {
+        { when: RATransferCandidate(inv, f, op, kind, recipe) &
+                TMDLRecipeRegister(inv, kind, recipe, name, required, input, output, role) &
+                RATransferRole(inv, f, op, role, make_RATransferValue(value)) &
+                RAValueClass(inv, f, value, actual) & RATransferCompatible(inv, required, actual),
+          then: RATransferMatchedFields.has(inv, f, op, kind, recipe, names_one(name)) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, name, required, input, output, role, actual, index) {
+        { when: RATransferCandidate(inv, f, op, kind, recipe) &
+                TMDLRecipeRegister(inv, kind, recipe, name, required, input, output, role) &
+                RATransferRole(inv, f, op, role, make_RATransferPhysical(actual, index)) &
+                RATransferCompatible(inv, required, actual) & TMDLRegister(inv, required, index) &
+                ids_not_contains(RATransferExcludedIndices.get(inv, kind, recipe, name), index),
+          then: RATransferMatchedFields.has(inv, f, op, kind, recipe, names_one(name)) }
+    }),
+];
+
+pub let ra_transfer_choose = [
+    forall(fn(choices, inv, f, op, kind, recipe) {
+        { when: RATransferCandidates.has(inv, f, op, choices) & (recipes_length(choices) > 0) &
+                (make_RATR(kind, recipe) == recipes_get(choices, 0)),
+          then: RATransferChosen(inv, f, op, kind, recipe) & RATransferScan(inv, f, op, "in", 0, 0) &
+                RATransferScan(inv, f, op, "out", 0, 0) }
+    }),
+];
+
+pub let ra_transfer_emit = [
+    forall(fn(inv, f, op, kind, recipe, name, class, input, output, role, field, optional, value) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, role) & (input >= 0) &
+                TMDLInstructionSlot(inv, kind, "in", field, name, optional, false, false) &
+                RATransferRole(inv, f, op, role, make_RATransferValue(value)),
+          then: RATransferField(inv, f, op, "in", field, name, 1) &
+                RATransferFieldValue(inv, f, op, "in", field, value) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, name, class, input, output, role, field, actual, index, dialect) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, role) & (input >= 0) &
+                TMDLInstructionSlot(inv, kind, "in", field, name, true, false, false) &
+                RATransferRole(inv, f, op, role, make_RATransferPhysical(actual, index)) &
+                TMDLClassDialect(inv, class, dialect),
+          then: RATransferField(inv, f, op, "in", field, name, 0) &
+                RATransferEmitAttribute(inv, f, op, name, make_PhysicalRegisterAttr(dialect, class, index)) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, name, class, input, output, role, field, optional, value) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, role) & (output >= 0) &
+                TMDLInstructionSlot(inv, kind, "out", field, name, optional, false, false) &
+                RATransferRole(inv, f, op, role, make_RATransferValue(value)),
+          then: RATransferField(inv, f, op, "out", field, name, 1) &
+                RATransferFieldValue(inv, f, op, "out", field, value) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, name, class, input, output, role, field, actual, index, dialect) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, role) & (output >= 0) &
+                TMDLInstructionSlot(inv, kind, "out", field, name, true, false, false) &
+                RATransferRole(inv, f, op, role, make_RATransferPhysical(actual, index)) &
+                TMDLClassDialect(inv, class, dialect),
+          then: RATransferField(inv, f, op, "out", field, name, 0) &
+                RATransferEmitAttribute(inv, f, op, name, make_PhysicalRegisterAttr(dialect, class, index)) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, control, stateIn,
+        stateOut, field, name) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+                ) &
+                TMDLInstructionSlot(inv, kind, "in", field, name, true, false, true) & (control >= 0),
+          then: RATransferField(inv, f, op, "in", field, name, 1) &
+                RATransferFieldValue(inv, f, op, "in", field, control) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, stateIn, stateOut,
+        field, name) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, -1, stateIn, stateOut
+                ) &
+                TMDLInstructionSlot(inv, kind, "in", field, name, true, false, true),
+          then: RATransferField(inv, f, op, "in", field, name, 0) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, field, name) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                TMDLInstructionSlot(inv, kind, "out", field, name, true, false, true),
+          then: RATransferField(inv, f, op, "out", field, name, 0) }
+    }),
+    forall(fn(inv, f, op, direction, field, actual, name, size) {
+        { when: RATransferScan(inv, f, op, direction, field, actual) &
+                RATransferField(inv, f, op, direction, field, name, size),
+          then: RATransferScan(inv, f, op, direction, (field + 1), (actual + size)) }
+    }),
+    forall(fn(inv, f, op, field, actual, value) {
+        { when: RATransferScan(inv, f, op, "in", field, actual) &
+                RATransferFieldValue(inv, f, op, "in", field, value),
+          then: RATransferEmitOperand(inv, f, op, actual, value) }
+    }),
+    forall(fn(inv, f, op, field, actual, value, ty) {
+        { when: RATransferScan(inv, f, op, "out", field, actual) &
+                RATransferFieldValue(inv, f, op, "out", field, value) & ValueType.has(value, ty),
+          then: RATransferEmitDefinition(inv, f, value, make_ResultDef(op, actual), ty) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, direction, count) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                TMDLInstructionSlotCount(inv, kind, direction, count),
+          then: RATransferSegments.has(inv, f, op, direction, count, make_ANil()) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, direction, field, name, size, ty, tail) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                RATransferField(inv, f, op, direction, field, name, size) & RAIntegerType(ty) &
+                RATransferSegments.has(inv, f, op, direction, (field + 1), tail),
+          then: RATransferSegments.has(
+              inv, f, op, direction, field, make_ACons(make_IntegerAttr(ty, 64, i64_hex(size)), tail)
+          ) }
+    }),
+    forall(fn(xs, inv, f, op) {
+        { when: RATransferSegments.has(inv, f, op, "in", 0, xs),
+          then: RATransferEmitAttribute(inv, f, op, "operand_segment_sizes", make_ListAttr(xs)) &
+                RATransferSegmented.has(inv, f, op, ids_one(0)) }
+    }),
+    forall(fn(xs, inv, f, op) {
+        { when: RATransferSegments.has(inv, f, op, "out", 0, xs),
+          then: RATransferEmitAttribute(inv, f, op, "result_segment_sizes", make_ListAttr(xs)) &
+                RATransferSegmented.has(inv, f, op, ids_one(1)) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, name, value, ty) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                TMDLRecipeAttribute(inv, kind, recipe, name, "constant", value) & RASignedIntegerType(ty),
+          then: RATransferEmitAttribute(inv, f, op, name, make_IntegerAttr(ty, 64, i64_hex(value))) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, name, ignored, raw, ty) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                TMDLRecipeAttribute(inv, kind, recipe, name, "offset", ignored) &
+                RATransferOffset(inv, f, op, kind, recipe, raw) & RASignedIntegerType(ty),
+          then: RATransferEmitAttribute(inv, f, op, name, make_IntegerAttr(ty, 64, i64_hex(raw))) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, inputs, actualInputs, outputs, actualOutputs) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) & TMDLInstructionSlotCount(inv, kind, "in", inputs) &
+                RATransferScan(inv, f, op, "in", inputs, actualInputs) &
+                TMDLInstructionSlotCount(inv, kind, "out", outputs) &
+                RATransferScan(inv, f, op, "out", outputs, actualOutputs) &
+                (ids_length(RATransferSegmented.get(inv, f, op)) == 2),
+          then: RATransferConstructed.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, control, stateIn,
+        stateOut, field) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+                ) &
+                TMDLInstructionStateSlot(inv, kind, "in", field) & (stateIn >= 0),
+          then: RATransferField(inv, f, op, "in", field, "state", 1) &
+                RATransferFieldValue(inv, f, op, "in", field, stateIn) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, control, stateIn,
+        stateOut, field) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+                ) &
+                TMDLInstructionStateSlot(inv, kind, "in", field) & (stateIn == -1),
+          then: RATransferField(inv, f, op, "in", field, "state", 0) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, control, stateIn,
+        stateOut, field) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+                ) &
+                TMDLInstructionStateSlot(inv, kind, "out", field) & (stateOut >= 0),
+          then: RATransferField(inv, f, op, "out", field, "state", 1) &
+                RATransferFieldValue(inv, f, op, "out", field, stateOut) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, transfer, width, source, destination, base, offset, control, stateIn,
+        stateOut, field) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                RATransferRequest(
+                    inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+                ) &
+                TMDLInstructionStateSlot(inv, kind, "out", field) & (stateOut == -1),
+          then: RATransferField(inv, f, op, "out", field, "state", 0) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, role, pinned, index, name, class, input, output, dialect) {
+        { when: RATransferChosen(inv, f, op, kind, recipe) &
+                RATransferRequestedPin(inv, f, op, role, pinned, index) &
+                TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, role) &
+                TMDLClassDialect(inv, class, dialect),
+          then: RATransferEmitAttribute(inv, f, op, name, make_PhysicalRegisterAttr(dialect, class, index)) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RATransferEmitKind(inv, f, op, kind),
+          then: RATransferChanges.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut) {
+        { when: RATransferRequest(
+            inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+        ),
+          then: RATransferChanges.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, slot, value) {
+        { when: RATransferReplaceOperand(inv, f, op, slot, value) &
+                ids_not_contains(RATransferRebuiltBranches.get(inv, f), op),
+          then: RATransferEmitOperand(inv, f, op, slot, value) }
+    }),
+];
+
+pub let ra_transfer_check = [
+    forall(fn(inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut) {
+        { when: RATransferRequest(
+            inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+        ) &
+                (recipes_length(RATransferCandidates.get(inv, f, op)) == 0),
+          then: RATransferError(inv, f, op, "no profile/class/offset eligible proved transfer recipe") }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                (RATransferConstructed.get(inv, f) != RATransferRequests.get(inv, f)),
+          then: RATransferError(inv, f, f, "transfer construction is incomplete") }
+    }),
+    forall(fn(inv, f, entity, message) {
+        { when: RATransferError(inv, f, entity, message),
+          then: RATransferErrors.has(inv, f, ids_one(entity)) }
+    }),
+    forall(fn(inv, f, candidate, bytes, direction) {
+        { when: RAFrameAdjustPlan(inv, f, candidate, bytes, direction) &
+                (RAFrameExpectedExits.get(inv, f) != RAFrameAdjustedExits.get(inv, f)),
+          then: RATransferError(inv, f, f, "frame adjustment cannot reach every exit") }
+    }),
+    forall(fn(inv, f, candidate, bytes, direction) {
+        { when: RAFrameAdjustPlan(inv, f, candidate, bytes, direction) &
+                ids_not_contains(RAFrameAddressDirections.get(inv), direction),
+          then: RATransferError(inv, f, f, "no aligned native SP adjustment recipe") }
+    }),
+    forall(fn(inv, f, candidate, bytes) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAFrameInstalled(f, bytes) &
+                (RAFrameRequiredBytes.get(inv, f) > bytes),
+          then: RATransferError(inv, f, f, "frame grew after its SP adjustments were installed") }
+    }),
+    forall(fn(inv, f, candidate, op, class, index, spClass, spIndex, file, width, offset, merge, spWidth,
+        spOffset, spMerge) {
+        { when: RAFrameNeeded(inv, f, candidate) & RANativePhysicalRead(inv, f, op, class, index) &
+                ids_not_contains(RATransferGeneratedOps.get(inv, f), op) &
+                ids_not_contains(RAHardwiredIndices.get(inv, class), index) &
+                TMDLAbiRegister(inv, "sp", spClass, spIndex) & TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, spClass, file, spWidth, spOffset, spMerge) & (index < (spIndex + spWidth)) &
+                (spIndex < (index + width)),
+          then: RATransferError(
+              inv, f, op, "source stack-pointer reads require frame-index lowering before allocating a frame"
+          ) }
+    }),
+    forall(fn(inv, f, candidate, op, class, index, spClass, spIndex, file, width, offset, merge, spWidth,
+        spOffset, spMerge) {
+        { when: RAFrameNeeded(inv, f, candidate) & RANativePhysicalWrite(inv, f, op, class, index) &
+                ids_not_contains(RATransferGeneratedOps.get(inv, f), op) &
+                ids_not_contains(RAHardwiredIndices.get(inv, class), index) &
+                TMDLAbiRegister(inv, "sp", spClass, spIndex) & TMDLClass(inv, class, file, width, offset, merge) &
+                TMDLClass(inv, spClass, file, spWidth, spOffset, spMerge) & (index < (spIndex + spWidth)) &
+                (spIndex < (index + width)),
+          then: RATransferError(
+              inv, f, op, "source stack-pointer writes require frame-index lowering before allocating a frame"
+          ) }
+    }),
+];
+
+pub let ra_transfer_ready = [
+    forall(fn(inv, f, candidate) {
+        { when: RATransferTransaction(inv, f, candidate) & (ids_length(RATransferChanges.get(inv, f)) > 0) &
+                (ids_length(RATransferErrors.get(inv, f)) == 0) &
+                RATransferConstructed.has(inv, f, RATransferRequests.get(inv, f)),
+          then: RATransferReady(inv, f, candidate) }
+    }),
+];
+
+pub let ra_transfer_delete = [
+    forall(fn(inv, f, candidate, op, slot) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEraseOperand(inv, f, op, slot),
+          then: Operand.remove(op, slot) }
+    }),
+    forall(fn(inv, f, candidate, value, def) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEraseDefinition(inv, f, value, def),
+          then: ValueDefinition.remove(value) & DefinedValue.remove(def) }
+    }),
+    forall(fn(inv, f, candidate, value, op, slot) {
+        { when: RATransferReady(inv, f, candidate) &
+                RATransferEraseDefinition(inv, f, value, make_ResultDef(op, slot)),
+          then: erase(Result(op, slot, value)) }
+    }),
+    forall(fn(inv, f, candidate, op, name) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEraseAttribute(inv, f, op, name),
+          then: Attribute.remove(op, name) }
+    }),
+    forall(fn(inv, f, candidate, op, block, position) {
+        { when: RATransferReady(inv, f, candidate) & RATransferPlacement(inv, f, op, block, position),
+          then: OpPlacement.remove(op) }
+    }),
+    forall(fn(inv, f, candidate, op, edge) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEraseSuccessor(inv, f, op, edge),
+          then: Successor.remove(op, edge) }
+    }),
+    forall(fn(inv, f, candidate, op, edge, slot) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEraseSuccessorArg(inv, f, op, edge, slot),
+          then: SuccessorArg.remove(op, edge, slot) }
+    }),
+];
+
+pub let ra_transfer_install = [
+    forall(fn(inv, f, candidate, op, kind, recipe, region) {
+        { when: RATransferReady(inv, f, candidate) & RATransferChosen(inv, f, op, kind, recipe) &
+                RAFunction(inv, f, region),
+          then: OpKind.has(op, kind) & KindBoundary.has(kind, make_OrdinaryBoundary()) &
+                RATransferNative(f, op, kind, recipe) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEmitOperand(inv, f, op, slot, value),
+          then: Operand.has(op, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, value, def, ty) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEmitDefinition(inv, f, value, def, ty),
+          then: ValueType.has(value, ty) & ValueDefinition.has(value, def) }
+    }),
+    forall(fn(inv, f, candidate, op, name, attr) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEmitAttribute(inv, f, op, name, attr),
+          then: Attribute.has(op, name, attr) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RATransferReady(inv, f, candidate),
+          then: RATransferProgress(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate, value, class, index) {
+        { when: RATransferReady(inv, f, candidate) & RATransferNewPin(inv, f, value, class, index),
+          then: RAAllocationPin(f, value, class, index) }
+    }),
+    forall(fn(inv, f, candidate, op, kind) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEmitKind(inv, f, op, kind),
+          then: OpKind.has(op, kind) & KindBoundary.has(kind, make_OrdinaryBoundary()) }
+    }),
+    forall(fn(inv, f, candidate, op, block, position, order) {
+        { when: RATransferReady(inv, f, candidate) & RATransferPlacement(inv, f, op, block, position) &
+                (order == ids_length(RATransferPreceding.get(inv, f, op))),
+          then: OpPlacement.has(op, make_InBlock(block, order)) }
+    }),
+    forall(fn(inv, f, candidate, block, region) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEmitBlock(inv, f, block, region),
+          then: BlockRegion.has(block, region) & BlockLayout.has(block, block) }
+    }),
+    forall(fn(inv, f, candidate, value, block, slot, ty) {
+        { when: RATransferReady(inv, f, candidate) &
+                RATransferEmitDefinition(inv, f, value, make_BlockParamDef(block, slot), ty),
+          then: DeclaredType.has(value, ty) }
+    }),
+    forall(fn(inv, f, candidate, op, edge, dest) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEmitSuccessor(inv, f, op, edge, dest),
+          then: Successor.has(op, edge, dest) }
+    }),
+    forall(fn(inv, f, candidate, op, edge, slot, operand) {
+        { when: RATransferReady(inv, f, candidate) & RATransferEmitSuccessorArg(inv, f, op, edge, slot, operand),
+          then: SuccessorArg.has(op, edge, slot, operand) }
+    }),
+    forall(fn(inv, f, candidate, value, offset, size, align) {
+        { when: RATransferReady(inv, f, candidate) & RAFramePlannedSlot(inv, f, value, offset, size, align),
+          then: RAFrameSlot.has(f, value, make_RAFS(offset, size, align)) }
+    }),
+    forall(fn(inv, f, candidate, op, transfer, width, source, destination, offset, state) {
+        { when: RATransferReady(inv, f, candidate) &
+                RAFramePending(inv, f, op, transfer, width, source, destination, offset, state),
+          then: RAFrameMemory(f, op, state) }
+    }),
+    forall(fn(inv, f, candidate, class, index, bits, offset, size, align) {
+        { when: RATransferReady(inv, f, candidate) &
+                RAFrameSaveOffset(inv, f, class, index, bits, offset, size, align),
+          then: RAFrameSaveInstalled(f, class, index) }
+    }),
+    forall(fn(inv, f, candidate, saved, savedIndex, bits, offset, size, align, value, actual, index) {
+        { when: RATransferReady(inv, f, candidate) &
+                RAFrameSaveOffset(inv, f, saved, savedIndex, bits, offset, size, align) &
+                RAChosenRegister(inv, f, candidate, value, actual, index),
+          then: RAAllocationPin(f, value, actual, index) }
+    }),
+    forall(fn(inv, f, candidate, bytes, direction) {
+        { when: RATransferReady(inv, f, candidate) & RAFrameAdjustPlan(inv, f, candidate, bytes, direction),
+          then: RAFrameInstalled(f, bytes) }
+    }),
+    forall(fn(inv, f, candidate, before, after) {
+        { when: RATransferReady(inv, f, candidate) & RATransferOrder(inv, f, before, after),
+          then: RAAllocationOrder(f, before, after) }
+    }),
+];
+
+pub let ra_transfer_verify_index = [
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate),
+          then: RATransferVerifyOps.has(inv, f, candidate, ids_empty()) &
+                RATransferVerifiedOps.has(inv, f, candidate, ids_empty()) &
+                RATransferVerifyErrors.has(inv, f, candidate, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe),
+          then: RATransferVerifyOps.has(inv, f, candidate, ids_one(op)) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, name, ty, bits, hex, value) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                Attribute.has(op, name, make_IntegerAttr(ty, bits, hex)) & (value == hex_i64(hex)),
+          then: RATransferNumber(inv, f, candidate, op, name, value) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, name, dialect, class, index) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                Attribute.has(op, name, make_PhysicalRegisterAttr(dialect, class, index)),
+          then: RATransferNumber(inv, f, candidate, op, name, index) }
+    }),
+    forall(fn(inv, f, candidate, op, kind, recipe, direction, name, slot, value, class, index) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferNative(f, op, kind, recipe) &
+                RANativeSlot(inv, f, op, direction, name, slot, value) &
+                RAChosenRegister(inv, f, candidate, value, class, index),
+          then: RATransferNumber(inv, f, candidate, op, name, index) }
+    }),
+];
+
+pub let ra_transfer_verify_check = [
+    forall(fn(f, op, kind, recipe, inv, candidate, name, excluded) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                TMDLRecipeExcluded(inv, kind, recipe, name, excluded) &
+                RATransferNumber(inv, f, candidate, op, name, excluded),
+          then: RATransferVerifyError(inv, f, candidate, op, "transfer writes a discarded register") }
+    }),
+    forall(fn(f, op, kind, recipe, inv, candidate) {
+        { when: RATransferNative(f, op, kind, recipe) & RASelectedCandidate(inv, f, candidate) &
+                ids_not_contains(RATransferVerifiedOps.get(inv, f, candidate), op),
+          then: RATransferVerifyError(inv, f, candidate, op, "allocated transfer has no legal native encoding") }
+    }),
+    forall(fn(inv, f, candidate, op, message) {
+        { when: RATransferVerifyError(inv, f, candidate, op, message),
+          then: RATransferVerifyErrors.has(inv, f, candidate, ids_one(op)) }
+    }),
+];
+
+pub let ra_transfer_verify_complete = [
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RATransferVerifiedOps.has(inv, f, candidate, RATransferVerifyOps.get(inv, f, candidate)) &
+                (ids_length(RATransferVerifyErrors.get(inv, f, candidate)) == 0),
+          then: RATransfersVerified(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                RATransfersVerified(inv, f, candidate) & RAEdgeCopiesComplete(inv, f, candidate) &
+                RAFrameComplete(inv, f, candidate),
+          then: RATransferComplete(inv, f, candidate) }
+    }),
+];
+
+pub let ra_transfer_plan = [
+    forall(fn(inv, f, candidate, op, slot, value) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RARepairRequest(inv, f, candidate, op, slot, value, "split fixed operand") & (slot >= 0) &
+                ids_not_contains(RATransferSpilledValues.get(inv, f), value),
+          then: RATransferCopyInputRequest(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RARepairRequest(inv, f, candidate, op, slot, value, "copy tied operand") & (slot >= 0) &
+                ids_not_contains(RATransferSpilledValues.get(inv, f), value),
+          then: RATransferCopyInputRequest(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, op, slot, value) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RARepairRequest(inv, f, candidate, op, slot, value, "split live tied operand") & (slot >= 0) &
+                ids_not_contains(RATransferSpilledValues.get(inv, f), value),
+          then: RATransferCopyInputRequest(inv, f, op, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, op, value) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RARepairRequest(inv, f, candidate, op, -1, value, "split fixed result") &
+                ids_not_contains(RATransferSpilledValues.get(inv, f), value),
+          then: RATransferCopyOutputRequest(inv, f, op, value) }
+    }),
+    forall(fn(inv, f, op, slot, value) {
+        { when: RATransferCopyInputRequest(inv, f, op, slot, value),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RATransferInputCopy", "", sequence_of_5(inv, f, op, slot, value)), 0,
+              fresh_ir_id()
+          ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RATransferInputCopy", "", sequence_of_5(inv, f, op, slot, value)), 1,
+                    fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, op, slot, value, fresh0, fresh1) {
+        { when: RATransferCopyInputRequest(inv, f, op, slot, value) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RATransferInputCopy", "", sequence_of_5(inv, f, op, slot, value)), 0,
+                    fresh0
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RATransferInputCopy", "", sequence_of_5(inv, f, op, slot, value)), 1,
+                    fresh1
+                ),
+          then: RATransferInputCopy.has(inv, f, op, slot, value, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(inv, f, op, value) {
+        { when: RATransferCopyOutputRequest(inv, f, op, value),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RATransferOutputCopy", "", sequence_of_4(inv, f, op, value)), 0,
+              fresh_ir_id()
+          ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RATransferOutputCopy", "", sequence_of_4(inv, f, op, value)), 1,
+                    fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, op, value, fresh0, fresh1) {
+        { when: RATransferCopyOutputRequest(inv, f, op, value) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RATransferOutputCopy", "", sequence_of_4(inv, f, op, value)), 0, fresh0
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RATransferOutputCopy", "", sequence_of_4(inv, f, op, value)), 1, fresh1
+                ),
+          then: RATransferOutputCopy.has(inv, f, op, value, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(copy, temp, inv, f, op, slot, value, candidate, class, width, ty) {
+        { when: RATransferInputCopy.has(inv, f, op, slot, value, make_RATCopy(copy, temp)) &
+                RASelectedCandidate(inv, f, candidate) & RAValueClass(inv, f, value, class) &
+                RAValueBits.has(inv, f, value, width) & ValueType.has(value, ty),
+          then: RATransferTransaction(inv, f, candidate) & ValueType.has(temp, ty) &
+                RAValueClass(inv, f, temp, class) & RAGeneratedTemporary(f, temp) & RANoSpill(inv, f, temp) &
+                RATransferRequest(
+                    inv, f, copy, "copy", width, make_RATransferValue(value), make_RATransferValue(temp),
+                    make_RATransferAbsent(), 0, -1, -1, -1
+                ) }
+    }),
+    forall(fn(copy, temp, inv, f, op, value, candidate, class, width, ty, def, slot) {
+        { when: RATransferOutputCopy.has(inv, f, op, value, make_RATCopy(copy, temp)) &
+                RASelectedCandidate(inv, f, candidate) & RAValueClass(inv, f, value, class) &
+                RAValueBits.has(inv, f, value, width) & ValueType.has(value, ty) &
+                ValueDefinition.has(value, def) & (def == make_ResultDef(op, slot)),
+          then: RATransferTransaction(inv, f, candidate) & ValueType.has(temp, ty) &
+                RAValueClass(inv, f, temp, class) & RAGeneratedTemporary(f, temp) & RANoSpill(inv, f, temp) &
+                RATransferRequest(
+                    inv, f, copy, "copy", width, make_RATransferValue(temp), make_RATransferValue(value),
+                    make_RATransferAbsent(), 0, -1, -1, -1
+                ) &
+                RATransferEraseDefinition(inv, f, value, def) & RATransferEmitDefinition(inv, f, temp, def, ty) }
+    }),
+    forall(fn(inv, f, op, slot, value, class, index) {
+        { when: RATransferCopyInputRequest(inv, f, op, slot, value) &
+                RATransferCopyTargetRank.has(inv, f, op, slot, 0) &
+                RAInputPin(inv, f, op, slot, value, class, index),
+          then: RATransferCopyTarget(inv, f, op, slot, class, index) }
+    }),
+    forall(fn(inv, f, op, slot, value, result, candidate, class, index) {
+        { when: RATransferCopyInputRequest(inv, f, op, slot, value) &
+                RATransferCopyTargetRank.has(inv, f, op, slot, 1) & RATiedOperands(inv, f, op, slot, result) &
+                RASelectedCandidate(inv, f, candidate) &
+                RAChosenRegister(inv, f, candidate, result, class, index),
+          then: RATransferCopyTarget(inv, f, op, slot, class, index) }
+    }),
+    forall(fn(inv, f, op, slot, class, index, copy, temp, value) {
+        { when: RATransferCopyTarget(inv, f, op, slot, class, index) &
+                RATransferInputCopy.has(inv, f, op, slot, value, make_RATCopy(copy, temp)),
+          then: RATransferRequestedPin(inv, f, copy, "destination", class, index) &
+                RATransferNewPin(inv, f, temp, class, index) }
+    }),
+    forall(fn(inv, f, op, slot, class, index, result) {
+        { when: RATransferCopyTarget(inv, f, op, slot, class, index) & RATiedOperands(inv, f, op, slot, result),
+          then: RATransferNewPin(inv, f, result, class, index) }
+    }),
+    forall(fn(copy, temp, inv, f, op, slot, value, candidate, block, point) {
+        { when: RATransferInputCopy.has(inv, f, op, slot, value, make_RATCopy(copy, temp)) &
+                RASelectedCandidate(inv, f, candidate) & RAAt(inv, f, candidate, block, op, point),
+          then: RATransferPlacement(inv, f, copy, block, make_RACFGPos(point, -1, copy, 0, 0)) &
+                RATransferEraseOperand(inv, f, op, slot) & RATransferReplaceOperand(inv, f, op, slot, temp) }
+    }),
+    forall(fn(copy, temp, inv, f, op, value, candidate, block, point) {
+        { when: RATransferOutputCopy.has(inv, f, op, value, make_RATCopy(copy, temp)) &
+                RASelectedCandidate(inv, f, candidate) & RAAt(inv, f, candidate, block, op, point),
+          then: RATransferPlacement(inv, f, copy, block, make_RACFGPos(point, 1, copy, 0, 0)) }
+    }),
+    forall(fn(inv, f, candidate, values, value, key, class, size) {
+        { when: RASelectedCandidate(inv, f, candidate) & RATransferSpilledValues.has(inv, f, values) &
+                (ids_length(values) > 0) & (value == ids_get(values, 0)) &
+                RASpill(inv, f, candidate, value, make_RASlot(key, class, size)),
+          then: RAFrameSpillValue(inv, f, value, class, size) & RAFrameActive(inv, f, candidate) &
+                RATransferTransaction(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, value, class, size, stackAlign, slotSize, redZone, down, style, align, extent, offset) {
+        { when: RAFrameSpillValue(inv, f, value, class, size) &
+                TMDLStackLayout(inv, stackAlign, slotSize, redZone, down, style) &
+                ids_not_contains(RAFrameAllocatedValues.get(inv, f), value) & (align == max(size, slotSize)) &
+                RAFrameExtent.has(inv, f, extent) & (offset == (((extent + (align - 1)) / align) * align)),
+          then: RAFramePlannedSlot(inv, f, value, offset, size, align) }
+    }),
+    forall(fn(inv, f, value, class, size, offset, allocated, align) {
+        { when: RAFrameSpillValue(inv, f, value, class, size) &
+                RAFrameSlot.has(f, value, make_RAFS(offset, allocated, align)),
+          then: RAFramePlannedSlot(inv, f, value, offset, allocated, align) }
+    }),
+    forall(fn(inv, f, value, class, size) {
+        { when: RAFrameSpillValue(inv, f, value, class, size),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RAFrameSpillIds", "", sequence_of_3(inv, f, value)), 0, fresh_ir_id()
+          ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameSpillIds", "", sequence_of_3(inv, f, value)), 1, fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, value, class, size, fresh0, fresh1) {
+        { when: RAFrameSpillValue(inv, f, value, class, size) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameSpillIds", "", sequence_of_3(inv, f, value)), 0, fresh0
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameSpillIds", "", sequence_of_3(inv, f, value)), 1, fresh1
+                ),
+          then: RAFrameSpillIds.has(inv, f, value, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(inv, f, value, class, size, op, slot, candidate, block, point) {
+        { when: RAFrameSpillValue(inv, f, value, class, size) &
+                ValueDefinition.has(value, make_ResultDef(op, slot)) & RASelectedCandidate(inv, f, candidate) &
+                RAAt(inv, f, candidate, block, op, point),
+          then: RAFrameStoreAt(inv, f, value, block, point, 1) }
+    }),
+    forall(fn(inv, f, value, class, size, block, slot, point) {
+        { when: RAFrameSpillValue(inv, f, value, class, size) &
+                ValueDefinition.has(value, make_BlockParamDef(block, slot)) &
+                RAFramePrefix(inv, f, block, point),
+          then: RAFrameStoreAt(inv, f, value, block, point, -3) }
+    }),
+    forall(fn(inv, f, value, block, point, lane, store, state, memory, offset, size, align, width) {
+        { when: RAFrameStoreAt(inv, f, value, block, point, lane) &
+                RAFrameSpillIds.has(inv, f, value, make_RATCopy(store, state)) & RAMemoryType(memory) &
+                RAFramePlannedSlot(inv, f, value, offset, size, align) & RAValueBits.has(inv, f, value, width),
+          then: ValueType.has(state, memory) & RAGeneratedTemporary(f, value) & RANoSpill(inv, f, value) &
+                RAFramePending(
+                    inv, f, store, "spill", width, make_RATransferValue(value), make_RATransferAbsent(), offset,
+                    state
+                ) &
+                RAFrameEvent(inv, f, block, store, state) &
+                RATransferPlacement(inv, f, store, block, make_RACFGPos(point, lane, store, 0, 0)) }
+    }),
+    forall(fn(inv, f, value, class, size, user, slot) {
+        { when: RAFrameSpillValue(inv, f, value, class, size) & RAUse(inv, f, user, slot, value),
+          then: RAFrameReloadNeeded(inv, f, user, value) }
+    }),
+    forall(fn(inv, f, user, value) {
+        { when: RAFrameReloadNeeded(inv, f, user, value),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RAFrameReloadIds", "", sequence_of_4(inv, f, user, value)), 0, fresh_ir_id()
+          ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameReloadIds", "", sequence_of_4(inv, f, user, value)), 1,
+                    fresh_ir_id()
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameReloadIds", "", sequence_of_4(inv, f, user, value)), 2,
+                    fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, user, value, fresh0, fresh1, fresh2) {
+        { when: RAFrameReloadNeeded(inv, f, user, value) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameReloadIds", "", sequence_of_4(inv, f, user, value)), 0, fresh0
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameReloadIds", "", sequence_of_4(inv, f, user, value)), 1, fresh1
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameReloadIds", "", sequence_of_4(inv, f, user, value)), 2, fresh2
+                ),
+          then: RAFrameReloadIds.has(inv, f, user, value, make_RAFSaved(fresh0, fresh1, fresh2, 0)) }
+    }),
+    forall(fn(inv, f, value, class, size, user, slot, reload, temp, state, unused, candidate, block, point, ty,
+        memory, width, offset, allocated, align) {
+        { when: RAFrameSpillValue(inv, f, value, class, size) & RAUse(inv, f, user, slot, value) &
+                RAFrameReloadIds.has(inv, f, user, value, make_RAFSaved(reload, temp, state, unused)) &
+                RASelectedCandidate(inv, f, candidate) & RAAt(inv, f, candidate, block, user, point) &
+                ValueType.has(value, ty) & RAMemoryType(memory) & RAValueBits.has(inv, f, value, width) &
+                RAFramePlannedSlot(inv, f, value, offset, allocated, align),
+          then: ValueType.has(temp, ty) & ValueType.has(state, memory) & RAValueClass(inv, f, temp, class) &
+                RAGeneratedTemporary(f, temp) & RANoSpill(inv, f, temp) &
+                RAFrameReloadValue(inv, f, user, value, temp) &
+                RAFramePending(
+                    inv, f, reload, "reload", width, make_RATransferAbsent(), make_RATransferValue(temp), offset,
+                    state
+                ) &
+                RAFrameEvent(inv, f, block, reload, state) &
+                RATransferPlacement(inv, f, reload, block, make_RACFGPos(point, -2, reload, 0, 0)) }
+    }),
+    forall(fn(inv, f, user, old, temp, slot) {
+        { when: RAFrameReloadValue(inv, f, user, old, temp) & Operand.has(user, slot, old),
+          then: RATransferEraseOperand(inv, f, user, slot) & RATransferReplaceOperand(inv, f, user, slot, temp) }
+    }),
+    forall(fn(inv, f, value, class, size, candidate) {
+        { when: RAFrameSpillValue(inv, f, value, class, size) & RASelectedCandidate(inv, f, candidate),
+          then: RAFrameNeeded(inv, f, candidate) }
+    }),
+];
+
+pub let ra_transfer_frame_index = [
+    forall(fn(inv, class, index, file, width, offset, merge, spClass, spIndex, spFile, spWidth, spOffset,
+        spMerge) {
+        { when: TMDLAbiRegister(inv, "callee-saved", class, index) &
+                TMDLClass(inv, class, file, width, offset, merge) & TMDLAbiRegister(inv, "sp", spClass, spIndex) &
+                TMDLClass(inv, spClass, spFile, spWidth, spOffset, spMerge) & (file != spFile),
+          then: RAFrameNonStackCallee(inv, class, index) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLAbiRegister(inv, "ra", class, index),
+          then: RAFrameNonStackCallee(inv, class, index) }
+    }),
+    forall(fn(inv, f, candidate, value, actual, index, saved, savedIndex, file, actualWidth, actualOffset,
+        actualMerge, savedWidth, savedOffset, savedMerge) {
+        { when: RASelectedCandidate(inv, f, candidate) &
+                RAChosenRegister(inv, f, candidate, value, actual, index) &
+                RAFrameNonStackCallee(inv, saved, savedIndex) &
+                TMDLClass(inv, actual, file, actualWidth, actualOffset, actualMerge) &
+                TMDLClass(inv, saved, file, savedWidth, savedOffset, savedMerge) &
+                (index < (savedIndex + savedWidth)) & (savedIndex < (index + actualWidth)),
+          then: RAFrameCalleeRegister(inv, f, saved, savedIndex) }
+    }),
+    forall(fn(inv, class, index, file, width, offset, merge, spClass, spIndex, spWidth, spOffset, spMerge) {
+        { when: TMDLAbiRegister(inv, "callee-saved", class, index) &
+                TMDLClass(inv, class, file, width, offset, merge) & TMDLAbiRegister(inv, "sp", spClass, spIndex) &
+                TMDLClass(inv, spClass, file, spWidth, spOffset, spMerge) & ((index + width) <= spIndex),
+          then: RAFrameNonStackCallee(inv, class, index) }
+    }),
+    forall(fn(inv, class, index, file, width, offset, merge, spClass, spIndex, spWidth, spOffset, spMerge) {
+        { when: TMDLAbiRegister(inv, "callee-saved", class, index) &
+                TMDLClass(inv, class, file, width, offset, merge) & TMDLAbiRegister(inv, "sp", spClass, spIndex) &
+                TMDLClass(inv, spClass, file, spWidth, spOffset, spMerge) & (index >= (spIndex + spWidth)),
+          then: RAFrameNonStackCallee(inv, class, index) }
+    }),
+    forall(fn(inv, f, candidate, op, actual, index, saved, savedIndex, file, actualWidth, actualOffset,
+        actualMerge, savedWidth, savedOffset, savedMerge) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAResourceWrite(inv, f, op, actual, index) &
+                RAFrameNonStackCallee(inv, saved, savedIndex) &
+                TMDLClass(inv, actual, file, actualWidth, actualOffset, actualMerge) &
+                TMDLClass(inv, saved, file, savedWidth, savedOffset, savedMerge) &
+                (index < (savedIndex + savedWidth)) & (savedIndex < (index + actualWidth)),
+          then: RAFrameCalleeRegister(inv, f, saved, savedIndex) }
+    }),
+    forall(fn(inv, f, block) {
+        { when: RABlock(inv, f, block) & ids_not_contains(RAFrameKnownEntries.get(inv, f), block),
+          then: RAFramePrefix(inv, f, block, 0) }
+    }),
+    forall(fn(inv, f, candidate, block, entry, state, point) {
+        { when: RASelectedCandidate(inv, f, candidate) & ids_contains(RAFrameKnownEntries.get(inv, f), block) &
+                RAFrameEntryState.has(f, block, make_RATCopy(entry, state)) &
+                RAAt(inv, f, candidate, block, entry, point),
+          then: RAFramePrefix(inv, f, block, (point + 1)) }
+    }),
+    forall(fn(inv, f, class, index) {
+        { when: RAFrameCalleeRegister(inv, f, class, index),
+          then: RAKnownResourceRef(inv, make_RARegRef(class, index)) }
+    }),
+    forall(fn(inv, f, class, index, candidate) {
+        { when: RAFrameCalleeRegister(inv, f, class, index) & RASelectedCandidate(inv, f, candidate) &
+                registers_not_contains(RAFrameSavedRegisters.get(inv, f), make_RARegRef(class, index)),
+          then: RAFrameMissingSaves.has(inv, f, registers_one(make_RARegRef(class, index))) &
+                RAFrameNeeded(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate) & (RAFrameExtent.get(inv, f) > 0),
+          then: RAFrameNeeded(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate, op) {
+        { when: RASelectedCandidate(inv, f, candidate) & RANativeCall(inv, f, op) &
+                (RAFrameEntryBias.get(inv) > 0),
+          then: RAFrameNeeded(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate, extent, align, slot, redZone, down, style, bias, bytes) {
+        { when: RAFrameNeeded(inv, f, candidate) & RAFrameExtent.has(inv, f, extent) &
+                TMDLStackLayout(inv, align, slot, redZone, down, style) & RAFrameEntryBias.has(inv, bias) &
+                (bytes == (((((extent + bias) + (align - 1)) / align) * align) - bias)),
+          then: RAFrameRequiredBytes.has(inv, f, bytes) }
+    }),
+];
+
+pub let ra_control_pred = [
+    forall(fn(f, before, after, inv, candidate, block) {
+        { when: RAAllocationOrder(f, before, after) & RAPlace(inv, f, candidate, before, block) &
+                RAPlace(inv, f, candidate, after, block),
+          then: RAPred(inv, f, candidate, after, before) }
+    }),
+    forall(fn(entry, state, f, block, inv, candidate, op) {
+        { when: RAFrameEntryState.has(f, block, make_RATCopy(entry, state)) &
+                RAPlace(inv, f, candidate, entry, block) & RAPlace(inv, f, candidate, op, block) & (entry != op),
+          then: RAPred(inv, f, candidate, op, entry) }
+    }),
+];
+
+pub let ra_control_import = [
+    // Edge-transfer saves must not execute before the edge is taken.
+    forall(fn(f, op, edge, kind, recipe, inv, block, dest) {
+        { when: RAAllocationOrder(f, op, edge) & RATransferNative(f, op, kind, recipe) &
+                RAJump(inv, f, edge, block, dest),
+          then: RAPin(inv, f, op, block) }
+    }),
+];
+
+pub let ra_transfer_split_index = [
+    forall(fn(inv, f, candidate, term, dest, slot, joined, incoming, target, targetIndex, source, sourceIndex,
+        edge) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAIncoming(inv, f, term, dest, slot, joined, incoming) &
+                RAChosenRegister(inv, f, candidate, joined, target, targetIndex) &
+                RAChosenRegister(inv, f, candidate, incoming, source, sourceIndex) &
+                (ids_length(RACFGSuccessors.get(inv, f, term)) > 1) & Successor.has(term, edge, dest) &
+                (targetIndex != sourceIndex),
+          then: RATransferSplitEdge(inv, f, term, edge, dest) }
+    }),
+    forall(fn(inv, f, term, edge, dest) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest),
+          then: RACFGSplitEdges.has(inv, f, term, ids_one(edge)) }
+    }),
+    forall(fn(inv, f, term, edge, dest) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RACFGSplitIds", "", sequence_of_4(inv, f, term, edge)), 0, fresh_ir_id()
+          ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RACFGSplitIds", "", sequence_of_4(inv, f, term, edge)), 1,
+                    fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, term, edge, dest, fresh0, fresh1) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RACFGSplitIds", "", sequence_of_4(inv, f, term, edge)), 0, fresh0
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RACFGSplitIds", "", sequence_of_4(inv, f, term, edge)), 1, fresh1
+                ),
+          then: RACFGSplitIds.has(inv, f, term, edge, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(inv, f, term, edge, dest, slot, value) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest) & BlockParam(dest, slot, value),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RACFGSplitParam", "", sequence_of_5(inv, f, term, edge, slot)), 0,
+              fresh_ir_id()
+          ) }
+    }),
+    forall(fn(inv, f, term, edge, dest, slot, value, fresh0) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest) & BlockParam(dest, slot, value) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RACFGSplitParam", "", sequence_of_5(inv, f, term, edge, slot)), 0,
+                    fresh0
+                ),
+          then: RACFGSplitParam.has(inv, f, term, edge, slot, fresh0) }
+    }),
+];
+
+pub let ra_transfer_split = [
+    forall(fn(inv, f, term, edge, dest, block, jump, candidate, region, ty, count) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest) &
+                RACFGSplitIds.has(inv, f, term, edge, make_RATCopy(block, jump)) &
+                RASelectedCandidate(inv, f, candidate) & RAFunction(inv, f, region) & RAIntegerType(ty) &
+                RACFGParamCount.has(inv, f, dest, count),
+          then: RATransferTransaction(inv, f, candidate) & RATransferEmitBlock(inv, f, block, region) &
+                RATransferEmitKind(inv, f, jump, "cfg.br") &
+                RATransferPlacement(inv, f, jump, block, make_RACFGPos(0, 0, 0, 0, 0)) &
+                RATransferEraseSuccessor(inv, f, term, edge) &
+                RATransferEmitSuccessor(inv, f, term, edge, block) &
+                RATransferEmitSuccessor(inv, f, jump, 0, dest) &
+                RATransferEmitAttribute(inv, f, jump, "dest", make_BlockAttr(dest)) &
+                RATransferEmitAttribute(
+                    inv, f, jump, "operand_segment_sizes",
+                    make_ListAttr(make_ACons(make_IntegerAttr(ty, 64, i64_hex(count)), make_ANil()))
+                ) }
+    }),
+    forall(fn(inv, f, term, edge, dest, block, jump, slot, value, ty, temp) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest) &
+                RACFGSplitIds.has(inv, f, term, edge, make_RATCopy(block, jump)) & BlockParam(dest, slot, value) &
+                ValueType.has(value, ty) & RACFGSplitParam.has(inv, f, term, edge, slot, temp),
+          then: RATransferEmitDefinition(inv, f, temp, make_BlockParamDef(block, slot), ty) &
+                RATransferEmitOperand(inv, f, jump, slot, temp) &
+                RATransferEmitSuccessorArg(inv, f, jump, 0, slot, slot) }
+    }),
+    forall(fn(inv, f, term, edge, dest, block, jump) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest) &
+                RACFGSplitIds.has(inv, f, term, edge, make_RATCopy(block, jump)) &
+                OpKind.has(term, "cfg.cond_br") & (edge == 0),
+          then: RATransferEraseAttribute(inv, f, term, "true_dest") &
+                RATransferEmitAttribute(inv, f, term, "true_dest", make_BlockAttr(block)) }
+    }),
+    forall(fn(inv, f, term, edge, dest, block, jump) {
+        { when: RATransferSplitEdge(inv, f, term, edge, dest) &
+                RACFGSplitIds.has(inv, f, term, edge, make_RATCopy(block, jump)) &
+                OpKind.has(term, "cfg.cond_br") & (edge == 1),
+          then: RATransferEraseAttribute(inv, f, term, "false_dest") &
+                RATransferEmitAttribute(inv, f, term, "false_dest", make_BlockAttr(block)) }
+    }),
+    forall(fn(inv, f, term, dest, edge) {
+        { when: RASource(inv, f, term, "cfg.switch") & Successor.has(term, edge, dest) &
+                (ids_length(RACFGSplitEdges.get(inv, f, term)) > 0) &
+                ids_not_contains(RACFGSplitEdges.get(inv, f, term), edge),
+          then: RACFGSplitDestination(inv, f, term, edge, dest) }
+    }),
+    forall(fn(inv, f, term, edge, dest, block, jump) {
+        { when: RASource(inv, f, term, "cfg.switch") & RATransferSplitEdge(inv, f, term, edge, dest) &
+                RACFGSplitIds.has(inv, f, term, edge, make_RATCopy(block, jump)),
+          then: RACFGSplitDestination(inv, f, term, edge, block) }
+    }),
+    forall(fn(inv, f, term, count) {
+        { when: RASource(inv, f, term, "cfg.switch") & (ids_length(RACFGSplitEdges.get(inv, f, term)) > 0) &
+                (count == ids_length(RACFGSuccessors.get(inv, f, term))),
+          then: RACFGSwitchDests.has(inv, f, term, count, make_ANil()) }
+    }),
+    forall(fn(inv, f, term, edge, dest, tail) {
+        { when: RACFGSplitDestination(inv, f, term, edge, dest) &
+                RACFGSwitchDests.has(inv, f, term, (edge + 1), tail),
+          then: RACFGSwitchDests.has(inv, f, term, edge, make_ACons(make_BlockAttr(dest), tail)) }
+    }),
+    forall(fn(dests, inv, f, term) {
+        { when: RACFGSwitchDests.has(inv, f, term, 0, dests),
+          then: RATransferEraseAttribute(inv, f, term, "dests") &
+                RATransferEmitAttribute(inv, f, term, "dests", make_ListAttr(dests)) }
+    }),
+];
+
+pub let ra_transfer_layout = [
+    forall(fn(inv, f, first, block, p, a, owner, i, sub, second, q, b, other, j, otherSub) {
+        { when: RATransferPlacement(inv, f, first, block, make_RACFGPos(p, a, owner, i, sub)) &
+                RATransferPlacement(inv, f, second, block, make_RACFGPos(q, b, other, j, otherSub)) & (p < q),
+          then: RATransferBefore(inv, f, first, second) }
+    }),
+    forall(fn(inv, f, first, block, p, a, owner, i, sub, second, b, other, j, otherSub) {
+        { when: RATransferPlacement(inv, f, first, block, make_RACFGPos(p, a, owner, i, sub)) &
+                RATransferPlacement(inv, f, second, block, make_RACFGPos(p, b, other, j, otherSub)) & (a < b),
+          then: RATransferBefore(inv, f, first, second) }
+    }),
+    forall(fn(inv, f, first, block, p, a, owner, i, sub, second, other, j, otherSub) {
+        { when: RATransferPlacement(inv, f, first, block, make_RACFGPos(p, a, owner, i, sub)) &
+                RATransferPlacement(inv, f, second, block, make_RACFGPos(p, a, other, j, otherSub)) &
+                (owner < other),
+          then: RATransferBefore(inv, f, first, second) }
+    }),
+    forall(fn(inv, f, first, block, p, a, owner, i, sub, second, j, otherSub) {
+        { when: RATransferPlacement(inv, f, first, block, make_RACFGPos(p, a, owner, i, sub)) &
+                RATransferPlacement(inv, f, second, block, make_RACFGPos(p, a, owner, j, otherSub)) & (i < j),
+          then: RATransferBefore(inv, f, first, second) }
+    }),
+    forall(fn(inv, f, op, block, position) {
+        { when: RATransferPlacement(inv, f, op, block, position),
+          then: RATransferPreceding.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, first, second) {
+        { when: RATransferBefore(inv, f, first, second),
+          then: RATransferPreceding.has(inv, f, second, ids_one(first)) }
+    }),
+    forall(fn(inv, f, first, block, p, lane, group, index, a, second, b) {
+        { when: RATransferPlacement(inv, f, first, block, make_RACFGPos(p, lane, group, index, a)) &
+                RATransferPlacement(inv, f, second, block, make_RACFGPos(p, lane, group, index, b)) & (a < b),
+          then: RATransferBefore(inv, f, first, second) }
+    }),
+];
+
+pub let ra_transfer_memory_index = [
+    forall(fn(inv, f, candidate, block) {
+        { when: RAFrameActive(inv, f, candidate) & RAEntry(inv, f, block) &
+                ids_not_contains(RAFrameKnownEntries.get(inv, f), block),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RAFrameEntryState", "", sequence_of_2(f, block)), 0, fresh_ir_id()
+          ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameEntryState", "", sequence_of_2(f, block)), 1, fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, candidate, block, fresh0, fresh1) {
+        { when: RAFrameActive(inv, f, candidate) & RAEntry(inv, f, block) &
+                ids_not_contains(RAFrameKnownEntries.get(inv, f), block) &
+                RAFreshId.has(make_RAFreshNumbers("RAFrameEntryState", "", sequence_of_2(f, block)), 0, fresh0) &
+                RAFreshId.has(make_RAFreshNumbers("RAFrameEntryState", "", sequence_of_2(f, block)), 1, fresh1),
+          then: RAFrameEntryState.has(f, block, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(inv, f, candidate, block, entry, state, ty) {
+        { when: RAFrameActive(inv, f, candidate) & RAEntry(inv, f, block) &
+                RAFrameEntryState.has(f, block, make_RATCopy(entry, state)) & RAMemoryType(ty) &
+                ids_not_contains(RAFrameKnownEntries.get(inv, f), block),
+          then: RATransferEmitKind(inv, f, entry, "state.entry_state") &
+                RATransferEmitDefinition(inv, f, state, make_ResultDef(entry, 0), ty) &
+                RATransferPlacement(inv, f, entry, block, make_RACFGPos(-100, 0, 0, 0, 0)) &
+                RAFrameBlockInput(inv, f, block, state) }
+    }),
+    forall(fn(inv, f, candidate, block, entry) {
+        { when: RAFrameActive(inv, f, candidate) & RABlock(inv, f, block) & RAEntry(inv, f, entry) &
+                (block != entry) & ids_not_contains(RAFrameKnownStates.get(inv, f), block),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RAFrameJoinedState", "", sequence_of_2(f, block)), 0, fresh_ir_id()
+          ) }
+    }),
+    forall(fn(inv, f, candidate, block, entry, fresh0) {
+        { when: RAFrameActive(inv, f, candidate) & RABlock(inv, f, block) & RAEntry(inv, f, entry) &
+                (block != entry) & ids_not_contains(RAFrameKnownStates.get(inv, f), block) &
+                RAFreshId.has(make_RAFreshNumbers("RAFrameJoinedState", "", sequence_of_2(f, block)), 0, fresh0),
+          then: RAFrameJoinedState.has(f, block, fresh0) }
+    }),
+    forall(fn(inv, f, candidate, state, block, slot, ty) {
+        { when: RAFrameActive(inv, f, candidate) & RAFrameJoinedState.has(f, block, state) &
+                ids_not_contains(RAFrameKnownStates.get(inv, f), block) &
+                RACFGParamCount.has(inv, f, block, slot) & RAMemoryType(ty),
+          then: RAFrameStateParam(inv, f, block, slot, state) &
+                RATransferEmitDefinition(inv, f, state, make_BlockParamDef(block, slot), ty) &
+                RAFrameBlockInput(inv, f, block, state) }
+    }),
+    forall(fn(inv, f, candidate, state, block, slot) {
+        { when: RAFrameActive(inv, f, candidate) & RAFrameJoinedState.has(f, block, state) &
+                BlockParam(block, slot, state),
+          then: RAFrameStateParam(inv, f, block, slot, state) & RAFrameBlockInput(inv, f, block, state) }
+    }),
+    forall(fn(inv, f, candidate, block) {
+        { when: RAFrameActive(inv, f, candidate) & RABlock(inv, f, block),
+          then: RAFrameEvents.has(inv, f, block, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, op, state, block, point) {
+        { when: RAFrameActive(inv, f, candidate) & RAFrameMemory(f, op, state) &
+                RAAt(inv, f, candidate, block, op, point),
+          then: RAFrameEvent(inv, f, block, op, state) }
+    }),
+    forall(fn(inv, f, user, slot, value) {
+        { when: RATransferReplaceOperand(inv, f, user, slot, value),
+          then: RATransferReplacedSlots.has(inv, f, user, ids_one(slot)) }
+    }),
+    forall(fn(inv, f, candidate, dest, term, edge, slot, state) {
+        { when: RAFrameActive(inv, f, candidate) & Successor.has(term, edge, dest) &
+                RAFrameStateParam(inv, f, dest, slot, state),
+          then: RACFGEdgeCount.has(inv, f, term, edge, (slot + 1)) }
+    }),
+    forall(fn(inv, f, candidate, term) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.br"),
+          then: RACFGEdgeStart.has(inv, f, term, 0, 0) }
+    }),
+    forall(fn(inv, f, candidate, term, count) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.cond_br") &
+                RACFGEdgeCount.has(inv, f, term, 0, count),
+          then: RACFGEdgeStart.has(inv, f, term, 0, 1) & RACFGEdgeStart.has(inv, f, term, 1, (count + 1)) }
+    }),
+    forall(fn(inv, f, candidate, term) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.switch"),
+          then: RACFGEdgeStart.has(inv, f, term, 0, 1) }
+    }),
+    forall(fn(inv, f, candidate, term, start, edge, count) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.switch") &
+                RACFGEdgeStart.has(inv, f, term, edge, start) & RACFGEdgeCount.has(inv, f, term, edge, count),
+          then: RACFGEdgeStart.has(inv, f, term, (edge + 1), (start + count)) }
+    }),
+    forall(fn(inv, f, candidate, block, entry, state) {
+        { when: RAFrameActive(inv, f, candidate) & RAEntry(inv, f, block) &
+                RAFrameEntryState.has(f, block, make_RATCopy(entry, state)),
+          then: RAFrameBlockInput(inv, f, block, state) }
+    }),
+    forall(fn(inv, f, candidate, term, kind, dest, edge) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, kind) &
+                Successor.has(term, edge, dest),
+          then: RATransferRebuiltBranches.has(inv, f, ids_one(term)) }
+    }),
+];
+
+pub let ra_transfer_memory_order = [
+    forall(fn(inv, f, block, op, state) {
+        { when: RAFrameEvent(inv, f, block, op, state),
+          then: RAFrameEvents.has(inv, f, block, ids_one(op)) & RAFrameEarlier.has(inv, f, op, ids_empty()) &
+                RAFrameLast.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, block, op, state, before, previous) {
+        { when: RAFrameEvent(inv, f, block, op, state) & RAFrameEvent(inv, f, block, before, previous) &
+                RATransferBefore(inv, f, before, op),
+          then: RAFrameEarlier.has(inv, f, op, ids_one(before)) & RAFrameLast.has(inv, f, before, ids_one(op)) }
+    }),
+];
+
+pub let ra_transfer_memory = [
+    forall(fn(inv, f, block, op, state, input) {
+        { when: RAFrameEvent(inv, f, block, op, state) & (ids_length(RAFrameEarlier.get(inv, f, op)) == 0) &
+                RAFrameBlockInput(inv, f, block, input),
+          then: RAFrameEventInput(inv, f, op, input) }
+    }),
+    forall(fn(inv, f, block, op, state, preceding, before, input) {
+        { when: RAFrameEvent(inv, f, block, op, state) & RAFrameEarlier.has(inv, f, op, preceding) &
+                (ids_length(preceding) > 0) & RAFrameEvent(inv, f, block, before, input) &
+                ids_contains(preceding, before) &
+                (ids_length(RAFrameEarlier.get(inv, f, before)) == (ids_length(preceding) - 1)),
+          then: RAFrameEventInput(inv, f, op, input) }
+    }),
+    forall(fn(inv, f, candidate, block, input) {
+        { when: RAFrameActive(inv, f, candidate) & RAFrameBlockInput(inv, f, block, input) &
+                (ids_length(RAFrameEvents.get(inv, f, block)) == 0),
+          then: RAFrameBlockTail(inv, f, block, input) }
+    }),
+    forall(fn(inv, f, block, op, state) {
+        { when: RAFrameEvent(inv, f, block, op, state) & (ids_length(RAFrameLast.get(inv, f, op)) == 0),
+          then: RAFrameBlockTail(inv, f, block, state) }
+    }),
+    forall(fn(inv, f, op, transfer, width, source, destination, offset, state, input, class, index) {
+        { when: RAFramePending(inv, f, op, transfer, width, source, destination, offset, state) &
+                RAFrameEventInput(inv, f, op, input) & TMDLAbiRegister(inv, "sp", class, index),
+          then: RATransferRequest(
+              inv, f, op, transfer, width, source, destination, make_RATransferPhysical(class, index), offset,
+              -1, input, state
+          ) }
+    }),
+    forall(fn(inv, f, candidate, op, state, input, old, slot, memory) {
+        { when: RAFrameActive(inv, f, candidate) & RAFrameMemory(f, op, state) &
+                RAFrameEventInput(inv, f, op, input) & Operand.has(op, slot, old) & RAMemoryType(memory) &
+                ValueType.has(old, memory),
+          then: RATransferEraseOperand(inv, f, op, slot) & RATransferReplaceOperand(inv, f, op, slot, input) }
+    }),
+    forall(fn(inv, f, candidate, dest, term, edge, sourceSlot, slot, value, stateSlot, state) {
+        { when: RAFrameActive(inv, f, candidate) & Successor.has(term, edge, dest) &
+                SuccessorArg.has(term, edge, slot, sourceSlot) & Operand.has(term, sourceSlot, value) &
+                RAFrameStateParam(inv, f, dest, stateSlot, state) & (slot != stateSlot) &
+                ids_not_contains(RATransferReplacedSlots.get(inv, f, term), sourceSlot),
+          then: RACFGEdgeOperand(inv, f, term, edge, slot, value) }
+    }),
+    forall(fn(inv, f, candidate, dest, term, edge, sourceSlot, slot, value, stateSlot, state, temp) {
+        { when: RAFrameActive(inv, f, candidate) & Successor.has(term, edge, dest) &
+                SuccessorArg.has(term, edge, slot, sourceSlot) & Operand.has(term, sourceSlot, value) &
+                RAFrameStateParam(inv, f, dest, stateSlot, state) & (slot != stateSlot) &
+                RATransferReplaceOperand(inv, f, term, sourceSlot, temp),
+          then: RACFGEdgeOperand(inv, f, term, edge, slot, temp) }
+    }),
+    forall(fn(inv, f, candidate, dest, term, edge, slot, state, block, point, tail) {
+        { when: RAFrameActive(inv, f, candidate) & Successor.has(term, edge, dest) &
+                RAFrameStateParam(inv, f, dest, slot, state) & RAAt(inv, f, candidate, block, term, point) &
+                RAFrameBlockTail(inv, f, block, tail),
+          then: RACFGEdgeOperand(inv, f, term, edge, slot, tail) }
+    }),
+];
+
+pub let ra_transfer_memory_finish = [
+    forall(fn(inv, f, term, edge, slot, value, start) {
+        { when: RACFGEdgeOperand(inv, f, term, edge, slot, value) &
+                RACFGEdgeStart.has(inv, f, term, edge, start),
+          then: RATransferEmitOperand(inv, f, term, (start + slot), value) &
+                RATransferEmitSuccessorArg(inv, f, term, edge, slot, (start + slot)) }
+    }),
+    forall(fn(inv, f, candidate, term, kind, dest, edge, value) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, kind) & (kind != "cfg.br") &
+                Successor.has(term, edge, dest) & Operand.has(term, 0, value) &
+                ids_not_contains(RATransferReplacedSlots.get(inv, f, term), 0),
+          then: RATransferEmitOperand(inv, f, term, 0, value) }
+    }),
+    forall(fn(inv, f, candidate, term, kind, dest, edge, value) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, kind) & (kind != "cfg.br") &
+                Successor.has(term, edge, dest) & RATransferReplaceOperand(inv, f, term, 0, value),
+          then: RATransferEmitOperand(inv, f, term, 0, value) }
+    }),
+    forall(fn(inv, f, candidate, dest, term, edge, value, slot) {
+        { when: RAFrameActive(inv, f, candidate) & Successor.has(term, edge, dest) &
+                Operand.has(term, slot, value),
+          then: RATransferEraseOperand(inv, f, term, slot) }
+    }),
+    forall(fn(inv, f, candidate, dest, term, edge, operand, slot) {
+        { when: RAFrameActive(inv, f, candidate) & Successor.has(term, edge, dest) &
+                SuccessorArg.has(term, edge, slot, operand),
+          then: RATransferEraseSuccessorArg(inv, f, term, edge, slot) }
+    }),
+    forall(fn(inv, f, candidate, term, count, ty) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.br") &
+                RACFGEdgeCount.has(inv, f, term, 0, count) & RAIntegerType(ty),
+          then: RATransferEraseAttribute(inv, f, term, "operand_segment_sizes") &
+                RATransferEmitAttribute(
+                    inv, f, term, "operand_segment_sizes",
+                    make_ListAttr(make_ACons(make_IntegerAttr(ty, 64, i64_hex(count)), make_ANil()))
+                ) }
+    }),
+    forall(fn(inv, f, candidate, term, taken, other, ty) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.cond_br") &
+                RACFGEdgeCount.has(inv, f, term, 0, taken) & RACFGEdgeCount.has(inv, f, term, 1, other) &
+                RAIntegerType(ty),
+          then: RATransferEraseAttribute(inv, f, term, "operand_segment_sizes") &
+                RATransferEmitAttribute(
+                    inv, f, term, "operand_segment_sizes",
+                    make_ListAttr(
+                        make_ACons(
+                            make_IntegerAttr(ty, 64, i64_hex(1)),
+                            make_ACons(
+                                make_IntegerAttr(ty, 64, i64_hex(taken)),
+                                make_ACons(make_IntegerAttr(ty, 64, i64_hex(other)), make_ANil())
+                            )
+                        )
+                    )
+                ) }
+    }),
+    forall(fn(inv, f, candidate, term, count) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.switch") &
+                (count == ids_length(RACFGSuccessors.get(inv, f, term))),
+          then: RACFGSwitchCounts.has(inv, f, term, count, make_ANil()) }
+    }),
+    forall(fn(inv, f, candidate, term, count, edge, tail, ty) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.switch") &
+                RACFGEdgeCount.has(inv, f, term, edge, count) &
+                RACFGSwitchCounts.has(inv, f, term, (edge + 1), tail) & RAIntegerType(ty),
+          then: RACFGSwitchCounts.has(
+              inv, f, term, edge, make_ACons(make_IntegerAttr(ty, 64, i64_hex(count)), tail)
+          ) }
+    }),
+    forall(fn(inv, f, candidate, term, counts, edges, end, ty) {
+        { when: RAFrameActive(inv, f, candidate) & RASource(inv, f, term, "cfg.switch") &
+                RACFGSwitchCounts.has(inv, f, term, 0, counts) &
+                (edges == ids_length(RACFGSuccessors.get(inv, f, term))) &
+                RACFGEdgeStart.has(inv, f, term, edges, end) & RAIntegerType(ty),
+          then: RATransferEraseAttribute(inv, f, term, "arg_counts") &
+                RATransferEraseAttribute(inv, f, term, "operand_segment_sizes") &
+                RATransferEmitAttribute(inv, f, term, "arg_counts", make_ListAttr(counts)) &
+                RATransferEmitAttribute(
+                    inv, f, term, "operand_segment_sizes",
+                    make_ListAttr(
+                        make_ACons(
+                            make_IntegerAttr(ty, 64, i64_hex(1)),
+                            make_ACons(make_IntegerAttr(ty, 64, i64_hex((end - 1))), make_ANil())
+                        )
+                    )
+                ) }
+    }),
+];
+
+pub let ra_transfer_save_plan = [
+    forall(fn(inv, f, candidate, registers, class, index, bits, stackAlign, slotSize, redZone, down, style, size,
+        align, extent, offset) {
+        { when: RAFrameNeeded(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                RAEdgeCopiesComplete(inv, f, candidate) & RAFrameMissingSaves.has(inv, f, registers) &
+                (registers_length(registers) > 0) & (make_RARegRef(class, index) == registers_get(registers, 0)) &
+                TMDLRegisterWidth(inv, class, bits) &
+                TMDLStackLayout(inv, stackAlign, slotSize, redZone, down, style) & (size == ((bits + 7) / 8)) &
+                (align == max(size, slotSize)) & RAFrameExtent.has(inv, f, extent) &
+                (offset == (((extent + (align - 1)) / align) * align)),
+          then: RAFrameSaveOffset(inv, f, class, index, bits, offset, size, align) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewSave", class, sequence_of_3(inv, f, index)), 0, fresh_ir_id()
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewSave", class, sequence_of_3(inv, f, index)), 1, fresh_ir_id()
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewSave", class, sequence_of_3(inv, f, index)), 2, fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, class, index, bits, offset, size, align, candidate, fresh0, fresh1, fresh2) {
+        { when: RAFrameSaveOffset(inv, f, class, index, bits, offset, size, align) &
+                RASelectedCandidate(inv, f, candidate) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewSave", class, sequence_of_3(inv, f, index)), 0, fresh0
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewSave", class, sequence_of_3(inv, f, index)), 1, fresh1
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewSave", class, sequence_of_3(inv, f, index)), 2, fresh2
+                ),
+          then: RAFrameNewSave.has(inv, f, class, index, make_RAFSaved(fresh0, fresh1, fresh2, 0)) &
+                RAFrameActive(inv, f, candidate) & RATransferTransaction(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, class, index, width, offset, size, align, exit) {
+        { when: RAFrameSaveOffset(inv, f, class, index, width, offset, size, align) & RAExit(inv, f, exit),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RAFrameNewRestore", class, sequence_of_4(inv, f, exit, index)), 0,
+              fresh_ir_id()
+          ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewRestore", class, sequence_of_4(inv, f, exit, index)), 1,
+                    fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, class, index, width, offset, size, align, exit, fresh0, fresh1) {
+        { when: RAFrameSaveOffset(inv, f, class, index, width, offset, size, align) & RAExit(inv, f, exit) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewRestore", class, sequence_of_4(inv, f, exit, index)), 0,
+                    fresh0
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAFrameNewRestore", class, sequence_of_4(inv, f, exit, index)), 1,
+                    fresh1
+                ),
+          then: RAFrameNewRestore.has(inv, f, exit, class, index, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(inv, f, class, index, width, offset, size, align, block, key, op, state, unused, ty, point) {
+        { when: RAFrameSaveOffset(inv, f, class, index, width, offset, size, align) & RAEntry(inv, f, block) &
+                RAFrameNewSave.has(inv, f, class, index, make_RAFSaved(key, op, state, unused)) &
+                RAMemoryType(ty) & RAFramePrefix(inv, f, block, point),
+          then: ValueType.has(state, ty) & RAFramePlannedSlot(inv, f, key, offset, size, align) &
+                RAFramePending(
+                    inv, f, op, "spill", width, make_RATransferPhysical(class, index), make_RATransferAbsent(),
+                    offset, state
+                ) &
+                RAFrameEvent(inv, f, block, op, state) &
+                RATransferPlacement(inv, f, op, block, make_RACFGPos(point, -2, op, 0, 0)) }
+    }),
+    forall(fn(inv, f, class, index, width, offset, size, align, block, candidate, term, point, op, state, ty) {
+        { when: RAFrameSaveOffset(inv, f, class, index, width, offset, size, align) & RAExit(inv, f, block) &
+                RASelectedCandidate(inv, f, candidate) & RAReturn(inv, f, term, block) &
+                RAAt(inv, f, candidate, block, term, point) &
+                RAFrameNewRestore.has(inv, f, block, class, index, make_RATCopy(op, state)) & RAMemoryType(ty),
+          then: ValueType.has(state, ty) &
+                RAFramePending(
+                    inv, f, op, "reload", width, make_RATransferAbsent(), make_RATransferPhysical(class, index),
+                    offset, state
+                ) &
+                RAFrameEvent(inv, f, block, op, state) &
+                RATransferPlacement(inv, f, op, block, make_RACFGPos(point, -3, op, 0, 0)) }
+    }),
+];
+
+pub let ra_transfer_adjust_index = [
+    forall(fn(inv, kind, recipe, width, address, alignment, features, parameters, spClass, spIndex, destination,
+        destClass, input, result, base, baseClass, operand, output, name, bits, signed, align, nonzero, factor) {
+        { when: TMDLRecipe(inv, kind, recipe, "address-add", width, address, alignment, features, parameters) &
+                RARecipeProfileEligible(inv, kind, recipe) & TMDLAbiRegister(inv, "sp", spClass, spIndex) &
+                TMDLRegisterWidth(inv, spClass, width) &
+                TMDLRecipeRegister(inv, kind, recipe, destination, destClass, input, result, "destination") &
+                TMDLRecipeRegister(inv, kind, recipe, base, baseClass, operand, output, "base") &
+                RATransferCompatible(inv, destClass, spClass) & RATransferCompatible(inv, baseClass, spClass) &
+                TMDLRegister(inv, destClass, spIndex) & TMDLRegister(inv, baseClass, spIndex) &
+                ids_not_contains(RATransferExcludedIndices.get(inv, kind, recipe, destination), spIndex) &
+                ids_not_contains(RATransferExcludedIndices.get(inv, kind, recipe, base), spIndex) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, signed, align, nonzero) &
+                TMDLRecipeOffsetFactor(inv, kind, recipe, factor),
+          then: RAFrameAddressDomain(inv, kind, recipe, bits, align, factor) }
+    }),
+    forall(fn(inv, kind, recipe, bits, align, factor, name, nonzero, stackAlign, slotSize, redZone, down, style,
+        step) {
+        { when: RAFrameAddressDomain(inv, kind, recipe, bits, align, factor) & (bits > 1) & (bits < 63) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, true, align, nonzero) &
+                TMDLStackLayout(inv, stackAlign, slotSize, redZone, down, style) &
+                (step == (((shift_left(1, (bits - 1)) - 1) / max(stackAlign, align)) * max(stackAlign, align))) &
+                (step > 0),
+          then: RAFrameAddressLimit.has(inv, factor, step) & RAFrameAddressDirections.has(inv, ids_one(factor)) }
+    }),
+    forall(fn(inv, kind, recipe, bits, align, factor, name, nonzero, stackAlign, slotSize, redZone, down, style,
+        step) {
+        { when: RAFrameAddressDomain(inv, kind, recipe, bits, align, factor) & (bits > 1) & (bits < 63) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, true, align, nonzero) &
+                TMDLStackLayout(inv, stackAlign, slotSize, redZone, down, style) &
+                (step == ((shift_left(1, (bits - 1)) / max(stackAlign, align)) * max(stackAlign, align))) &
+                (step > 0),
+          then: RAFrameAddressLimit.has(inv, (0 - factor), step) &
+                RAFrameAddressDirections.has(inv, ids_one((0 - factor))) }
+    }),
+    forall(fn(inv, kind, recipe, bits, align, factor, name, nonzero, stackAlign, slotSize, redZone, down, style,
+        step) {
+        { when: RAFrameAddressDomain(inv, kind, recipe, bits, align, factor) & (bits > 0) & (bits < 63) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, false, align, nonzero) &
+                TMDLStackLayout(inv, stackAlign, slotSize, redZone, down, style) &
+                (step == (((shift_left(1, bits) - 1) / max(stackAlign, align)) * max(stackAlign, align))) &
+                (step > 0),
+          then: RAFrameAddressLimit.has(inv, factor, step) & RAFrameAddressDirections.has(inv, ids_one(factor)) }
+    }),
+    forall(fn(inv, align, slot, redZone, style) {
+        { when: TMDLStackLayout(inv, align, slot, redZone, true, style),
+          then: RAFrameDirection(inv, -1) }
+    }),
+    forall(fn(inv, align, slot, redZone, style) {
+        { when: TMDLStackLayout(inv, align, slot, redZone, false, style),
+          then: RAFrameDirection(inv, 1) }
+    }),
+];
+
+pub let ra_transfer_adjust_plan = [
+    forall(fn(inv, f, candidate, bytes, direction) {
+        { when: RAFrameNeeded(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                (registers_length(RAFrameMissingSaves.get(inv, f)) == 0) &
+                RAEdgeCopiesComplete(inv, f, candidate) &
+                ids_not_contains(RAFrameInstalledFunctions.get(inv), f) &
+                RAFrameRequiredBytes.has(inv, f, bytes) & (bytes > 0) & RAFrameDirection(inv, direction),
+          then: RAFrameAdjustPlan(inv, f, candidate, bytes, direction) & RAFrameActive(inv, f, candidate) &
+                RATransferTransaction(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate, bytes, direction, block, point) {
+        { when: RAFrameAdjustPlan(inv, f, candidate, bytes, direction) & RAEntry(inv, f, block) &
+                RAFramePrefix(inv, f, block, point),
+          then: RAFrameAdjustment(make_RAFAS(inv, f, candidate, block, point, direction, bytes, 0)) }
+    }),
+    forall(fn(inv, f, candidate, bytes, direction, block, term, point) {
+        { when: RAFrameAdjustPlan(inv, f, candidate, bytes, direction) & RAExit(inv, f, block) &
+                RAReturn(inv, f, term, block) & RAAt(inv, f, candidate, block, term, point),
+          then: RAFrameAdjustment(make_RAFAS(inv, f, candidate, block, point, (0 - direction), bytes, 0)) }
+    }),
+];
+
+pub let ra_transfer_adjust = [
+    forall(fn(step, inv, f, candidate, block, point, direction, remaining, ordinal) {
+        { when: RAFrameAdjustment(step) &
+                (step == make_RAFAS(inv, f, candidate, block, point, direction, remaining, ordinal)) &
+                (remaining > 0),
+          then: RAFreshId.has(make_RAFreshAdjustment(step), 0, fresh_ir_id()) &
+                RAFreshId.has(make_RAFreshAdjustment(step), 1, fresh_ir_id()) }
+    }),
+    forall(fn(step, inv, f, candidate, block, point, direction, remaining, ordinal, fresh0, fresh1) {
+        { when: RAFrameAdjustment(step) &
+                (step == make_RAFAS(inv, f, candidate, block, point, direction, remaining, ordinal)) &
+                (remaining > 0) & RAFreshId.has(make_RAFreshAdjustment(step), 0, fresh0) &
+                RAFreshId.has(make_RAFreshAdjustment(step), 1, fresh1),
+          then: RAFrameAdjustmentIds.has(step, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(step, inv, f, candidate, block, point, direction, remaining, ordinal, maximum, amount, op, state,
+        memory, spClass, spIndex, width) {
+        { when: RAFrameAdjustment(step) &
+                (step == make_RAFAS(inv, f, candidate, block, point, direction, remaining, ordinal)) &
+                (remaining > 0) & RAFrameAddressLimit.has(inv, direction, maximum) &
+                (amount == min(remaining, maximum)) & RAFrameAdjustmentIds.has(step, make_RATCopy(op, state)) &
+                RAMemoryType(memory) & TMDLAbiRegister(inv, "sp", spClass, spIndex) &
+                TMDLRegisterWidth(inv, spClass, width),
+          then: ValueType.has(state, memory) &
+                RATransferPlacement(inv, f, op, block, make_RACFGPos(point, -1, 0, ordinal, 0)) &
+                RAFramePending(
+                    inv, f, op, "address-add", width, make_RATransferAbsent(),
+                    make_RATransferPhysical(spClass, spIndex), (direction * amount), state
+                ) &
+                RAFrameEvent(inv, f, block, op, state) &
+                RAFrameAdjustment(
+                    make_RAFAS(inv, f, candidate, block, point, direction, (remaining - amount), (ordinal + 1))
+                ) }
+    }),
+    forall(fn(inv, f, candidate, block, point, direction, ordinal) {
+        { when: RAFrameAdjustment(make_RAFAS(inv, f, candidate, block, point, direction, 0, ordinal)) &
+                RAExit(inv, f, block) & (point >= 0),
+          then: RAFrameAdjustedExits.has(inv, f, ids_one(block)) }
+    }),
+];
+
+pub let ra_transfer_frame_complete = [
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                RAFrameRequiredBytes.has(inv, f, 0) & (registers_length(RAFrameMissingSaves.get(inv, f)) == 0),
+          then: RAFrameComplete(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate, bytes) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                RAFrameInstalled(f, bytes) & (bytes >= RAFrameRequiredBytes.get(inv, f)) &
+                (registers_length(RAFrameMissingSaves.get(inv, f)) == 0),
+          then: RAFrameComplete(inv, f, candidate) }
+    }),
+];
+
+pub let ra_transfer_edge_index = [
+    forall(fn(inv, f, candidate, edge, dest, slot, joined, incoming, target, targetIndex, source) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAIncoming(inv, f, edge, dest, slot, joined, incoming) &
+                RAChosenRegister(inv, f, candidate, joined, target, targetIndex) &
+                RAChosenRegister(inv, f, candidate, incoming, source, targetIndex) &
+                RATransferCompatible(inv, target, source),
+          then: RAEdgeMatchingValues.has(inv, f, edge, ids_one(joined)) }
+    }),
+];
+
+pub let ra_transfer_edge_moves = [
+    forall(fn(inv, f, candidate, edge, dest, slot, joined, incoming, class, index, source, sourceIndex) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAIncoming(inv, f, edge, dest, slot, joined, incoming) &
+                RAChosenRegister(inv, f, candidate, joined, class, index) &
+                RAChosenRegister(inv, f, candidate, incoming, source, sourceIndex) &
+                ids_not_contains(RAEdgeMatchingValues.get(inv, f, edge), joined),
+          then: RAEdgeMove(inv, f, candidate, edge, slot, joined, incoming, class, index) &
+                RAEdgePending.has(inv, f, ids_one(edge)) & RAEdgeMovingValues.has(inv, f, edge, ids_one(joined)) }
+    }),
+];
+
+pub let ra_transfer_edge_cycle = [
+    forall(fn(inv, f, candidate, edge, slot, joined, incoming, target, targetIndex, otherSlot, other,
+        otherIncoming, otherClass, otherIndex, source, sourceIndex, file, targetWidth, targetOffset, targetMerge,
+        sourceWidth, sourceOffset, sourceMerge) {
+        { when: RAEdgeMove(inv, f, candidate, edge, slot, joined, incoming, target, targetIndex) &
+                RAEdgeMove(inv, f, candidate, edge, otherSlot, other, otherIncoming, otherClass, otherIndex) &
+                (joined != other) & RAChosenRegister(inv, f, candidate, otherIncoming, source, sourceIndex) &
+                TMDLClass(inv, target, file, targetWidth, targetOffset, targetMerge) &
+                TMDLClass(inv, source, file, sourceWidth, sourceOffset, sourceMerge) &
+                (targetIndex < (sourceIndex + sourceWidth)) & (sourceIndex < (targetIndex + targetWidth)),
+          then: RAEdgeDependency(inv, f, edge, joined, other) & RAEdgeMoveReach(inv, f, edge, joined, other) }
+    }),
+    forall(fn(inv, f, edge, first, middle, last) {
+        { when: RAEdgeMoveReach(inv, f, edge, first, middle) & RAEdgeDependency(inv, f, edge, middle, last),
+          then: RAEdgeMoveReach(inv, f, edge, first, last) }
+    }),
+    forall(fn(inv, f, edge, joined) {
+        { when: RAEdgeMoveReach(inv, f, edge, joined, joined),
+          then: RAEdgeCyclicValues.has(inv, f, ids_one(edge)) & RAEdgeCycleValue.has(inv, f, edge, joined) }
+    }),
+];
+
+pub let ra_transfer_edge_plan = [
+    forall(fn(inv, f, candidate) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                (ids_length(RAEdgePending.get(inv, f)) == 0),
+          then: RAEdgeCopiesComplete(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate, moves, edge) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                RAEdgeMovingValues.has(inv, f, edge, moves) & (ids_length(moves) > 0) &
+                ids_not_contains(RAEdgeCyclicValues.get(inv, f), edge) &
+                (ids_length(RACFGSuccessors.get(inv, f, edge)) == 1),
+          then: RAEdgeCopyStateRow(make_RAECS(inv, f, candidate, edge, moves, 0)) &
+                RATransferTransaction(inv, f, candidate) }
+    }),
+    forall(fn(inv, f, candidate, edge) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                (edge == ids_get(RAEdgeCyclicValues.get(inv, f), 0)) &
+                (ids_length(RACFGSuccessors.get(inv, f, edge)) == 1),
+          then: RAEdgeCycleRemaining.has(inv, f, edge, ids_empty()) }
+    }),
+    forall(fn(inv, f, candidate, edge, saved, savedSlot, incoming, savedClass, savedIndex, slot, joined, other,
+        class, index) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                (edge == ids_get(RAEdgeCyclicValues.get(inv, f), 0)) & RAEdgeCycleValue.has(inv, f, edge, saved) &
+                RAEdgeMove(inv, f, candidate, edge, savedSlot, saved, incoming, savedClass, savedIndex) &
+                RAEdgeMove(inv, f, candidate, edge, slot, joined, other, class, index) & (incoming != other),
+          then: RAEdgeCycleRemaining.has(inv, f, edge, ids_one(joined)) }
+    }),
+];
+
+pub let ra_transfer_edge_blocked = [
+    forall(fn(inv, f, candidate, edge, remaining) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                (edge == ids_get(RAEdgeCyclicValues.get(inv, f), 0)) &
+                RAEdgeCycleRemaining.has(inv, f, edge, remaining),
+          then: RAEdgeCopyStateRow(make_RAECS(inv, f, candidate, edge, remaining, 0)) &
+                RATransferTransaction(inv, f, candidate) }
+    }),
+    forall(fn(state, inv, f, candidate, edge, remaining, ordinal) {
+        { when: RAEdgeCopyStateRow(state) & (state == make_RAECS(inv, f, candidate, edge, remaining, ordinal)),
+          then: RAEdgeBlockedMoves.has(state, ids_empty()) }
+    }),
+    forall(fn(state, inv, f, candidate, edge, remaining, ordinal, joined, other) {
+        { when: RAEdgeCopyStateRow(state) & (state == make_RAECS(inv, f, candidate, edge, remaining, ordinal)) &
+                RAEdgeDependency(inv, f, edge, joined, other) & ids_contains(remaining, joined) &
+                ids_contains(remaining, other),
+          then: RAEdgeBlockedMoves.has(state, ids_one(joined)) }
+    }),
+];
+
+pub let ra_transfer_edge_ready = [
+    forall(fn(state, inv, f, candidate, edge, remaining, ordinal, slot, joined, incoming, class, index) {
+        { when: RAEdgeCopyStateRow(state) & (state == make_RAECS(inv, f, candidate, edge, remaining, ordinal)) &
+                RAEdgeMove(inv, f, candidate, edge, slot, joined, incoming, class, index) &
+                ids_contains(remaining, joined) & ids_not_contains(RAEdgeBlockedMoves.get(state), joined),
+          then: RAEdgeNextMove.has(state, joined) }
+    }),
+];
+
+pub let ra_transfer_edge_step = [
+    forall(fn(state, joined) {
+        { when: RAEdgeCopyStateRow(state) & RAEdgeNextMove.has(state, joined),
+          then: RAFreshId.has(make_RAFreshEdge(state), 0, fresh_ir_id()) &
+                RAFreshId.has(make_RAFreshEdge(state), 1, fresh_ir_id()) }
+    }),
+    forall(fn(state, joined, fresh0, fresh1) {
+        { when: RAEdgeCopyStateRow(state) & RAEdgeNextMove.has(state, joined) &
+                RAFreshId.has(make_RAFreshEdge(state), 0, fresh0) &
+                RAFreshId.has(make_RAFreshEdge(state), 1, fresh1),
+          then: RAEdgeStepIds.has(state, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(state, inv, f, candidate, edge, remaining, ordinal, joined, slot, incoming, class, index, copy,
+        temp, ty, width, block, point, dest, operand) {
+        { when: RAEdgeCopyStateRow(state) & (state == make_RAECS(inv, f, candidate, edge, remaining, ordinal)) &
+                RAEdgeNextMove.has(state, joined) &
+                RAEdgeMove(inv, f, candidate, edge, slot, joined, incoming, class, index) &
+                RAEdgeStepIds.has(state, make_RATCopy(copy, temp)) & ValueType.has(incoming, ty) &
+                RAValueBits.has(inv, f, incoming, width) & RAAt(inv, f, candidate, block, edge, point) &
+                Successor.has(edge, 0, dest) & SuccessorArg.has(edge, 0, slot, operand),
+          then: ValueType.has(temp, ty) & RAValueClass(inv, f, temp, class) & RAGeneratedTemporary(f, temp) &
+                RANoSpill(inv, f, temp) &
+                RATransferRequest(
+                    inv, f, copy, "copy", width, make_RATransferValue(incoming), make_RATransferValue(temp),
+                    make_RATransferAbsent(), 0, -1, -1, -1
+                ) &
+                RATransferRequestedPin(inv, f, copy, "destination", class, index) &
+                RATransferNewPin(inv, f, temp, class, index) & RATransferNewPin(inv, f, joined, class, index) &
+                RATransferEraseOperand(inv, f, edge, operand) &
+                RATransferReplaceOperand(inv, f, edge, operand, temp) &
+                RATransferPlacement(inv, f, copy, block, make_RACFGPos(point, -1, 0, ordinal, 0)) &
+                RATransferOrder(inv, f, copy, edge) &
+                RAEdgeCopyStateRow(
+                    make_RAECS(inv, f, candidate, edge, ids_remove(remaining, joined), (ordinal + 1))
+                ) }
+    }),
+    forall(fn(f, before, edge, state, inv, candidate, remaining, ordinal, copy, temp) {
+        { when: RAAllocationOrder(f, before, edge) & RAEdgeCopyStateRow(state) &
+                (state == make_RAECS(inv, f, candidate, edge, remaining, ordinal)) &
+                RAEdgeStepIds.has(state, make_RATCopy(copy, temp)),
+          then: RATransferOrder(inv, f, before, copy) }
+    }),
+    forall(fn(first, inv, f, candidate, edge, remaining, ordinal, before, unused, second, rest, after, temp) {
+        { when: RAEdgeCopyStateRow(first) & (first == make_RAECS(inv, f, candidate, edge, remaining, ordinal)) &
+                RAEdgeStepIds.has(first, make_RATCopy(before, unused)) & RAEdgeCopyStateRow(second) &
+                (second == make_RAECS(inv, f, candidate, edge, rest, (ordinal + 1))) &
+                RAEdgeStepIds.has(second, make_RATCopy(after, temp)),
+          then: RATransferOrder(inv, f, before, after) }
+    }),
+];
+
+pub let ra_transfer_cycle_layout = [
+    forall(fn(inv, f, candidate, edge) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                (edge == ids_get(RAEdgeCyclicValues.get(inv, f), 0)) &
+                (ids_length(RACFGSuccessors.get(inv, f, edge)) == 1),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RAEdgeCycleCopy", "", sequence_of_3(inv, f, edge)), 0, fresh_ir_id()
+          ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAEdgeCycleCopy", "", sequence_of_3(inv, f, edge)), 1, fresh_ir_id()
+                ) }
+    }),
+    forall(fn(inv, f, candidate, edge, fresh0, fresh1) {
+        { when: RASelectedCandidate(inv, f, candidate) & RAColorComplete(inv, f, candidate) &
+                (edge == ids_get(RAEdgeCyclicValues.get(inv, f), 0)) &
+                (ids_length(RACFGSuccessors.get(inv, f, edge)) == 1) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAEdgeCycleCopy", "", sequence_of_3(inv, f, edge)), 0, fresh0
+                ) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAEdgeCycleCopy", "", sequence_of_3(inv, f, edge)), 1, fresh1
+                ),
+          then: RAEdgeCycleCopy.has(inv, f, edge, make_RATCopy(fresh0, fresh1)) }
+    }),
+];
+
+pub let ra_transfer_cycle_store = [
+    forall(fn(copy, temp, inv, f, edge, joined, candidate, slot, incoming, class, index, width, ty, sourceClass,
+        block, point) {
+        { when: RAEdgeCycleCopy.has(inv, f, edge, make_RATCopy(copy, temp)) &
+                RAEdgeCycleValue.has(inv, f, edge, joined) &
+                RAEdgeMove(inv, f, candidate, edge, slot, joined, incoming, class, index) &
+                RAValueBits.has(inv, f, incoming, width) & ValueType.has(incoming, ty) &
+                RAValueClass(inv, f, incoming, sourceClass) & RAAt(inv, f, candidate, block, edge, point),
+          then: RATransferTransaction(inv, f, candidate) & ValueType.has(temp, ty) &
+                RAValueClass(inv, f, temp, sourceClass) &
+                RATransferRequest(
+                    inv, f, copy, "copy", width, make_RATransferValue(incoming), make_RATransferValue(temp),
+                    make_RATransferAbsent(), 0, -1, -1, -1
+                ) &
+                RATransferPlacement(inv, f, copy, block, make_RACFGPos(point, -2, 0, 0, 0)) &
+                RATransferOrder(inv, f, copy, edge) }
+    }),
+    forall(fn(copy, temp, inv, f, edge, joined, candidate, slot, incoming, class, index, operand) {
+        { when: RAEdgeCycleCopy.has(inv, f, edge, make_RATCopy(copy, temp)) &
+                RAEdgeCycleValue.has(inv, f, edge, joined) &
+                RAEdgeMove(inv, f, candidate, edge, slot, joined, incoming, class, index) &
+                Operand.has(edge, operand, incoming),
+          then: RATransferEraseOperand(inv, f, edge, operand) &
+                RATransferReplaceOperand(inv, f, edge, operand, temp) }
+    }),
+    forall(fn(save, saved, inv, f, edge, state, candidate, remaining, ordinal, copy, temp) {
+        { when: RAEdgeCycleCopy.has(inv, f, edge, make_RATCopy(save, saved)) & RAEdgeCopyStateRow(state) &
+                (state == make_RAECS(inv, f, candidate, edge, remaining, ordinal)) &
+                RAEdgeStepIds.has(state, make_RATCopy(copy, temp)),
+          then: RATransferOrder(inv, f, save, copy) }
+    }),
+];
+
+pub let ra_transfer_address_index = [
+    forall(fn(inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut) {
+        { when: RATransferRequest(
+            inv, f, op, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+        ),
+          then: RAAddressRepairRecipes.has(inv, f, op, recipes_empty()) }
+    }),
+    forall(fn(inv, f, op, kind, recipe) {
+        { when: RATransferCandidate(inv, f, op, kind, recipe) & TMDLRecipeZeroOffset(inv, kind, recipe) &
+                RATransferMatchedFields.has(
+                    inv, f, op, kind, recipe, RATransferRecipeFields.get(inv, kind, recipe)
+                ),
+          then: RAAddressRepairRecipes.has(inv, f, op, recipes_one(make_RATR(kind, recipe))) }
+    }),
+    forall(fn(inv, f, op, kind, recipe, name, bits, signed, align) {
+        { when: RATransferCandidate(inv, f, op, kind, recipe) &
+                TMDLRecipeOffset(inv, kind, recipe, name, bits, signed, align, false) &
+                RATransferMatchedFields.has(
+                    inv, f, op, kind, recipe, RATransferRecipeFields.get(inv, kind, recipe)
+                ),
+          then: RAAddressRepairRecipes.has(inv, f, op, recipes_one(make_RATR(kind, recipe))) }
+    }),
+];
+
+pub let ra_transfer_address_plan = [
+    forall(fn(inv, f, op, width, source, destination, base, offset, control, stateIn, stateOut, recipes, kind,
+        recipe, transfer, address, align, features, parameters, name, class, input, output) {
+        { when: RATransferRequest(
+            inv, f, op, "spill", width, source, destination, base, offset, control, stateIn, stateOut
+        ) &
+                (recipes_length(RATransferCandidates.get(inv, f, op)) == 0) & (offset != 0) &
+                RAAddressRepairRecipes.has(inv, f, op, recipes) & (recipes_length(recipes) > 0) &
+                (make_RATR(kind, recipe) == recipes_get(recipes, 0)) &
+                TMDLRecipe(inv, kind, recipe, transfer, width, address, align, features, parameters) &
+                TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, "base"),
+          then: RAAddressRepair(inv, f, op, address, class) & RAAddressNeededType(inv, f, address) &
+                RAAddressStateRow(make_RAAS(inv, f, op, address, class, base, offset, 0, control)) }
+    }),
+    forall(fn(inv, f, op, width, source, destination, base, offset, control, stateIn, stateOut, recipes, kind,
+        recipe, transfer, address, align, features, parameters, name, class, input, output) {
+        { when: RATransferRequest(
+            inv, f, op, "reload", width, source, destination, base, offset, control, stateIn, stateOut
+        ) &
+                (recipes_length(RATransferCandidates.get(inv, f, op)) == 0) & (offset != 0) &
+                RAAddressRepairRecipes.has(inv, f, op, recipes) & (recipes_length(recipes) > 0) &
+                (make_RATR(kind, recipe) == recipes_get(recipes, 0)) &
+                TMDLRecipe(inv, kind, recipe, transfer, width, address, align, features, parameters) &
+                TMDLRecipeRegister(inv, kind, recipe, name, class, input, output, "base"),
+          then: RAAddressRepair(inv, f, op, address, class) & RAAddressNeededType(inv, f, address) &
+                RAAddressStateRow(make_RAAS(inv, f, op, address, class, base, offset, 0, control)) }
+    }),
+    forall(fn(inv, f, width) {
+        { when: RAAddressNeededType(inv, f, width) & ids_not_contains(RAAddressKnownWidths.get(inv, f), width),
+          then: RAFreshId.has(
+              make_RAFreshNumbers("RAAddressTypeId", "", sequence_of_3(inv, f, width)), 0, fresh_ir_type_id()
+          ) }
+    }),
+    forall(fn(inv, f, width, fresh0) {
+        { when: RAAddressNeededType(inv, f, width) & ids_not_contains(RAAddressKnownWidths.get(inv, f), width) &
+                RAFreshId.has(
+                    make_RAFreshNumbers("RAAddressTypeId", "", sequence_of_3(inv, f, width)), 0, fresh0
+                ),
+          then: RAAddressTypeId.has(inv, f, width, fresh0) }
+    }),
+    forall(fn(id, inv, f, width) {
+        { when: RAAddressTypeId.has(inv, f, width, id),
+          then: TypeHandle.has(
+              id, make_Apply(make_Ctor("builtin.i"), make_TCons(make_NatLit(bigint(width)), make_TNil()))
+          ) &
+                TypeHandleOf.has(
+                    make_Apply(make_Ctor("builtin.i"), make_TCons(make_NatLit(bigint(width)), make_TNil())), id
+                ) }
+    }),
+];
+
+pub let ra_transfer_address_step = [
+    forall(fn(state, inv, f, owner, width, class, base, remaining, ordinal, control) {
+        { when: RAAddressStateRow(state) &
+                (state == make_RAAS(inv, f, owner, width, class, base, remaining, ordinal, control)) &
+                (remaining != 0),
+          then: RAFreshId.has(make_RAFreshAddress(state), 0, fresh_ir_id()) &
+                RAFreshId.has(make_RAFreshAddress(state), 1, fresh_ir_id()) }
+    }),
+    forall(fn(state, inv, f, owner, width, class, base, remaining, ordinal, control, fresh0, fresh1) {
+        { when: RAAddressStateRow(state) &
+                (state == make_RAAS(inv, f, owner, width, class, base, remaining, ordinal, control)) &
+                (remaining != 0) & RAFreshId.has(make_RAFreshAddress(state), 0, fresh0) &
+                RAFreshId.has(make_RAFreshAddress(state), 1, fresh1),
+          then: RAAddressIds.has(state, make_RATCopy(fresh0, fresh1)) }
+    }),
+    forall(fn(state, inv, f, owner, width, class, base, remaining, ordinal, control, limit, amount, op, temp) {
+        { when: RAAddressStateRow(state) &
+                (state == make_RAAS(inv, f, owner, width, class, base, remaining, ordinal, control)) &
+                (remaining > 0) & RAFrameAddressLimit.has(inv, 1, limit) & (amount == min(remaining, limit)) &
+                RAAddressIds.has(state, make_RATCopy(op, temp)),
+          then: ValueType.has(
+              temp, make_Apply(make_Ctor("builtin.i"), make_TCons(make_NatLit(bigint(width)), make_TNil()))
+          ) &
+                RAValueClass(inv, f, temp, class) & RAGeneratedTemporary(f, temp) & RANoSpill(inv, f, temp) &
+                RATransferRequest(
+                    inv, f, op, "address-add", width, make_RATransferAbsent(), make_RATransferValue(temp), base,
+                    amount, control, -1, -1
+                ) &
+                RAAddressStateRow(
+                    make_RAAS(
+                        inv, f, owner, width, class, make_RATransferValue(temp), (remaining - amount),
+                        (ordinal + 1), control
+                    )
+                ) }
+    }),
+    forall(fn(state, inv, f, owner, width, class, base, remaining, ordinal, control, limit, amount, op, temp) {
+        { when: RAAddressStateRow(state) &
+                (state == make_RAAS(inv, f, owner, width, class, base, remaining, ordinal, control)) &
+                (remaining < 0) & RAFrameAddressLimit.has(inv, -1, limit) &
+                (amount == max(remaining, (0 - limit))) & RAAddressIds.has(state, make_RATCopy(op, temp)),
+          then: ValueType.has(
+              temp, make_Apply(make_Ctor("builtin.i"), make_TCons(make_NatLit(bigint(width)), make_TNil()))
+          ) &
+                RAValueClass(inv, f, temp, class) & RAGeneratedTemporary(f, temp) & RANoSpill(inv, f, temp) &
+                RATransferRequest(
+                    inv, f, op, "address-add", width, make_RATransferAbsent(), make_RATransferValue(temp), base,
+                    amount, control, -1, -1
+                ) &
+                RAAddressStateRow(
+                    make_RAAS(
+                        inv, f, owner, width, class, make_RATransferValue(temp), (remaining - amount),
+                        (ordinal + 1), control
+                    )
+                ) }
+    }),
+    forall(fn(state, inv, f, owner, width, class, base, remaining, ordinal, control, op, temp, block, p, lane,
+        group, index, sub) {
+        { when: RAAddressStateRow(state) &
+                (state == make_RAAS(inv, f, owner, width, class, base, remaining, ordinal, control)) &
+                (remaining > 0) & RAAddressIds.has(state, make_RATCopy(op, temp)) &
+                RATransferPlacement(inv, f, owner, block, make_RACFGPos(p, lane, group, index, sub)),
+          then: RATransferPlacement(inv, f, op, block, make_RACFGPos(p, lane, group, index, (0 - remaining))) }
+    }),
+    forall(fn(state, inv, f, owner, width, class, base, remaining, ordinal, control, op, temp, block, p, lane,
+        group, index, sub) {
+        { when: RAAddressStateRow(state) &
+                (state == make_RAAS(inv, f, owner, width, class, base, remaining, ordinal, control)) &
+                (remaining < 0) & RAAddressIds.has(state, make_RATCopy(op, temp)) &
+                RATransferPlacement(inv, f, owner, block, make_RACFGPos(p, lane, group, index, sub)),
+          then: RATransferPlacement(inv, f, op, block, make_RACFGPos(p, lane, group, index, remaining)) }
+    }),
+];
+
+pub let ra_transfer_address_finish = [
+    forall(fn(inv, f, owner, address, class, temp, ordinal, control, transfer, width, source, destination, base,
+        offset, stateIn, stateOut) {
+        { when: RAAddressStateRow(
+            make_RAAS(inv, f, owner, address, class, make_RATransferValue(temp), 0, ordinal, control)
+        ) &
+                RATransferRequest(
+                    inv, f, owner, transfer, width, source, destination, base, offset, control, stateIn,
+                    stateOut
+                ) &
+                (offset != 0),
+          then: erase(
+              RATransferRequest(
+                  inv, f, owner, transfer, width, source, destination, base, offset, control, stateIn, stateOut
+              )
+          ) &
+                erase(RATransferRole(inv, f, owner, "base", base)) &
+                RATransferRequest(
+                    inv, f, owner, transfer, width, source, destination, make_RATransferValue(temp), 0, control,
+                    stateIn, stateOut
+                ) }
+    }),
+];
+
+pub let ra_bind_require = [
+    forall(fn(inv, f, op, kind, value, class, index, slot) {
+        { when: RASource(inv, f, op, kind) & RAAllocationPin(f, value, class, index) &
+                ValueDefinition.has(value, make_ResultDef(op, slot)),
+          then: RAOutputPin(inv, f, op, value, class, index) }
+    }),
+];
+

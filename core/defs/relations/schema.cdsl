@@ -1,4 +1,4 @@
-mod relational;
+pub mod relational;
 use relational::*;
 
 pub extern type BigInt = Type;
@@ -482,3 +482,14 @@ pub let rule_50 = forall(fn() {
 pub let rule_51 = forall(fn() {
     { when: truth, then: ConstructorKind.has("$attr.wide", make_KType()) }
 });
+pub mod tmdl_schema;
+pub mod regalloc;
+pub mod regalloc_control;
+pub mod regalloc_structured;
+pub mod regalloc_color;
+pub mod regalloc_bindings;
+pub mod regalloc_abi;
+pub mod regalloc_publish;
+pub mod regalloc_transfer;
+pub mod regalloc_encoding;
+pub mod regalloc_select;

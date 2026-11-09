@@ -1816,13 +1816,26 @@ impl Checker {
             Type::Function(types, Box::new(result)),
         ))
     }
+    fn needs_symbolic_lift(&self, ty: &Type) -> bool {
+        let ty = self.resolve_type(ty);
+        crate::relations::expression_sort(&ty).is_none()
+            && (!matches!(ty, Type::Variable(_))
+                || self.obligations.iter().any(|obligation| {
+                    obligation.constraint.class == "FromInteger"
+                        && obligation
+                            .constraint
+                            .arguments
+                            .first()
+                            .is_some_and(|argument| self.resolve_type(argument) == ty)
+                }))
+    }
     fn unify_argument(&mut self, actual: &Type, expected: &Type, span: &Span) -> Checked<bool> {
         let actual = self.resolve_type(actual);
         let expected = self.resolve_type(expected);
         if crate::relations::coerces(&actual, &expected) {
             return Ok(true);
         }
-        if crate::relations::expression_sort(&actual).is_none()
+        if self.needs_symbolic_lift(&actual)
             && let Some(sort) = crate::relations::expression_sort(&expected)
         {
             self.unify(&actual, sort, span)?;
@@ -2099,16 +2112,24 @@ impl Checker {
     ) -> Checked<(Term, Type)> {
         let (left, left_ty) = self.infer(left, environment)?;
         let (right, right_ty) = self.infer(right, environment)?;
-        if let Some((operand, result)) =
-            crate::relations::binary_type(operator, &self.resolve_type(&left_ty))
-        {
-            let expected =
-                if crate::relations::expression_sort(&self.resolve_type(&right_ty)).is_none() {
-                    crate::relations::expression_sort(&operand).unwrap_or(&operand)
+        let left_type = self.resolve_type(&left_ty);
+        let right_type = self.resolve_type(&right_ty);
+        let symbolic = crate::relations::binary_type(operator, &left_type)
+            .map(|(right, result)| (left_type.clone(), right, result))
+            .or_else(|| {
+                crate::relations::binary_type(operator, &right_type)
+                    .filter(|(operand, _)| operand == &right_type)
+                    .map(|(_, result)| (right_type.clone(), right_type.clone(), result))
+            });
+        if let Some((expected_left, expected_right, result)) = symbolic {
+            for (actual, expected) in [(&left_ty, &expected_left), (&right_ty, &expected_right)] {
+                let expected = if self.needs_symbolic_lift(actual) {
+                    crate::relations::expression_sort(expected).unwrap_or(expected)
                 } else {
-                    &operand
+                    expected
                 };
-            self.unify(&right_ty, expected, &expr.span)?;
+                self.unify(actual, expected, &expr.span)?;
+            }
             return Ok((
                 Term {
                     ty: result.clone(),

@@ -1,0 +1,466 @@
+use ::relational::*;
+use ::BigInt;
+use ::Definition;
+use ::EntryValue;
+use ::ExitValue;
+use ::FeedbackValue;
+use ::Gamma;
+use ::GammaArm;
+use ::GammaDefaultArm;
+use ::GammaSelector;
+use ::GraphMember;
+use ::OpKind;
+use ::OpUnderRegion;
+use ::OwnedRegion;
+use ::RegionOwner;
+use ::RegionParam;
+use ::RegionSlot;
+use ::Result;
+use ::SiblingRead;
+use ::Theta;
+use ::ThetaBody;
+use ::ThetaContinueOn;
+use ::ThetaPredicate;
+use ::ValueDefinition;
+use ::Yield;
+use ::regalloc_control::RAAllPathsDemand;
+use ::regalloc_control::RABinding;
+use ::regalloc_control::RABlock;
+use ::regalloc_control::RABranch;
+use ::regalloc_control::RAControlEdge;
+use ::regalloc_control::RAEntry;
+use ::regalloc_control::RAExit;
+use ::regalloc_control::RAFunction;
+use ::regalloc_control::RAGraphFunction;
+use ::regalloc_control::RAIds;
+use ::regalloc_control::RAIncoming;
+use ::regalloc_control::RAJump;
+use ::regalloc_control::RANode;
+use ::regalloc_control::RAPin;
+use ::regalloc_control::RARecognizedOps;
+use ::regalloc_control::RARequired;
+use ::regalloc_control::RAReturn;
+use ::regalloc_control::RAReturnNode;
+use ::regalloc_control::RAReturnValue;
+use ::regalloc_control::RASource;
+use ::regalloc_control::RASourceOps;
+use ::regalloc_control::RAStructuredFlag;
+use ::regalloc_control::RAStructuredOwnerSet;
+use ::regalloc_control::RATerminator;
+use ::regalloc_control::RAUse;
+
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let min = primitive<(a0: Integer, a1: Integer) -> Integer>("min");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let fresh_ir_id = primitive<() -> Integer>("fresh-ir-id");
+let ids_insert = primitive<(a0: RAIds, a1: Integer) -> RAIds>("set-insert");
+let make_ResultDef = constructor(Definition::ResultDef);
+
+// Structured graph import precedes control placement. Saturate index, lanes,
+// plan, then repeat blocked/ready/one step to saturation, and finally emit.
+// The prefix chooses only dependency-ready owners. Source order is irrelevant.
+pub let RAStructuredFunction = relation<(Integer, Integer)>("RAStructuredFunction");
+pub let RAStructuredRegion = relation<(Integer, Integer, Integer)>("RAStructuredRegion");
+pub let RAStructuredOwner = relation<(Integer, Integer, Integer)>("RAStructuredOwner");
+pub let RAStructuredActive = relation<(Integer, Integer, Integer)>("RAStructuredActive");
+pub let RAStructuredDemand = relation<(Integer, Integer, Integer, Integer, Integer)>("RAStructuredDemand");
+pub let RAStructuredLane = relation<(Integer, Integer, Integer, Integer, Integer)>("RAStructuredLane");
+pub let RAStructuredBefore = relation<(Integer, Integer, Integer, Integer)>("RAStructuredBefore");
+pub let RAStructuredAllocated = table<(Integer, Integer, String), RAIds>("RAStructuredAllocated", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAStructuredNeeds = table<(Integer, Integer, Integer), RAIds>("RAStructuredNeeds", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAStructuredOwners = table<(Integer, Integer, Integer, Integer), RAIds>("RAStructuredOwners", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAStructuredEntry = table<(Integer, Integer, Integer, Integer), Integer>("RAStructuredEntry", unique);
+pub let RAStructuredExit = table<(Integer, Integer, Integer, Integer), Integer>("RAStructuredExit", unique);
+pub let RAStructuredOwnerEntry = table<(Integer, Integer, Integer), Integer>("RAStructuredOwnerEntry", unique);
+pub let RAStructuredOwnerExit = table<(Integer, Integer, Integer), Integer>("RAStructuredOwnerExit", unique);
+pub let RAStructuredArm = table<(Integer, Integer, Integer), Integer>("RAStructuredArm", unique);
+pub let RAStructuredJump = table<(Integer, Integer, Integer, Integer), Integer>("RAStructuredJump", unique);
+pub let RAStructuredGate = table<(Integer, Integer, Integer), Integer>("RAStructuredGate", unique);
+pub let RAStructuredLink = relation<(Integer, Integer, Integer, Integer)>("RAStructuredLink");
+
+// Switch arms have forwarding stubs, so their terminator carries no arguments.
+pub let RASwitch = relation<(Integer, Integer, Integer, Integer, Integer, Integer)>("RASwitch");
+pub let RASwitchCase = relation<(Integer, Integer, Integer, Integer, BigInt, Integer)>("RASwitchCase");
+pub let RASwitchOwner = relation<(Integer, Integer, Integer, Integer)>("RASwitchOwner");
+pub let RASwitchDestinations = table<(Integer, Integer, Integer), RAIds>("RASwitchDestinations", merge(fn(old, new) { ids_union(old, new) }));
+pub let RASwitchDemands = table<(Integer, Integer, Integer, Integer), RAIds>("RASwitchDemands", merge(fn(old, new) { ids_union(old, new) }));
+pub enum RAStructuredPrefix {
+    RASP(Integer, Integer, Integer, Integer, Integer, RAIds),
+};
+let make_RASP = constructor(RAStructuredPrefix::RASP);
+
+pub let RAStructuredState = relation<(RAStructuredPrefix,)>("RAStructuredState");
+pub let RAStructuredBlocked = table<RAStructuredPrefix, RAIds>("RAStructuredBlocked", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAStructuredReady = table<RAStructuredPrefix, Integer>("RAStructuredReady", merge(fn(old, new) { min(old, new) }));
+pub let ra_structured_index = [
+    forall(fn(inv, f, region, op) {
+        { when: RAFunction(inv, f, region) & RAGraphFunction(inv, f) & OpUnderRegion(region, op) & Gamma(op),
+          then: RAStructuredFunction(inv, f) }
+    }),
+    forall(fn(inv, f, region, op) {
+        { when: RAFunction(inv, f, region) & RAGraphFunction(inv, f) & OpUnderRegion(region, op) & Theta(op),
+          then: RAStructuredFunction(inv, f) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAStructuredFunction(inv, f) & RAFunction(inv, f, region),
+          then: RAStructuredRegion(inv, f, region) & RAStructuredFlag.has(inv, f, true) &
+                RAStructuredAllocated.has(inv, f, "region", ids_empty()) &
+                RAStructuredAllocated.has(inv, f, "theta", ids_empty()) &
+                RAStructuredAllocated.has(inv, f, "owner", ids_empty()) &
+                RAStructuredAllocated.has(inv, f, "arm", ids_empty()) &
+                RAStructuredAllocated.has(inv, f, "jump", ids_empty()) &
+                RAStructuredAllocated.has(inv, f, "return", ids_empty()) }
+    }),
+    forall(fn(inv, f, region, op) {
+        { when: RAStructuredRegion(inv, f, region) & GraphMember(region, op) & Gamma(op),
+          then: RAStructuredOwner(inv, f, op) }
+    }),
+    forall(fn(inv, f, region, op) {
+        { when: RAStructuredRegion(inv, f, region) & GraphMember(region, op) & Theta(op),
+          then: RAStructuredOwner(inv, f, op) }
+    }),
+    forall(fn(inv, f, region, op, kind) {
+        { when: RAStructuredRegion(inv, f, region) & GraphMember(region, op) & OpKind.has(op, kind),
+          then: RASource(inv, f, op, kind) & RASourceOps.has(inv, f, ids_one(op)) &
+                RAStructuredNeeds.has(inv, f, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, op) {
+        { when: RAStructuredOwner(inv, f, op),
+          then: RARecognizedOps.has(inv, f, ids_one(op)) & RAStructuredOwnerSet.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, region, lane, op) {
+        { when: RAStructuredDemand(inv, f, region, lane, op) & RAStructuredOwner(inv, f, op),
+          then: RAStructuredActive(inv, f, op) }
+    }),
+    forall(fn(inv, f, op, region, slot) {
+        { when: RAStructuredActive(inv, f, op) & OwnedRegion.has(op, slot, region),
+          then: RAStructuredRegion(inv, f, region) }
+    }),
+    // Demand is projected onto siblings, including free reads in nested regions.
+    forall(fn(inv, f, region, value, slot, op, resultSlot) {
+        { when: RAStructuredRegion(inv, f, region) & RAFunction(inv, f, region) & Yield.has(region, slot, value) &
+                ValueDefinition.has(value, make_ResultDef(op, resultSlot)) & GraphMember(region, op),
+          then: RAStructuredDemand(inv, f, region, 0, op) }
+    }),
+    forall(fn(inv, f, region, owner, slot, value, op, resultSlot) {
+        { when: RAStructuredRegion(inv, f, region) & RegionOwner.has(region, owner) & Gamma(owner) &
+                ExitValue(region, slot, value) & ValueDefinition.has(value, make_ResultDef(op, resultSlot)) &
+                GraphMember(region, op),
+          then: RAStructuredDemand(inv, f, region, 0, op) }
+    }),
+    forall(fn(inv, f, owner, region, slot, value, op, resultSlot) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                ThetaPredicate.has(owner, slot) & Yield.has(region, slot, value) &
+                ValueDefinition.has(value, make_ResultDef(op, resultSlot)) & GraphMember(region, op),
+          then: RAStructuredDemand(inv, f, region, 0, op) }
+    }),
+    forall(fn(inv, f, owner, region, slot, value, op, resultSlot) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                FeedbackValue(region, slot, value) & ValueDefinition.has(value, make_ResultDef(op, resultSlot)) &
+                GraphMember(region, op),
+          then: RAStructuredDemand(inv, f, region, 1, op) }
+    }),
+    forall(fn(inv, f, owner, region, slot, value, op, resultSlot) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                ExitValue(region, slot, value) & ValueDefinition.has(value, make_ResultDef(op, resultSlot)) &
+                GraphMember(region, op),
+          then: RAStructuredDemand(inv, f, region, 2, op) }
+    }),
+    forall(fn(inv, f, region, lane, user, reader, value, producer) {
+        { when: RAStructuredDemand(inv, f, region, lane, user) & SiblingRead(reader, value, user, producer) &
+                GraphMember(region, producer),
+          then: RAStructuredDemand(inv, f, region, lane, producer) }
+    }),
+    forall(fn(inv, f, region, lane, op) {
+        { when: RAStructuredDemand(inv, f, region, lane, op),
+          then: RAStructuredNeeds.has(inv, f, op, ids_one(lane)) }
+    }),
+    forall(fn(inv, f, region, reader, value, later, earlier) {
+        { when: RAStructuredRegion(inv, f, region) & SiblingRead(reader, value, later, earlier) &
+                GraphMember(region, later) & GraphMember(region, earlier) & (later != earlier),
+          then: RAStructuredBefore(inv, f, later, earlier) }
+    }),
+    forall(fn(inv, f, later, middle, earlier) {
+        { when: RAStructuredBefore(inv, f, later, middle) & RAStructuredBefore(inv, f, middle, earlier),
+          then: RAStructuredBefore(inv, f, later, earlier) }
+    }),
+];
+
+pub let ra_structured_lanes = [
+    // A shared cone runs once before the test. Exclusive cones remain after it,
+    // including total arithmetic: the region entry bounds its legal placements.
+    forall(fn(inv, f, region, op) {
+        { when: RAStructuredDemand(inv, f, region, 0, op),
+          then: RAStructuredLane(inv, f, region, 0, op) }
+    }),
+    forall(fn(inv, f, region, op) {
+        { when: RAStructuredDemand(inv, f, region, 1, op) & RAStructuredDemand(inv, f, region, 2, op),
+          then: RAStructuredLane(inv, f, region, 0, op) }
+    }),
+    forall(fn(inv, f, region, op) {
+        { when: RAStructuredDemand(inv, f, region, 1, op) &
+                ids_not_contains(RAStructuredNeeds.get(inv, f, op), 0) &
+                ids_not_contains(RAStructuredNeeds.get(inv, f, op), 2),
+          then: RAStructuredLane(inv, f, region, 1, op) }
+    }),
+    forall(fn(inv, f, region, op) {
+        { when: RAStructuredDemand(inv, f, region, 2, op) &
+                ids_not_contains(RAStructuredNeeds.get(inv, f, op), 0) &
+                ids_not_contains(RAStructuredNeeds.get(inv, f, op), 1),
+          then: RAStructuredLane(inv, f, region, 2, op) }
+    }),
+];
+
+pub let ra_structured_plan = [
+    forall(fn(inv, f, region) {
+        { when: RAStructuredRegion(inv, f, region) &
+                ids_not_contains(RAStructuredAllocated.get(inv, f, "region"), region),
+          then: RAStructuredAllocated.has(inv, f, "region", ids_one(region)) &
+                RAStructuredEntry.has(inv, f, region, 0, fresh_ir_id()) &
+                RAStructuredExit.has(inv, f, region, 0, fresh_ir_id()) &
+                RAStructuredOwners.has(inv, f, region, 0, ids_empty()) }
+    }),
+    forall(fn(inv, f, owner, region) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                ids_not_contains(RAStructuredAllocated.get(inv, f, "theta"), owner),
+          then: RAStructuredAllocated.has(inv, f, "theta", ids_one(owner)) &
+                RAStructuredEntry.has(inv, f, region, 1, fresh_ir_id()) &
+                RAStructuredExit.has(inv, f, region, 1, fresh_ir_id()) &
+                RAStructuredEntry.has(inv, f, region, 2, fresh_ir_id()) &
+                RAStructuredExit.has(inv, f, region, 2, fresh_ir_id()) &
+                RAStructuredOwners.has(inv, f, region, 1, ids_empty()) &
+                RAStructuredOwners.has(inv, f, region, 2, ids_empty()) }
+    }),
+    forall(fn(inv, f, owner) {
+        { when: RAStructuredActive(inv, f, owner) &
+                ids_not_contains(RAStructuredAllocated.get(inv, f, "owner"), owner),
+          then: RAStructuredAllocated.has(inv, f, "owner", ids_one(owner)) &
+                RAStructuredOwnerEntry.has(inv, f, owner, fresh_ir_id()) &
+                RAStructuredOwnerExit.has(inv, f, owner, fresh_ir_id()) &
+                RAStructuredGate.has(inv, f, owner, fresh_ir_id()) }
+    }),
+    forall(fn(inv, f, owner, region, slot) {
+        { when: RAStructuredActive(inv, f, owner) & Gamma(owner) & OwnedRegion.has(owner, slot, region) &
+                ids_not_contains(RAStructuredAllocated.get(inv, f, "arm"), region),
+          then: RAStructuredAllocated.has(inv, f, "arm", ids_one(region)) &
+                RAStructuredArm.has(inv, f, region, fresh_ir_id()) }
+    }),
+    forall(fn(inv, f, region, lane, op) {
+        { when: RAStructuredLane(inv, f, region, lane, op) & RAStructuredOwner(inv, f, op),
+          then: RAStructuredOwners.has(inv, f, region, lane, ids_one(op)) }
+    }),
+    forall(fn(entry, inv, f, region, lane, exit) {
+        { when: RAStructuredEntry.has(inv, f, region, lane, entry) &
+                RAStructuredExit.has(inv, f, region, lane, exit),
+          then: RABlock(inv, f, entry) & RABlock(inv, f, exit) &
+                RAStructuredState(make_RASP(inv, f, region, lane, entry, ids_empty())) }
+    }),
+    forall(fn(entry, inv, f, owner, exit) {
+        { when: RAStructuredOwnerEntry.has(inv, f, owner, entry) &
+                RAStructuredOwnerExit.has(inv, f, owner, exit),
+          then: RABlock(inv, f, entry) & RABlock(inv, f, exit) }
+    }),
+    forall(fn(inv, f, region, lane, op, entry) {
+        { when: RAStructuredLane(inv, f, region, lane, op) & RAStructuredEntry.has(inv, f, region, lane, entry),
+          then: RARequired(inv, f, op, entry) }
+    }),
+];
+
+pub let ra_structured_blocked = [
+    forall(fn(state) {
+        { when: RAStructuredState(state),
+          then: RAStructuredBlocked.has(state, ids_empty()) }
+    }),
+    forall(fn(state, inv, f, region, lane, block, seen, owner, pred) {
+        { when: RAStructuredState(state) & (state == make_RASP(inv, f, region, lane, block, seen)) &
+                RAStructuredLane(inv, f, region, lane, owner) & RAStructuredOwner(inv, f, owner) &
+                RAStructuredBefore(inv, f, owner, pred) & RAStructuredOwner(inv, f, pred) &
+                RAStructuredLane(inv, f, region, lane, pred) & ids_not_contains(seen, pred),
+          then: RAStructuredBlocked.has(state, ids_one(owner)) }
+    }),
+];
+
+pub let ra_structured_ready = [
+    forall(fn(state, inv, f, region, lane, block, seen, owner) {
+        { when: RAStructuredState(state) & (state == make_RASP(inv, f, region, lane, block, seen)) &
+                RAStructuredLane(inv, f, region, lane, owner) & RAStructuredOwner(inv, f, owner) &
+                ids_not_contains(seen, owner) & ids_not_contains(RAStructuredBlocked.get(state), owner),
+          then: RAStructuredReady.has(state, owner) }
+    }),
+];
+
+pub let ra_structured_step = [
+    forall(fn(state, inv, f, region, lane, block, seen, owner, entry, exit) {
+        { when: RAStructuredState(state) & (state == make_RASP(inv, f, region, lane, block, seen)) &
+                RAStructuredReady.has(state, owner) & RAStructuredOwnerEntry.has(inv, f, owner, entry) &
+                RAStructuredOwnerExit.has(inv, f, owner, exit),
+          then: RAStructuredLink(inv, f, block, entry) &
+                RAStructuredState(make_RASP(inv, f, region, lane, exit, ids_insert(seen, owner))) }
+    }),
+];
+
+pub let ra_structured_emit = [
+    forall(fn(state, inv, f, region, lane, block, seen, exit) {
+        { when: RAStructuredState(state) & (state == make_RASP(inv, f, region, lane, block, seen)) &
+                RAStructuredOwners.has(inv, f, region, lane, seen) &
+                RAStructuredExit.has(inv, f, region, lane, exit),
+          then: RAStructuredLink(inv, f, block, exit) }
+    }),
+    forall(fn(inv, f, from, dest) {
+        { when: RAStructuredLink(inv, f, from, dest) &
+                ids_not_contains(RAStructuredAllocated.get(inv, f, "jump"), from),
+          then: RAStructuredAllocated.has(inv, f, "jump", ids_one(from)) &
+                RAStructuredJump.has(inv, f, from, dest, fresh_ir_id()) }
+    }),
+    forall(fn(op, inv, f, from, dest) {
+        { when: RAStructuredJump.has(inv, f, from, dest, op),
+          then: RAJump(inv, f, op, from, dest) & RAControlEdge(inv, f, from, dest) &
+                RANode(inv, f, op, "cfg.br") & RAPin(inv, f, op, from) & RATerminator(inv, f, op, from) }
+    }),
+    forall(fn(inv, f, region, entry, exit) {
+        { when: RAStructuredFunction(inv, f) & RAFunction(inv, f, region) &
+                RAStructuredEntry.has(inv, f, region, 0, entry) & RAStructuredExit.has(inv, f, region, 0, exit) &
+                ids_not_contains(RAStructuredAllocated.get(inv, f, "return"), f),
+          then: RAStructuredAllocated.has(inv, f, "return", ids_one(f)) & RAEntry(inv, f, entry) &
+                RAExit(inv, f, exit) & RAReturnNode.has(inv, f, fresh_ir_id()) }
+    }),
+    forall(fn(inv, f, op, exit) {
+        { when: RAStructuredFunction(inv, f) & RAReturnNode.has(inv, f, op) & RAExit(inv, f, exit),
+          then: RAReturn(inv, f, op, exit) & RANode(inv, f, op, "func.return") & RAPin(inv, f, op, exit) &
+                RATerminator(inv, f, op, exit) }
+    }),
+    forall(fn(inv, f, region, op, value, slot) {
+        { when: RAStructuredFunction(inv, f) & RAFunction(inv, f, region) & RAReturnNode.has(inv, f, op) &
+                Yield.has(region, slot, value),
+          then: RAReturnValue(inv, f, op, slot, value) & RAUse(inv, f, op, slot, value) }
+    }),
+    // Gamma joins reuse the owner's result IDs as destination block parameters.
+    forall(fn(inv, f, owner, region, slot, stub, entry, exit, joined) {
+        { when: RAStructuredActive(inv, f, owner) & Gamma(owner) & OwnedRegion.has(owner, slot, region) &
+                RAStructuredArm.has(inv, f, region, stub) & RAStructuredEntry.has(inv, f, region, 0, entry) &
+                RAStructuredExit.has(inv, f, region, 0, exit) & RAStructuredOwnerExit.has(inv, f, owner, joined),
+          then: RABlock(inv, f, stub) & RAStructuredLink(inv, f, stub, entry) &
+                RAStructuredLink(inv, f, exit, joined) }
+    }),
+    forall(fn(inv, f, owner, op, block, predicate, region, dest) {
+        { when: RAStructuredActive(inv, f, owner) & Gamma(owner) & RAStructuredGate.has(inv, f, owner, op) &
+                RAStructuredOwnerEntry.has(inv, f, owner, block) & GammaSelector(owner, predicate) &
+                GammaDefaultArm.has(owner, region) & RAStructuredArm.has(inv, f, region, dest),
+          then: RASwitch(inv, f, op, block, predicate, dest) & RASwitchOwner(inv, f, op, owner) &
+                RAControlEdge(inv, f, block, dest) & RANode(inv, f, op, "cfg.switch") & RAPin(inv, f, op, block) &
+                RATerminator(inv, f, op, block) & RAUse(inv, f, op, 0, predicate) }
+    }),
+    forall(fn(inv, f, owner, op, block, region, case, dest, ordinal) {
+        { when: RAStructuredActive(inv, f, owner) & Gamma(owner) & RAStructuredGate.has(inv, f, owner, op) &
+                RAStructuredOwnerEntry.has(inv, f, owner, block) & GammaArm.has(owner, case, region) &
+                RAStructuredArm.has(inv, f, region, dest) & RegionSlot.has(region, ordinal),
+          then: RASwitchCase(inv, f, op, ordinal, case, dest) & RAControlEdge(inv, f, block, dest) }
+    }),
+    forall(fn(inv, f, owner, block, slot, value) {
+        { when: RAStructuredActive(inv, f, owner) & Gamma(owner) &
+                RAStructuredOwnerExit.has(inv, f, owner, block) & Result(owner, slot, value),
+          then: RABinding(inv, f, block, slot, value) }
+    }),
+    forall(fn(inv, f, owner, region, arm, stub, entry, edge, slot, joined, incoming) {
+        { when: RAStructuredActive(inv, f, owner) & Gamma(owner) & OwnedRegion.has(owner, arm, region) &
+                RAStructuredArm.has(inv, f, region, stub) & RAStructuredEntry.has(inv, f, region, 0, entry) &
+                RAStructuredJump.has(inv, f, stub, entry, edge) & RegionParam(region, slot, joined) &
+                EntryValue(region, slot, incoming),
+          then: RABinding(inv, f, entry, slot, joined) & RAIncoming(inv, f, edge, entry, slot, joined, incoming) &
+                RAUse(inv, f, edge, slot, incoming) }
+    }),
+    forall(fn(inv, f, owner, region, arm, exit, block, edge, slot, joined, incoming) {
+        { when: RAStructuredActive(inv, f, owner) & Gamma(owner) & OwnedRegion.has(owner, arm, region) &
+                RAStructuredExit.has(inv, f, region, 0, exit) & RAStructuredOwnerExit.has(inv, f, owner, block) &
+                RAStructuredJump.has(inv, f, exit, block, edge) & Result(owner, slot, joined) &
+                ExitValue(region, slot, incoming),
+          then: RAIncoming(inv, f, edge, block, slot, joined, incoming) & RAUse(inv, f, edge, slot, incoming) }
+    }),
+    // Theta's test precedes both selective cones. The backedge and final edge own
+    // their corresponding uses, so feedback never demands the exit computation.
+    forall(fn(inv, f, owner, region, before, after, header, feedback, exit) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                RAStructuredOwnerEntry.has(inv, f, owner, before) &
+                RAStructuredOwnerExit.has(inv, f, owner, after) &
+                RAStructuredEntry.has(inv, f, region, 0, header) &
+                RAStructuredExit.has(inv, f, region, 1, feedback) &
+                RAStructuredExit.has(inv, f, region, 2, exit),
+          then: RAStructuredLink(inv, f, before, header) & RAStructuredLink(inv, f, feedback, header) &
+                RAStructuredLink(inv, f, exit, after) }
+    }),
+    forall(fn(inv, f, owner, region, op, block, slot, predicate, taken, fallthrough) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                RAStructuredGate.has(inv, f, owner, op) & RAStructuredExit.has(inv, f, region, 0, block) &
+                ThetaPredicate.has(owner, slot) & Yield.has(region, slot, predicate) &
+                RAStructuredEntry.has(inv, f, region, 1, taken) &
+                RAStructuredEntry.has(inv, f, region, 2, fallthrough) & ThetaContinueOn.has(owner, true),
+          then: RABranch(inv, f, op, block, predicate, taken, fallthrough) & RAUse(inv, f, op, 0, predicate) &
+                RANode(inv, f, op, "cfg.cond_br") & RAPin(inv, f, op, block) & RATerminator(inv, f, op, block) &
+                RAControlEdge(inv, f, block, taken) & RAControlEdge(inv, f, block, fallthrough) }
+    }),
+    forall(fn(inv, f, owner, region, op, block, slot, predicate, taken, fallthrough) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                RAStructuredGate.has(inv, f, owner, op) & RAStructuredExit.has(inv, f, region, 0, block) &
+                ThetaPredicate.has(owner, slot) & Yield.has(region, slot, predicate) &
+                RAStructuredEntry.has(inv, f, region, 2, taken) &
+                RAStructuredEntry.has(inv, f, region, 1, fallthrough) & ThetaContinueOn.has(owner, false),
+          then: RABranch(inv, f, op, block, predicate, taken, fallthrough) & RAUse(inv, f, op, 0, predicate) &
+                RANode(inv, f, op, "cfg.cond_br") & RAPin(inv, f, op, block) & RATerminator(inv, f, op, block) &
+                RAControlEdge(inv, f, block, taken) & RAControlEdge(inv, f, block, fallthrough) }
+    }),
+    forall(fn(inv, f, owner, region, before, header, edge, slot, joined, incoming) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                RAStructuredOwnerEntry.has(inv, f, owner, before) &
+                RAStructuredEntry.has(inv, f, region, 0, header) &
+                RAStructuredJump.has(inv, f, before, header, edge) & RegionParam(region, slot, joined) &
+                EntryValue(region, slot, incoming),
+          then: RABinding(inv, f, header, slot, joined) &
+                RAIncoming(inv, f, edge, header, slot, joined, incoming) & RAUse(inv, f, edge, slot, incoming) }
+    }),
+    forall(fn(inv, f, owner, region, feedback, header, edge, slot, joined, incoming) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                RAStructuredExit.has(inv, f, region, 1, feedback) &
+                RAStructuredEntry.has(inv, f, region, 0, header) &
+                RAStructuredJump.has(inv, f, feedback, header, edge) & RegionParam(region, slot, joined) &
+                FeedbackValue(region, slot, incoming),
+          then: RAIncoming(inv, f, edge, header, slot, joined, incoming) & RAUse(inv, f, edge, slot, incoming) }
+    }),
+    forall(fn(inv, f, owner, region, exit, after, edge, slot, joined, incoming) {
+        { when: RAStructuredActive(inv, f, owner) & ThetaBody.has(owner, region) &
+                RAStructuredExit.has(inv, f, region, 2, exit) & RAStructuredOwnerExit.has(inv, f, owner, after) &
+                RAStructuredJump.has(inv, f, exit, after, edge) & Result(owner, slot, joined) &
+                ExitValue(region, slot, incoming),
+          then: RABinding(inv, f, after, slot, joined) & RAIncoming(inv, f, edge, after, slot, joined, incoming) &
+                RAUse(inv, f, edge, slot, incoming) }
+    }),
+    // All switch destinations are frozen before mandatory placement. Equality of
+    // their demanded destination sets proves the operation runs on every arm.
+    forall(fn(inv, f, switch, block, predicate, default) {
+        { when: RASwitch(inv, f, switch, block, predicate, default),
+          then: RASwitchDestinations.has(inv, f, switch, ids_one(default)) }
+    }),
+    forall(fn(inv, f, switch, ordinal, case, dest) {
+        { when: RASwitchCase(inv, f, switch, ordinal, case, dest),
+          then: RASwitchDestinations.has(inv, f, switch, ids_one(dest)) }
+    }),
+];
+
+pub let ra_control_mandatory = [
+    forall(fn(inv, f, switch, block, predicate, default, op, kind) {
+        { when: RASwitch(inv, f, switch, block, predicate, default) & RANode(inv, f, op, kind),
+          then: RASwitchDemands.has(inv, f, switch, op, ids_empty()) }
+    }),
+    forall(fn(inv, f, switch, block, predicate, default, dest, op) {
+        { when: RASwitch(inv, f, switch, block, predicate, default) & RAControlEdge(inv, f, block, dest) &
+                RAAllPathsDemand(inv, f, op, dest),
+          then: RASwitchDemands.has(inv, f, switch, op, ids_one(dest)) }
+    }),
+    forall(fn(inv, f, switch, block, predicate, default, op, kind) {
+        { when: RASwitch(inv, f, switch, block, predicate, default) & RANode(inv, f, op, kind) &
+                RASwitchDemands.has(inv, f, switch, op, RASwitchDestinations.get(inv, f, switch)),
+          then: RAAllPathsDemand(inv, f, op, block) }
+    }),
+];
+

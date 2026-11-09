@@ -1,0 +1,45 @@
+use ::relational::*;
+
+
+// Canonical metadata installed by selected-target dialect registration.
+pub let TMDLTarget = relation<(Integer,)>("TMDLTarget");
+pub let TMDLClass = relation<(Integer, String, String, Integer, Integer, Bool)>("TMDLClass");
+pub let TMDLRegister = relation<(Integer, String, Integer)>("TMDLRegister");
+pub let TMDLRegisterWidth = relation<(Integer, String, Integer)>("TMDLRegisterWidth");
+pub let TMDLHardwiredZero = relation<(Integer, String, Integer)>("TMDLHardwiredZero");
+pub let TMDLAbiRegister = relation<(Integer, String, String, Integer)>("TMDLAbiRegister");
+pub let TMDLAbiPin = relation<(Integer, String, String, Integer, String, Integer)>("TMDLAbiPin");
+pub let TMDLAbiOverflow = relation<(Integer, String, String, String)>("TMDLAbiOverflow");
+pub let TMDLStackLayout = relation<(Integer, Integer, Integer, Integer, Bool, String)>("TMDLStackLayout");
+pub let TMDLStackLinkBytes = relation<(Integer, Integer)>("TMDLStackLinkBytes");
+pub let TMDLFixedRead = relation<(Integer, String, String, Integer)>("TMDLFixedRead");
+pub let TMDLFixedWrite = relation<(Integer, String, String, Integer)>("TMDLFixedWrite");
+pub let TMDLImplicitOrUpdate = relation<(Integer, String, String, Integer)>("TMDLImplicitOrUpdate");
+pub let TMDLFeature = relation<(Integer, String)>("TMDLFeature");
+pub let TMDLParameter = relation<(Integer, String, Integer)>("TMDLParameter");
+pub let TMDLClassDialect = relation<(Integer, String, String)>("TMDLClassDialect");
+pub let TMDLClassOrder = relation<(Integer, String, Integer)>("TMDLClassOrder");
+pub let TMDLRegisterName = relation<(Integer, String, String, Integer)>("TMDLRegisterName");
+pub let TMDLOpcode = relation<(Integer, String, String, String)>("TMDLOpcode");
+pub let TMDLOpcodeFeatureCount = relation<(Integer, String, Integer)>("TMDLOpcodeFeatureCount");
+pub let TMDLOpaqueTransferKind = relation<(Integer, String)>("TMDLOpaqueTransferKind");
+pub let TMDLOpcodeFeature = relation<(Integer, String, String)>("TMDLOpcodeFeature");
+pub let TMDLPureKind = relation<(Integer, String)>("TMDLPureKind");
+pub let TMDLInstructionSlot = relation<(Integer, String, String, Integer, String, Bool, Bool, Bool)>("TMDLInstructionSlot");
+pub let TMDLInstructionStateSlot = relation<(Integer, String, String, Integer)>("TMDLInstructionStateSlot");
+pub let TMDLInstructionSlotCount = relation<(Integer, String, String, Integer)>("TMDLInstructionSlotCount");
+pub let TMDLSlotClass = relation<(Integer, String, String, String)>("TMDLSlotClass");
+pub let TMDLRecipe = relation<(Integer, String, Integer, String, Integer, Integer, Integer, Integer, Integer)>("TMDLRecipe");
+pub let TMDLRecipeRegister = relation<(Integer, String, Integer, String, String, Integer, Integer, String)>("TMDLRecipeRegister");
+pub let TMDLRecipeExcluded = relation<(Integer, String, Integer, String, Integer)>("TMDLRecipeExcluded");
+pub let TMDLRecipeAttribute = relation<(Integer, String, Integer, String, String, Integer)>("TMDLRecipeAttribute");
+pub let TMDLRecipeOffsetFactor = relation<(Integer, String, Integer, Integer)>("TMDLRecipeOffsetFactor");
+pub let TMDLRecipeOffset = relation<(Integer, String, Integer, String, Integer, Bool, Integer, Bool)>("TMDLRecipeOffset");
+pub let TMDLRecipeZeroOffset = relation<(Integer, String, Integer)>("TMDLRecipeZeroOffset");
+pub let TMDLRecipeFeature = relation<(Integer, String, Integer, String)>("TMDLRecipeFeature");
+pub let TMDLRecipeParameter = relation<(Integer, String, Integer, String, Integer)>("TMDLRecipeParameter");
+pub let TMDLEncodingShape = relation<(Integer, String, Integer, Integer, Integer, String)>("TMDLEncodingShape");
+pub let TMDLGuard = relation<(Integer, String, Integer, String, String, String, Integer, Integer, Integer, String, String)>("TMDLGuard");
+pub let TMDLGuardChild = relation<(Integer, String, Integer, Integer, Integer)>("TMDLGuardChild");
+pub let TMDLEncodingField = relation<(Integer, String, Integer, Integer, String, String, Bool)>("TMDLEncodingField");
+pub let TMDLEncodingRange = relation<(Integer, String, Integer, Integer, Integer, Integer, String)>("TMDLEncodingRange");

@@ -1,0 +1,791 @@
+use ::relational::*;
+use ::Attr;
+use ::AttrItem;
+use ::Attribute;
+use ::DictItem;
+use ::Operand;
+use ::Result;
+use ::SymbolName;
+use ::TypeExpr;
+use ::TypeList;
+use ::ValueType;
+use ::regalloc::RANativePhysicalRead;
+use ::regalloc::RANativePhysicalWrite;
+use ::regalloc::RAValueBits;
+use ::regalloc::RAValueExcluded;
+use ::regalloc_color::RAColorValue;
+use ::regalloc_color::RAForcedRegister;
+use ::regalloc_color::RAInputPin;
+use ::regalloc_color::RAInterference;
+use ::regalloc_color::RAOutputPin;
+use ::regalloc_color::RATiedOperands;
+use ::regalloc_color::RAValueClass;
+use ::regalloc_control::RACFGSource;
+use ::regalloc_control::RAControlComplete;
+use ::regalloc_control::RADef;
+use ::regalloc_control::RAExplicitlyPinned;
+use ::regalloc_control::RAFunction;
+use ::regalloc_control::RAIds;
+use ::regalloc_control::RAIncoming;
+use ::regalloc_control::RAPin;
+use ::regalloc_control::RASource;
+use ::regalloc_control::RAUse;
+use ::tmdl_schema::TMDLAbiPin;
+use ::tmdl_schema::TMDLClass;
+use ::tmdl_schema::TMDLClassDialect;
+use ::tmdl_schema::TMDLClassOrder;
+use ::tmdl_schema::TMDLFeature;
+use ::tmdl_schema::TMDLFixedRead;
+use ::tmdl_schema::TMDLFixedWrite;
+use ::tmdl_schema::TMDLHardwiredZero;
+use ::tmdl_schema::TMDLInstructionSlot;
+use ::tmdl_schema::TMDLInstructionSlotCount;
+use ::tmdl_schema::TMDLInstructionStateSlot;
+use ::tmdl_schema::TMDLOpcode;
+use ::tmdl_schema::TMDLOpcodeFeature;
+use ::tmdl_schema::TMDLOpcodeFeatureCount;
+use ::tmdl_schema::TMDLParameter;
+use ::tmdl_schema::TMDLRecipe;
+use ::tmdl_schema::TMDLRecipeFeature;
+use ::tmdl_schema::TMDLRecipeParameter;
+use ::tmdl_schema::TMDLRegister;
+use ::tmdl_schema::TMDLRegisterName;
+use ::tmdl_schema::TMDLRegisterWidth;
+use ::tmdl_schema::TMDLSlotClass;
+
+let ids_union = primitive<(a0: RAIds, a1: RAIds) -> RAIds>("set-union");
+let max = primitive<(a0: Integer, a1: Integer) -> Integer>("max");
+let min = primitive<(a0: Integer, a1: Integer) -> Integer>("min");
+let ids_empty = primitive<() -> RAIds>("set-empty");
+let ids_one = primitive<(a0: Integer) -> RAIds>("set-of");
+let hex_i64 = primitive<(a0: String) -> Integer>("hex-i64");
+let ids_not_contains = predicate<(RAIds, Integer)>("set-not-contains");
+let ids_contains = predicate<(RAIds, Integer)>("set-contains");
+let ids_length = primitive<(a0: RAIds) -> Integer>("set-length");
+let features_union = primitive<(a0: RAFeatureNames, a1: RAFeatureNames) -> RAFeatureNames>("set-union");
+let features_empty = primitive<() -> RAFeatureNames>("set-empty");
+let features_one = primitive<(a0: String) -> RAFeatureNames>("set-of");
+let features_length = primitive<(a0: RAFeatureNames) -> Integer>("set-length");
+let names_union = primitive<(a0: RANativeNames, a1: RANativeNames) -> RANativeNames>("set-union");
+let names_empty = primitive<() -> RANativeNames>("set-empty");
+let names_one = primitive<(a0: String) -> RANativeNames>("set-of");
+let names_not_contains = predicate<(RANativeNames, String)>("set-not-contains");
+let make_Apply = constructor(TypeExpr::Apply);
+let make_Ctor = constructor(TypeExpr::Ctor);
+let make_TNil = constructor(TypeList::TNil);
+let make_ListAttr = constructor(Attr::ListAttr);
+let make_IntegerAttr = constructor(Attr::IntegerAttr);
+let make_DictAttr = constructor(Attr::DictAttr);
+let make_PhysicalRegisterAttr = constructor(Attr::PhysicalRegisterAttr);
+let make_AssignedRegisterAttr = constructor(Attr::AssignedRegisterAttr);
+let make_TCons = constructor(TypeList::TCons);
+let make_SymbolParam = constructor(TypeExpr::SymbolParam);
+
+// Install after regalloc-control and regalloc-color. Saturate each phase in order:
+// ra-bind-index, ra-bind-count, ra-bind-slots, ra-bind-require, ra-bind-domain, ra-bind-check, ra-bind-complete.
+// Target rows and the imported source revision remain frozen throughout.
+
+// direction, schema index, field name, optional, variadic, control
+pub let RAFixedSlot = relation<(Integer, String, String, String, String, Integer)>("RAFixedSlot");
+
+// guard kind, operand names, numeric parameters, exact 128-bit pattern, comparison
+pub let RANativePhysicalFields = table<(Integer, Integer, Integer, String), RAIds>("RANativePhysicalFields", merge(fn(old, new) { ids_union(old, new) }));
+pub let RANativeControlled = table<(Integer, Integer), RAIds>("RANativeControlled", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAHardwiredIndices = table<(Integer, String), RAIds>("RAHardwiredIndices", merge(fn(old, new) { ids_union(old, new) }));
+pub let RANativeControlType = relation<(TypeExpr,)>("RANativeControlType");
+pub let RANativeCount = table<(Integer, Integer, Integer, String), Integer>("RANativeCount", merge(fn(old, new) { max(old, new) }));
+pub let RASegmentedOps = table<(Integer, Integer, String), RAIds>("RASegmentedOps", merge(fn(old, new) { ids_union(old, new) }));
+pub let RASegmentCount = table<(Integer, Integer, Integer, String), Integer>("RASegmentCount", merge(fn(old, new) { max(old, new) }));
+pub let RANativeStateValues = table<(Integer, Integer), RAIds>("RANativeStateValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RANativeRead = relation<(Integer, Integer, Integer, String, Integer, Integer)>("RANativeRead");
+pub let RANativeValidShape = table<(Integer, Integer, Integer), RAIds>("RANativeValidShape", merge(fn(old, new) { ids_union(old, new) }));
+pub let RANativeBoundSlots = table<(Integer, Integer, Integer, String), RAIds>("RANativeBoundSlots", merge(fn(old, new) { ids_union(old, new) }));
+pub let RANativeSegment = relation<(Integer, Integer, Integer, String, Integer, Integer)>("RANativeSegment");
+pub let RAFieldStart = relation<(Integer, Integer, Integer, String, Integer, Integer)>("RAFieldStart");
+
+// The slot's final index addresses the actual compressed Operand/Result table.
+pub let RANativeSlot = relation<(Integer, Integer, Integer, String, String, Integer, Integer)>("RANativeSlot");
+pub let RAHardwareSlot = relation<(Integer, Integer, Integer, String, String, Integer, Integer, String)>("RAHardwareSlot");
+pub let RAValueRequirement = relation<(Integer, Integer, Integer, String)>("RAValueRequirement");
+pub let RAValueClassOrder = table<(Integer, Integer, Integer), Integer>("RAValueClassOrder", merge(fn(old, new) { min(old, new) }));
+pub let RARequirementIndices = table<(Integer, String), RAIds>("RARequirementIndices", merge(fn(old, new) { ids_union(old, new) }));
+pub let RABindingErrors = table<(Integer, Integer), RAIds>("RABindingErrors", merge(fn(old, new) { ids_union(old, new) }));
+pub let RABindingError = relation<(Integer, Integer, Integer, String)>("RABindingError");
+pub let RABindingsComplete = relation<(Integer, Integer)>("RABindingsComplete");
+pub extern type RAFeatureNames = Type;
+pub let ra_feature_names_sort = container<RAFeatureNames, Set<String>>();
+
+pub let RARecipeMatchedParameters = table<(Integer, String, Integer), RAFeatureNames>("RARecipeMatchedParameters", merge(fn(old, new) { features_union(old, new) }));
+pub let RARecipeFeatureEligible = relation<(Integer, String, Integer)>("RARecipeFeatureEligible");
+pub let RARecipeProfileEligible = relation<(Integer, String, Integer)>("RARecipeProfileEligible");
+pub let RANativeClassifiedValues = table<(Integer, Integer), RAIds>("RANativeClassifiedValues", merge(fn(old, new) { ids_union(old, new) }));
+pub extern type RANativeNames = Type;
+pub let ra_native_names_sort = container<RANativeNames, Set<String>>();
+
+pub let RANativeKnownClasses = table<Integer, RANativeNames>("RANativeKnownClasses", merge(fn(old, new) { names_union(old, new) }));
+pub let RANativeKnownPinNames = table<(Integer, Integer, Integer), RANativeNames>("RANativeKnownPinNames", merge(fn(old, new) { names_union(old, new) }));
+pub let RANativeValidPinNames = table<(Integer, Integer, Integer), RANativeNames>("RANativeValidPinNames", merge(fn(old, new) { names_union(old, new) }));
+pub let RANativePinDictionaries = table<(Integer, Integer), RAIds>("RANativePinDictionaries", merge(fn(old, new) { ids_union(old, new) }));
+pub let RANativeAssignmentLists = table<(Integer, Integer), RAIds>("RANativeAssignmentLists", merge(fn(old, new) { ids_union(old, new) }));
+pub let RANativeAssignmentEntries = table<(Integer, Integer), RAIds>("RANativeAssignmentEntries", merge(fn(old, new) { ids_union(old, new) }));
+pub let RAEligibleOpcodes = table<Integer, RANativeNames>("RAEligibleOpcodes", merge(fn(old, new) { names_union(old, new) }));
+
+// A branch or a passthrough return can have no native register slot to impose
+// a class. Resolve those values only after native view propagation completes.
+pub let RARequiredValues = table<(Integer, Integer), RAIds>("RARequiredValues", merge(fn(old, new) { ids_union(old, new) }));
+pub let RALogicalValue = relation<(Integer, Integer, Integer)>("RALogicalValue");
+pub let ra_bind_index = [
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RANativeControlType(make_Apply(make_Ctor("son.control"), make_TNil())) &
+                RASegmentedOps.has(inv, f, "in", ids_empty()) & RASegmentedOps.has(inv, f, "out", ids_empty()) &
+                RANativeStateValues.has(inv, f, ids_empty()) & RANativeControlled.has(inv, f, ids_empty()) &
+                RABindingErrors.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, op, kind, local, dialect) {
+        { when: RASource(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect),
+          then: RANativeCount.has(inv, f, op, "in", 0) & RANativeCount.has(inv, f, op, "out", 0) &
+                RASegmentCount.has(inv, f, op, "in", 0) & RASegmentCount.has(inv, f, op, "out", 0) &
+                RANativeValidShape.has(inv, f, op, ids_empty()) &
+                RANativeBoundSlots.has(inv, f, op, "in", ids_empty()) &
+                RANativeBoundSlots.has(inv, f, op, "out", ids_empty()) &
+                RANativePhysicalFields.has(inv, f, op, "in", ids_empty()) &
+                RANativePhysicalFields.has(inv, f, op, "out", ids_empty()) }
+    }),
+    forall(fn(inv, f, op, kind, value, slot) {
+        { when: RASource(inv, f, op, kind) & Operand.has(op, slot, value),
+          then: RANativeRead(inv, f, op, "in", slot, value) }
+    }),
+    forall(fn(inv, f, op, kind, slot, value) {
+        { when: RASource(inv, f, op, kind) & Result(op, slot, value),
+          then: RANativeRead(inv, f, op, "out", slot, value) }
+    }),
+    forall(fn(inv, f, op, kind, xs) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "operand_segment_sizes", make_ListAttr(xs)),
+          then: RASegmentedOps.has(inv, f, "in", ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, kind, xs) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "result_segment_sizes", make_ListAttr(xs)),
+          then: RASegmentedOps.has(inv, f, "out", ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, kind, xs, slot, ty, bits, hex, size) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "operand_segment_sizes", make_ListAttr(xs)) &
+                AttrItem(xs, slot, make_IntegerAttr(ty, bits, hex)) & (size == hex_i64(hex)),
+          then: RANativeSegment(inv, f, op, "in", slot, size) & RASegmentCount.has(inv, f, op, "in", (slot + 1)) }
+    }),
+    forall(fn(inv, f, op, kind, xs, slot, ty, bits, hex, size) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "result_segment_sizes", make_ListAttr(xs)) &
+                AttrItem(xs, slot, make_IntegerAttr(ty, bits, hex)) & (size == hex_i64(hex)),
+          then: RANativeSegment(inv, f, op, "out", slot, size) &
+                RASegmentCount.has(inv, f, op, "out", (slot + 1)) }
+    }),
+    // Fixed SSA roles use the generator's canonical read name and write _def suffix.
+    forall(fn(inv, kind, class, index, name, slot, optional, variadic) {
+        { when: TMDLFixedRead(inv, kind, class, index) & TMDLRegisterName(inv, class, name, index) &
+                TMDLInstructionSlot(inv, kind, "in", slot, name, optional, variadic, false),
+          then: RAFixedSlot(inv, kind, "in", name, class, index) & TMDLSlotClass(inv, kind, name, class) }
+    }),
+    forall(fn(inv, kind, class, index, name, field, slot, optional, variadic) {
+        { when: TMDLFixedWrite(inv, kind, class, index) & TMDLRegisterName(inv, class, name, index) &
+                (field == (name + "_def")) &
+                TMDLInstructionSlot(inv, kind, "out", slot, field, optional, variadic, false),
+          then: RAFixedSlot(inv, kind, "out", field, class, index) & TMDLSlotClass(inv, kind, field, class) }
+    }),
+    forall(fn(inv, class, file, group, offset, merge) {
+        { when: TMDLClass(inv, class, file, group, offset, merge),
+          then: RARequirementIndices.has(inv, class, ids_empty()) &
+                RAHardwiredIndices.has(inv, class, ids_empty()) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLRegister(inv, class, index),
+          then: RARequirementIndices.has(inv, class, ids_one(index)) }
+    }),
+    forall(fn(inv, f, region, value, args) {
+        { when: RAFunction(inv, f, region) & ValueType.has(value, make_Apply(make_Ctor("builtin.state"), args)),
+          then: RANativeStateValues.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, class, index) {
+        { when: TMDLHardwiredZero(inv, class, index),
+          then: RAHardwiredIndices.has(inv, class, ids_one(index)) }
+    }),
+    forall(fn(inv, f, op, kind, control, slot) {
+        { when: RASource(inv, f, op, kind) & Operand.has(op, slot, control) &
+                ValueType.has(control, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RANativeControlled.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, block, point) {
+        { when: RACFGSource(inv, f, op, block, point),
+          then: RANativeControlled.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, kind, recipe, transfer, width, address, align, features, parameters) {
+        { when: TMDLRecipe(inv, kind, recipe, transfer, width, address, align, features, parameters),
+          then: RARecipeMatchedParameters.has(inv, kind, recipe, features_empty()) }
+    }),
+    forall(fn(inv, kind, recipe, transfer, width, address, align, parameters) {
+        { when: TMDLRecipe(inv, kind, recipe, transfer, width, address, align, 0, parameters),
+          then: RARecipeFeatureEligible(inv, kind, recipe) }
+    }),
+    forall(fn(inv, kind, recipe, feature) {
+        { when: TMDLRecipeFeature(inv, kind, recipe, feature) & TMDLFeature(inv, feature),
+          then: RARecipeFeatureEligible(inv, kind, recipe) }
+    }),
+    forall(fn(inv, kind, recipe, parameter, value) {
+        { when: TMDLRecipeParameter(inv, kind, recipe, parameter, value) & TMDLParameter(inv, parameter, value),
+          then: RARecipeMatchedParameters.has(inv, kind, recipe, features_one(parameter)) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RANativeClassifiedValues.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RANativeKnownClasses.has(inv, names_empty()) & RANativePinDictionaries.has(inv, f, ids_empty()) &
+                RANativeAssignmentLists.has(inv, f, ids_empty()) &
+                RANativeAssignmentEntries.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, class, file, width, offset, merge) {
+        { when: TMDLClass(inv, class, file, width, offset, merge),
+          then: RANativeKnownClasses.has(inv, names_one(class)) }
+    }),
+    forall(fn(inv, f, op, kind) {
+        { when: RASource(inv, f, op, kind),
+          then: RANativeKnownPinNames.has(inv, f, op, names_empty()) &
+                RANativeValidPinNames.has(inv, f, op, names_empty()) }
+    }),
+    forall(fn(inv, f, op, kind, pins) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "pins", make_DictAttr(pins)),
+          then: RANativePinDictionaries.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, region, entries) {
+        { when: RAFunction(inv, f, region) & Attribute.has(f, "assignment", make_ListAttr(entries)),
+          then: RANativeAssignmentLists.has(inv, f, ids_one(f)) }
+    }),
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RAEligibleOpcodes.has(inv, names_empty()) }
+    }),
+    forall(fn(inv, kind) {
+        { when: TMDLOpcodeFeatureCount(inv, kind, 0),
+          then: RAEligibleOpcodes.has(inv, names_one(kind)) }
+    }),
+    forall(fn(inv, kind, feature) {
+        { when: TMDLOpcodeFeature(inv, kind, feature) & TMDLFeature(inv, feature),
+          then: RAEligibleOpcodes.has(inv, names_one(kind)) }
+    }),
+];
+
+pub let ra_bind_slots = [
+    forall(fn(inv, f, op, kind, local, dialect, direction, count) {
+        { when: RASource(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                TMDLInstructionSlotCount(inv, kind, direction, count),
+          then: RAFieldStart(inv, f, op, direction, 0, 0) }
+    }),
+    forall(fn(inv, f, op, direction, field, start, size, kind, name, optional, variadic, control) {
+        { when: RAFieldStart(inv, f, op, direction, field, start) &
+                RANativeSegment(inv, f, op, direction, field, size) & (size >= 0) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, control),
+          then: RAFieldStart(inv, f, op, direction, (field + 1), (start + size)) }
+    }),
+    // Without segments native optional slots use the existing prefix convention.
+    forall(fn(inv, f, op, direction, field, start, kind, name, optional, control, value) {
+        { when: RAFieldStart(inv, f, op, direction, field, start) &
+                ids_not_contains(RASegmentedOps.get(inv, f, direction), op) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, false, control) &
+                RANativeRead(inv, f, op, direction, start, value) &
+                ids_not_contains(RANativeStateValues.get(inv, f), value),
+          then: RANativeSegment(inv, f, op, direction, field, 1) }
+    }),
+    forall(fn(inv, f, op, direction, field, start, kind, name, control) {
+        { when: RAFieldStart(inv, f, op, direction, field, start) &
+                ids_not_contains(RASegmentedOps.get(inv, f, direction), op) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, true, false, control) &
+                (start >= RANativeCount.get(inv, f, op, direction)),
+          then: RANativeSegment(inv, f, op, direction, field, 0) }
+    }),
+    forall(fn(inv, f, op, direction, field, start, kind, name, control, value) {
+        { when: RAFieldStart(inv, f, op, direction, field, start) &
+                ids_not_contains(RASegmentedOps.get(inv, f, direction), op) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, true, false, control) &
+                RANativeRead(inv, f, op, direction, start, value) &
+                ids_contains(RANativeStateValues.get(inv, f), value),
+          then: RANativeSegment(inv, f, op, direction, field, 0) }
+    }),
+    forall(fn(inv, f, op, direction, field, start, kind, count) {
+        { when: RAFieldStart(inv, f, op, direction, field, start) &
+                ids_not_contains(RASegmentedOps.get(inv, f, direction), op) & RASource(inv, f, op, kind) &
+                TMDLInstructionStateSlot(inv, kind, direction, field) &
+                RANativeCount.has(inv, f, op, direction, count) & (count >= start),
+          then: RANativeSegment(inv, f, op, direction, field, (count - start)) }
+    }),
+    forall(fn(inv, f, op, field, start, size, kind, name, optional, variadic, control, actual, value) {
+        { when: RAFieldStart(inv, f, op, "in", field, start) & RANativeSegment(inv, f, op, "in", field, size) &
+                RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, "in", field, name, optional, variadic, control) &
+                RANativeRead(inv, f, op, "in", actual, value) & (actual >= start) & (actual < (start + size)),
+          then: RANativeSlot(inv, f, op, "in", name, actual, value) }
+    }),
+    forall(fn(inv, f, op, field, start, size, kind, name, optional, variadic, control, actual, value) {
+        { when: RAFieldStart(inv, f, op, "out", field, start) & RANativeSegment(inv, f, op, "out", field, size) &
+                RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, "out", field, name, optional, variadic, control) &
+                RANativeRead(inv, f, op, "out", actual, value) & (actual >= start) & (actual < (start + size)),
+          then: RANativeSlot(inv, f, op, "out", name, actual, value) }
+    }),
+    forall(fn(inv, kind, recipe, transfer, width, address, align, features, parameters) {
+        { when: TMDLRecipe(inv, kind, recipe, transfer, width, address, align, features, parameters) &
+                RARecipeFeatureEligible(inv, kind, recipe) &
+                (parameters == features_length(RARecipeMatchedParameters.get(inv, kind, recipe))),
+          then: RARecipeProfileEligible(inv, kind, recipe) }
+    }),
+];
+
+pub let ra_bind_count = [
+    forall(fn(inv, f, op, direction, actual, value) {
+        { when: RANativeRead(inv, f, op, direction, actual, value),
+          then: RANativeCount.has(inv, f, op, direction, (actual + 1)) }
+    }),
+];
+
+pub let ra_bind_require = [
+    forall(fn(inv, f, op, direction, name, slot, value, kind, class, ty) {
+        { when: RANativeSlot(inv, f, op, direction, name, slot, value) & RASource(inv, f, op, kind) &
+                TMDLSlotClass(inv, kind, name, class) & ValueType.has(value, ty) &
+                ids_not_contains(RANativeStateValues.get(inv, f), value) &
+                (ty != make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RAHardwareSlot(inv, f, op, direction, name, slot, value, class) &
+                RAValueRequirement(inv, f, value, class) }
+    }),
+    forall(fn(inv, f, edge, block, slot, joined, incoming, class) {
+        { when: RAIncoming(inv, f, edge, block, slot, joined, incoming) &
+                RAValueRequirement(inv, f, joined, class),
+          then: RAValueRequirement(inv, f, incoming, class) }
+    }),
+    forall(fn(inv, f, edge, block, slot, joined, incoming, class) {
+        { when: RAIncoming(inv, f, edge, block, slot, joined, incoming) &
+                RAValueRequirement(inv, f, incoming, class),
+          then: RAValueRequirement(inv, f, joined, class) }
+    }),
+    forall(fn(inv, f, value, class, bits) {
+        { when: RAValueRequirement(inv, f, value, class) & TMDLRegisterWidth(inv, class, bits),
+          then: RAValueBits.has(inv, f, value, bits) }
+    }),
+    forall(fn(inv, f, op, name, slot, input, class, resultSlot, result, outClass) {
+        { when: RAHardwareSlot(inv, f, op, "in", name, slot, input, class) &
+                RAHardwareSlot(inv, f, op, "out", name, resultSlot, result, outClass),
+          then: RATiedOperands(inv, f, op, slot, result) }
+    }),
+    forall(fn(inv, f, op, name, slot, value, class, pins, target, pinned, index) {
+        { when: RAHardwareSlot(inv, f, op, "in", name, slot, value, class) &
+                Attribute.has(op, "pins", make_DictAttr(pins)) &
+                DictItem(pins, name, make_PhysicalRegisterAttr(target, pinned, index)),
+          then: RAInputPin(inv, f, op, slot, value, pinned, index) }
+    }),
+    forall(fn(inv, f, op, name, slot, value, class, pins, target, pinned, index) {
+        { when: RAHardwareSlot(inv, f, op, "out", name, slot, value, class) &
+                Attribute.has(op, "pins", make_DictAttr(pins)) &
+                DictItem(pins, name, make_PhysicalRegisterAttr(target, pinned, index)),
+          then: RAOutputPin(inv, f, op, value, pinned, index) }
+    }),
+    forall(fn(inv, f, op, name, slot, value, class, kind, fixed, index) {
+        { when: RAHardwareSlot(inv, f, op, "in", name, slot, value, class) & RASource(inv, f, op, kind) &
+                RAFixedSlot(inv, kind, "in", name, fixed, index),
+          then: RAInputPin(inv, f, op, slot, value, fixed, index) }
+    }),
+    forall(fn(inv, f, op, name, slot, value, class, kind, fixed, index) {
+        { when: RAHardwareSlot(inv, f, op, "out", name, slot, value, class) & RASource(inv, f, op, kind) &
+                RAFixedSlot(inv, kind, "out", name, fixed, index),
+          then: RAOutputPin(inv, f, op, value, fixed, index) }
+    }),
+    forall(fn(inv, f, region, entries, slot, value, target, class, index) {
+        { when: RAFunction(inv, f, region) & Attribute.has(f, "assignment", make_ListAttr(entries)) &
+                AttrItem(entries, slot, make_AssignedRegisterAttr(value, target, class, index)),
+          then: RAForcedRegister(inv, f, value, class, index) }
+    }),
+    forall(fn(inv, f, op, direction, name, slot, value, class) {
+        { when: RAHardwareSlot(inv, f, op, direction, name, slot, value, class),
+          then: RANativeBoundSlots.has(inv, f, op, direction, ids_one(slot)) }
+    }),
+    forall(fn(inv, f, op, direction, name, slot, value, kind, field, optional, variadic) {
+        { when: RANativeSlot(inv, f, op, direction, name, slot, value) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, true) &
+                ValueType.has(value, make_Apply(make_Ctor("son.control"), make_TNil())),
+          then: RANativeBoundSlots.has(inv, f, op, direction, ids_one(slot)) }
+    }),
+    forall(fn(inv, f, op, direction, name, slot, value, kind, field, optional, variadic, control) {
+        { when: RANativeSlot(inv, f, op, direction, name, slot, value) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, control) &
+                TMDLInstructionStateSlot(inv, kind, direction, field) &
+                ids_contains(RANativeStateValues.get(inv, f), value),
+          then: RANativeBoundSlots.has(inv, f, op, direction, ids_one(slot)) }
+    }),
+    forall(fn(inv, f, op, kind, local, dialect, count, total) {
+        { when: RASource(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                TMDLInstructionSlotCount(inv, kind, "in", count) & RAFieldStart(inv, f, op, "in", count, total) &
+                RANativeCount.has(inv, f, op, "in", total),
+          then: RANativeValidShape.has(inv, f, op, ids_one(0)) }
+    }),
+    forall(fn(inv, f, op, kind, local, dialect, count, total) {
+        { when: RASource(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                TMDLInstructionSlotCount(inv, kind, "out", count) &
+                RAFieldStart(inv, f, op, "out", count, total) & RANativeCount.has(inv, f, op, "out", total),
+          then: RANativeValidShape.has(inv, f, op, ids_one(1)) }
+    }),
+    forall(fn(inv, f, op, kind, direction, field, name, optional, variadic, required, target, class, index) {
+        { when: RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, false) &
+                RANativeSegment(inv, f, op, direction, field, 0) & TMDLSlotClass(inv, kind, name, required) &
+                Attribute.has(op, name, make_PhysicalRegisterAttr(target, class, index)),
+          then: RANativePhysicalFields.has(inv, f, op, direction, ids_one(field)) }
+    }),
+    forall(fn(inv, f, op, kind, direction, field, name, optional, variadic, class, index) {
+        { when: RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, false) &
+                RANativeSegment(inv, f, op, direction, field, 0) &
+                RAFixedSlot(inv, kind, direction, name, class, index),
+          then: RANativePhysicalFields.has(inv, f, op, direction, ids_one(field)) }
+    }),
+    forall(fn(inv, f, op, kind, field, name, optional, variadic, target, class, index) {
+        { when: RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, "in", field, name, optional, variadic, false) &
+                RANativeSegment(inv, f, op, "in", field, 0) &
+                Attribute.has(op, name, make_PhysicalRegisterAttr(target, class, index)),
+          then: RANativePhysicalRead(inv, f, op, class, index) }
+    }),
+    forall(fn(inv, f, op, kind, field, name, optional, variadic, target, class, index) {
+        { when: RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, "out", field, name, optional, variadic, false) &
+                RANativeSegment(inv, f, op, "out", field, 0) &
+                Attribute.has(op, name, make_PhysicalRegisterAttr(target, class, index)),
+          then: RANativePhysicalWrite(inv, f, op, class, index) }
+    }),
+    // Native physical attributes constrain the named SSA slot as well as pins.
+    forall(fn(inv, f, op, name, slot, value, required, target, class, index) {
+        { when: RAHardwareSlot(inv, f, op, "in", name, slot, value, required) &
+                Attribute.has(op, name, make_PhysicalRegisterAttr(target, class, index)),
+          then: RAInputPin(inv, f, op, slot, value, class, index) }
+    }),
+    forall(fn(inv, f, op, name, slot, value, required, target, class, index) {
+        { when: RAHardwareSlot(inv, f, op, "out", name, slot, value, required) &
+                Attribute.has(op, name, make_PhysicalRegisterAttr(target, class, index)),
+          then: RAOutputPin(inv, f, op, value, class, index) }
+    }),
+    forall(fn(inv, f, value, required, target, name, dialect, class) {
+        { when: RAValueRequirement(inv, f, value, required) &
+                ValueType.has(
+                    value,
+                    make_Apply(
+                        make_Ctor("backend.reg"),
+                        make_TCons(make_SymbolParam(target), make_TCons(make_SymbolParam(name), make_TNil()))
+                    )
+                ) &
+                SymbolName.has(target, dialect) & SymbolName.has(name, class) &
+                TMDLClassDialect(inv, class, dialect),
+          then: RAValueRequirement(inv, f, value, class) }
+    }),
+    forall(fn(inv, f, op, direction, name, slot, value, class) {
+        { when: RAHardwareSlot(inv, f, op, direction, name, slot, value, class),
+          then: RANativeKnownPinNames.has(inv, f, op, names_one(name)) }
+    }),
+    forall(fn(inv, f, op, kind, pins, name, target, class, index) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "pins", make_DictAttr(pins)) &
+                DictItem(pins, name, make_PhysicalRegisterAttr(target, class, index)) &
+                TMDLClassDialect(inv, class, target) & TMDLRegister(inv, class, index),
+          then: RANativeValidPinNames.has(inv, f, op, names_one(name)) }
+    }),
+    forall(fn(inv, f, region, entries, slot, value, target, class, index) {
+        { when: RAFunction(inv, f, region) & Attribute.has(f, "assignment", make_ListAttr(entries)) &
+                AttrItem(entries, slot, make_AssignedRegisterAttr(value, target, class, index)) &
+                TMDLClassDialect(inv, class, target) & TMDLRegister(inv, class, index),
+          then: RANativeAssignmentEntries.has(inv, f, ids_one(slot)) }
+    }),
+];
+
+pub let ra_bind_domain = [
+    forall(fn(inv, f, value, class, bits, order) {
+        { when: RAValueRequirement(inv, f, value, class) & RAValueBits.has(inv, f, value, bits) &
+                TMDLRegisterWidth(inv, class, bits) & TMDLClassOrder(inv, class, order),
+          then: RAValueClassOrder.has(inv, f, value, order) }
+    }),
+    forall(fn(inv, f, value, class, order) {
+        { when: RAValueRequirement(inv, f, value, class) & TMDLClassOrder(inv, class, order) &
+                RAValueClassOrder.has(inv, f, value, order),
+          then: RAValueClass(inv, f, value, class) }
+    }),
+    forall(fn(inv, f, value, class, index, required) {
+        { when: RAValueClass(inv, f, value, class) & TMDLRegister(inv, class, index) &
+                RAValueRequirement(inv, f, value, required) &
+                ids_not_contains(RARequirementIndices.get(inv, required), index),
+          then: RAValueExcluded(inv, f, value, class, index) }
+    }),
+    forall(fn(inv, f, value, class) {
+        { when: RAValueClass(inv, f, value, class),
+          then: RANativeClassifiedValues.has(inv, f, ids_one(value)) }
+    }),
+];
+
+pub let ra_bind_check = [
+    forall(fn(inv, f, entity, message) {
+        { when: RABindingError(inv, f, entity, message),
+          then: RABindingErrors.has(inv, f, ids_one(entity)) }
+    }),
+    forall(fn(inv, f, op, kind, local, dialect, direction, count) {
+        { when: RASource(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                TMDLInstructionSlotCount(inv, kind, direction, count) &
+                ids_contains(RASegmentedOps.get(inv, f, direction), op) &
+                (count != RASegmentCount.get(inv, f, op, direction)),
+          then: RABindingError(inv, f, op, "malformed native segment list") }
+    }),
+    forall(fn(inv, f, op, kind, local, dialect, direction, count, total) {
+        { when: RASource(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                TMDLInstructionSlotCount(inv, kind, direction, count) &
+                RAFieldStart(inv, f, op, direction, count, total) &
+                (total != RANativeCount.get(inv, f, op, direction)),
+          then: RABindingError(inv, f, op, "native segment total differs from actual slots") }
+    }),
+    forall(fn(inv, f, op, kind, direction, field, name, optional, control, size) {
+        { when: RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, false, control) &
+                RANativeSegment(inv, f, op, direction, field, size) & (size != 1) & (size != 0),
+          then: RABindingError(inv, f, op, "native scalar segment has multiple values") }
+    }),
+    forall(fn(inv, f, op, kind, direction, field, name, control) {
+        { when: RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, false, false, control) &
+                RANativeSegment(inv, f, op, direction, field, 0),
+          then: RABindingError(inv, f, op, "missing required native slot") }
+    }),
+    forall(fn(inv, f, value, first, second, firstFile, firstGroup, firstOffset, firstMerge, secondFile,
+        secondGroup, secondOffset, secondMerge) {
+        { when: RAValueRequirement(inv, f, value, first) & RAValueRequirement(inv, f, value, second) &
+                TMDLClass(inv, first, firstFile, firstGroup, firstOffset, firstMerge) &
+                TMDLClass(inv, second, secondFile, secondGroup, secondOffset, secondMerge) &
+                (firstFile != secondFile),
+          then: RABindingError(inv, f, value, "value requires different physical register files") }
+    }),
+    forall(fn(inv, f, value, first, second, file, firstGroup, firstOffset, firstMerge, secondGroup, secondOffset,
+        secondMerge) {
+        { when: RAValueRequirement(inv, f, value, first) & RAValueRequirement(inv, f, value, second) &
+                TMDLClass(inv, first, file, firstGroup, firstOffset, firstMerge) &
+                TMDLClass(inv, second, file, secondGroup, secondOffset, secondMerge) &
+                (firstOffset != secondOffset),
+          then: RABindingError(inv, f, value, "value requires different register view offsets") }
+    }),
+    forall(fn(inv, f, value, first, second, file, firstGroup, offset, firstMerge, secondGroup, secondMerge) {
+        { when: RAValueRequirement(inv, f, value, first) & RAValueRequirement(inv, f, value, second) &
+                TMDLClass(inv, first, file, firstGroup, offset, firstMerge) &
+                TMDLClass(inv, second, file, secondGroup, offset, secondMerge) & (firstGroup != secondGroup),
+          then: RABindingError(inv, f, value, "value requires different register group widths") }
+    }),
+    forall(fn(inv, f, op, direction, name, slot, value, kind, field, optional, variadic, control) {
+        { when: RANativeSlot(inv, f, op, direction, name, slot, value) & RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, control) &
+                TMDLInstructionStateSlot(inv, kind, direction, field) &
+                ids_not_contains(RANativeStateValues.get(inv, f), value),
+          then: RABindingError(inv, f, op, "native state slot contains a non-state value") }
+    }),
+    forall(fn(inv, f, op, direction, name, slot, value, class, pins, target, pinned, index, expected) {
+        { when: RAHardwareSlot(inv, f, op, direction, name, slot, value, class) &
+                Attribute.has(op, "pins", make_DictAttr(pins)) &
+                DictItem(pins, name, make_PhysicalRegisterAttr(target, pinned, index)) &
+                TMDLClassDialect(inv, pinned, expected) & (target != expected),
+          then: RABindingError(inv, f, op, "slot pin names a different target") }
+    }),
+    forall(fn(inv, f, op, direction, actual, value, kind, local, dialect) {
+        { when: RANativeRead(inv, f, op, direction, actual, value) & RASource(inv, f, op, kind) &
+                TMDLOpcode(inv, kind, local, dialect) &
+                ids_not_contains(RANativeBoundSlots.get(inv, f, op, direction), actual),
+          then: RABindingError(inv, f, op, "native slot has no matching control, state, or register class") }
+    }),
+    forall(fn(inv, f, op, kind, local, dialect) {
+        { when: RASource(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                (ids_length(RANativeValidShape.get(inv, f, op)) != 2),
+          then: RABindingError(inv, f, op, "native operand or result grouping is incomplete") }
+    }),
+    forall(fn(inv, f, op, kind, direction, field, name, optional, variadic, class) {
+        { when: RASource(inv, f, op, kind) &
+                TMDLInstructionSlot(inv, kind, direction, field, name, optional, variadic, false) &
+                RANativeSegment(inv, f, op, direction, field, 0) & TMDLSlotClass(inv, kind, name, class) &
+                ids_not_contains(RANativePhysicalFields.get(inv, f, op, direction), field),
+          then: RABindingError(inv, f, op, "omitted native register slot has no physical binding") }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativePhysicalRead(inv, f, op, class, index) &
+                ids_not_contains(RAHardwiredIndices.get(inv, class), index) &
+                ids_not_contains(RANativeControlled.get(inv, f), op),
+          then: RABindingError(inv, f, op, "physical register read requires explicit control") }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativePhysicalWrite(inv, f, op, class, index) &
+                ids_not_contains(RAHardwiredIndices.get(inv, class), index) &
+                ids_not_contains(RANativeControlled.get(inv, f), op),
+          then: RABindingError(inv, f, op, "physical register write requires explicit control") }
+    }),
+    forall(fn(inv, f, op, direction, name, slot, value, required, target, class, index, expected) {
+        { when: RAHardwareSlot(inv, f, op, direction, name, slot, value, required) &
+                Attribute.has(op, name, make_PhysicalRegisterAttr(target, class, index)) &
+                TMDLClassDialect(inv, class, expected) & (target != expected),
+          then: RABindingError(inv, f, op, "native physical attribute names a different target") }
+    }),
+    forall(fn(inv, f, op, slot, value, ty) {
+        { when: RAUse(inv, f, op, slot, value) & ids_not_contains(RANativeStateValues.get(inv, f), value) &
+                ValueType.has(value, ty) & (ty != make_Apply(make_Ctor("son.control"), make_TNil())) &
+                ids_not_contains(RANativeClassifiedValues.get(inv, f), value),
+          then: RABindingError(inv, f, value, "hardware value has no target register domain") }
+    }),
+    forall(fn(inv, f, op, value, ty) {
+        { when: RADef(inv, f, op, value) & ids_not_contains(RANativeStateValues.get(inv, f), value) &
+                ValueType.has(value, ty) & (ty != make_Apply(make_Ctor("son.control"), make_TNil())) &
+                ids_not_contains(RANativeClassifiedValues.get(inv, f), value),
+          then: RABindingError(inv, f, value, "hardware definition has no target register domain") }
+    }),
+    forall(fn(inv, f, op, kind, pins) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "pins", pins) &
+                ids_not_contains(RANativePinDictionaries.get(inv, f), op),
+          then: RABindingError(inv, f, op, "pins attribute is not a dictionary") }
+    }),
+    forall(fn(inv, f, op, kind, pins, name, attr) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "pins", make_DictAttr(pins)) &
+                DictItem(pins, name, attr) & names_not_contains(RANativeKnownPinNames.get(inv, f, op), name),
+          then: RABindingError(inv, f, op, "pin does not name a present hardware slot") }
+    }),
+    forall(fn(inv, f, op, kind, pins, name, attr) {
+        { when: RASource(inv, f, op, kind) & Attribute.has(op, "pins", make_DictAttr(pins)) &
+                DictItem(pins, name, attr) & names_not_contains(RANativeValidPinNames.get(inv, f, op), name),
+          then: RABindingError(inv, f, op, "pin does not name a selected-target register") }
+    }),
+    forall(fn(inv, f, region, assignment) {
+        { when: RAFunction(inv, f, region) & Attribute.has(f, "assignment", assignment) &
+                ids_not_contains(RANativeAssignmentLists.get(inv, f), f),
+          then: RABindingError(inv, f, f, "assignment attribute is not a list") }
+    }),
+    forall(fn(inv, f, region, entries, slot, attr) {
+        { when: RAFunction(inv, f, region) & Attribute.has(f, "assignment", make_ListAttr(entries)) &
+                AttrItem(entries, slot, attr) & ids_not_contains(RANativeAssignmentEntries.get(inv, f), slot),
+          then: RABindingError(inv, f, f, "assignment entry does not name a selected-target register") }
+    }),
+    forall(fn(inv, f, value, class) {
+        { when: RAValueRequirement(inv, f, value, class) &
+                names_not_contains(RANativeKnownClasses.get(inv), class),
+          then: RABindingError(inv, f, value, "unknown selected-target register class") }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativePhysicalRead(inv, f, op, class, index) &
+                names_not_contains(RANativeKnownClasses.get(inv), class),
+          then: RABindingError(inv, f, op, "physical read names a different target class") }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativePhysicalWrite(inv, f, op, class, index) &
+                names_not_contains(RANativeKnownClasses.get(inv), class),
+          then: RABindingError(inv, f, op, "physical write names a different target class") }
+    }),
+    forall(fn(inv, f, op, kind, local, dialect) {
+        { when: RASource(inv, f, op, kind) & TMDLOpcode(inv, kind, local, dialect) &
+                names_not_contains(RAEligibleOpcodes.get(inv), kind),
+          then: RABindingError(inv, f, op, "operation is not selected for the target profile") }
+    }),
+    forall(fn(inv, f, op, block, point, kind) {
+        { when: RACFGSource(inv, f, op, block, point) & RASource(inv, f, op, kind) & (kind != "cfg.br") &
+                (kind != "cfg.cond_br") & (kind != "cfg.switch") & (kind != "son.branch") & (kind != "son.edge") &
+                (kind != "son.merge") & (kind != "func.return") & (kind != "state.entry_state") &
+                (kind != "state.join") & (kind != "state.split") &
+                names_not_contains(RAEligibleOpcodes.get(inv), kind),
+          then: RABindingError(inv, f, op, "operation is not selected for the target profile") }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativePhysicalRead(inv, f, op, class, index) &
+                ids_not_contains(RARequirementIndices.get(inv, class), index),
+          then: RABindingError(inv, f, op, "physical read register index is outside its class") }
+    }),
+    forall(fn(inv, f, op, class, index) {
+        { when: RANativePhysicalWrite(inv, f, op, class, index) &
+                ids_not_contains(RARequirementIndices.get(inv, class), index),
+          then: RABindingError(inv, f, op, "physical write register index is outside its class") }
+    }),
+];
+
+pub let ra_bind_complete = [
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region) & (ids_length(RABindingErrors.get(inv, f)) == 0),
+          then: RABindingsComplete(inv, f) }
+    }),
+];
+
+pub let ra_bind_fallback_index = [
+    forall(fn(inv, f, region) {
+        { when: RAFunction(inv, f, region),
+          then: RARequiredValues.has(inv, f, ids_empty()) }
+    }),
+    forall(fn(inv, f, value, class) {
+        { when: RAValueRequirement(inv, f, value, class),
+          then: RARequiredValues.has(inv, f, ids_one(value)) }
+    }),
+    forall(fn(inv, f, op, slot, value) {
+        { when: RAUse(inv, f, op, slot, value),
+          then: RALogicalValue(inv, f, value) }
+    }),
+    forall(fn(inv, f, op, value) {
+        { when: RADef(inv, f, op, value),
+          then: RALogicalValue(inv, f, value) }
+    }),
+];
+
+pub let ra_bind_fallback = [
+    forall(fn(inv, f, value, args, class, index) {
+        { when: RALogicalValue(inv, f, value) & ids_not_contains(RARequiredValues.get(inv, f), value) &
+                ValueType.has(value, make_Apply(make_Ctor("builtin.i"), args)) &
+                TMDLAbiPin(inv, "arg", "int", 0, class, index),
+          then: RAValueRequirement(inv, f, value, class) }
+    }),
+    forall(fn(inv, f, value, args, class, index) {
+        { when: RALogicalValue(inv, f, value) & ids_not_contains(RARequiredValues.get(inv, f), value) &
+                ValueType.has(value, make_Apply(make_Ctor("ptr.p"), args)) &
+                TMDLAbiPin(inv, "arg", "int", 0, class, index),
+          then: RAValueRequirement(inv, f, value, class) }
+    }),
+    forall(fn(inv, f, value, args, class, index) {
+        { when: RALogicalValue(inv, f, value) & ids_not_contains(RARequiredValues.get(inv, f), value) &
+                ValueType.has(value, make_Apply(make_Ctor("builtin.f"), args)) &
+                TMDLAbiPin(inv, "arg", "float", 0, class, index),
+          then: RAValueRequirement(inv, f, value, class) }
+    }),
+    forall(fn(inv, f, value, dialect, name, class, target) {
+        { when: RALogicalValue(inv, f, value) & ids_not_contains(RARequiredValues.get(inv, f), value) &
+                ValueType.has(
+                    value,
+                    make_Apply(
+                        make_Ctor("backend.reg"),
+                        make_TCons(make_SymbolParam(dialect), make_TCons(make_SymbolParam(name), make_TNil()))
+                    )
+                ) &
+                SymbolName.has(name, class) & TMDLClassDialect(inv, class, target),
+          then: RAValueRequirement(inv, f, value, class) }
+    }),
+];
+
+pub let ra_control_pin = [
+    forall(fn(inv, f, op, block, point, class, index) {
+        { when: RACFGSource(inv, f, op, block, point) & RANativePhysicalRead(inv, f, op, class, index) &
+                ids_not_contains(RAHardwiredIndices.get(inv, class), index),
+          then: RAPin(inv, f, op, block) & RAExplicitlyPinned.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, block, point, class, index) {
+        { when: RACFGSource(inv, f, op, block, point) & RANativePhysicalWrite(inv, f, op, class, index),
+          then: RAPin(inv, f, op, block) & RAExplicitlyPinned.has(inv, f, ids_one(op)) }
+    }),
+    forall(fn(inv, f, op, block, point, value, class, index) {
+        { when: RACFGSource(inv, f, op, block, point) & RAOutputPin(inv, f, op, value, class, index),
+          then: RAPin(inv, f, op, block) & RAExplicitlyPinned.has(inv, f, ids_one(op)) }
+    }),
+];
+
+pub let ra_color_interfere = [
+    forall(fn(inv, f, candidate, op, slot, result, tied, otherSlot, other, resultClass, otherClass) {
+        { when: RAControlComplete(inv, f, candidate) & RATiedOperands(inv, f, op, slot, result) &
+                RAUse(inv, f, op, slot, tied) & RAUse(inv, f, op, otherSlot, other) & (slot != otherSlot) &
+                (tied != other) & RAColorValue(inv, f, candidate, result, resultClass) &
+                RAColorValue(inv, f, candidate, other, otherClass),
+          then: RAInterference(inv, f, candidate, result, other) &
+                RAInterference(inv, f, candidate, other, result) }
+    }),
+];
+

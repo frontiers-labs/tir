@@ -1,0 +1,11 @@
+use ::relational::*;
+
+let max = primitive<(a0: Integer, a1: Integer) -> Integer>("max");
+
+pub let RARequest = relation<(Integer, Integer)>("RARequest");
+pub let RATransferComplete = relation<(Integer, Integer, Integer)>("RATransferComplete");
+pub let RAValueBits = table<(Integer, Integer, Integer), Integer>("RAValueBits", merge(fn(old, new) { max(old, new) }));
+pub let RAValueExcluded = relation<(Integer, Integer, Integer, String, Integer)>("RAValueExcluded");
+pub let RANativePhysicalRead = relation<(Integer, Integer, Integer, String, Integer)>("RANativePhysicalRead");
+pub let RANativePhysicalWrite = relation<(Integer, Integer, Integer, String, Integer)>("RANativePhysicalWrite");
+pub let RANativeCall = relation<(Integer, Integer, Integer)>("RANativeCall");

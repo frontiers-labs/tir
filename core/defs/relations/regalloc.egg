@@ -1,9 +1,0 @@
-
-(relation RARequest (i64 i64))
-(relation RATransferComplete (i64 i64 i64))
-(function RAValueBits (i64 i64 i64) i64 :merge (max old new))
-(relation RAValueExcluded (i64 i64 i64 String i64))
-(relation RANativePhysicalRead (i64 i64 i64 String i64))
-(relation RANativePhysicalWrite (i64 i64 i64 String i64))
-
-(relation RANativeCall (i64 i64 i64))

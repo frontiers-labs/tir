@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+mod allocation;
 mod schema;
 use tir_egglog::ast::{Command, Expr, Subdatatypes};
 use tir_egglog::{Signature, WriteState};
@@ -14,6 +15,10 @@ pub fn compile(core: &Path) -> Result<(), Box<dyn Error>> {
     println!(
         "cargo:rerun-if-changed={}",
         definitions.join("schema.rs").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        definitions.join("allocation.rs").display()
     );
     let (sources, dependencies) = tir_cdsl::SourceMap::from_file(definitions.join("schema.cdsl"))
         .map_err(|errors| {
@@ -39,15 +44,9 @@ pub fn compile(core: &Path) -> Result<(), Box<dyn Error>> {
     engine.run_program(engine.parse_program("ir-schema.egg", &schema)?)?;
     let output = PathBuf::from(std::env::var("OUT_DIR")?);
     std::fs::write(output.join("ir-schema.egg"), schema)?;
-    println!(
-        "cargo:rerun-if-changed={}",
-        definitions.join("tmdl-schema.egg").display()
-    );
-    let commands = engine.parse_program(
-        "tmdl-schema.egg",
-        &std::fs::read_to_string(definitions.join("tmdl-schema.egg"))?,
-    )?;
-    engine.run_program(commands)?;
+    let tmdl = tir_cdsl::relations::emit_schema_extension(&module, entries, allocation::TMDL)?;
+    engine.run_program(engine.parse_program("TMDL schema", &tmdl)?)?;
+    std::fs::write(output.join("tmdl-schema.egg"), tmdl)?;
     std::fs::write(
         output.join("ir-schema.bin"),
         engine.save_program_with_schema()?,
@@ -84,49 +83,50 @@ pub fn compile(core: &Path) -> Result<(), Box<dyn Error>> {
             |_, _| None,
         );
     }
+    let imports: Vec<_> = entries.iter().chain(allocation::TMDL).copied().collect();
+    let allocation: Vec<_> = [
+        allocation::BASE,
+        allocation::CONTROL,
+        allocation::STRUCTURED,
+        allocation::COLOR,
+        allocation::BINDINGS,
+        allocation::ABI,
+        allocation::PUBLISH,
+        allocation::TRANSFER,
+        allocation::ENCODING,
+        allocation::SELECT,
+    ]
+    .into_iter()
+    .flatten()
+    .copied()
+    .collect();
+    let source = tir_cdsl::relations::emit_schema_extension(&module, &imports, &allocation)?;
+    std::fs::write(output.join("regalloc.egg"), &source)?;
+    let commands = engine.parse_program("CDSL allocation", &source)?;
     let mut sorts = Vec::new();
-    for file in [
-        "regalloc.egg",
-        "regalloc-control.egg",
-        "regalloc-structured.egg",
-        "regalloc-color.egg",
-        "regalloc-bindings.egg",
-        "regalloc-abi.egg",
-        "regalloc-publish.egg",
-        "regalloc-transfer.egg",
-        "regalloc-encoding.egg",
-        "regalloc-select.egg",
-    ] {
-        println!(
-            "cargo:rerun-if-changed={}",
-            definitions.join(file).display()
-        );
-        let source = std::fs::read_to_string(definitions.join(file))?;
-        let commands = engine.parse_program(file, &source)?;
-        for command in &commands {
-            match command {
-                Command::Sort {
-                    name,
-                    presort_and_args,
-                    ..
-                } => {
-                    sorts.push((name.clone(), presort_and_args.clone()));
-                }
-                Command::Datatype { name, .. } => sorts.push((name.clone(), None)),
-                Command::Datatypes { datatypes, .. } => {
-                    for (_, name, datatype) in datatypes {
-                        let presort = match datatype {
-                            Subdatatypes::Variants(_) => None,
-                            Subdatatypes::NewSort(name, args) => Some((name.clone(), args.clone())),
-                        };
-                        sorts.push((name.clone(), presort));
-                    }
-                }
-                _ => {}
+    for command in &commands {
+        match command {
+            Command::Sort {
+                name,
+                presort_and_args,
+                ..
+            } => {
+                sorts.push((name.clone(), presort_and_args.clone()));
             }
+            Command::Datatype { name, .. } => sorts.push((name.clone(), None)),
+            Command::Datatypes { datatypes, .. } => {
+                for (_, name, datatype) in datatypes {
+                    let presort = match datatype {
+                        Subdatatypes::Variants(_) => None,
+                        Subdatatypes::NewSort(name, args) => Some((name.clone(), args.clone())),
+                    };
+                    sorts.push((name.clone(), presort));
+                }
+            }
+            _ => {}
         }
-        engine.run_program(commands)?;
     }
+    engine.run_program(commands)?;
     std::fs::write(
         output.join("regalloc.bin"),
         engine.save_program_with_schema()?,
