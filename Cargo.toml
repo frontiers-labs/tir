@@ -12,7 +12,6 @@ members = [
     "backends/riscv",
     "libs/adt",
     "libs/egglog",
-    "libs/ir-schema",
     "libs/jit",
     "libs/simcore",
     "libs/symbolic",
@@ -45,7 +44,6 @@ tir-lit = { path = "utils/lit" }
 tir-llvm = { path = "tools/llvm" }
 tir-jit = { path = "libs/jit" }
 tir-egglog = { path = "libs/egglog" }
-tir-ir-schema = { path = "libs/ir-schema" }
 tir-bench = { path = "utils/bench" }
 tir-cdsl = { path = "utils/cdsl" }
 

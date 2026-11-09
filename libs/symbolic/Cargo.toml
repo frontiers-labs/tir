@@ -11,11 +11,11 @@ doctest = false
 [dependencies]
 tir-adt.workspace = true
 tir-egglog.workspace = true
-tir-ir-schema.workspace = true
 smallvec = "1.15.2"
 chumsky.workspace = true
 
 [build-dependencies]
+tir-egglog = { workspace = true, features = ["parser"] }
 tir-cdsl = { workspace = true, features = ["rust-output"] }
 syn = { workspace = true, features = ["full"] }
 

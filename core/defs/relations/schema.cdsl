@@ -1,0 +1,484 @@
+mod relational;
+use relational::*;
+
+pub extern type BigInt = Type;
+
+pub enum Kind {
+    KType,
+    KNat,
+    KRow,
+    KGhost,
+    KSym,
+    KBool,
+    KAny,
+    KList(Kind),
+    KArrow(Kind, Kind),
+};
+let make_KType = constructor(Kind::KType);
+
+pub enum TypeExpr {
+    Ctor(String),
+    Apply(TypeExpr, TypeList),
+    FunctionType(TypeList, TypeList),
+    ProductType(TypeList),
+    SumType(TypeList),
+    RowType(RowFields),
+    Bound(Integer, Kind),
+    Nominal(Integer, TypeList),
+    Forall(KindList, TypeExpr),
+    NatLit(BigInt),
+    SymbolParam(Integer),
+    ListArg(TypeList),
+    UnkindedBound(Integer),
+    UnkindedLambda(Integer, TypeExpr),
+};
+
+pub enum TypeList {
+    TNil,
+    TCons(TypeExpr, TypeList),
+};
+let make_TCons = constructor(TypeList::TCons);
+
+pub enum KindList {
+    KNil,
+    KCons(Kind, KindList),
+};
+let make_KCons = constructor(KindList::KCons);
+
+pub enum RowFields {
+    RNil,
+    RCons(String, TypeExpr, RowFields),
+};
+let make_RCons = constructor(RowFields::RCons);
+
+pub let ConstructorKind = table<String, Kind>("ConstructorKind", unique);
+
+pub let ConstructorDefinition = table<String, TypeExpr>("ConstructorDefinition", unique);
+
+pub let NominalKind = table<Integer, Kind>("NominalKind", unique);
+
+pub let NominalDefinition = table<Integer, TypeExpr>("NominalDefinition", unique);
+
+pub let SymbolName = table<Integer, String>("SymbolName", unique);
+
+pub let TypeItem = relation<(TypeList, Integer, TypeExpr)>("TypeItem");
+
+pub let KindItem = relation<(KindList, Integer, Kind)>("KindItem");
+
+pub let RowItem = relation<(RowFields, Integer, String, TypeExpr)>("RowItem");
+
+pub let rule_0 = forall(fn(xs: Expr<TypeList>, x: Expr<TypeExpr>, tail: Expr<TypeList>) {
+    { when: (xs == make_TCons(x, tail)), then: TypeItem(xs, 0, x) }
+});
+
+pub let rule_1 = forall(fn(xs: Expr<TypeList>, x: Expr<TypeExpr>, tail: Expr<TypeList>, n: Expr<Integer>, y: Expr<TypeExpr>) {
+    { when: (xs == make_TCons(x, tail)) & TypeItem(tail, n, y), then: TypeItem(xs, (n + 1), y) }
+});
+
+pub let rule_2 = forall(fn(xs: Expr<KindList>, k: Expr<Kind>, tail: Expr<KindList>) {
+    { when: (xs == make_KCons(k, tail)), then: KindItem(xs, 0, k) }
+});
+
+pub let rule_3 = forall(fn(xs: Expr<KindList>, k: Expr<Kind>, tail: Expr<KindList>, n: Expr<Integer>, j: Expr<Kind>) {
+    { when: (xs == make_KCons(k, tail)) & KindItem(tail, n, j), then: KindItem(xs, (n + 1), j) }
+});
+
+pub let rule_4 = forall(fn(xs: Expr<RowFields>, name: Expr<String>, t: Expr<TypeExpr>, tail: Expr<RowFields>) {
+    { when: (xs == make_RCons(name, t, tail)), then: RowItem(xs, 0, name, t) }
+});
+
+pub let rule_5 = forall(fn(xs: Expr<RowFields>, name: Expr<String>, t: Expr<TypeExpr>, tail: Expr<RowFields>, n: Expr<Integer>, key: Expr<String>, ty: Expr<TypeExpr>) {
+    { when: (xs == make_RCons(name, t, tail)) & RowItem(tail, n, key, ty), then: RowItem(xs, (n + 1), key, ty) }
+});
+
+pub enum Attr {
+    IntegerAttr(TypeExpr, Integer, String),
+    FloatAttr(TypeExpr, String, String),
+    StringAttr(String),
+    BoolAttr(Bool),
+    TypeAttr(TypeExpr),
+    SymbolAttr(Integer),
+    ValueAttr(Integer),
+    BlockAttr(Integer),
+    ListAttr(AttrList),
+    DictAttr(AttrFields),
+    PredicateAttr(String),
+    PhysicalRegisterAttr(String, String, Integer),
+    AssignedRegisterAttr(Integer, String, String, Integer),
+    FpSemanticsAttr(Attr),
+    EvaluationContractAttr(Attr),
+    TypeArgumentAttr(TypeExpr),
+    LayoutEntryAttr(TypeExpr, AttrList, TypeExpr, TypeExpr, AttrList),
+    LayoutOptionAttr(String, Attr),
+    LayoutSpecAttr(AttrList, AttrList),
+};
+
+pub enum AttrList {
+    ANil,
+    ACons(Attr, AttrList),
+};
+let make_ACons = constructor(AttrList::ACons);
+
+pub enum AttrFields {
+    DNil,
+    DCons(String, Attr, AttrFields),
+};
+let make_DCons = constructor(AttrFields::DCons);
+
+pub let Attribute = table<(Integer, String), Attr>("Attribute", unique);
+
+pub let AttrItem = relation<(AttrList, Integer, Attr)>("AttrItem");
+
+pub let DictItem = relation<(AttrFields, String, Attr)>("DictItem");
+
+pub let rule_6 = forall(fn(xs: Expr<AttrList>, a: Expr<Attr>, tail: Expr<AttrList>) {
+    { when: (xs == make_ACons(a, tail)), then: AttrItem(xs, 0, a) }
+});
+
+pub let rule_7 = forall(fn(xs: Expr<AttrList>, a: Expr<Attr>, tail: Expr<AttrList>, n: Expr<Integer>, b: Expr<Attr>) {
+    { when: (xs == make_ACons(a, tail)) & AttrItem(tail, n, b), then: AttrItem(xs, (n + 1), b) }
+});
+
+pub let rule_8 = forall(fn(xs: Expr<AttrFields>, key: Expr<String>, a: Expr<Attr>, tail: Expr<AttrFields>) {
+    { when: (xs == make_DCons(key, a, tail)), then: DictItem(xs, key, a) }
+});
+
+pub let rule_9 = forall(fn(xs: Expr<AttrFields>, key: Expr<String>, a: Expr<Attr>, tail: Expr<AttrFields>, key2: Expr<String>, b: Expr<Attr>) {
+    { when: (xs == make_DCons(key, a, tail)) & DictItem(tail, key2, b), then: DictItem(xs, key2, b) }
+});
+
+pub enum Placement {
+    Root,
+    InGraph(Integer),
+    InBlock(Integer, Integer),
+};
+let make_InGraph = constructor(Placement::InGraph);
+let make_InBlock = constructor(Placement::InBlock);
+
+pub enum RegionMode {
+    CFG,
+    Graph,
+};
+
+pub let OpKind = table<Integer, String>("OpKind", unique);
+
+pub let OpScheme = table<String, TypeExpr>("OpScheme", unique);
+
+pub let OpPlacement = table<Integer, Placement>("OpPlacement", unique);
+
+pub let RegionOwner = table<Integer, Integer>("RegionOwner", unique);
+
+pub let RegionSlot = table<Integer, Integer>("RegionSlot", unique);
+
+pub let OwnedRegion = table<(Integer, Integer), Integer>("OwnedRegion", unique);
+
+pub let rule_10 = forall(fn(owner: Expr<Integer>, region: Expr<Integer>, slot: Expr<Integer>) {
+    { when: RegionOwner.has(region, owner) & RegionSlot.has(region, slot), then: OwnedRegion.has(owner, slot, region) }
+});
+
+pub let Mode = table<Integer, RegionMode>("Mode", unique);
+
+pub let BlockRegion = table<Integer, Integer>("BlockRegion", unique);
+
+pub let BlockLayout = table<Integer, Integer>("BlockLayout", unique);
+
+pub let Entry = table<Integer, Integer>("Entry", unique);
+
+pub let Implements = relation<(String, String)>("Implements");
+
+pub let HasInterface = relation<(Integer, String)>("HasInterface");
+
+pub let rule_11 = forall(fn(kind: Expr<String>, op: Expr<Integer>, interface: Expr<String>) {
+    { when: OpKind.has(op, kind) & Implements(kind, interface), then: HasInterface(op, interface) }
+});
+
+pub enum Definition {
+    ResultDef(Integer, Integer),
+    BlockParamDef(Integer, Integer),
+    RegionParamDef(Integer, Integer),
+};
+let make_ResultDef = constructor(Definition::ResultDef);
+let make_BlockParamDef = constructor(Definition::BlockParamDef);
+let make_RegionParamDef = constructor(Definition::RegionParamDef);
+
+pub let ValueType = table<Integer, TypeExpr>("ValueType", unique);
+
+pub let ValueDefinition = table<Integer, Definition>("ValueDefinition", unique);
+
+pub let DefinedValue = table<Definition, Integer>("DefinedValue", unique);
+
+pub let rule_12 = forall(fn(def: Expr<Definition>, value: Expr<Integer>) {
+    { when: ValueDefinition.has(value, def), then: DefinedValue.has(def, value) }
+});
+
+pub let DeclaredType = table<Integer, TypeExpr>("DeclaredType", unique);
+
+pub let Operand = table<(Integer, Integer), Integer>("Operand", unique);
+
+pub let Result = relation<(Integer, Integer, Integer)>("Result");
+
+pub let BlockParam = relation<(Integer, Integer, Integer)>("BlockParam");
+
+pub let RegionParam = relation<(Integer, Integer, Integer)>("RegionParam");
+
+pub let rule_13 = forall(fn(value: Expr<Integer>, op: Expr<Integer>, slot: Expr<Integer>) {
+    { when: ValueDefinition.has(value, make_ResultDef(op, slot)), then: Result(op, slot, value) }
+});
+
+pub let rule_14 = forall(fn(value: Expr<Integer>, block: Expr<Integer>, slot: Expr<Integer>) {
+    { when: ValueDefinition.has(value, make_BlockParamDef(block, slot)), then: BlockParam(block, slot, value) }
+});
+
+pub let rule_15 = forall(fn(value: Expr<Integer>, region: Expr<Integer>, slot: Expr<Integer>) {
+    { when: ValueDefinition.has(value, make_RegionParamDef(region, slot)), then: RegionParam(region, slot, value) }
+});
+
+pub let Successor = table<(Integer, Integer), Integer>("Successor", unique);
+
+pub let SuccessorArg = table<(Integer, Integer, Integer), Integer>("SuccessorArg", unique);
+
+pub let Yield = table<(Integer, Integer), Integer>("Yield", unique);
+
+pub enum UseSite {
+    OperandUse(Integer),
+    YieldUse(Integer, Integer),
+};
+let make_OperandUse = constructor(UseSite::OperandUse);
+let make_YieldUse = constructor(UseSite::YieldUse);
+
+pub let Uses = relation<(Integer, Integer, UseSite)>("Uses");
+
+pub let rule_16 = forall(fn(value: Expr<Integer>, op: Expr<Integer>, slot: Expr<Integer>) {
+    { when: Operand.has(op, slot, value), then: Uses(value, op, make_OperandUse(slot)) }
+});
+
+pub let rule_17 = forall(fn(value: Expr<Integer>, region: Expr<Integer>, slot: Expr<Integer>, owner: Expr<Integer>) {
+    { when: Yield.has(region, slot, value) & RegionOwner.has(region, owner), then: Uses(value, owner, make_YieldUse(region, slot)) }
+});
+
+pub let EdgeArgument = relation<(Integer, Integer, Integer, Integer)>("EdgeArgument");
+
+pub let rule_18 = forall(fn(operandSlot: Expr<Integer>, term: Expr<Integer>, edge: Expr<Integer>, paramSlot: Expr<Integer>, value: Expr<Integer>) {
+    { when: SuccessorArg.has(term, edge, paramSlot, operandSlot) & Operand.has(term, operandSlot, value), then: EdgeArgument(term, edge, paramSlot, value) }
+});
+
+pub let EntryBinding = table<(Integer, Integer), Integer>("EntryBinding", unique);
+
+pub let ExitBinding = table<(Integer, Integer), Integer>("ExitBinding", unique);
+
+pub let FeedbackBinding = table<(Integer, Integer), Integer>("FeedbackBinding", unique);
+
+pub let Gamma = relation<(Integer,)>("Gamma");
+
+pub let Theta = relation<(Integer,)>("Theta");
+
+pub let GammaPredicate = table<Integer, Integer>("GammaPredicate", unique);
+
+pub let GammaArm = table<(Integer, BigInt), Integer>("GammaArm", unique);
+
+pub let GammaDefaultArm = table<Integer, Integer>("GammaDefaultArm", unique);
+
+pub let GammaSelector = relation<(Integer, Integer)>("GammaSelector");
+
+pub let rule_19 = forall(fn(op: Expr<Integer>, slot: Expr<Integer>, value: Expr<Integer>) {
+    { when: Gamma(op) & GammaPredicate.has(op, slot) & Operand.has(op, slot, value), then: GammaSelector(op, value) }
+});
+
+pub let ThetaBody = table<Integer, Integer>("ThetaBody", unique);
+
+pub let ThetaPredicate = table<Integer, Integer>("ThetaPredicate", unique);
+
+pub let ThetaContinueOn = table<Integer, Bool>("ThetaContinueOn", unique);
+
+pub let EntryValue = relation<(Integer, Integer, Integer)>("EntryValue");
+
+pub let ExitValue = relation<(Integer, Integer, Integer)>("ExitValue");
+
+pub let FeedbackValue = relation<(Integer, Integer, Integer)>("FeedbackValue");
+
+pub let rule_20 = forall(fn(operandSlot: Expr<Integer>, region: Expr<Integer>, paramSlot: Expr<Integer>, owner: Expr<Integer>, value: Expr<Integer>) {
+    { when: EntryBinding.has(region, paramSlot, operandSlot) & RegionOwner.has(region, owner) & Operand.has(owner, operandSlot, value), then: EntryValue(region, paramSlot, value) }
+});
+
+pub let rule_21 = forall(fn(yieldSlot: Expr<Integer>, region: Expr<Integer>, resultSlot: Expr<Integer>, value: Expr<Integer>) {
+    { when: ExitBinding.has(region, resultSlot, yieldSlot) & Yield.has(region, yieldSlot, value), then: ExitValue(region, resultSlot, value) }
+});
+
+pub let rule_22 = forall(fn(yieldSlot: Expr<Integer>, region: Expr<Integer>, paramSlot: Expr<Integer>, value: Expr<Integer>) {
+    { when: FeedbackBinding.has(region, paramSlot, yieldSlot) & Yield.has(region, yieldSlot, value), then: FeedbackValue(region, paramSlot, value) }
+});
+
+pub let ParentOp = relation<(Integer, Integer)>("ParentOp");
+
+pub let rule_23 = forall(fn(op: Expr<Integer>, region: Expr<Integer>, parent: Expr<Integer>) {
+    { when: OpPlacement.has(op, make_InGraph(region)) & RegionOwner.has(region, parent), then: ParentOp(op, parent) }
+});
+
+pub let rule_24 = forall(fn(op: Expr<Integer>, block: Expr<Integer>, order: Expr<Integer>, region: Expr<Integer>, parent: Expr<Integer>) {
+    { when: OpPlacement.has(op, make_InBlock(block, order)) & BlockRegion.has(block, region) & RegionOwner.has(region, parent), then: ParentOp(op, parent) }
+});
+
+pub let Scope = relation<(Integer,)>("Scope");
+
+pub let Within = relation<(Integer, Integer)>("Within");
+
+pub let rule_25 = forall(fn(root: Expr<Integer>, kind: Expr<String>) {
+    { when: Scope(root) & OpKind.has(root, kind), then: Within(root, root) }
+});
+
+pub let rule_26 = forall(fn(root: Expr<Integer>, parent: Expr<Integer>, child: Expr<Integer>) {
+    { when: Within(root, parent) & ParentOp(child, parent), then: Within(root, child) }
+});
+
+pub enum Boundary {
+    OrdinaryBoundary,
+    FunctionBoundary,
+    ModuleBoundary,
+};
+let make_OrdinaryBoundary = constructor(Boundary::OrdinaryBoundary);
+let make_FunctionBoundary = constructor(Boundary::FunctionBoundary);
+let make_ModuleBoundary = constructor(Boundary::ModuleBoundary);
+
+pub let KindBoundary = table<String, Boundary>("KindBoundary", unique);
+
+pub let Module = relation<(Integer,)>("Module");
+
+pub let Function = relation<(Integer,)>("Function");
+
+pub let OwningFunction = table<Integer, Integer>("OwningFunction", unique);
+
+pub let rule_27 = forall(fn(kind: Expr<String>, op: Expr<Integer>) {
+    { when: OpKind.has(op, kind) & KindBoundary.has(kind, make_ModuleBoundary()), then: Module(op) }
+});
+
+pub let rule_28 = forall(fn(kind: Expr<String>, op: Expr<Integer>) {
+    { when: OpKind.has(op, kind) & KindBoundary.has(kind, make_FunctionBoundary()), then: Function(op) & OwningFunction.has(op, op) }
+});
+
+pub let rule_29 = forall(fn(child: Expr<Integer>, parent: Expr<Integer>, owner: Expr<Integer>, kind: Expr<String>) {
+    { when: ParentOp(child, parent) & OwningFunction.has(parent, owner) & OpKind.has(child, kind) & KindBoundary.has(kind, make_OrdinaryBoundary()), then: OwningFunction.has(child, owner) }
+});
+
+pub let SelectedScope = relation<(Integer,)>("SelectedScope");
+
+pub let SelectedOp = relation<(Integer, Integer)>("SelectedOp");
+
+pub let rule_30 = forall(fn(root: Expr<Integer>, op: Expr<Integer>) {
+    { when: SelectedScope(root) & Within(root, op), then: SelectedOp(root, op) }
+});
+
+pub let TypeHandle = table<Integer, TypeExpr>("TypeHandle", unique);
+
+pub let TypeHandleOf = table<TypeExpr, Integer>("TypeHandleOf", unique);
+
+pub let SymbolId = table<String, Integer>("SymbolId", unique);
+
+pub let OpLocation = table<Integer, Integer>("OpLocation", unique);
+
+pub let GraphLayout = table<Integer, Integer>("GraphLayout", unique);
+
+pub let BlockAttribute = table<(Integer, String), Attr>("BlockAttribute", unique);
+
+pub let GraphMember = relation<(Integer, Integer)>("GraphMember");
+
+pub let BlockMember = relation<(Integer, Integer, Integer)>("BlockMember");
+
+pub let BlocksOf = relation<(Integer, Integer, Integer)>("BlocksOf");
+
+pub let OpRegion = relation<(Integer, Integer)>("OpRegion");
+
+pub let RegionUnder = relation<(Integer, Integer)>("RegionUnder");
+
+pub let OpUnderRegion = relation<(Integer, Integer)>("OpUnderRegion");
+
+pub let ReaderAt = relation<(Integer, Integer, Integer)>("ReaderAt");
+
+pub let SiblingRead = relation<(Integer, Integer, Integer, Integer)>("SiblingRead");
+
+pub let rule_31 = forall(fn(op: Expr<Integer>, region: Expr<Integer>) {
+    { when: OpPlacement.has(op, make_InGraph(region)), then: GraphMember(region, op) & OpRegion(op, region) }
+});
+
+pub let rule_32 = forall(fn(op: Expr<Integer>, block: Expr<Integer>, order: Expr<Integer>) {
+    { when: OpPlacement.has(op, make_InBlock(block, order)), then: BlockMember(block, order, op) }
+});
+
+pub let rule_33 = forall(fn(region: Expr<Integer>, block: Expr<Integer>, layout: Expr<Integer>) {
+    { when: BlockRegion.has(block, region) & BlockLayout.has(block, layout), then: BlocksOf(region, layout, block) }
+});
+
+pub let rule_34 = forall(fn(op: Expr<Integer>, block: Expr<Integer>, order: Expr<Integer>, region: Expr<Integer>) {
+    { when: OpPlacement.has(op, make_InBlock(block, order)) & BlockRegion.has(block, region), then: OpRegion(op, region) }
+});
+
+pub let rule_35 = forall(fn(mode: Expr<RegionMode>, region: Expr<Integer>) {
+    { when: Mode.has(region, mode), then: RegionUnder(region, region) }
+});
+
+pub let rule_36 = forall(fn(owner: Expr<Integer>, inner: Expr<Integer>, parent: Expr<Integer>, root: Expr<Integer>) {
+    { when: RegionOwner.has(inner, owner) & OpRegion(owner, parent) & RegionUnder(parent, root), then: RegionUnder(inner, root) }
+});
+
+pub let rule_37 = forall(fn(op: Expr<Integer>, region: Expr<Integer>, root: Expr<Integer>) {
+    { when: OpRegion(op, region) & RegionUnder(region, root), then: OpUnderRegion(root, op) }
+});
+
+pub let rule_38 = forall(fn(op: Expr<Integer>, region: Expr<Integer>) {
+    { when: OpRegion(op, region), then: ReaderAt(op, region, op) }
+});
+
+pub let rule_39 = forall(fn(child: Expr<Integer>, parent: Expr<Integer>, region: Expr<Integer>, sibling: Expr<Integer>) {
+    { when: ParentOp(child, parent) & ReaderAt(parent, region, sibling), then: ReaderAt(child, region, sibling) }
+});
+
+pub let rule_40 = forall(fn(value: Expr<Integer>, reader: Expr<Integer>, r#use: Expr<UseSite>, producer: Expr<Integer>, slot: Expr<Integer>, home: Expr<Integer>, sibling: Expr<Integer>) {
+    { when: Uses(value, reader, r#use) & ValueDefinition.has(value, make_ResultDef(producer, slot)) & OpRegion(producer, home) & ReaderAt(reader, home, sibling), then: SiblingRead(reader, value, sibling, producer) }
+});
+
+pub let ScopedSiblingRead = relation<(Integer, Bool, Integer, Integer)>("ScopedSiblingRead");
+
+pub let rule_41 = forall(fn(root: Expr<Integer>, reader: Expr<Integer>, value: Expr<Integer>, sibling: Expr<Integer>, producer: Expr<Integer>) {
+    { when: OpUnderRegion(root, reader) & SiblingRead(reader, value, sibling, producer), then: ScopedSiblingRead(root, true, sibling, producer) }
+});
+
+pub let rule_42 = forall(fn(root: Expr<Integer>, reader: Expr<Integer>, value: Expr<Integer>, sibling: Expr<Integer>, producer: Expr<Integer>) {
+    { when: OpUnderRegion(root, reader) & SiblingRead(reader, value, sibling, producer) & OpRegion(producer, root), then: ScopedSiblingRead(root, false, sibling, producer) }
+});
+
+pub let OwnedEntity = relation<(Integer, String, Integer)>("OwnedEntity");
+
+pub let rule_43 = forall(fn(root: Expr<Integer>, op: Expr<Integer>) {
+    { when: Within(root, op), then: OwnedEntity(root, "op", op) }
+});
+
+pub let rule_44 = forall(fn(root: Expr<Integer>, op: Expr<Integer>, value: Expr<Integer>, slot: Expr<Integer>) {
+    { when: Within(root, op) & ValueDefinition.has(value, make_ResultDef(op, slot)), then: OwnedEntity(root, "value", value) }
+});
+
+pub let rule_45 = forall(fn(root: Expr<Integer>, op: Expr<Integer>, region: Expr<Integer>) {
+    { when: Within(root, op) & RegionOwner.has(region, op), then: OwnedEntity(root, "region", region) }
+});
+
+pub let rule_46 = forall(fn(root: Expr<Integer>, region: Expr<Integer>, block: Expr<Integer>) {
+    { when: OwnedEntity(root, "region", region) & BlockRegion.has(block, region), then: OwnedEntity(root, "block", block) }
+});
+
+pub let rule_47 = forall(fn(root: Expr<Integer>, region: Expr<Integer>, value: Expr<Integer>, slot: Expr<Integer>) {
+    { when: OwnedEntity(root, "region", region) & ValueDefinition.has(value, make_RegionParamDef(region, slot)), then: OwnedEntity(root, "value", value) }
+});
+
+pub let rule_48 = forall(fn(root: Expr<Integer>, block: Expr<Integer>, value: Expr<Integer>, slot: Expr<Integer>) {
+    { when: OwnedEntity(root, "block", block) & ValueDefinition.has(value, make_BlockParamDef(block, slot)), then: OwnedEntity(root, "value", value) }
+});
+
+pub let rule_49 = forall(fn() {
+    { when: truth, then: ConstructorKind.has("$attr.signed", make_KType()) }
+});
+
+pub let rule_50 = forall(fn() {
+    { when: truth, then: ConstructorKind.has("$attr.unsigned", make_KType()) }
+});
+
+pub let rule_51 = forall(fn() {
+    { when: truth, then: ConstructorKind.has("$attr.wide", make_KType()) }
+});
