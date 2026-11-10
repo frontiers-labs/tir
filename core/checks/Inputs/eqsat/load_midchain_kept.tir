@@ -1,9 +1,0 @@
-module {
-  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
-    %2 = state.entry_state : !state<memory>
-    %3, %4 = ptr.load %0 state(%2) : !i32
-    %5 = ptr.store %1, %0 state(%4)
-    func.return %3 state(%5)
-  }
-  module_end
-}

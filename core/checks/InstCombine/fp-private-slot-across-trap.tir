@@ -1,0 +1,22 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %f = func.func @f(%first: !i32, %last: !i32, %a: !f64, %b: !f64) -> !i32 {
+    %slot = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %first, %slot
+    %quotient = fp.div %a, %b {semantics = {exceptions = "flags_and_traps"}} : !f64
+    ptr.store %last, %slot
+    %result = ptr.load %slot : !i32
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%{{[0-9]+}}: !i32, %[[LAST:[0-9]+]]: !i32,
+// CHECK-NOT: ptr.
+// CHECK: %{{[0-9]+}}, %[[ENV:[0-9]+]], %[[MEM:[0-9]+]] = fp.div {{.*}} {semantics = {exceptions = "flags_and_traps"}}
+// CHECK-NEXT: -> %[[LAST]], %[[MEM]], %[[ENV]]

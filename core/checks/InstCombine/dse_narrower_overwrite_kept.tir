@@ -1,0 +1,25 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// The two writes start at the same address, but the second covers four bytes of
+// the eight the first wrote: the other four are still readable, so the wider
+// write is not dead.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_f = func.func @f(%0: !i64, %1: !i32) -> !i64 {
+    %2 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
+    ptr.store %0, %2
+    ptr.store %1, %2
+    %3 = ptr.load %2 : !i64
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[W:[0-9]+]]: !i64, %[[N:[0-9]+]]: !i32)
+// CHECK: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: %[[S:[0-9]+]] = ptr.store %[[W]], %[[P]] state(%{{[0-9]+}})
+// CHECK-NEXT: %{{[0-9]+}} = ptr.store %[[N]], %[[P]] state(%[[S]])

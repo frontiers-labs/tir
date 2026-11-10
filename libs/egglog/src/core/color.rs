@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::iter::once;
 
 use tir_adt::FxBuildHasher;
@@ -55,8 +55,6 @@ pub(crate) struct Colors {
     last_base: Vec<u32>,
     // The color timestamp up to which a color imported its parents' rows.
     imported: Vec<u32>,
-    // Scope markers describe this color, so descendants must not import them.
-    local_seeds: HashSet<(Color, TableId), FxBuildHasher>,
     // The timestamp of the rows of `classes` and `rows`.
     now: u32,
     container_revision: u64,
@@ -106,7 +104,6 @@ impl Colors {
             rebased: Vec::new(),
             last_base: Vec::new(),
             imported: Vec::new(),
-            local_seeds: HashSet::default(),
             now: 0,
             container_revision: 0,
             classes: Table::new(schema),
@@ -432,100 +429,6 @@ impl Database {
         color
     }
 
-    /// Make native colors from unary scope and binary child/parent records in
-    /// `source`. Each color receives its scope in the unary `seed` relation.
-    /// These colors keep the seed as local invocation metadata. Their ordinary
-    /// facts and unions inherit normally; other colors keep their seed semantics.
-    /// All records are validated before creating colors.
-    pub fn scope_colors(
-        &mut self,
-        source: Color,
-        scopes: TableId,
-        parents: TableId,
-        seed: TableId,
-    ) -> Result<Vec<Color>, Error> {
-        let scope_schema = self.schema().table(scopes);
-        let parent_schema = self.schema().table(parents);
-        let seed_schema = self.schema().table(seed);
-        if scope_schema.kind != TableKind::Relation
-            || scope_schema.columns.len() != 1
-            || parent_schema.kind != TableKind::Relation
-            || parent_schema.columns.len() != 2
-            || seed_schema.kind != TableKind::Relation
-            || seed_schema.columns != scope_schema.columns
-            || parent_schema
-                .columns
-                .iter()
-                .any(|s| *s != scope_schema.columns[0])
-            || self.rows(seed).next().is_some()
-        {
-            return Err(Error::Unsupported(
-                "scope records require compatible unary scopes/seeds and binary parents".into(),
-            ));
-        }
-        let mut pending: BTreeMap<Value, Vec<Value>> = self
-            .rows_in(source, scopes)
-            .map(|row| (row[0], Vec::new()))
-            .collect();
-        for row in self.rows_in(source, parents) {
-            if !pending.contains_key(&row[1]) {
-                return Err(Error::Unsupported(
-                    "scope parent record names an absent parent".into(),
-                ));
-            }
-            let Some(below) = pending.get_mut(&row[0]) else {
-                return Err(Error::Unsupported(
-                    "scope parent record names an absent child".into(),
-                ));
-            };
-            below.push(row[1]);
-        }
-        let mut remaining = BTreeMap::new();
-        let mut children: BTreeMap<Value, Vec<Value>> = BTreeMap::new();
-        let mut ready = BTreeSet::new();
-        for (&scope, below) in &mut pending {
-            below.sort_unstable();
-            below.dedup();
-            remaining.insert(scope, below.len());
-            if below.is_empty() {
-                ready.insert(scope);
-            }
-            for &parent in below.iter() {
-                children.entry(parent).or_default().push(scope);
-            }
-        }
-        let mut order = Vec::new();
-        while let Some(scope) = ready.pop_first() {
-            order.push(scope);
-            if let Some(children) = children.get(&scope) {
-                for child in children {
-                    let count = remaining[child] - 1;
-                    remaining.insert(*child, count);
-                    if count == 0 {
-                        ready.insert(*child);
-                    }
-                }
-            }
-        }
-        if order.len() != pending.len() {
-            return Err(Error::Unsupported("scope records have a cycle".into()));
-        }
-        let mut made = BTreeMap::new();
-        for scope in order {
-            let below = &pending[&scope];
-            let below = if below.is_empty() {
-                vec![source]
-            } else {
-                below.iter().map(|p| made[p]).collect()
-            };
-            let color = self.color(&below);
-            self.colors.local_seeds.insert((color, seed));
-            self.insert_in(color, seed, &[scope])?;
-            made.insert(scope, color);
-        }
-        Ok(made.into_values().collect())
-    }
-
     /// One new color above each color of `below`.
     pub fn colors(&mut self, below: &[Color]) -> Vec<Color> {
         below.iter().map(|&parent| self.color(&[parent])).collect()
@@ -552,7 +455,6 @@ impl Database {
             }
         }
         colors.alive.retain(|&c| !gone[c as usize]);
-        colors.local_seeds.retain(|(color, _)| !gone[color.index()]);
         let tables = once(&mut colors.classes)
             .chain(&mut colors.rows)
             .chain(&mut colors.removed);
@@ -697,111 +599,6 @@ impl Database {
         for (t, rows) in own {
             self.write_own(t, rows);
         }
-    }
-
-    /// Publish one batch of row edits from temporary colors, then discard
-    /// their semantic terms. Retained rows must hold only pre-`mark` IDs.
-    /// Conflicting writes fail before the base changes. Unrelated colors stay.
-    /// The caller owns each temporary color's entire descendant subtree.
-    ///
-    /// # Panics
-    ///
-    /// If a temporary color is the base, or the mark's isolation requirements
-    /// from [`Database::adopt_rows`] are violated.
-    pub fn adopt_scoped_rows(
-        &mut self,
-        colors: &[Color],
-        tables: &[TableId],
-        mark: u32,
-    ) -> Result<(), Error> {
-        let mut rows = BTreeMap::new();
-        let mut removed = Vec::new();
-        let mut error = None;
-        for &color in colors {
-            let members: Vec<_> = Colors::rows_of(&mut self.colors.classes, color.0, 0)
-                .iter()
-                .map(|(entry, _)| entry[1])
-                .collect();
-            for &table in tables {
-                let schema = &self.tables[table.index()].schema;
-                for row in self.own_rows_in(color, table) {
-                    let fields: Vec<_> = row.values().collect();
-                    if schema
-                        .ids
-                        .iter()
-                        .any(|&column| fields[column].raw() >= mark)
-                    {
-                        error = Some(Error::Unsupported(
-                            "scoped publication holds a temporary ID".into(),
-                        ));
-                    }
-                    let key = (table, fields[..schema.keys].to_vec());
-                    match rows.entry(key) {
-                        std::collections::btree_map::Entry::Vacant(entry) => {
-                            entry.insert((fields, row.is_subsumed()));
-                        }
-                        std::collections::btree_map::Entry::Occupied(mut entry) => {
-                            let (old, subsumed) = entry.get_mut();
-                            if *old != fields {
-                                error = Some(Error::Unsupported(
-                                    "conflicting scoped publication rows".into(),
-                                ));
-                            }
-                            *subsumed |= row.is_subsumed();
-                        }
-                    }
-                }
-                let mut hidden = Vec::new();
-                for column in self.tables[table.index()].schema.ids.clone() {
-                    let base = &mut self.tables[table.index()];
-                    let at = base.add_index(&[column]);
-                    base.refresh_index(at);
-                    holding(base, at, &[&members], &mut hidden);
-                }
-                let base = &self.tables[table.index()];
-                removed.extend(hidden.into_iter().map(|row| {
-                    (
-                        table,
-                        (0..base.schema.keys)
-                            .map(|column| Value::new(base.cell(row, column)))
-                            .collect(),
-                    )
-                }));
-                for (cells, _) in
-                    Colors::rows_of(&mut self.colors.removed[table.index()], color.0, 0)
-                {
-                    removed.push((
-                        table,
-                        cells[1..]
-                            .iter()
-                            .copied()
-                            .map(Value::new)
-                            .collect::<Vec<_>>(),
-                    ));
-                }
-            }
-        }
-        for &color in colors {
-            self.drop_color(color);
-        }
-        let publication = self.color(&[]);
-        if let Some(error) = error {
-            self.adopt_rows(publication, &[], mark);
-            return Err(error);
-        }
-        for (table, key) in removed {
-            self.remove_in(publication, table, &key);
-        }
-        for ((table, _), (fields, subsumed)) in rows {
-            let cells = self.tables[table.index()].canonical(&fields, &self.uf);
-            let cells = once(publication.0).chain(cells).collect();
-            if let Err(error) = self.write_in(table, cells, subsumed) {
-                self.adopt_rows(publication, &[], mark);
-                return Err(error);
-            }
-        }
-        self.adopt_rows(publication, tables, mark);
-        Ok(())
     }
 
     // Takes out of table `t` of the base the rows of `hidden` and those
@@ -1383,9 +1180,6 @@ impl Database {
                     self.colors.unions.push((c, entry[1], entry[2]));
                 }
                 for t in 0..self.colors.rows.len() {
-                    if self.colors.local_seeds.contains(&(color, TableId::new(t))) {
-                        continue;
-                    }
                     let rows = Colors::rows_of(&mut self.colors.rows[t], parent.0, since);
                     for (mut row, subsumed) in rows {
                         row[0] = c;

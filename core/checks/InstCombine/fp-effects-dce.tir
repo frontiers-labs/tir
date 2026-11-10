@@ -1,0 +1,17 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes),dce,verify-deps --verify %s | filecheck %s
+
+module {
+  %f = func.func @effects(%a: !f32, %b: !f32) {
+    %ignored = fp.add %a, %b : !f32
+    %flagged = fp.div %a, %b {semantics = {exceptions = "flags"}} : !f32
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @effects
+// CHECK-NOT: fp.add
+// CHECK: %{{[0-9]+}}, %[[NEXT:[0-9]+]] = fp.div {{.*}} {semantics = {exceptions = "flags"}} : !f32
+// CHECK-NEXT: -> %[[NEXT]]

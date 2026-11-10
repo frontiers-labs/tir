@@ -1,0 +1,26 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+
+// The join is reached from both arms, so it sits outside the gate and no fact
+// about %c holds there. `muli(%c, %y)` must therefore stay — folding it to %y
+// would be unsound on the path where %c is false.
+
+module {
+  %fn_join = func.func @join(%c: !i1, %y: !i1) -> !i1 {
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    cfg.br ^bb3
+  ^bb2:
+    cfg.br ^bb3
+  ^bb3:
+    %r = muli %c, %y : !i1
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @join(%[[C:[0-9]+]]: !i1, %[[Y:[0-9]+]]: !i1)
+// CHECK: %[[R:[0-9]+]] = muli %[[C]], %[[Y]] : !i1
+// CHECK: -> %[[R]]

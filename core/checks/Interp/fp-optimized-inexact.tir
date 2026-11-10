@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(restructure-nodes,eqsat),dce --verify %s | tir interp - | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes),dce --verify %s | tir interp - | filecheck %s
 
 module {
   %main = func.func @main() -> !i5 {

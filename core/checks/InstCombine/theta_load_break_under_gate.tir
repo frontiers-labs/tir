@@ -1,0 +1,49 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// The shape a `do` loop leaves behind: the body, then a guard that repeats or
+// leaves the loop. The arm that breaks never reaches the gate's continuation, so
+// the gate leaves the state the other arm yields, the θ over it reads the body's
+// write, and the break carries the value reaching it out of the loop.
+
+module {
+  %fn_countdown = func.func @countdown(%0: !i1, %1: !i32) -> !i32 {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = state.entry_state : !state<memory>
+    %4 = ptr.store %1, %2 state(%3)
+    %5 = scf.loop (%6 = %4) {
+      %7, %8 = scf.switch %0 args(%6) (%9) {
+        %10 = constant {value = 0} : !i1
+        -> %10, %9
+      }
+      (%11) {
+        %12, %13 = ptr.load %2 state(%11) : !i32
+        %14 = addi %12, %12 : !i32
+        %15 = ptr.store %14, %2 state(%13)
+        %16 = scf.switch %0 {
+          %17 = constant {value = 0} : !i1
+          -> %17
+        }
+        {
+          %18 = constant {value = 1} : !i1
+          -> %18
+        }
+        -> %16, %15
+      }
+      -> %7, %8, %8
+    }
+    %19, %20 = ptr.load %2 state(%5) : !i32
+    -> %19, %20
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @countdown
+// CHECK-NOT: ptr.
+// CHECK: %[[RESULT:[0-9]+]] = scf.loop (%[[PORT:[0-9]+]] = %1) {
+// CHECK: -> %{{[0-9]+}}, %[[PORT]]
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[PORT]], %[[PORT]] : !i32
+// CHECK: %[[REPEAT:[0-9]+]] = constant {value = 1} : !i1
+// CHECK: -> %[[REPEAT]], %[[NEXT]]
+// CHECK: -> %[[RESULT]], %{{[0-9]+}}

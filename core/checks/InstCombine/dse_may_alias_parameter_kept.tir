@@ -1,0 +1,23 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// A parameter pointer is an object the analysis cannot tell apart from another
+// parameter's, and nothing here ever names one without the other, so the two
+// are one chain: a write through one may be read back through the other and
+// nothing is dead.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !ptr.p<!i32>, %2: !i32) {
+    ptr.store %2, %0
+    ptr.store %2, %1
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: !ptr.p<!i32>, %[[Q:[0-9]+]]: !ptr.p<!i32>, %[[V:[0-9]+]]: !i32)
+// CHECK: %[[S:[0-9]+]] = ptr.store %[[V]], %[[P]] state(%{{[0-9]+}})
+// CHECK-NEXT: %{{[0-9]+}} = ptr.store %[[V]], %[[Q]] state(%[[S]])

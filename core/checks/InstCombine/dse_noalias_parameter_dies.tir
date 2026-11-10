@@ -1,0 +1,29 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// The `restrict` counterpart of `may_alias_parameter_kept`: the qualifier says
+// the write through the other parameter cannot be a read of this one, so each
+// parameter is a memory of its own on a chain nothing else touches, split off
+// the entry state. The first write is overwritten by the third with nothing
+// observing it in between, and the exit joins the two chains.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) noalias [0, 1] {
+    ptr.store %2, %0
+    ptr.store %2, %1
+    ptr.store %3, %0
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: {{.*}}, %[[Q:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: {{.*}}, %[[B:[0-9]+]]: {{.*}})
+// CHECK-NEXT: %[[E:[0-9]+]] = state.entry_state : !state<memory>
+// CHECK-NEXT: %[[C1:[0-9]+]], %[[C2:[0-9]+]] = state.split state(%[[E]])
+// CHECK-NEXT: %[[S2:[0-9]+]] = ptr.store %[[A]], %[[Q]] state(%[[C2]])
+// CHECK-NEXT: %[[S1:[0-9]+]] = ptr.store %[[B]], %[[P]] state(%[[C1]])
+// CHECK-NEXT: %[[EXIT:[0-9]+]] = state.join state(%[[S1]], %[[S2]])
+// CHECK-NEXT: -> %[[EXIT]]

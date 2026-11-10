@@ -13,8 +13,7 @@ doctest = false
 
 [dependencies]
 tir-macros.workspace = true
-tir-egglog = { workspace = true, features = ["parser"] }
-tir-pdl.workspace = true
+tir-egglog.workspace = true
 tir-symbolic.workspace = true
 tir-adt.workspace = true
 linkme.workspace = true
@@ -26,7 +25,6 @@ ariadne.workspace = true
 egglog-rules = ["tir-egglog/parser"]
 
 [build-dependencies]
-tir-pdl.workspace = true
 tir-cdsl = { workspace = true, features = ["rust-output"] }
 tir-egglog = { workspace = true, features = ["parser"] }
 

@@ -1,0 +1,45 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// The shape restructuring leaves a `goto`/`while` loop in: the whole body runs
+// before the predicate, so the update happens ahead of the test and the loop
+// only carries on what it was handed. The port then carries the latch through
+// the test — what the loop is left with is what the test computed — and the
+// read inside the loop takes the head the test was entered on.
+
+module {
+  %fn_sum = func.func @sum(%0: !i1, %1: !i32) -> !i32 {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = state.entry_state : !state<memory>
+    %4 = ptr.store %1, %2 state(%3)
+    %5 = scf.loop (%6 = %4) {
+      %7, %8 = scf.switch %0 args(%6) (%9) {
+        %10 = constant {value = 0} : !i1
+        -> %10, %9
+      }
+      (%11) {
+        %12, %13 = ptr.load %2 state(%11) : !i32
+        %14 = addi %12, %12 : !i32
+        %15 = ptr.store %14, %2 state(%13)
+        %16 = constant {value = 1} : !i1
+        -> %16, %15
+      }
+      -> %7, %8, %8
+    }
+    %17, %18 = ptr.load %2 state(%5) : !i32
+    -> %17, %18
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @sum
+// CHECK-NOT: ptr.
+// CHECK: %[[RESULT:[0-9]+]] = scf.loop (%[[HEAD:[0-9]+]] = %1) {
+// CHECK-NEXT: %[[COND:[0-9]+]], %[[LATCH:[0-9]+]] = scf.switch %0 {
+// CHECK: -> %{{[0-9]+}}, %[[HEAD]]
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[HEAD]], %[[HEAD]] : !i32
+// CHECK: -> %{{[0-9]+}}, %[[NEXT]]
+// CHECK: -> %[[COND]], %[[LATCH]], %[[LATCH]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[RESULT]], %{{[0-9]+}}

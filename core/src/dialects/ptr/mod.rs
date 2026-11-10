@@ -7,7 +7,6 @@
 //! to an offset moves to the address unchanged and no width change is implicit.
 
 mod intrinsics;
-pub(crate) mod semantics;
 
 use tir_symbolic::term::{no_carrier, valid};
 

@@ -227,21 +227,6 @@ pub fn infer_types<V, A>(
             SymKind::LoadMemory | SymKind::LoadReserved => const_u64(graph, children[1])
                 .map(|bytes| semantic(terms, ctor::RAW, vec![TypeArg::Nat(bytes * 8)]))
                 .unwrap_or_else(|| semantic(terms, ctor::RAW, vec![inference.fresh_var()])),
-            SymKind::MemoryByteRead | SymKind::MemoryByteWrite | SymKind::MemoryRangeValid => {
-                inference.unify(&child(0), &TypeArg::Type(crate::term::TypeId::STATE))?;
-                inference.unify(&child(1), &bits(terms, 64))?;
-                match kind {
-                    SymKind::MemoryByteWrite => {
-                        inference.unify(&child(2), &bits(terms, 9))?;
-                        TypeArg::Type(crate::term::TypeId::STATE)
-                    }
-                    SymKind::MemoryRangeValid => {
-                        inference.unify(&child(2), &bits(terms, 64))?;
-                        bits(terms, 1)
-                    }
-                    _ => bits(terms, 9),
-                }
-            }
             SymKind::StoreConditional => bits(terms, 1),
             SymKind::AtomicRmw => const_u64(graph, children[2])
                 .map(|bytes| bits(terms, bytes * 8))
@@ -429,9 +414,7 @@ pub fn infer_widths<V, A>(
                     .get(1)
                     .and_then(|&c| const_u64(graph, c))
                     .map(|bytes| (bytes as u32) * 8),
-                SymKind::MemoryByteRead => Some(9),
-                SymKind::MemoryRangeValid => Some(1),
-                SymKind::MemoryByteWrite | SymKind::StoreMemory => None,
+                SymKind::StoreMemory => None,
 
                 SymKind::LoadReserved => children
                     .get(1)

@@ -1,8 +1,8 @@
 // RUN: tir opt --verify %s | filecheck %s
 // RUN: tir interp %s --args=5 | filecheck --check-prefix=VALUE %s
-// RUN: tir opt --pass restructure-nodes,eqsat %s | tir interp --args=5 | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp --args=5 | filecheck --check-prefix=VALUE %s
 // RUN: tir interp %s -f shift | filecheck --check-prefix=SHIFT %s
-// RUN: tir opt --pass restructure-nodes,eqsat %s | tir interp -f limbs --args=5 | filecheck --check-prefix=LIMBS %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f limbs --args=5 | filecheck --check-prefix=LIMBS %s
 
 // An integer is as wide as its type. A constant an `i64` cannot spell keeps
 // its limbs and prints as its unsigned value.

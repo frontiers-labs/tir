@@ -1,0 +1,62 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
+
+// A comparison and its complement over the same operands are one fact: knowing
+// `a < b` is knowing `a >= b` is false, in either arm and in either direction.
+// Each arm masks the complement with its own operand, so the arms share no term
+// that could be spelled once outside the gate.
+
+module {
+  %fn_ordering = func.func @ordering(%a: !i32, %b: !i32, %k: !i1, %m: !i1) -> !i1 {
+    %c = cmpi %a, %b {predicate = "slt"} : !i1
+    %r = scf.switch %c {
+      %e = cmpi %a, %b {predicate = "sge"} : !i1
+      %x = xori %e, %m : !i1
+      -> %x
+    }
+    {
+      %t = cmpi %a, %b {predicate = "sge"} : !i1
+      %y = xori %t, %k : !i1
+      -> %y
+    }
+    -> %r
+  }
+  %fn_equality = func.func @equality(%a: !i32, %b: !i32, %k: !i1, %m: !i1) -> !i1 {
+    %c = cmpi %a, %b {predicate = "eq"} : !i1
+    %r = scf.switch %c {
+      %e = cmpi %a, %b {predicate = "ne"} : !i1
+      %x = xori %e, %m : !i1
+      -> %x
+    }
+    {
+      %t = cmpi %a, %b {predicate = "ne"} : !i1
+      %y = xori %t, %k : !i1
+      -> %y
+    }
+    -> %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @ordering(
+// CHECK-SAME: %[[K:[0-9]+]]: !i1, %[[M:[0-9]+]]: !i1
+// CHECK: scf.switch
+// CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: %[[X:[0-9]+]] = xori %[[ONE]], %[[M]] : !i1
+// CHECK-NEXT: -> %[[X]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: -> %[[K]]
+// CHECK-NEXT: }
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @equality(
+// CHECK-SAME: %[[K:[0-9]+]]: !i1, %[[M:[0-9]+]]: !i1
+// CHECK: scf.switch
+// CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: %[[X:[0-9]+]] = xori %[[ONE]], %[[M]] : !i1
+// CHECK-NEXT: -> %[[X]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: -> %[[K]]
+// CHECK-NEXT: }

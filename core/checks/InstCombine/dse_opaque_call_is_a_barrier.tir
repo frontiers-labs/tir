@@ -1,0 +1,30 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// The slot's address reaches the call, so the call is on the chain the slot's
+// accesses are on and the facts model nothing about what it does to memory: it
+// may read the first write back. Nothing here ever names the slot's chain
+// without the world's, so the two are one and the call needs no merge to sit
+// on it.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_g = func.declare @g(!ptr.p<!i32>) -> !unit
+  %fn_f = func.func @f(%0: !i32, %1: !i32) {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %2
+    func.call %fn_g(%2 : !ptr.p<!i32>)
+    ptr.store %1, %2
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: %[[A1:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[SLOT:[0-9]+]] state(%{{[0-9]+}})
+// CHECK-NEXT: %[[ENV:[0-9]+]] = state.entry_state : !state<fp.env>
+// CHECK-NEXT: %[[A2:[0-9]+]], %[[CALL_ENV:[0-9]+]] = func.call %{{[0-9]+}}(%[[SLOT]] : !ptr.p<!i32>) state(%[[A1]], %[[ENV]])
+// CHECK-NEXT: %[[A3:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[SLOT]] state(%[[A2]])
+// CHECK-NEXT: -> %[[A3]], %[[CALL_ENV]]

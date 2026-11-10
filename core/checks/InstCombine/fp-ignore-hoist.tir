@@ -1,0 +1,25 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+
+module {
+  %f = func.func @shared(%condition: !i1, %a: !f64, %b: !f64) -> !f64 {
+    cfg.cond_br %condition, ^then, ^else
+  ^then:
+    %x = fp.add %a, %b : !f64
+    cfg.br ^join(%x : !f64)
+  ^else:
+    %y = fp.add %a, %b : !f64
+    cfg.br ^join(%y : !f64)
+  ^join(%result: !f64):
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: func.func @shared
+// CHECK-NOT: scf.switch
+// CHECK: %[[SUM:[0-9]+]] = fp.add
+// CHECK-NOT: fp.add
+// CHECK-NOT: scf.switch
+// CHECK: -> %[[SUM]]

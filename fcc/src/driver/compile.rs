@@ -442,8 +442,10 @@ pub(super) fn parse_source_opts(opts: &DriverOptions, name: &str, source: &str) 
     )
 }
 
-fn add_eqsat(pm: &mut tir::PassManager) {
-    pm.add_pass(tir::passes::EqSatPass::new());
+// C's floating-point sign identities are rules no solver checks; the
+// compiler trusts them.
+fn add_instcombine(pm: &mut tir::PassManager) {
+    pm.add_pass(tir::passes::InstCombineNodesPass::trusting());
 }
 
 pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
@@ -457,7 +459,7 @@ pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
         // callers select a reduced mid-end pipeline. Without this final
         // cleanup, unfolded address arithmetic can reach instruction
         // selection and change the program's observable behavior.
-        add_eqsat(pm.nest(&tir::func::FUNC));
+        add_instcombine(pm.nest(&tir::func::FUNC));
     } else if let Some(rounds) = opts.opt_level.rounds() {
         let fixpoint = pm.fixpoint(rounds.cap);
         fixpoint.add_pass(tir::passes::InlinePass::new(rounds.inline));
@@ -468,17 +470,20 @@ pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
         // simplifier's own sweep takes what nothing demands.
         round.add_pass(tir::passes::PromoteNodesPass::new());
         round.add_pass(tir::passes::VerifyDepsPass::new());
-        add_eqsat(round);
+        add_instcombine(round);
         if rounds.affine {
+            // Loop scheduling reads the chains too, and what it leaves behind — a
+            // rebuilt nest, an unrolled body — is address arithmetic nobody has
+            // folded yet, so the simplifier runs once more over it.
             round.add_pass(tir::passes::AffineSchedulePass::new());
-            add_eqsat(round);
+            add_instcombine(round);
         }
     } else {
         // -O0 runs no round. What is left is the normalising simplifier every
         // pipeline needs: instruction selection reads unfolded address
         // arithmetic as a different program, which is a backend defect this
         // level inherits.
-        add_eqsat(pm.nest(&tir::func::FUNC));
+        add_instcombine(pm.nest(&tir::func::FUNC));
     }
     pm.set_workers(opts.jobs);
     pm
