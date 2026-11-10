@@ -1,0 +1,19 @@
+// The slot's address reaches the call, so the call is on the chain the slot's
+// accesses are on and the facts model nothing about what it does to memory: it
+// may read the first write back. Nothing here ever names the slot's chain
+// without the world's, so the two are one and the call needs no merge to sit
+// on it.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_g = func.declare @g(!ptr.p<!i32>) -> !unit
+  %fn_f = func.func @f(%0: !i32, %1: !i32) {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %2
+    func.call %fn_g(%2 : !ptr.p<!i32>)
+    ptr.store %1, %2
+    func.return
+  }
+  module_end
+}

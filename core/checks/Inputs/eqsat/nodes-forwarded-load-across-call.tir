@@ -1,0 +1,51 @@
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+// Separate state chains do not grant an opaque call an inaccessible-memory
+// contract. Keep the slot and both calls, including the direct slot read chain.
+
+#layout_spec = #layout.spec<!i8 = {size = 8, abi = 8}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_f = func.declare @f(!i8) -> !unit
+  %fn_g = func.declare @g() -> !unit
+  %fn_scale = func.func @scale(%p: !ptr.p) {
+    %slot = ptr.alloca {size = 1, align = 1} : !ptr.p
+    %s_slot = state.entry_state : !state<memory>
+    %s_param = state.entry_state : !state<memory>
+    %s_world = state.entry_state : !state<memory>
+    %ptr, %r_param = ptr.load %p state(%s_param) : !ptr.p
+    %byte, %r_world = ptr.load %ptr state(%s_world) : !i8
+    %w_slot = ptr.store %byte, %slot state(%s_slot)
+    %in_g = state.join state(%r_world, %r_param)
+    %after_g = func.call %fn_g() state(%in_g)
+    %g_world, %g_param = state.split state(%after_g)
+    %back, %r_slot = ptr.load %slot state(%w_slot) : !i8
+    %in_f = state.join state(%g_world, %g_param)
+    %after_f = func.call %fn_f(%back : !i8) state(%in_f)
+    %f_world, %f_param = state.split state(%after_f)
+    %out = state.join state(%r_slot, %f_world, %f_param)
+    -> %out
+  }
+  module_end
+}
+
+// CHECK: %[[F:[0-9]+]] = func.declare @f(!i8) -> !unit
+// CHECK-NEXT: %[[G:[0-9]+]] = func.declare @g() -> !unit
+// CHECK-NEXT: %{{[0-9]+}} = func.func @scale(%[[P:[0-9]+]]: !ptr.p) {
+// CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca {size = 1, align = 1} : !ptr.p
+// CHECK-NEXT: %[[SS:[0-9]+]] = state.entry_state : !state<memory>
+// CHECK-NEXT: %[[SP:[0-9]+]] = state.entry_state : !state<memory>
+// CHECK-NEXT: %[[SW:[0-9]+]] = state.entry_state : !state<memory>
+// CHECK-NEXT: %[[PTR:[0-9]+]], %[[RP:[0-9]+]] = ptr.load %[[P]] state(%[[SP]]) : !ptr.p
+// CHECK-NEXT: %[[BYTE:[0-9]+]], %[[RW:[0-9]+]] = ptr.load %[[PTR]] state(%[[SW]]) : !i8
+// CHECK-NEXT: %[[WS:[0-9]+]] = ptr.store %[[BYTE]], %[[SLOT]] state(%[[SS]])
+// CHECK-NEXT: %[[ING:[0-9]+]] = state.join state(%[[RW]], %[[RP]])
+// CHECK-NEXT: %[[AG:[0-9]+]] = func.call %[[G]]() state(%[[ING]])
+// CHECK-NEXT: %[[GW:[0-9]+]], %[[GP:[0-9]+]] = state.split state(%[[AG]])
+// CHECK-NEXT: %[[BACK:[0-9]+]], %[[RS:[0-9]+]] = ptr.load %[[SLOT]] state(%[[WS]]) : !i8
+// CHECK-NEXT: %[[INF:[0-9]+]] = state.join state(%[[GW]], %[[GP]])
+// CHECK-NEXT: %[[AF:[0-9]+]] = func.call %[[F]](%[[BACK]] : !i8) state(%[[INF]])
+// CHECK-NEXT: %[[FW:[0-9]+]], %[[FP:[0-9]+]] = state.split state(%[[AF]])
+// CHECK-NEXT: %[[OUT:[0-9]+]] = state.join state(%[[RS]], %[[FW]], %[[FP]])
+// CHECK-NEXT: -> %[[OUT]]
+// CHECK-NEXT: }

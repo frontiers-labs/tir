@@ -1,0 +1,60 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// The shape a `do` loop leaves behind: the body, then a guard that repeats or
+// leaves the loop. The arm that breaks never reaches the gate's continuation, so
+// the gate leaves the state the other arm yields, the θ over it reads the body's
+// write, and the break carries the value reaching it out of the loop.
+
+module {
+  %fn_countdown = func.func @countdown(%0: !i1, %1: !i32) -> !i32 {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = state.entry_state : !state<memory>
+    %4 = ptr.store %1, %2 state(%3)
+    %5 = scf.loop (%6 = %4) {
+      %7, %8 = scf.switch %0 args(%6) (%9) {
+        %10 = constant {value = 0} : !i1
+        -> %10, %9
+      }
+      (%11) {
+        %12, %13 = ptr.load %2 state(%11) : !i32
+        %14 = addi %12, %12 : !i32
+        %15 = ptr.store %14, %2 state(%13)
+        %16 = scf.switch %0 {
+          %17 = constant {value = 0} : !i1
+          -> %17
+        }
+        {
+          %18 = constant {value = 1} : !i1
+          -> %18
+        }
+        -> %16, %15
+      }
+      -> %7, %8, %8
+    }
+    %19, %20 = ptr.load %2 state(%5) : !i32
+    -> %19, %20
+  }
+  module_end
+}
+
+// CHECK-LABEL: module {
+// CHECK-NEXT:   %[[V0:[0-9]+]] = func.func @countdown(%[[V1:[0-9]+]]: !i1, %[[V2:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT:     %[[V3:[0-9]+]] = state.entry_state : !state<memory>
+// CHECK-NEXT:     %[[V4:[0-9]+]] = scf.loop (%[[V5:[0-9]+]] = %[[V2]]) {
+// CHECK-NEXT:       %[[V6:[0-9]+]], %[[V7:[0-9]+]] = scf.switch %[[V1]] args(%[[V5]]) (%[[V8:[0-9]+]]) {
+// CHECK-NEXT:         %[[V9:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT:         -> %[[V9]], %[[V8]]
+// CHECK-NEXT:       }
+// CHECK-NEXT:       (%[[V10:[0-9]+]]) {
+// CHECK-NEXT:         %[[V11:[0-9]+]] = addi %[[V10]], %[[V10]] : !i32
+// CHECK-NEXT:         %[[V12:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT:         -> %[[V12]], %[[V11]]
+// CHECK-NEXT:       }
+// CHECK-NEXT:       -> %[[V6]], %[[V7]], %[[V7]]
+// CHECK-NEXT:     }
+// CHECK-NEXT:     -> %[[V4]], %[[V3]]
+// CHECK-NEXT:   }
+// CHECK-NEXT:   module_end
+// CHECK-NEXT: }

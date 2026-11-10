@@ -48,6 +48,9 @@ const OP_VOCABULARY: &[(&str, SymKind)] = &[
     ("switch", SymKind::Switch),
     ("poison", SymKind::Poison),
     ("freeze", SymKind::Freeze),
+    ("memory_byte_read", SymKind::MemoryByteRead),
+    ("memory_byte_write", SymKind::MemoryByteWrite),
+    ("memory_range_valid", SymKind::MemoryRangeValid),
 ];
 
 /// The [`SymKind`] an operator atom names, if any.

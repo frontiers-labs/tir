@@ -1,0 +1,24 @@
+module {layout.spec = #layout.spec<endianness = "little", !ptr.p = {size = 64, abi = 64}>} {
+  %fn_main = func.func @f(%x: !i32, %3: !ptr.p<!i32>) -> !i32 {
+    %0 = constant {value = 0} : !i32
+    %1 = constant {value = 1} : !i32
+    %2 = constant {value = 3} : !i32
+    %4 = state.entry_state : !state<memory>
+    %5 = ptr.store %0, %3 state(%4)
+    %6, %7 = scf.loop (%8 = %0, %9 = %5) {
+      %10, %17 = ptr.load %3 state(%9) : !i32
+      %peer, %peerstate = ptr.load %3 state(%9) : !i32
+      %joined = state.join state(%17, %peerstate)
+      %both = addi %10, %peer : !i32
+      %11 = addi %both, %1 : !i32
+      %12 = ptr.store %11, %3 state(%joined)
+      %13, %done = ptr.load %3 state(%12) : !i32
+      %14 = cmpi %13, %2 {predicate = "slt"} : !i1
+      -> %14, %8, %13, %done, %done
+    }
+    %15 = ptr.load %3 state(%7) : !i32
+    %16 = addi %6, %15 : !i32
+    func.return %16
+  }
+  module_end
+}

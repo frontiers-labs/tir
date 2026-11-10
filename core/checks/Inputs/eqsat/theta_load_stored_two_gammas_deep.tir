@@ -1,0 +1,126 @@
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+// The opaque sink can observe both cells at its first call. Keep their state
+// through both nested gates and loops, including the false controller exit.
+
+module {
+  %fn_sink = func.declare @sink(!i32) -> !i32
+  %fn_f = func.func @f(%0: !i1) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = constant {value = 0} : !i32
+    %4 = state.entry_state : !state<memory>
+    %5 = ptr.store %3, %1 state(%4)
+    %51 = ptr.store %3, %2 state(%5)
+    %6 = scf.loop (%7 = %51) {
+      %8, %9 = scf.switch %0 args(%7) (%10) {
+        %11 = constant {value = 0} : !i1
+        -> %11, %10
+      }
+      (%12) {
+        %13 = constant {value = 3} : !i32
+        %14, %15 = ptr.load %1 state(%12) : !i32
+        %16 = cmpi %14, %13 {predicate = "slt"} : !i1
+        %17 = scf.switch %16 args(%15) (%18) {
+          -> %18
+        }
+        (%19) {
+          %20 = constant {value = 0} : !i32
+          %21 = ptr.store %20, %2 state(%19)
+          %22 = scf.loop (%23 = %21) {
+            %24 = constant {value = 2} : !i32
+            %25, %26 = ptr.load %2 state(%23) : !i32
+            %27 = cmpi %25, %24 {predicate = "slt"} : !i1
+            %28, %29 = scf.switch %27 args(%26) (%30) {
+              %31 = constant {value = 0} : !i1
+              -> %31, %30
+            }
+            (%32) {
+              %33, %34 = ptr.load %1 state(%32) : !i32
+              %35 = constant {value = 1} : !i32
+              %36 = addi %33, %35 : !i32
+              %37 = ptr.store %36, %1 state(%34)
+              %38, %39 = ptr.load %2 state(%37) : !i32
+              %40 = constant {value = 1} : !i32
+              %41 = addi %38, %40 : !i32
+              %42 = ptr.store %41, %2 state(%39)
+              %43 = constant {value = 1} : !i1
+              -> %43, %42
+            }
+            -> %28, %29, %29
+          }
+          -> %22
+        }
+        %44, %45 = ptr.load %1 state(%17) : !i32
+        %46, %47 = func.call %fn_sink(%44 : !i32) -> !i32 state(%45)
+        %48 = constant {value = 1} : !i1
+        -> %48, %47
+      }
+      -> %8, %9, %9
+    }
+    %49, %50 = ptr.load %1 state(%6) : !i32
+    -> %49, %50
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT:   %[[V3:[0-9]+]] = func.declare @sink(!i32) -> !i32
+// CHECK-NEXT:   %[[V100:[0-9]+]] = func.func @f(%[[V5:[0-9]+]]: !i1) -> !i32 {
+// CHECK-NEXT:     %[[V7:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+// CHECK-NEXT:     %[[V9:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+// CHECK-NEXT:     %[[V11:[0-9]+]] = constant {value = 0} : !i32
+// CHECK-NEXT:     %[[V13:[0-9]+]] = state.entry_state : !state<memory>
+// CHECK-NEXT:     %[[V16:[0-9]+]] = ptr.store %[[V11]], %[[V7]] state(%[[V13]])
+// CHECK-NEXT:     %[[V18:[0-9]+]] = ptr.store %[[V11]], %[[V9]] state(%[[V16]])
+// CHECK-NEXT:     %[[V95:[0-9]+]] = scf.loop (%[[V19:[0-9]+]] = %[[V18]]) {
+// CHECK-NEXT:       %[[V92:[0-9]+]], %[[V93:[0-9]+]] = scf.switch %[[V5]] args(%[[V19]]) (%[[V21:[0-9]+]]) {
+// CHECK-NEXT:         %[[V23:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT:         -> %[[V23]], %[[V21]]
+// CHECK-NEXT:       }
+// CHECK-NEXT:       (%[[V25:[0-9]+]]) {
+// CHECK-NEXT:         %[[V27:[0-9]+]] = constant {value = 3} : !i32
+// CHECK-NEXT:         %[[V29:[0-9]+]], %[[V31:[0-9]+]] = ptr.load %[[V7]] state(%[[V25]]) : !i32
+// CHECK-NEXT:         %[[V32:[0-9]+]] = cmpi %[[V29]], %[[V27]] {predicate = "slt"} : !i1
+// CHECK-NEXT:         %[[V82:[0-9]+]] = scf.switch %[[V32]] args(%[[V31]]) (%[[V34:[0-9]+]]) {
+// CHECK-NEXT:           -> %[[V34]]
+// CHECK-NEXT:         }
+// CHECK-NEXT:         (%[[V36:[0-9]+]]) {
+// CHECK-NEXT:           %[[V38:[0-9]+]] = constant {value = 0} : !i32
+// CHECK-NEXT:           %[[V41:[0-9]+]] = ptr.store %[[V38]], %[[V9]] state(%[[V36]])
+// CHECK-NEXT:           %[[V80:[0-9]+]] = scf.loop (%[[V42:[0-9]+]] = %[[V41]]) {
+// CHECK-NEXT:             %[[V44:[0-9]+]] = constant {value = 2} : !i32
+// CHECK-NEXT:             %[[V46:[0-9]+]], %[[V48:[0-9]+]] = ptr.load %[[V9]] state(%[[V42]]) : !i32
+// CHECK-NEXT:             %[[V49:[0-9]+]] = cmpi %[[V46]], %[[V44]] {predicate = "slt"} : !i1
+// CHECK-NEXT:             %[[V77:[0-9]+]], %[[V78:[0-9]+]] = scf.switch %[[V49]] args(%[[V48]]) (%[[V51:[0-9]+]]) {
+// CHECK-NEXT:               %[[V53:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT:               -> %[[V53]], %[[V51]]
+// CHECK-NEXT:             }
+// CHECK-NEXT:             (%[[V55:[0-9]+]]) {
+// CHECK-NEXT:               %[[V57:[0-9]+]], %[[V59:[0-9]+]] = ptr.load %[[V7]] state(%[[V55]]) : !i32
+// CHECK-NEXT:               %[[V60:[0-9]+]] = constant {value = 1} : !i32
+// CHECK-NEXT:               %[[V62:[0-9]+]] = addi %[[V57]], %[[V60]] : !i32
+// CHECK-NEXT:               %[[V65:[0-9]+]] = ptr.store %[[V62]], %[[V7]] state(%[[V59]])
+// CHECK-NEXT:               %[[V66:[0-9]+]], %[[V68:[0-9]+]] = ptr.load %[[V9]] state(%[[V65]]) : !i32
+// CHECK-NEXT:               %[[V69:[0-9]+]] = constant {value = 1} : !i32
+// CHECK-NEXT:               %[[V71:[0-9]+]] = addi %[[V66]], %[[V69]] : !i32
+// CHECK-NEXT:               %[[V74:[0-9]+]] = ptr.store %[[V71]], %[[V9]] state(%[[V68]])
+// CHECK-NEXT:               %[[V75:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT:               -> %[[V75]], %[[V74]]
+// CHECK-NEXT:             }
+// CHECK-NEXT:             -> %[[V77]], %[[V78]], %[[V78]]
+// CHECK-NEXT:           }
+// CHECK-NEXT:           -> %[[V80]]
+// CHECK-NEXT:         }
+// CHECK-NEXT:         %[[V84:[0-9]+]], %[[V86:[0-9]+]] = ptr.load %[[V7]] state(%[[V82]]) : !i32
+// CHECK-NEXT:         %[[V87:[0-9]+]], %[[V89:[0-9]+]] = func.call %[[V3]](%[[V84]] : !i32) -> !i32 state(%[[V86]])
+// CHECK-NEXT:         %[[V90:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT:         -> %[[V90]], %[[V89]]
+// CHECK-NEXT:       }
+// CHECK-NEXT:       -> %[[V92]], %[[V93]], %[[V93]]
+// CHECK-NEXT:     }
+// CHECK-NEXT:     %[[V97:[0-9]+]], %[[V99:[0-9]+]] = ptr.load %[[V7]] state(%[[V95]]) : !i32
+// CHECK-NEXT:     -> %[[V97]], %[[V99]]
+// CHECK-NEXT:   }
+// CHECK-NEXT:   module_end
+// CHECK-NEXT: }

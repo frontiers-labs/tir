@@ -1,0 +1,34 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+
+// The `c == 1` fact holds throughout the arm the gate guards, however deeply the
+// restructured code nests inside it: the scope is pushed once and the nesting
+// carries it down with no re-assertion, and the redundant compare folds.
+
+module {
+  %fn_nested = func.func @nested(%a: !i32, %b: !i32) -> !i1 {
+    %c = cmpi %a, %b {predicate = "eq"} : !i1
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    cfg.br ^bb3
+  ^bb2:
+    func.return %c
+  ^bb3:
+    %d = cmpi %a, %b {predicate = "eq"} : !i1
+    func.return %d
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @nested
+// CHECK: %[[C:[0-9]+]] = cmpi
+// CHECK-NEXT: cfg.cond_br %[[C]], ^bb1, ^bb2
+// CHECK: ^bb1:
+// CHECK-NEXT: cfg.br ^bb3
+// CHECK: ^bb2:
+// CHECK-NEXT: func.return %[[C]]
+// CHECK: ^bb3:
+// CHECK-NEXT: %[[D:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: func.return %[[D]]

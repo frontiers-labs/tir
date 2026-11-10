@@ -1,0 +1,20 @@
+// noalias separates the addresses but does not prove the q store cannot fault.
+// The first p write remains visible if q faults before the overwrite.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) noalias [0, 1] {
+    ptr.store %2, %0
+    ptr.store %2, %1
+    ptr.store %3, %0
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @f(%[[P:[0-9]+]]: !ptr.p<!i32>, %[[Q:[0-9]+]]: !ptr.p<!i32>, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32) noalias [0, 1]
+// CHECK-NEXT: ptr.store %[[A]], %[[P]]
+// CHECK-NEXT: ptr.store %[[A]], %[[Q]]
+// CHECK-NEXT: ptr.store %[[B]], %[[P]]
+// CHECK-NEXT: func.return

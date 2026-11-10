@@ -10,6 +10,10 @@
 //! replaces the cost of one row of its constructor in the default model. An
 //! e-class of a sort that no constructor makes is a leaf, printed `Sort#id`.
 
+mod dag;
+
+pub use dag::GreedyDagExtractor;
+
 use std::collections::{HashMap, HashSet};
 
 use tir_adt::FxBuildHasher;
@@ -251,6 +255,18 @@ impl<'g> TreeExtractor<'g, DefaultCost> {
 }
 
 impl<'g, C: Cost> TreeExtractor<'g, C> {
+    /// The constructor and input values selected at the root of `value`.
+    /// Input values retain their e-class identities for joins to origin data.
+    pub fn best_enode(&self, value: Value) -> Result<(TableId, Vec<Value>), Error> {
+        let class = self.db.find_in(self.color, value);
+        let (table, row) = self
+            .parent
+            .get(&class)
+            .ok_or_else(|| Error::ExtractError(format!("no term for {value:?}")))?;
+        let arity = self.db.schema().table(*table).key_arity();
+        Ok((*table, row[..arity].to_vec()))
+    }
+
     pub fn with_cost_model(db: &'g Database, model: impl TreeCostModel<C> + 'g) -> Self {
         Self::build(db, Color::BASE, model)
     }

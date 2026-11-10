@@ -1,0 +1,93 @@
+rule mul-one: builtin.muli(x: int<W>, 1) => x proof trusted;
+rule one-mul: builtin.muli(1, x: int<W>) => x proof trusted;
+rule fp-neg-neg: fp.neg(fp.neg(x)) => x proof trusted;
+rule fp-copy-self: fp.copysign(x, x) => x proof trusted;
+rule fp-abs-abs: fp.abs(fp.abs(x)) => fp.abs(x) proof trusted;
+rule fp-abs-neg: fp.abs(fp.neg(x)) => fp.abs(x) proof trusted;
+rule fp-copy-neg-self: fp.copysign(x, fp.neg(x)) => fp.neg(x) proof trusted;
+rule fp-copy-abs-magnitude: fp.copysign(fp.abs(x), y) => fp.copysign(x, y) proof trusted;
+rule fp-copy-neg-magnitude: fp.copysign(fp.neg(x), y) => fp.copysign(x, y) proof trusted;
+rule fp-neg-copy-neg-sign: fp.neg(fp.copysign(x, fp.neg(y))) => fp.copysign(x, y) proof trusted;
+rule fp-abs-copy: fp.abs(fp.copysign(x, y)) => fp.abs(x) where defined(y) proof trusted;
+rule fp-copy-abs-sign: fp.copysign(x, fp.abs(y)) => fp.abs(x) where defined(y) proof trusted;
+rule or-known: builtin.ori(x: int<W>, c: const<W>) => x
+  where defined(x), (known_ones(x) & c) == c proof trusted;
+rule add-zero: builtin.addi(x: int<W>, 0) => x proof trusted;
+rule zero-add: builtin.addi(0, x: int<W>) => x proof trusted;
+rule sub-negative-one: builtin.subi(x: int<W>, -1) => builtin.addi(x, 1) proof trusted;
+rule sub-zero: builtin.subi(x: int<W>, 0) => x proof trusted;
+rule or-zero: builtin.ori(x: int<W>, 0) => x proof trusted;
+rule zero-xor: builtin.xori(0, x: int<W>) => x proof trusted;
+rule xor-zero: builtin.xori(x: int<W>, 0) => x proof trusted;
+rule shl-zero: builtin.shli(x: int<W>, 0) => x proof trusted;
+rule lshr-zero: builtin.shrui(x: int<W>, 0) => x proof trusted;
+rule ashr-zero: builtin.shrsi(x: int<W>, 0) => x proof trusted;
+rule and-ones: builtin.andi(x: int<W>, -1) => x proof trusted;
+rule and-self: builtin.andi(x: int<W>, x) => x proof trusted;
+rule or-self: builtin.ori(x: int<W>, x) => x proof trusted;
+rule and-absorption: builtin.andi(builtin.ori(x: int<W>, y: int<W>), x)
+  => x where defined(y) proof trusted;
+rule or-absorption: builtin.ori(builtin.andi(x: int<W>, y: int<W>), x)
+  => x where defined(y) proof trusted;
+rule xor-cancel: builtin.xori(builtin.xori(x: int<W>, y: int<W>), y)
+  => x where defined(y) proof trusted;
+rule and-zero: builtin.andi(x: int<W>, 0) => 0 where defined(x) proof trusted;
+rule or-ones: builtin.ori(x: int<W>, -1) => -1 where defined(x) proof trusted;
+rule xor-self: builtin.xori(x: int<W>, x) => 0 where defined(x) proof trusted;
+rule sub-self: builtin.subi(x: int<W>, x) => 0 where defined(x) proof trusted;
+rule telescope: builtin.addi(builtin.subi(x: int<W>, y: int<W>), builtin.subi(y, z: int<W>))
+  => builtin.subi(x, z) where defined(y) proof trusted;
+rule add-add-sub: builtin.addi(builtin.addi(x: int<W>, y: int<W>), builtin.subi(z: int<W>, y))
+  => builtin.addi(x, z) where defined(y) proof trusted;
+rule sub-add-left: builtin.subi(builtin.addi(x: int<W>, y: int<W>), builtin.addi(x, z: int<W>))
+  => builtin.subi(y, z) where defined(x) proof trusted;
+rule sub-add-negate: builtin.subi(x: int<W>, builtin.addi(x, y: int<W>))
+  => builtin.subi(0, y) where defined(x) proof trusted;
+rule sub-left: builtin.subi(builtin.subi(x: int<W>, y: int<W>), builtin.subi(x, z: int<W>))
+  => builtin.subi(z, y) where defined(x) proof trusted;
+rule sub-right: builtin.subi(builtin.subi(x: int<W>, y: int<W>), builtin.subi(z: int<W>, y))
+  => builtin.subi(x, z) where defined(y) proof trusted;
+rule sub-sub-left: builtin.subi(builtin.subi(x: int<W>, y: int<W>), x)
+  => builtin.subi(0, y) where defined(x) proof trusted;
+rule sub-sub-cancel: builtin.subi(y: int<W>, builtin.subi(y, x: int<W>))
+  => x where defined(y) proof trusted;
+rule add-sub-cancel: builtin.addi(builtin.subi(x: int<W>, y: int<W>), y)
+  => x where defined(y) proof trusted;
+rule sub-add-cancel: builtin.subi(builtin.addi(x: int<W>, y: int<W>), y)
+  => x where defined(y) proof trusted;
+rule and-complement: builtin.andi(x: int<W>, builtin.xori(x, -1))
+  => 0 where defined(x) proof trusted;
+rule or-complement: builtin.ori(x: int<W>, builtin.xori(x, -1))
+  => -1 where defined(x) proof trusted;
+rule xor-or-and: builtin.xori(builtin.ori(x: int<W>, y: int<W>), builtin.andi(x, y))
+  => builtin.xori(x, y) proof trusted;
+rule xor-xor-and: builtin.xori(builtin.xori(x: int<W>, y: int<W>), builtin.andi(x, y))
+  => builtin.ori(x, y) proof trusted;
+rule xor-and-xor-reversed: builtin.xori(builtin.andi(x: int<W>, y: int<W>), builtin.xori(x, y))
+  => builtin.ori(x, y) proof trusted;
+
+rule forward-integer: ptr.load(p: ptr<P> | ptr.store(x: int<W>, p | s: state<memory>)) => x proof smt;
+
+rule fold-add: builtin.addi(a: const<W>, b: const<W>) => a + b proof trusted;
+rule fold-sub: builtin.subi(a: const<W>, b: const<W>) => a - b proof trusted;
+rule fold-mul: builtin.muli(a: const<W>, b: const<W>) => a * b proof trusted;
+rule add-offsets: builtin.addi(builtin.addi(x: int<W>, a: const<W>), builtin.addi(y: int<W>, b: const<W>))
+  => builtin.addi(builtin.addi(x, y), a + b) proof trusted;
+rule add-constants: builtin.addi(builtin.addi(x: int<W>, a: const<W>), b: const<W>)
+  => builtin.addi(x, a + b) proof trusted;
+rule sub-constants: builtin.subi(builtin.addi(x: int<W>, a: const<W>), b: const<W>)
+  => builtin.addi(x, a - b) proof trusted;
+rule mul-constants: builtin.muli(builtin.muli(x: int<W>, a: const<W>), b: const<W>)
+  => builtin.muli(x, a * b) proof trusted;
+rule mul-negative-one: builtin.muli(x: int<W>, -1) => builtin.subi(0, x) proof trusted;
+rule mul-pow2: builtin.muli(x: int<W>, c: const<W>) => builtin.shli(x, ctz(c))
+  where popcount(c) == 1, c != 1 proof trusted;
+
+rule udiv-one: builtin.divui(x: int<W>, 1) => x where defined(x) proof trusted;
+rule sdiv-one: builtin.divsi(x: int<W>, c: const<W>) => x
+  where c == 1, c != -1, defined(x) proof trusted;
+rule urem-one: builtin.remui(x: int<W>, 1) => 0 where defined(x) proof trusted;
+rule srem-one: builtin.remsi(x: int<W>, c: const<W>) => 0
+  where c == 1, c != -1, defined(x) proof trusted;
+
+rule forward-pointer: ptr.load(p: ptr<P> | ptr.store(x: ptr<Q>, p | s: state<memory>)) => x proof smt;

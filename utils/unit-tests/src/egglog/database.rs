@@ -209,6 +209,41 @@ fn a_subsumed_row_stays_for_lookup() {
 }
 
 #[test]
+fn scoped_publication_preserves_subsumption_and_normalized_rows() {
+    for scoped in [false, true] {
+        let (mut db, node) = node_db();
+        let held = db.add_relation("held", &[node]);
+        let [a, b] = [(); 2].map(|()| db.fresh(node));
+        db.insert(held, &[b]).unwrap();
+        db.subsume(held, &[b]);
+        db.rebuild().unwrap();
+        let mark = db.mark();
+        let first = db.color(&[]);
+        let second = db.color(&[]);
+        db.union_in(first, a, b);
+        db.insert_in(second, held, &[a]).unwrap();
+        db.rebuild().unwrap();
+        if scoped {
+            db.adopt_scoped_rows(&[first, second], &[held], mark)
+                .unwrap();
+        } else {
+            db.adopt_rows(first, &[held], mark);
+        }
+        db.rebuild().unwrap();
+        let retained: Vec<_> = db
+            .rows(held)
+            .map(|row| (row[0], row.is_subsumed()))
+            .collect();
+        assert_eq!(retained, [(a, true)]);
+        assert_ne!(
+            db.find(a),
+            db.find(b),
+            "publication does not adopt local unions"
+        );
+    }
+}
+
+#[test]
 fn clear_drops_every_row() {
     let (mut db, node) = node_db();
     let edge = db.add_relation("edge", &[node, node]);
@@ -974,4 +1009,133 @@ mod argument_containers {
                 .unwrap();
         }
     }
+}
+
+#[test]
+fn native_scope_groups_keep_local_markers_and_publish_one_atomic_batch() {
+    use tir_egglog::Color;
+    let (mut db, node) = node_db();
+    let int = db.sort("i64").unwrap();
+    let scopes = db.add_relation("scopes", &[int]);
+    let parents = db.add_relation("parents", &[int, int]);
+    let seed = db.add_relation("seed", &[int]);
+    let facts = db.add_relation("facts", &[int]);
+    let scratch = db.add_relation("scratch", &[node]);
+    let edits = db.add_function("edits", &[int], int, Merge::AssertEq);
+    let values: Vec<_> = (0_i64..100).map(|x| db.base(x)).collect();
+    let [a, b, c] = [(); 3].map(|()| db.fresh(node));
+    for &scope in &values[..5] {
+        db.insert(scopes, &[scope]).unwrap();
+    }
+    for (child, parent) in [(1, 0), (2, 0), (3, 1), (3, 2), (4, 1)] {
+        db.insert(parents, &[values[child], values[parent]])
+            .unwrap();
+    }
+    let foreign = db.color(&[]);
+    db.insert_in(foreign, seed, &[values[99]]).unwrap();
+    let foreign_child = db.color(&[foreign]);
+    for _ in 0..2 {
+        let mark = db.mark();
+        let colors = db.scope_colors(Color::BASE, scopes, parents, seed).unwrap();
+        db.rebuild().unwrap();
+        for (i, &color) in colors.iter().enumerate() {
+            assert_eq!(
+                db.rows_in(color, seed).map(|r| r[0]).collect::<Vec<_>>(),
+                [values[i]]
+            );
+            let temporary = db.fresh(node);
+            db.insert_in(color, scratch, &[temporary]).unwrap();
+        }
+        db.union_in(colors[1], a, b);
+        db.union_in(colors[2], b, c);
+        db.insert(facts, &[values[8]]).unwrap();
+        db.insert_in(colors[1], edits, &[values[0], values[7]])
+            .unwrap();
+        db.insert_in(colors[2], edits, &[values[1], values[9]])
+            .unwrap();
+        db.rebuild().unwrap();
+        assert_eq!(db.find_in(colors[4], a), db.find_in(colors[4], b));
+        assert_ne!(db.find_in(colors[4], a), db.find_in(colors[4], c));
+        assert_eq!(db.find_in(colors[3], a), db.find_in(colors[3], c));
+        assert_ne!(db.find(a), db.find(b));
+        assert_ne!(db.find_in(colors[2], a), db.find_in(colors[2], b));
+        for &color in &colors {
+            assert_eq!(db.rows_in(color, facts).count(), 1);
+        }
+        db.adopt_scoped_rows(&colors, &[edits], mark).unwrap();
+        db.rebuild().unwrap();
+        assert_eq!(db.lookup(edits, &[values[0]]), Some(values[7]));
+        assert_eq!(db.lookup(edits, &[values[1]]), Some(values[9]));
+        assert_eq!(db.mark(), mark);
+        assert_eq!(db.rows(scratch).count(), 0);
+        assert_eq!(
+            db.rows_in(foreign_child, seed)
+                .map(|r| r[0])
+                .collect::<Vec<_>>(),
+            [values[99]]
+        );
+        db.remove(edits, &[values[0]]);
+        db.remove(edits, &[values[1]]);
+    }
+}
+
+#[test]
+fn scoped_publication_rejects_conflicts_and_fresh_references_before_base_changes() {
+    let (mut db, node) = node_db();
+    let int = db.sort("i64").unwrap();
+    let edits = db.add_function("edits", &[int], int, Merge::AssertEq);
+    let refs = db.add_relation("refs", &[node]);
+    let zero = db.base(0_i64);
+    let one = db.base(1_i64);
+    let two = db.base(2_i64);
+    db.insert(edits, &[zero, zero]).unwrap();
+    let foreign = db.color(&[]);
+    db.insert_in(foreign, edits, &[one, two]).unwrap();
+    for fresh_reference in [false, true] {
+        let mark = db.mark();
+        let colors = [db.color(&[]), db.color(&[])];
+        for &color in &colors {
+            db.remove_in(color, edits, &[zero]);
+        }
+        db.insert_in(colors[0], edits, &[zero, one]).unwrap();
+        db.insert_in(
+            colors[1],
+            edits,
+            &[zero, if fresh_reference { one } else { two }],
+        )
+        .unwrap();
+        if fresh_reference {
+            let temporary = db.fresh(node);
+            db.insert_in(colors[1], refs, &[temporary]).unwrap();
+        }
+        db.rebuild().unwrap();
+        assert!(db.adopt_scoped_rows(&colors, &[edits, refs], mark).is_err());
+        assert_eq!(db.lookup(edits, &[zero]), Some(zero));
+        assert_eq!(db.lookup_in(foreign, edits, &[one]), Some(two));
+        assert_eq!(db.rows(refs).count(), 0);
+        assert_eq!(db.mark(), mark);
+    }
+}
+
+#[test]
+fn native_scope_records_reject_cycles_and_missing_parents_before_color_creation() {
+    use tir_egglog::Color;
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let scopes = db.add_relation("scopes", &[int]);
+    let parents = db.add_relation("parents", &[int, int]);
+    let seed = db.add_relation("seed", &[int]);
+    let zero = db.base(0_i64);
+    let one = db.base(1_i64);
+    db.insert(scopes, &[zero]).unwrap();
+    db.insert(parents, &[zero, one]).unwrap();
+    assert!(db.scope_colors(Color::BASE, scopes, parents, seed).is_err());
+    db.insert(scopes, &[one]).unwrap();
+    db.insert(parents, &[one, zero]).unwrap();
+    assert!(db.scope_colors(Color::BASE, scopes, parents, seed).is_err());
+    db.remove(parents, &[one, zero]);
+    let colors = db.scope_colors(Color::BASE, scopes, parents, seed).unwrap();
+    db.rebuild().unwrap();
+    assert_eq!(db.rows_in(colors[0], seed).count(), 1);
+    assert_eq!(db.rows_in(colors[1], seed).count(), 1);
 }

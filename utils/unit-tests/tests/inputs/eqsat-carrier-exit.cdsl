@@ -1,0 +1,18 @@
+pub mod ops {
+    pub extern type Dialect = Type;
+    pub extern type Interface = Type;
+    pub extern type IrSort<T>;
+};
+pub mod library {
+    pub extern type Any;
+    pub extern type Many<T>;
+    pub extern let any_sort: ::ops::IrSort<Any>;
+    pub extern let many_sort<T>: ::ops::IrSort<Many<T>>;
+};
+extern type eqsat_test = ops::Dialect;
+extern let carrier_exit_interface: ops::Interface;
+
+pub let eqsat_test::carrier_exit = {
+    signature: (values: library::Many<library::Any>) -> (),
+    interfaces: [carrier_exit_interface],
+};

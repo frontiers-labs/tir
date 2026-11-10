@@ -1,0 +1,30 @@
+// Prove the carried value constant while retaining the counted loop and its port.
+
+module {
+  %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %seven = constant {value = 7} : !i32
+    %i1_end, %r, %k = scf.ordered_for %i1 = %zero to %n step %one (%iv = %zero, %c = %seven) {
+      %w = addi %c, %zero : !i32
+      %next = addi %iv, %one : !i32
+      scf.yield %next, %w
+    }
+    %s = addi %k, %r : !i32
+    func.return %s
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[N:[0-9]+]]: !i32)
+// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
+// CHECK: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
+// CHECK: %[[SEVEN:[0-9]+]] = constant {value = 7} : !i32
+// CHECK: %{{[0-9]+}}, %[[R:[0-9]+]], %{{[0-9]+}} = scf.ordered_for %{{[0-9]+}} = %[[ZERO]] to %[[N]] step %[[ONE]] (%[[IV:[0-9]+]] = %[[ZERO]], %[[C:[0-9]+]] = %[[SEVEN]]) {
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[IV]], %[[ONE]] : !i32
+// CHECK-NEXT: scf.yield %[[NEXT]], %[[C]]
+// CHECK-NEXT: }
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[SEVEN]], %[[R]] : !i32
+// CHECK-NEXT: func.return %[[SUM]]
+
+// VALUE: i32 10

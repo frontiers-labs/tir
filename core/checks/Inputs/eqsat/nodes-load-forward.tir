@@ -1,0 +1,20 @@
+// Forward the private store into both load uses, then remove the slot.
+
+module {
+  %fn_f = func.func @f(%x: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %x, %p
+    %r = ptr.load %p : !i32
+    %s = addi %r, %r : !i32
+    func.return %s
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[X:[0-9]+]]: !i32)
+// CHECK-NOT: ptr.
+// CHECK: %[[R:[0-9]+]] = addi %[[X]], %[[X]] : !i32
+// CHECK-NOT: ptr.
+// CHECK-NEXT: func.return %[[R]]
+
+// VALUE: i32 10

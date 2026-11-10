@@ -228,6 +228,7 @@ fn expr<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> + Clone {
 fn fact<'a>() -> impl Parser<'a, &'a str, Fact, Extra<'a>> + Clone {
     choice((
         form("=", expr().then(expr())).map_with(|(a, b), e| Fact::Eq(span(e), a, b)),
+        form("not", expr()).map(Fact::Not),
         plain(&["="]).map(Fact::Fact),
     ))
     .labelled("a fact")

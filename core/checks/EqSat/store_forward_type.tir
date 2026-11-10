@@ -1,0 +1,17 @@
+// RUN: tir opt --pass restructure-nodes,eqsat %s | filecheck %s
+
+// The extents agree but the types do not: forwarding would read the bits of a
+// float as an integer.
+
+module {
+  %fn_f = func.func @f(%0: !ptr.p, %1: !f32) -> !i32 {
+    %2 = state.entry_state : !state<memory>
+    %3 = ptr.store %1, %0 state(%2)
+    %4 = ptr.load %0 state(%3) : !i32
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: ptr.load

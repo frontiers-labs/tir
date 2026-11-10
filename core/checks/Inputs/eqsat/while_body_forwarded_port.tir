@@ -1,0 +1,90 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(instcombine-nodes) --verify %s | filecheck %s
+
+// A tested loop's body knows the flag its test forwarded holds, but a port the
+// body only forwards on an edge stays in its register: a literal is worth
+// something to an op that computes with it, and nothing to an edge already
+// carrying the value. Where the body does compute with the port — a gate
+// deciding on it — that read is the literal, and the edge still forwards the
+// register.
+
+module {
+  %fn_forward = func.func @forward(%f0: !i1, %v0: !i32) -> !i32 {
+    %r, %s = scf.loop (%f = %f0, %v = %v0) {
+      %n = constant {value = 10} : !i32
+      %c = cmpi %v, %n {predicate = "slt"} : !i1
+      %nf, %nv = scf.switch %c {
+        -> %f, %v
+      }
+      {
+        %one = constant {value = 1} : !i32
+        %x = addi %v, %one : !i32
+        -> %c, %x
+      }
+      -> %c, %nf, %nv, %c, %v
+    }
+    -> %s
+  }
+  %fn_compute = func.func @compute(%f0: !i1, %v0: !i32) -> !i32 {
+    %r, %s = scf.loop (%f = %f0, %v = %v0) {
+      %n = constant {value = 10} : !i32
+      %c = cmpi %v, %n {predicate = "slt"} : !i1
+      %nf, %nv = scf.switch %c {
+        -> %f, %v
+      }
+      {
+        %one = constant {value = 1} : !i32
+        %two = constant {value = 2} : !i32
+        %x = scf.switch %c {
+          %b = addi %v, %two : !i32
+          -> %b
+        }
+        {
+          %a = addi %v, %one : !i32
+          -> %a
+        }
+        -> %c, %x
+      }
+      -> %c, %nf, %nv, %c, %v
+    }
+    -> %s
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: %[[V25:[0-9]+]] = func.func @forward(%[[V3:[0-9]+]]: !i1, %[[V4:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT: %[[V22:[0-9]+]], %[[V23:[0-9]+]] = scf.loop (%[[V6:[0-9]+]] = %[[V3]], %[[V7:[0-9]+]] = %[[V4]]) {
+// CHECK-NEXT: %[[V9:[0-9]+]] = constant {value = 10} : !i32
+// CHECK-NEXT: %[[V11:[0-9]+]] = cmpi %[[V7]], %[[V9]] {predicate = "slt"} : !i1
+// CHECK-NEXT: %[[V19:[0-9]+]], %[[V20:[0-9]+]] = scf.switch %[[V11]] {
+// CHECK-NEXT: -> %[[V6]], %[[V7]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: %[[V15:[0-9]+]] = constant {value = 1} : !i32
+// CHECK-NEXT: %[[V17:[0-9]+]] = addi %[[V7]], %[[V15]] : !i32
+// CHECK-NEXT: -> %[[V11]], %[[V17]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[V11]], %[[V19]], %[[V20]], %[[V11]], %[[V7]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[V23]]
+// CHECK-NEXT: }
+// CHECK-NEXT: %[[V57:[0-9]+]] = func.func @compute(%[[V27:[0-9]+]]: !i1, %[[V28:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT: %[[V54:[0-9]+]], %[[V55:[0-9]+]] = scf.loop (%[[V30:[0-9]+]] = %[[V27]], %[[V31:[0-9]+]] = %[[V28]]) {
+// CHECK-NEXT: %[[V33:[0-9]+]] = constant {value = 10} : !i32
+// CHECK-NEXT: %[[V35:[0-9]+]] = cmpi %[[V31]], %[[V33]] {predicate = "slt"} : !i1
+// CHECK-NEXT: %[[V51:[0-9]+]], %[[V52:[0-9]+]] = scf.switch %[[V35]] {
+// CHECK-NEXT: -> %[[V30]], %[[V31]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: %[[V39:[0-9]+]] = constant {value = 1} : !i32
+// CHECK-NEXT: %[[V47:[0-9]+]] = addi %[[V31]], %[[V39]] : !i32
+// CHECK-NEXT: -> %[[V35]], %[[V47]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[V35]], %[[V51]], %[[V52]], %[[V35]], %[[V31]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[V55]]
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }

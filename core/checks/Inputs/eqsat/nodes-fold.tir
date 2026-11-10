@@ -1,0 +1,26 @@
+// Fold x + 0 and 2 * 3, then remove the private slot.
+
+module {
+  %fn_f = func.func @f(%x: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %two = constant {value = 2} : !i32
+    %three = constant {value = 3} : !i32
+    %a = addi %x, %zero : !i32
+    %b = muli %two, %three : !i32
+    %c = addi %a, %b : !i32
+    ptr.store %c, %p
+    %r = ptr.load %p : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[X:[0-9]+]]: !i32)
+// CHECK-NOT: muli
+// CHECK: %[[SIX:[0-9]+]] = constant {value = 6} : !i32
+// CHECK: %[[C:[0-9]+]] = addi %[[X]], %[[SIX]] : !i32
+// CHECK-NOT: addi
+// CHECK-NEXT: func.return %[[C]]
+
+// VALUE: i32 11

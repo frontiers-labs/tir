@@ -1,0 +1,52 @@
+// Adjacent forwarding removes both loads of their immediately stored values.
+// The strict subtraction still demands the potentially poison first argument.
+// Its derived address and the dynamic-offset store must remain.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_f = func.func @f(%0: !i64, %1: !i64) -> !i32 {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
+    ptr.store %0, %3
+    %4 = ptr.load %3 : !i64
+    %5 = subi %4, %0 : !i64
+    %6 = ptr.ptradd %2, %5 : !ptr.p<!i32>
+    %7 = ptr.ptradd %2, %1 : !ptr.p<!i32>
+    %8 = constant {value = 42} : !i32
+    ptr.store %8, %7
+    %9 = ptr.load %6 : !i32
+    %10 = constant {value = 1} : !i32
+    ptr.store %10, %2
+    %11 = constant {value = 2} : !i32
+    ptr.store %11, %2
+    %12 = ptr.load %2 : !i32
+    %13 = constant {value = 100} : !i32
+    %14 = muli %9, %13 : !i32
+    %15 = addi %14, %12 : !i32
+    func.return %15
+  }
+  module_end
+}
+
+// CHECK: #layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+// CHECK: module {layout.spec = #layout_spec} {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @f(%[[A:[0-9]+]]: !i64, %[[OFFSET:[0-9]+]]: !i64) -> !i32 {
+// CHECK-NEXT: %[[P:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+// CHECK-NEXT: %[[Q:[0-9]+]] = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
+// CHECK-NEXT: ptr.store %[[A]], %[[Q]]
+// CHECK-NEXT: %[[DIFF:[0-9]+]] = subi %[[A]], %[[A]] : !i64
+// CHECK-NEXT: %[[READP:[0-9]+]] = ptr.ptradd %[[P]], %[[DIFF]] : !ptr.p<!i32>
+// CHECK-NEXT: %[[WRITEP:[0-9]+]] = ptr.ptradd %[[P]], %[[OFFSET]] : !ptr.p<!i32>
+// CHECK-NEXT: %[[FORTYTWO:[0-9]+]] = constant {value = 42} : !i32
+// CHECK-NEXT: ptr.store %[[FORTYTWO]], %[[WRITEP]]
+// CHECK-NEXT: %[[READ:[0-9]+]] = ptr.load %[[READP]] : !i32
+// CHECK-NEXT: %[[TWO:[0-9]+]] = constant {value = 2} : !i32
+// CHECK-NEXT: ptr.store %[[TWO]], %[[P]]
+// CHECK-NEXT: %[[HUNDRED:[0-9]+]] = constant {value = 100} : !i32
+// CHECK-NEXT: %[[MUL:[0-9]+]] = muli %[[READ]], %[[HUNDRED]] : !i32
+// CHECK-NEXT: %[[ADD:[0-9]+]] = addi %[[MUL]], %[[TWO]] : !i32
+// CHECK-NEXT: func.return %[[ADD]]
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }

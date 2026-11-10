@@ -26,6 +26,7 @@ pub use tir_symbolic::sem::{
 pub(crate) use tir_symbolic::sem::{con, op};
 
 pub mod fp_refinement;
+pub mod memory;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NodeMeta {

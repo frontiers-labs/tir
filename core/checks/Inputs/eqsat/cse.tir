@@ -1,0 +1,19 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+
+// The unused duplicate truncation is removed; the returned truncation stays.
+
+module {
+  %fn_cse = func.func @cse(%x: !i32) -> !i16 {
+    %0 = trunci %x : !i16
+    %1 = trunci %x : !i16
+    func.return %0
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @cse
+// CHECK: trunci
+// CHECK-NOT: trunci

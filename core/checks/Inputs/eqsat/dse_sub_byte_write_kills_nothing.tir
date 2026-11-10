@@ -1,0 +1,17 @@
+// A one-bit write covers part of a byte, and the pass counts bytes: it cannot
+// say what of the byte before it survives, so it neither dies nor kills.
+
+#layout_spec = #layout.spec<!i1 = {size = 1, abi = 8}, !i8 = {size = 8, abi = 8}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  %fn_f = func.func @f() -> !i8 {
+    %0 = ptr.alloca {size = 1, align = 1} : !ptr.p<!i8>
+    %1 = constant {value = 77} : !i8
+    ptr.store %1, %0
+    %2 = constant {value = 1} : !i1
+    ptr.store %2, %0
+    %3 = ptr.load %0 : !i8
+    func.return %3
+  }
+  module_end
+}

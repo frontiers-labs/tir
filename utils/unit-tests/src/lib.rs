@@ -137,13 +137,14 @@ mod core {
     // Migration skip: the storage commit and revision APIs were removed.
     #[cfg(any())]
     mod epochs;
+    mod eqsat;
     mod fixtures;
     mod float;
+    mod memory_proof;
     // Migration skip: this suite targets the removed guarded-relaxation implementation.
     #[cfg(any())]
     mod float_refinement;
     mod idmap;
-    mod instcombine;
     mod interfaces;
     // Migration skip: this suite exercises removed selector or allocator infrastructure.
     #[cfg(any())]

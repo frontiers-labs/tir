@@ -1172,6 +1172,12 @@ impl EGraph {
         self.planned = usize::MAX;
     }
 
+    /// Run this ruleset only in temporary colors.
+    pub fn set_ruleset_colored(&mut self, ruleset: &str) {
+        self.rules.set_colored(ruleset);
+        self.planned = usize::MAX;
+    }
+
     /// The program file of the rules, as [`Program::to_bytes`] writes it.
     pub fn save_program(&mut self) -> Vec<u8> {
         self.plan().expect("typed rules plan");

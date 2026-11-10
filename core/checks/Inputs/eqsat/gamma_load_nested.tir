@@ -1,0 +1,50 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// Distributing a read into an arm leaves a read of that arm's state, which is a
+// gate of its own where the arm holds one: the law names the operation rebuilding
+// the read it introduced just as a seeded read names the one it was read from, so
+// it fires again and the inner gate grows a port too.
+
+module {
+  %fn_nested = func.func @nested(%0: !i1, %1: !i1, %2: !i32, %3: !i32, %4: !i32, %5: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %s0 = state.entry_state : !state<memory>
+    %s1 = ptr.store %5, %p state(%s0)
+    %s2 = scf.switch %0 args(%s1) (%e) {
+      %e1 = ptr.store %4, %p state(%e)
+      -> %e1
+    }
+    (%t) {
+      %t1 = scf.switch %1 args(%t) (%ie) {
+        %ie1 = ptr.store %3, %p state(%ie)
+        -> %ie1
+      }
+      (%it) {
+        %it1 = ptr.store %2, %p state(%it)
+        -> %it1
+      }
+      -> %t1
+    }
+    %6, %s3 = ptr.load %p state(%s2) : !i32
+    -> %6, %s3
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @nested(%[[C:[0-9]+]]: !i1, %[[D:[0-9]+]]: !i1, %[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[Z:[0-9]+]]: !i32, %[[W:[0-9]+]]: !i32
+// CHECK-NOT: ptr.
+// CHECK: %[[OUTER:[0-9]+]] = scf.switch %[[C]] {
+// CHECK-NEXT: -> %[[Z]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: %[[INNER:[0-9]+]] = scf.switch %[[D]] {
+// CHECK-NEXT: -> %[[Y]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: -> %[[X]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[INNER]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[OUTER]]

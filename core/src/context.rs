@@ -181,7 +181,6 @@ impl Context {
     /// Access the authoritative engine with support for adding egglog rules.
     /// The first call replaces the precompiled IR program with its source
     /// rules, preserving the database. Later calls retain user rules.
-    #[cfg(feature = "egglog-rules")]
     pub fn egraph_with_rules(&self) -> Result<RefMut<'_, EGraph>, tir_egglog::Error> {
         use tir_egglog::{Rules, ast::Command};
 

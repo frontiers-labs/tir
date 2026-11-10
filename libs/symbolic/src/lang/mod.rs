@@ -83,6 +83,12 @@ pub enum SymKind {
     /// Arguments are address, bytes written, value, address-space metadata.
     // #[arity = 4]
     StoreMemory,
+    /// Functional cell read: [memory, address64] -> byte8 plus initialized1.
+    MemoryByteRead,
+    /// Functional cell update: [memory, address64, cell9] -> unsized memory.
+    MemoryByteWrite,
+    /// Ordinary shared read/write domain: [memory, address64, size64] -> bit1.
+    MemoryRangeValid,
     ZExt,
     SExt,
     /// Bit-field extract: args value, high, low (inclusive) -> `high-low+1` bits. The
@@ -277,6 +283,8 @@ impl SymKind {
             SymKind::If
             | SymKind::Clamp
             | SymKind::Extract
+            | SymKind::MemoryByteWrite
+            | SymKind::MemoryRangeValid
             | SymKind::LoadMemory
             | SymKind::LoadReserved
             | SymKind::Fence

@@ -18,6 +18,8 @@ name = "torture"
 harness = false
 
 [dev-dependencies]
+filecheck = { path = "../filecheck" }
+tir-pdl.workspace = true
 xtask = { path = "../xtask" }
 tir = { workspace = true, features = ["egglog-rules"] }
 tir-adt.workspace = true

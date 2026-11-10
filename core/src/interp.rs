@@ -205,6 +205,52 @@ impl Memory {
     }
 }
 
+// The range primitive runs before the shared recipe can touch any cell.
+struct ScalarMemory<'a>(&'a mut Memory);
+impl crate::ptr::semantics::Access for ScalarMemory<'_> {
+    type Bits = (u64, u32);
+    type Error = InterpError;
+    fn constant(&mut self, v: u64, w: u32) -> Self::Bits {
+        (v, w)
+    }
+    fn scalar(&mut self, k: crate::ptr::semantics::Scalar, a: &[Self::Bits]) -> Self::Bits {
+        use crate::ptr::semantics::Scalar;
+        match k {
+            Scalar::Add => (a[0].0.wrapping_add(a[1].0), a[0].1),
+            Scalar::And => (a[0].0 & a[1].0, a[0].1),
+            Scalar::Not => ((!a[0].0) & ((1u64 << a[0].1) - 1), a[0].1),
+            Scalar::Extract => (
+                (a[0].0 >> a[2].0) & ((1u64 << (a[1].0 - a[2].0 + 1)) - 1),
+                (a[1].0 - a[2].0 + 1) as u32,
+            ),
+            Scalar::Concat => ((a[0].0 << a[1].1) | a[1].0, a[0].1 + a[1].1),
+            Scalar::If => {
+                if a[0].0 != 0 {
+                    a[1]
+                } else {
+                    a[2]
+                }
+            }
+        }
+    }
+    fn range(&mut self, p: Self::Bits, n: Self::Bits) -> Result<Self::Bits> {
+        self.0.check(p.0, n.0)?;
+        Ok((1, 1))
+    }
+    fn read(&mut self, p: Self::Bits) -> Self::Bits {
+        let i = (p.0 - MEMORY_BASE) as usize;
+        (
+            u64::from(self.0.bytes[i]) | (u64::from(self.0.written[i]) << 8),
+            9,
+        )
+    }
+    fn write(&mut self, p: Self::Bits, cell: Self::Bits) {
+        let i = (p.0 - MEMORY_BASE) as usize;
+        self.0.bytes[i] = cell.0 as u8;
+        self.0.written[i] = cell.0 & 256 != 0;
+    }
+}
+
 /// Concrete evaluation of one leaf operation: `operands[i]` is the value of
 /// value operand `i`; the returned values bind to the op's value results in
 /// order. Dependencies carry nothing and are neither passed nor returned.
@@ -1046,7 +1092,7 @@ pub(crate) fn load_interp_evaluate(
         ));
     };
     let ty = context.get_value(crate::ptr::load_result(operation)).ty();
-    let value = read_typed(&context, &state.memory, ty, *address)?;
+    let value = read_typed(&context, &mut state.memory, ty, *address)?;
     Ok(vec![value])
 }
 
@@ -1187,14 +1233,25 @@ pub(crate) static __TIR_IFACE_MemsetOp_Interp: crate::interp::InterpCallbacks =
 
 fn read_typed(
     context: &Context,
-    memory: &Memory,
+    memory: &mut Memory,
     ty: crate::TypeId,
     address: u64,
 ) -> Result<Value> {
+    if let Some(width) = crate::ptr::semantics::ordinary_width(context, ty) {
+        let loaded = crate::ptr::semantics::load(&mut ScalarMemory(memory), (address, 64), width)?;
+        let (value, _) = loaded.value;
+        let (poison, _) = loaded.poison;
+        return Ok(if poison != 0 {
+            Value::Poison
+        } else if PtrType::view(context, ty).is_some() {
+            Value::Ptr(value)
+        } else {
+            Value::Int(APInt::new(u64::from(width), value))
+        });
+    }
     let bits = IntegerType::view(context, ty)
         .map(|integer| integer.width())
-        .or_else(|| FloatType::view(context, ty).map(|float| u64::from(float.bit_width())))
-        .or_else(|| PtrType::view(context, ty).map(|_| 64));
+        .or_else(|| FloatType::view(context, ty).map(|float| u64::from(float.bit_width())));
     if let Some(bits) = bits
         && !memory.is_written(address, bits / 8)?
     {
@@ -1212,11 +1269,6 @@ fn read_typed(
             bits.to_u64() as u128,
         )));
     }
-    if PtrType::view(context, ty).is_some() {
-        return memory
-            .read_int(address, 64)
-            .map(|bits| Value::Ptr(bits.to_u64()));
-    }
     Err(InterpError::Message(
         "loads of this type are not interpretable yet".into(),
     ))
@@ -1229,11 +1281,34 @@ fn write_typed(
     address: u64,
     value: &Value,
 ) -> Result<()> {
+    if let Some(width) = crate::ptr::semantics::ordinary_width(context, ty) {
+        let (bits, poison) = match value {
+            Value::Poison => (0, 1),
+            Value::Int(v)
+                if IntegerType::view(context, ty).is_some() && v.width() == u64::from(width) =>
+            {
+                (v.to_u64(), 0)
+            }
+            Value::Ptr(v) if PtrType::view(context, ty).is_some() => (*v, 0),
+            _ => {
+                return Err(InterpError::Message(
+                    "store value must match the pointee".into(),
+                ));
+            }
+        };
+        crate::ptr::semantics::store(
+            &mut ScalarMemory(memory),
+            (address, 64),
+            (bits, width),
+            (poison, 1),
+            width,
+        )?;
+        return Ok(());
+    }
     if matches!(value, Value::Poison) {
         let bits = IntegerType::view(context, ty)
             .map(|integer| integer.width())
             .or_else(|| FloatType::view(context, ty).map(|float| u64::from(float.bit_width())))
-            .or_else(|| PtrType::view(context, ty).map(|_| 64))
             .ok_or_else(|| InterpError::Message("a store of poison of no size".into()))?;
         return memory.forget(address, bits / 8);
     }
@@ -1250,12 +1325,6 @@ fn write_typed(
         };
         let bits = APInt::new(u64::from(float.bit_width()), float_value.to_bits() as u64);
         return memory.write_int(address, &bits);
-    }
-    if PtrType::view(context, ty).is_some() {
-        let Value::Ptr(target) = value else {
-            return Err(mismatch());
-        };
-        return memory.write_int(address, &APInt::new(64, *target));
     }
     Err(InterpError::Message(
         "stores of this type are not interpretable yet".into(),

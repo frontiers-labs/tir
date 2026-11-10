@@ -1,0 +1,14 @@
+module {layout.spec = #layout.spec<endianness = "little", !ptr.p = {size = 64, abi = 64}>} {
+ %f = func.func @f(%x: !i32, %p: !ptr.p<!i32>) -> !i32 {
+ %e = state.entry_state : !state<memory>
+ %s = ptr.store %x, %p state(%e)
+ %a, %r = ptr.load %p state(%s) : !i32
+ %b, %t = ptr.load %p state(%s) : !i32
+ %j = state.join state(%r, %t)
+ %sum = addi %a, %b : !i32
+ %next = ptr.store %sum, %p state(%j)
+ %out, %final = ptr.load %p state(%next) : !i32
+ -> %out, %final
+ }
+ module_end
+}

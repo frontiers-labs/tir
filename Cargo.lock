@@ -1991,6 +1991,7 @@ dependencies = [
  "tir-cdsl",
  "tir-egglog",
  "tir-macros",
+ "tir-pdl",
  "tir-symbolic",
 ]
 
@@ -2155,6 +2156,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tir-pdl"
+version = "0.1.0"
+dependencies = [
+ "ariadne",
+ "chumsky",
+ "logos",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+ "tir-symbolic",
+]
+
+[[package]]
 name = "tir-riscv"
 version = "0.1.0"
 dependencies = [
@@ -2186,6 +2201,7 @@ name = "tir-unit-tests"
 version = "0.1.0"
 dependencies = [
  "fcc",
+ "filecheck",
  "logos",
  "proptest",
  "serde_json",
@@ -2199,6 +2215,7 @@ dependencies = [
  "tir-jit",
  "tir-lit",
  "tir-llvm",
+ "tir-pdl",
  "tir-riscv",
  "tir-sim",
  "tir-symbolic",

@@ -99,7 +99,7 @@ impl Jit {
         let mut pm = PassManager::new();
         let function_pipeline = pm.nest(&tir::func::FUNC);
         function_pipeline.add_pass(tir::passes::RestructureNodesPass::new());
-        function_pipeline.add_pass(tir::passes::InstCombineNodesPass::new());
+        function_pipeline.add_pass(tir::passes::EqSatPass::new());
         pm.run(context, module_op)
             .map_err(|e| JitError::Pipeline(format!("mid-end: {e}")))?;
 
