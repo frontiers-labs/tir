@@ -1,7 +1,10 @@
+mod ast_grep;
 mod bench;
+mod dupehound;
 mod fcc_fuzz;
 mod formal_test;
 mod lint;
+mod scripts;
 mod test;
 mod verify_smt;
 
@@ -28,6 +31,8 @@ enum Task {
     TestPack(test::PackOptions),
     /// Run the lints: ast-grep rules, duplicate code, clippy and rustdoc.
     Lint,
+    /// Install the pre-commit hook.
+    InstallGitHooks,
     /// Build the project documentation
     Docs,
     /// Run formal ISA verification against the Sail model
@@ -57,6 +62,7 @@ fn main() -> anyhow::Result<()> {
         Task::Bench(options) => bench::run(&project_root(), options),
         Task::TestPack(options) => test::pack(&project_root(), options),
         Task::Lint => lint::run(&sh, &project_root()),
+        Task::InstallGitHooks => lint::install_git_hooks(&project_root()),
         Task::Docs => build_docs(&sh),
         Task::Verify { isa, args } => verify_smt::verify_smt(&sh, &isa, args.into_iter()),
         Task::FccTorture { fcc } => fcc_torture::bless(&sh, &project_root(), fcc.as_deref()),

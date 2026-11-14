@@ -1,0 +1,27 @@
+name: Replay libFuzzer crashes
+description: Replay tracked libFuzzer inputs and record fixed defects
+inputs:
+  target:
+    description: Fuzzer target name
+    required: true
+  output:
+    description: Directory for fixed-defect lists
+    required: true
+  token:
+    description: GitHub token with issue read access
+    required: true
+  extractor:
+    description: Executable that extracts records from issue JSON
+    required: true
+  extractor-args:
+    description: JSON array of extractor arguments before the output directory
+    required: true
+  replay:
+    description: Executable that replays a crash input
+    required: true
+  replay-args:
+    description: JSON array of replay arguments before the input path
+    required: true
+runs:
+  using: node24
+  main: index.js

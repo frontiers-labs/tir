@@ -1028,18 +1028,8 @@ impl<'a> SemaExprLoweringCtx<'a> {
         register_indices: &'a HashMap<(String, String), u32>,
     ) -> Self {
         Self {
-            graph,
-            params,
             register_indices: Some(register_indices),
-            isa_consts: HashMap::new(),
-            next_symbol_id: 0,
-            register_symbols: HashMap::new(),
-            variable_symbols: HashMap::new(),
-            regnum_symbols: HashMap::new(),
-            let_bindings: HashMap::new(),
-            let_symbols: HashMap::new(),
-            had_error: false,
-            lambda_params: Vec::new(),
+            ..Self::new(graph, params)
         }
     }
 

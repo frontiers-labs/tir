@@ -30,7 +30,7 @@ jobs:
       - run: rustup toolchain install
       - uses: rui314/setup-mold@v1
       - uses: taiki-e/install-action@nextest
-      - run: .github/scripts/install-spirv-tools.sh
+      - uses: ./.github/actions/install-spirv-tools
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
         with:
@@ -66,7 +66,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/fcc-package
       - uses: taiki-e/install-action@nextest
-      - run: .github/scripts/install-spirv-tools.sh
+      - uses: ./.github/actions/install-spirv-tools
       - uses: actions/download-artifact@v8
         with:
           name: ci-tests
@@ -89,7 +89,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/fcc-package
       - uses: taiki-e/install-action@nextest
-      - run: .github/scripts/install-spirv-tools.sh
+      - uses: ./.github/actions/install-spirv-tools
       - uses: actions/download-artifact@v8
         with:
           name: ci-tests
@@ -212,16 +212,27 @@ jobs:
             -- -max_total_time=60 -max_len=16384 2>&1 | tee fuzz.log
       - name: Record the crash
         if: steps.fuzz.outcome == 'failure'
-        env:
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: .github/scripts/record-libfuzzer-crash.sh ${{ matrix.target }} fuzz.log defects
+        uses: ./.github/actions/record-libfuzzer-crash
+        with:
+          target: ${{ matrix.target }}
+          artifacts: utils/fuzz/artifacts/${{ matrix.target }}
+          log: fuzz.log
+          output: defects
+          reproduce: cargo fuzz run --fuzz-dir utils/fuzz ${{ matrix.target }} crash.bin
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       # A raw fuzzer input is not a C program, so `xtask --replay` leaves these
       # alone; only the fuzzer knows how to feed one back in.
       - name: Replay tracked crashes
         if: hashFiles('target/ci/xtask') != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/replay-libfuzzer-crashes.sh ${{ matrix.target }} defects
+        uses: ./.github/actions/replay-libfuzzer-crashes
+        with:
+          target: ${{ matrix.target }}
+          output: defects
+          token: ${{ github.token }}
+          extractor: target/ci/xtask
+          extractor-args: '["fcc-fuzz", "--extract"]'
+          replay: cargo
+          replay-args: '["fuzz", "run", "--fuzz-dir", "utils/fuzz", "${{ matrix.target }}"]'
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -267,10 +278,20 @@ jobs:
           pattern: defects-*
           merge-multiple: true
           path: defects
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          RESULTS: ${{ toJSON(needs) }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          chmod +x target/ci/xtask 2>/dev/null || true
-          .github/scripts/report-nightly-failures.sh defects
+      - uses: ./.github/actions/report-nightly-failures
+        with:
+          defects: defects
+          token: ${{ github.token }}
+          results: ${{ toJSON(needs) }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          renderer: target/ci/xtask
+          renderer-args: '["fcc-fuzz", "--render"]'
+          reproductions: |
+            {
+              "corpus": "cargo xtask fcc-fuzz --corpus",
+              "differential-fuzz": "cargo xtask fcc-fuzz --self-test",
+              "libfuzzer": "cargo fuzz run --fuzz-dir utils/fuzz <target>",
+              "build-and-package": "cargo xtask test-pack --profile ci --torture --output target/ci-tests.tar.zst",
+              "verify-axioms": "TIR_VERIFY_AXIOMS=1 cargo xtask test --profile ci -- -E 'not binary(torture)'"
+            }
+          default-reproduction: cargo xtask test --profile ci --torture

@@ -31,12 +31,13 @@ jobs:
         with:
           tool: mdbook,mdbook-mermaid
       - name: Build docs
-        run: |
-          cargo build -p tir-pdl
-          python3 utils/pdl/scripts/check-doc-examples.py
-          cargo xtask docs
-          python3 utils/scripts/check_isa_docs.py
-          python3 utils/scripts/check_tmdl_reference.py
+        run: cargo xtask docs
+      - uses: ./.github/actions/check-isa-docs
+        with:
+          sources: docs/generated/isa
+          book: book/generated/isa
+          targets: '{"riscv":"backends/riscv/defs","aarch64":"backends/arm64/defs","x86-64":"backends/x86_64/defs","ptx":"gpu/defs/ptx"}'
+          without-encodings: ptx
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         with:

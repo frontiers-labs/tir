@@ -1,7 +1,11 @@
 // REQUIRES: linux, x86_64
 // RUN: fcc compile --march x86_64 --stage ir -o - %s | filecheck %s
-// RUN: fcc compile --march x86_64 -O0 --stage obj -o - %s | python3 %S/../Inputs/run_object.py
-// RUN: fcc compile --march x86_64 -O2 --stage obj -o - %s | python3 %S/../Inputs/run_object.py
+// RUN: fcc compile --march x86_64 -O0 --stage obj -o %t.o %s
+// RUN: timeout 30 cc %t.o -o %t
+// RUN: timeout 30 %t
+// RUN: fcc compile --march x86_64 -O2 --stage obj -o %t.o %s
+// RUN: timeout 30 cc %t.o -o %t
+// RUN: timeout 30 %t
 
 struct record {
     struct record *next;

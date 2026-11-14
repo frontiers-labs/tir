@@ -12,6 +12,7 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Zunstable-options", "--jobs-front
 # instead of compiling them again with their own feature sets.
 [unstable]
 feature-unification = true
+bindeps = true
 
 [resolver]
 feature-unification = "workspace"

@@ -495,8 +495,16 @@ fn run_case(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Result<(), Fai
 }
 
 fn run_case_commands(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Result<(), Failed> {
+    let temporary = if case.run_lines.iter().any(|run| run.contains("%t")) {
+        Some(tir_adt::TempDir::with_prefix("tir-lit-").map_err(|error| {
+            Failed::from(format!("failed to create temporary directory: {error}"))
+        })?)
+    } else {
+        None
+    };
+    let temp_path = temporary.as_ref().map(|dir| dir.path().join("tmp"));
     for run in &case.run_lines {
-        run_pipeline(run, &case.path, tools)?;
+        run_pipeline(run, &case.path, temp_path.as_deref(), tools)?;
     }
     Ok(())
 }
@@ -504,6 +512,7 @@ fn run_case_commands(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Resul
 fn run_pipeline(
     run: &str,
     test_path: &Path,
+    temp_path: Option<&Path>,
     tools: &HashMap<String, PathBuf>,
 ) -> Result<(), Failed> {
     let s = test_path.to_string_lossy().to_string();
@@ -512,7 +521,13 @@ fn run_pipeline(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let substitute = |tok: &str| tok.replace("%s", &s).replace("%S", &dir);
+    let substitute = |tok: &str| {
+        let tok = tok.replace("%s", &s).replace("%S", &dir);
+        match temp_path {
+            Some(path) => tok.replace("%t", &path.to_string_lossy()),
+            None => tok,
+        }
+    };
 
     let stages: Vec<&str> = run.split('|').collect();
     let mut piped_input: Vec<u8> = Vec::new();

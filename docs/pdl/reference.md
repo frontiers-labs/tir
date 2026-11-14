@@ -586,10 +586,4 @@ Common diagnostics have the following meanings:
 | Floating-point equality requires a checked proof binding | The generated-rule path cannot discharge the requested proof. |
 
 Every complete `pdl` code block in this chapter is a standalone frontend
-example. Consumer-specific restrictions still apply. The repository's
-`utils/pdl/scripts/check-doc-examples.py` checks those blocks with the frontend.
-
-```sh
-cargo build -p tir-pdl
-python3 utils/pdl/scripts/check-doc-examples.py
-```
+example. Consumer-specific restrictions still apply.

@@ -1,0 +1,17 @@
+name: Check ISA documentation
+description: Validate generated chapters, manual links, and instruction diagrams
+inputs:
+  sources:
+    description: Directory containing generated Markdown chapters
+    required: true
+  book:
+    description: Directory containing the rendered ISA reference
+    required: true
+  targets:
+    description: JSON object mapping rendered target names to TMDL source directories
+    required: true
+  without-encodings:
+    description: Targets that must not have binary encoding diagrams, one per line
+runs:
+  using: node24
+  main: index.js

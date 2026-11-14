@@ -1,14 +1,37 @@
 {
   "hooks": {
-    "PostToolUse": [
+    "PreToolUse": [
       {
-        "matcher": "^apply_patch$",
+        "matcher": "Bash|apply_patch|Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$(git rev-parse --show-toplevel)\"/.agents/hooks/lint-edit.py",
-            "timeout": 60,
-            "statusMessage": "Running ast-grep on edited files"
+            "command": "env -u __MISE_SHIM -u LD_LIBRARY_PATH node \"$(git rev-parse --show-toplevel)/.agents/hooks/no-scripts.js\"",
+            "statusMessage": "Checking script policy"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env -u __MISE_SHIM -u LD_LIBRARY_PATH node \"$(git rev-parse --show-toplevel)/.agents/hooks/no-scripts.js\"",
+            "statusMessage": "Checking script policy"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$(git rev-parse --show-toplevel)\" && cargo xtask lint >&2; status=$?; printf '{}'; exit \"$status\"",
+            "timeout": 1800,
+            "statusMessage": "Running cargo xtask lint"
           }
         ]
       }

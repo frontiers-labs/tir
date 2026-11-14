@@ -406,10 +406,12 @@ impl<'a> DeclParser<'a> {
                             let value = if self.eat(&Token::Assign) {
                                 let expression_offset = tok + self.pos;
                                 let expression = self.take_enumerator_value();
-                                Some(parse_external_constant_expression(
+                                Some(parse_external_expression(
                                     state,
                                     expression_offset,
                                     expression,
+                                    constant_expr(),
+                                    "expected enumerator value",
                                 )?)
                             } else {
                                 None
@@ -1285,10 +1287,12 @@ fn parse_external_tokens(
                     let initializer = if parser.eat(&Token::Assign) {
                         let initializer_tok = tok + parser.pos;
                         let initializer_tokens = parser.take_initializer();
-                        Some(parse_external_initializer(
+                        Some(parse_external_expression(
                             state,
                             initializer_tok,
                             initializer_tokens,
+                            initializer(),
+                            "expected initializer",
                         )?)
                     } else {
                         None
@@ -1358,10 +1362,12 @@ fn parse_local_decl_tokens(
         let initializer = if parser.eat(&Token::Assign) {
             let initializer_tok = tok + parser.pos;
             let initializer_tokens = parser.take_initializer();
-            Some(parse_external_initializer(
+            Some(parse_external_expression(
                 state,
                 initializer_tok,
                 initializer_tokens,
+                initializer(),
+                "expected initializer",
             )?)
         } else {
             None
@@ -1402,17 +1408,19 @@ fn parse_local_decl_tokens(
     }
 }
 
-fn parse_external_initializer(
+fn parse_external_expression<'src>(
     state: &mut SimpleState<ParseState>,
     token_offset: usize,
-    tokens: &[Token<'_>],
+    tokens: &'src [Token<'src>],
+    parser: impl Parser<'src, &'src [Token<'src>], NodeId, Extra<'src>>,
+    expected: &str,
 ) -> Result<NodeId, String> {
     if tokens.is_empty() {
-        return Err("expected initializer".to_string());
+        return Err(expected.to_string());
     }
     let previous_offset = state.0.token_offset;
     state.0.token_offset = token_offset;
-    let (initializer, errors) = initializer()
+    let (expression, errors) = parser
         .then_ignore(end())
         .parse_with_state(tokens, state)
         .into_output_errors();
@@ -1420,28 +1428,7 @@ fn parse_external_initializer(
     if let Some(error) = errors.first() {
         return Err(error.to_string());
     }
-    initializer.ok_or_else(|| "expected initializer".to_string())
-}
-
-fn parse_external_constant_expression(
-    state: &mut SimpleState<ParseState>,
-    token_offset: usize,
-    tokens: &[Token<'_>],
-) -> Result<NodeId, String> {
-    if tokens.is_empty() {
-        return Err("expected enumerator value".to_string());
-    }
-    let previous_offset = state.0.token_offset;
-    state.0.token_offset = token_offset;
-    let (expression, errors) = constant_expr()
-        .then_ignore(end())
-        .parse_with_state(tokens, state)
-        .into_output_errors();
-    state.0.token_offset = previous_offset;
-    if let Some(error) = errors.first() {
-        return Err(error.to_string());
-    }
-    expression.ok_or_else(|| "expected enumerator value".to_string())
+    expression.ok_or_else(|| expected.to_string())
 }
 
 fn parse_external_array_length(
@@ -1464,8 +1451,14 @@ fn parse_external_array_length(
     if expression.is_none() || !errors.is_empty() {
         return Ok(ArrayLength::new(spelling, None));
     }
-    parse_external_constant_expression(state, token_offset, tokens)
-        .map(|expression| ArrayLength::new(spelling, Some(expression)))
+    parse_external_expression(
+        state,
+        token_offset,
+        tokens,
+        constant_expr(),
+        "expected enumerator value",
+    )
+    .map(|expression| ArrayLength::new(spelling, Some(expression)))
 }
 
 fn declaration_tokens<'src, I>() -> impl Parser<'src, I, Vec<Token<'src>>, Extra<'src>> + Clone

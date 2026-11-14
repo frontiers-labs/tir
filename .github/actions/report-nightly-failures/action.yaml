@@ -1,0 +1,30 @@
+name: Report nightly failures
+description: Create and close issues for recorded defects and failed jobs
+inputs:
+  defects:
+    description: Directory containing defect records and fixed lists
+    required: true
+  token:
+    description: GitHub token with issue write access
+    required: true
+  results:
+    description: JSON object containing job results
+    required: true
+  run-url:
+    description: URL of the workflow run
+    required: true
+  renderer:
+    description: Executable that renders a defect record as an issue
+    required: true
+  renderer-args:
+    description: JSON array of renderer arguments before the record path
+    required: true
+  reproductions:
+    description: JSON object mapping job names to reproduction commands
+    required: true
+  default-reproduction:
+    description: Reproduction command for jobs not in the mapping
+    required: true
+runs:
+  using: node24
+  main: index.js

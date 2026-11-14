@@ -1,0 +1,23 @@
+name: Run benchmarks
+description: Run Cargo benchmarks and publish Benchboard reports
+inputs:
+  package:
+    description: Cargo package to benchmark (default all packages)
+  benchmark:
+    description: Benchmark target to run (default all targets)
+  exclude:
+    description: Package/target pairs to skip, one per line
+  cargo-args:
+    description: Cargo arguments before -p and --bench, one per line
+    default: bench
+  format:
+    description: Measurement format, criterion or bencher
+    default: criterion
+  label:
+    description: Benchmark group in the report
+    required: true
+  subject:
+    description: Optional comparison subject for compiler/program/level/stage benchmark names
+runs:
+  using: node24
+  main: index.js

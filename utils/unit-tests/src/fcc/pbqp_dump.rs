@@ -8,7 +8,7 @@ fn fcc_binary() -> &'static Path {
 }
 
 fn validator() -> PathBuf {
-    crate::fixture_root().join("../../fcc/checks/Inputs/validate_pbqp_dumps.py")
+    crate::fixture_root().join("../scripts/validate_pbqp_dumps.py")
 }
 
 fn source() -> PathBuf {

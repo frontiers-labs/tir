@@ -17,10 +17,8 @@ filecheck = { path = "../filecheck" }
 libtest-mimic = "0.8"
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
-toml.workspace = true
-
-[dev-dependencies]
 tir-adt.workspace = true
+toml.workspace = true
 
 [[test]]
 name = "lit"
