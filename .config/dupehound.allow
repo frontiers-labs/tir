@@ -1,0 +1,102 @@
+# Accepted dupehound cluster relationships. Each entry names two functions;
+# the preceding comment explains why their implementations stay separate.
+# This migration establishes the baseline; later changes may only remove lines.
+
+# Default methods of two traits have different error types. A shared helper
+# would still leave both formatted signatures over ten lines.
+core/src/backend/mod.rs::atomic_rmw libs/symbolic/src/lang/exec.rs::atomic_rmw
+
+# The nested fold function is inside fold_behavior. The scanner counts the
+# same source body both as a nested function and as part of its enclosing one.
+tmdl/src/sem_expr_state.rs::fold_behavior tmdl/src/sem_expr_state.rs::fold
+
+# RVV asm kernels implement u32 XOR/multiply, u32 XOR/right-shift, and u64 AND.
+# Their instructions, operands, lane widths and pointer strides differ; the
+# normalized Rust asm! calls hide those differences.
+libs/adt/src/simd/riscv.rs::hash_mix libs/adt/src/simd/riscv.rs::hash_finish
+libs/adt/src/simd/riscv.rs::hash_mix libs/adt/src/simd/riscv.rs::and_words
+libs/adt/src/simd/riscv.rs::hash_finish libs/adt/src/simd/riscv.rs::and_words
+
+# SVE2 asm kernels implement u32 XOR/multiply, u32 XOR/right-shift, and u64 AND.
+# Their instruction strings select different operands, lane widths and strides.
+libs/adt/src/simd/arm.rs::hash_mix libs/adt/src/simd/arm.rs::hash_finish
+libs/adt/src/simd/arm.rs::hash_mix libs/adt/src/simd/arm.rs::and_words
+libs/adt/src/simd/arm.rs::hash_finish libs/adt/src/simd/arm.rs::and_words
+
+# select_eq compares rows to one scalar. select_moved gathers through a map and
+# selects unmapped or changed rows; its asm masks and memory accesses differ.
+libs/adt/src/simd/arm.rs::select_eq libs/adt/src/simd/arm.rs::select_moved
+
+# BinOp, BuiltinFunction and RegisterTrait conversions exhaustively rename
+# variants of three unrelated enums. The scanner normalizes their variant names.
+tmdl/src/json/expr.rs::from tmdl/src/json/expr.rs::from
+tmdl/src/json/expr.rs::from tmdl/src/json.rs::from
+
+# UnitBind copies optional per-operation bindings. FusionSchedule copies
+# required fusion counters, stage groups and micro-ops from a different model.
+tmdl/src/json.rs::from tmdl/src/json.rs::from
+
+# ForOp, WhileOp and DoOp parse different operation schemas and region orders:
+# cond/step/body, cond/body, and body/cond. Existing label and region helpers
+# already share the common parsing; their typed builders remain distinct.
+fcc/src/cir.rs::custom_parse fcc/src/cir.rs::custom_parse
+
+# These tests check different directive contracts: conjunction of REQUIRES,
+# negated REQUIRES, and negated UNSUPPORTED with the opposite gating result.
+utils/lit/src/lib.rs::requires_multiple_features_is_and utils/lit/src/lib.rs::requires_negation
+utils/lit/src/lib.rs::requires_multiple_features_is_and utils/lit/src/lib.rs::unsupported_negation
+utils/lit/src/lib.rs::requires_negation utils/lit/src/lib.rs::unsupported_negation
+
+# CoreMark is vendored benchmark source. The matching CRC routine is also a
+# standalone FCC differential-test input that must compile without CoreMark.
+utils/third-party/CoreMark/core_util.c::crcu8 utils/unit-tests/src/fcc/corpus/scalar/crc16.c::crcu8
+
+# One test checks that an instruction requiring the complex decoder cannot use
+# a simple slot. The other checks that decode_cycles reserves a slot for three
+# cycles. They protect separate scheduling constraints and expect different times.
+utils/unit-tests/src/simcore/scoreboard.rs::complex_decoder_slot_accepts_one_instruction_per_cycle utils/unit-tests/src/simcore/scoreboard.rs::decoder_occupancy_reserves_its_slot_for_multiple_cycles
+
+# BinaryEmitError and AsmPrintError have distinct variants and diagnostic text.
+# Both use exhaustive Display matches; the scanner normalizes names and strings.
+core/src/backend/binary/writer.rs::fmt core/src/backend/printer.rs::fmt
+
+# Addition and subtraction use different narrow operations and wide limb
+# routines. Keeping each arithmetic operation explicit preserves its contract.
+libs/adt/src/apint.rs::add libs/adt/src/apint.rs::sub
+
+# Upstream CoreMark prints MATDAT input arrays and MATRES result arrays through
+# separate typed functions. Their element widths differ.
+utils/third-party/CoreMark/core_matrix.c::printmat utils/third-party/CoreMark/core_matrix.c::printmatC
+
+# for has an optional condition, a step block, and continue edges to that step.
+# while requires a condition and continues directly to it. Their shared body
+# helper already owns the common break/continue stack lifecycle.
+fcc/src/codegen/control.rs::lower_flat_for fcc/src/codegen/control.rs::lower_flat_while
+
+# Limb addition propagates overflow carry; subtraction propagates underflow
+# borrow. Their overflowing operations differ at both arithmetic steps.
+libs/adt/src/apint.rs::add_words libs/adt/src/apint.rs::sub_words
+
+# AVX2 processes four u64 lanes with 256-bit intrinsics; AVX512 processes eight
+# with 512-bit intrinsics. Each requires its own target feature and vector types.
+libs/adt/src/simd/x86.rs::and_words libs/adt/src/simd/x86.rs::and_words
+
+# rust_rule passes a write-only WriteState to seminaive matching callbacks.
+# rust_rule_full passes readable FullState to full matching callbacks. The
+# typed adapters preserve these capabilities; EGraph::rust_rule shares registration.
+libs/egglog/src/prelude.rs::rust_rule libs/egglog/src/prelude.rs::rust_rule_full
+
+# These emit different instruction-selection attribute variants and fields.
+tmdl/src/rustgen/isel_spec.rs::emit_attr_fixed_use tmdl/src/rustgen/isel_spec.rs::emit_attr_physical
+
+# Spill stores and reloads emit different instructions and operand roles.
+backends/riscv/src/lib.rs::reg_store backends/riscv/src/lib.rs::reg_reload
+
+# Instruction roots and constant-foldable operations are different sets.
+tmdl/src/rustgen/instruction_analysis.rs::scalar_root_kind tmdl/src/rustgen/flag_analysis.rs::foldable_kind
+
+# One maps rounded float operations; the other complements comparisons.
+libs/symbolic/src/lang/rounded.rs::operation core/src/sem/egraph.rs::complement_comparison
+
+# The targets use different features, branch emitters and call emitters.
+backends/arm64/src/lib.rs::create_isel_pass_for backends/x86_64/src/lib.rs::create_isel_pass_for

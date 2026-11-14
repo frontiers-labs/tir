@@ -1,6 +1,10 @@
 // REQUIRES: linux, x86_64
-// RUN: env TIR_SHUFFLE_SEED=0 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o - %s | python3 %S/../Inputs/run_object.py
-// RUN: env TIR_SHUFFLE_SEED=1 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o - %s | python3 %S/../Inputs/run_object.py
+// RUN: env TIR_SHUFFLE_SEED=0 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o %t.o %s
+// RUN: timeout 30 cc %t.o -o %t
+// RUN: timeout 30 %t
+// RUN: env TIR_SHUFFLE_SEED=1 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o %t.o %s
+// RUN: timeout 30 cc %t.o -o %t
+// RUN: timeout 30 %t
 
 // Shuffling may schedule the loop's own arithmetic between the code that
 // computes a call's arguments, `al` for the variadic call among them, and the

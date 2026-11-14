@@ -146,9 +146,9 @@ impl CondBranchOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let condition = parse_value_id(parser, context)?;
-        expect_token(parser, ",")?;
+        parser.expect_token(",")?;
         let (true_dest, true_args) = parse_successor(parser, context)?;
-        expect_token(parser, ",")?;
+        parser.expect_token(",")?;
         let (false_dest, false_args) = parse_successor(parser, context)?;
 
         let op = CondBranchOpBuilder::new(context)
@@ -286,16 +286,16 @@ impl SwitchOp {
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         use tir::parse::common::Cursor;
         let selector = parse_value_id(parser, context)?;
-        expect_token(parser, ":")?;
+        parser.expect_token(":")?;
         let ty = parse_arg_type(parser, context)?;
         let width = context
             .terms()
             .bit_width(ty)
             .map_or(64, |width| width as u32);
-        expect_token(parser, ",")?;
-        expect_token(parser, "[")?;
-        expect_token(parser, "default")?;
-        expect_token(parser, ":")?;
+        parser.expect_token(",")?;
+        parser.expect_token("[")?;
+        parser.expect_token("default")?;
+        parser.expect_token(":")?;
         let default = parse_successor(parser, context)?;
         let mut cases = Vec::new();
         while parser.parse_token(",") {
@@ -303,11 +303,11 @@ impl SwitchOp {
             let case = parser
                 .parse_number()
                 .ok_or((span, Error::ExpectedToken("case value")))?;
-            expect_token(parser, ":")?;
+            parser.expect_token(":")?;
             let successor = parse_successor(parser, context)?;
             cases.push((crate::binding::truncate_bits(case, width), successor));
         }
-        expect_token(parser, "]")?;
+        parser.expect_token("]")?;
         let op = SwitchOpBuilder::new(context)
             .selector(selector)
             .successors(cases, default)
@@ -428,7 +428,7 @@ fn parse_successor(
                 }
                 break;
             }
-            expect_token(parser, ":")?;
+            parser.expect_token(":")?;
             loop {
                 arg_types.push(parse_arg_type(parser, context)?);
                 if parser.parse_token(",") {
@@ -437,7 +437,7 @@ fn parse_successor(
                 break;
             }
         }
-        expect_token(parser, ")")?;
+        parser.expect_token(")")?;
     }
 
     let block = parser.resolve_region_block_label(context, &label, &arg_types)?;
@@ -463,16 +463,4 @@ fn parse_arg_type(
     parser
         .parse_type(context)?
         .ok_or_else(|| (parser.span(), Error::ExpectedType))
-}
-
-fn expect_token(
-    parser: &mut tir::parse::text::Parser,
-    token: &'static str,
-) -> Result<(), (tir::parse::Span, Error)> {
-    use tir::parse::common::Cursor;
-    if parser.parse_token(token) {
-        Ok(())
-    } else {
-        Err((parser.span(), Error::ExpectedToken(token)))
-    }
 }

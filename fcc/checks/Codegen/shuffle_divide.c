@@ -1,6 +1,10 @@
 // REQUIRES: linux, x86_64
-// RUN: env TIR_SHUFFLE_SEED=2 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o - %s | python3 %S/../Inputs/run_object.py
-// RUN: env TIR_SHUFFLE_SEED=3 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o - %s | python3 %S/../Inputs/run_object.py
+// RUN: env TIR_SHUFFLE_SEED=2 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o %t.o %s
+// RUN: timeout 30 cc %t.o -o %t
+// RUN: timeout 30 %t
+// RUN: env TIR_SHUFFLE_SEED=3 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o %t.o %s
+// RUN: timeout 30 cc %t.o -o %t
+// RUN: timeout 30 %t
 
 // `cdq` writes edx and `idiv` reads it. These seeds schedule the loop's other
 // arithmetic between the two; a value defined there must not take edx, or the

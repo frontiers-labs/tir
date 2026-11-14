@@ -1,0 +1,23 @@
+name: Record libFuzzer crash
+description: Save a libFuzzer crash and its diagnosis as a defect record
+inputs:
+  target:
+    description: Fuzzer target name
+    required: true
+  artifacts:
+    description: Directory containing crash inputs
+    required: true
+  log:
+    description: Fuzzer output log
+    required: true
+  output:
+    description: Directory for defect records
+    required: true
+  reproduce:
+    description: Command to replay a saved crash.bin
+    required: true
+  run-url:
+    description: URL of the workflow run
+runs:
+  using: node24
+  main: index.js
