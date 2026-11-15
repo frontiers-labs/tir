@@ -115,6 +115,7 @@ impl LintRule for AstGrep {
                 severity: Severity::Error,
                 file: finding.file,
                 line: finding.range.start.line + 1,
+                end_line: finding.range.start.line + 1,
                 message: format!("[{}] {}", finding.rule_id, finding.message),
             };
             found.entry(key).or_default().push(diagnostic);
@@ -124,10 +125,12 @@ impl LintRule for AstGrep {
         let mut errors = Vec::new();
         for (key, count) in &listed {
             for _ in 0..count.saturating_sub(found.get(key).map_or(0, Vec::len)) {
+                let line = baseline.lines().position(|line| line == key).unwrap_or(0) as u32 + 1;
                 errors.push(LintDiagnostic {
                     severity: Severity::Error,
                     file: BASELINE.to_owned(),
-                    line: baseline.lines().position(|line| line == key).unwrap_or(0) as u32 + 1,
+                    line,
+                    end_line: line,
                     message: format!("fixed, remove from {BASELINE}: {key}"),
                 });
             }
@@ -173,12 +176,15 @@ pub fn check_baseline(
             }
         }
         let previous = counts(old.lines());
-        for (key, count) in counts(baseline.lines()) {
-            for _ in 0..count.saturating_sub(*previous.get(&key).unwrap_or(&0)) {
+        let current = counts(baseline.lines());
+        for (index, key) in baseline.lines().enumerate() {
+            if current[key] > *previous.get(key).unwrap_or(&0) {
+                let line = index as u32 + 1;
                 errors.push(LintDiagnostic {
                     severity: Severity::Error,
                     file: path.to_owned(),
-                    line: baseline.lines().position(|line| line == key).unwrap_or(0) as u32 + 1,
+                    line,
+                    end_line: line,
                     message: format!("{path} may only shrink; new line: {key}"),
                 });
             }

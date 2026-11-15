@@ -71,6 +71,7 @@ impl LintRule for Jevlint {
                 severity: Severity::Error,
                 file: finding.path,
                 line: finding.start_line,
+                end_line: finding.start_line,
                 message: format!("jevlint {}: {}", finding.rule_id, finding.description),
             })
             .collect())

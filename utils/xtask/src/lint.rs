@@ -114,9 +114,11 @@ impl ChangedLines {
             .components()
             .filter(|component| !matches!(component, Component::CurDir))
             .collect();
-        self.0
-            .get(&path)
-            .is_some_and(|ranges| ranges.iter().any(|range| range.contains(&finding.line)))
+        self.0.get(&path).is_some_and(|ranges| {
+            ranges
+                .iter()
+                .any(|range| range.start <= finding.end_line && finding.line < range.end)
+        })
     }
 }
 
@@ -207,6 +209,7 @@ impl Display for Severity {
 pub struct LintDiagnostic {
     pub severity: Severity,
     pub line: u32,
+    pub end_line: u32,
     pub file: String,
     pub message: String,
 }
@@ -300,6 +303,7 @@ impl LintRule for Dependencies {
                 severity: Severity::Error,
                 file: String::new(),
                 line: 0,
+                end_line: 0,
                 message: format!(
                     "new production dependency `{dependency}`; implement it in-tree instead"
                 ),
@@ -309,6 +313,7 @@ impl LintRule for Dependencies {
             errors.push(LintDiagnostic { severity: Severity::Error,
                 file: String::new(),
                 line: 0,
+                end_line: 0,
                 message: format!("`{dependency}` is no longer a production dependency; remove it from production-dependencies.txt"),
             });
         }
@@ -426,6 +431,7 @@ fn cargo_diagnostics(command: xshell::Cmd<'_>) -> anyhow::Result<Vec<LintDiagnos
                 severity: Severity::Error,
                 file: span.file_name.clone(),
                 line: span.line_start,
+                end_line: span.line_start,
                 message,
             });
         } else {
@@ -433,6 +439,7 @@ fn cargo_diagnostics(command: xshell::Cmd<'_>) -> anyhow::Result<Vec<LintDiagnos
                 severity: Severity::Error,
                 file: String::new(),
                 line: 0,
+                end_line: 0,
                 message,
             });
         }
@@ -551,6 +558,7 @@ pub fn run(root: &Path, options: Options) -> anyhow::Result<()> {
                         severity,
                         file: String::new(),
                         line: 0,
+                        end_line: 0,
                         message: format!("skipping {}: {reason}", rule.name()),
                     })
                     .collect())
@@ -562,6 +570,7 @@ pub fn run(root: &Path, options: Options) -> anyhow::Result<()> {
                 severity: Severity::Error,
                 file: String::new(),
                 line: 0,
+                end_line: 0,
                 message: format!("{}: {error:#}", rule.name()),
             }),
         }

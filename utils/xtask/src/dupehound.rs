@@ -104,6 +104,7 @@ impl LintRule for Dupehound {
                                 severity: Severity::Error,
                                 file: member.file.clone(),
                                 line: member.start_line,
+                                end_line: member.end_line,
                                 message: format!(
                                     "unaccepted duplicate-cluster members: {}:{} ({}) and {}:{} ({})",
                                     left.file,
@@ -121,23 +122,25 @@ impl LintRule for Dupehound {
             }
         }
         for pair in allowed.difference(&seen) {
+            let line = baseline
+                .lines()
+                .position(|line| {
+                    let members: BTreeSet<_> = line
+                        .split('#')
+                        .next()
+                        .unwrap_or_default()
+                        .split_whitespace()
+                        .map(str::to_owned)
+                        .collect();
+                    &members == pair
+                })
+                .unwrap_or(0) as u32
+                + 1;
             errors.push(LintDiagnostic {
                 severity: Severity::Error,
                 file: ALLOWED.to_owned(),
-                line: baseline
-                    .lines()
-                    .position(|line| {
-                        let members: BTreeSet<_> = line
-                            .split('#')
-                            .next()
-                            .unwrap_or_default()
-                            .split_whitespace()
-                            .map(str::to_owned)
-                            .collect();
-                        &members == pair
-                    })
-                    .unwrap_or(0) as u32
-                    + 1,
+                line,
+                end_line: line,
                 message: format!(
                     "{} no longer share a duplicate cluster; remove them from {ALLOWED}",
                     pair.iter().cloned().collect::<Vec<_>>().join(" ")

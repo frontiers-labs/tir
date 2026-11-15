@@ -86,7 +86,7 @@ impl LintRule for Scripts {
                 continue;
             }
             if script(&full).with_context(|| format!("checking {name}"))? {
-                errors.push(LintDiagnostic { severity: Severity::Error, file: name.to_owned(), line: 1, message: "shell and Python scripts must be in .agents, .codex, .claude, or utils/scripts".to_owned() });
+                errors.push(LintDiagnostic { severity: Severity::Error, file: name.to_owned(), line: 1, end_line: 1, message: "shell and Python scripts must be in .agents, .codex, .claude, or utils/scripts".to_owned() });
             }
         }
         Ok(errors)
