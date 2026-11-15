@@ -1,0 +1,21 @@
+diff --git i/grammar.js w/grammar.js
+index 4a0ff4b..3057953 100644
+--- i/grammar.js
++++ w/grammar.js
+@@ -52,7 +52,7 @@ const TOKEN_TREE_NON_SPECIAL_PUNCTUATION = [
+   '+', '-', '*', '/', '%', '^', '!', '&', '|', '&&', '||', '<<',
+   '>>', '+=', '-=', '*=', '/=', '%=', '^=', '&=', '|=', '<<=',
+   '>>=', '=', '==', '!=', '>', '<', '>=', '<=', '@', '_', '.',
+-  '..', '...', '..=', ',', ';', ':', '::', '->', '=>', '#', '?',
++  '..', '...', '..=', ',', ';', ':', '::', '->', '=>', '#', '?', '~',
+ ];
+ 
+ const primitiveTypes = numericTypes.concat(['bool', 'str', 'char']);
+@@ -120,6 +120,7 @@ module.exports = grammar({
+     source_file: $ => seq(
+       optional($.shebang),
+       repeat($._statement),
++      optional($._expression),
+     ),
+ 
+     _statement: $ => choice(

@@ -31,12 +31,8 @@ impl LintRule for Jevlint {
     fn tools(&self) -> &'static [Tool] {
         &[Tool {
             probe: &["jevlint", "version"],
-            version: None,
-            install: &[
-                "go",
-                "install",
-                "github.com/codegirl-007/jevlint/cmd/jevlint@v0.4.0",
-            ],
+            version: Some("v0.4.0-tir.1"),
+            install: &["python3", "utils/scripts/install_jevlint.py"],
         }]
     }
 

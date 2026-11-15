@@ -1,6 +1,7 @@
 name: Jevlint
 
 on:
+  workflow_dispatch:
   pull_request_target:
     branches: ["master"]
   push:
@@ -39,6 +40,8 @@ jobs:
       - run: cargo build --locked -p xtask --bin xtask
         working-directory: trusted
       - run: target/debug/xtask lint --install --only jevlint
+        working-directory: trusted
+      - run: python3 utils/scripts/check_jevlint.py
         working-directory: trusted
       - name: Check out source as data
         uses: actions/checkout@v7
