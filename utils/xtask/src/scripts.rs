@@ -3,6 +3,8 @@ use std::{fs::File, io::Read, path::Path};
 use anyhow::{ensure, Context, Result};
 use xshell::{cmd, Shell};
 
+use crate::lint::{LintDiagnostic, LintRule, Severity};
+
 fn script(path: &Path) -> Result<bool> {
     if path
         .extension()
@@ -57,30 +59,36 @@ fn allowed(path: &Path) -> bool {
         .any(|file| path == Path::new(file))
 }
 
-pub fn run(root: &Path) -> Result<()> {
-    let sh = Shell::new()?;
-    sh.change_dir(root);
-    let output = cmd!(sh, "git ls-files --cached --others --exclude-standard -z")
-        .ignore_status()
-        .output()?;
-    ensure!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let paths = std::str::from_utf8(&output.stdout).context("non-UTF-8 repository path")?;
-    let mut failed = false;
-    for name in paths.split('\0').filter(|name| !name.is_empty()) {
-        let path = Path::new(name);
-        let full = root.join(path);
-        if allowed(path) || !full.is_file() {
-            continue;
-        }
-        if script(&full).with_context(|| format!("checking {name}"))? {
-            eprintln!("error: shell and Python scripts must be in .agents, .codex, .claude, or utils/scripts: {name}");
-            failed = true;
-        }
+pub struct Scripts;
+
+impl LintRule for Scripts {
+    fn name(&self) -> &'static str {
+        "script locations"
     }
-    ensure!(!failed, "script location check failed");
-    Ok(())
+
+    fn run(&self, root: &Path) -> Result<Vec<LintDiagnostic>> {
+        let sh = Shell::new()?;
+        sh.change_dir(root);
+        let output = cmd!(sh, "git ls-files --cached --others --exclude-standard -z")
+            .ignore_status()
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let paths = std::str::from_utf8(&output.stdout).context("non-UTF-8 repository path")?;
+        let mut errors = Vec::new();
+        for name in paths.split('\0').filter(|name| !name.is_empty()) {
+            let path = Path::new(name);
+            let full = root.join(path);
+            if allowed(path) || !full.is_file() {
+                continue;
+            }
+            if script(&full).with_context(|| format!("checking {name}"))? {
+                errors.push(LintDiagnostic { severity: Severity::Error, file: name.to_owned(), line: 1, end_line: 1, message: "shell and Python scripts must be in .agents, .codex, .claude, or utils/scripts".to_owned() });
+            }
+        }
+        Ok(errors)
+    }
 }

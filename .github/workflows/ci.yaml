@@ -41,9 +41,11 @@ jobs:
       - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: clippy
+          shared-key: clippy-ast-grep-0.51.0-dupehound-0.1.2
+          cache-all-crates: true
           save-if: ${{ github.event_name == 'push' }}
       - run: git fetch --no-tags --depth=1 origin master:refs/remotes/origin/master
+      - run: cargo xtask lint --install --exclude jevlint
       - run: cargo xtask lint
         env:
           LINT_BASE: origin/master
