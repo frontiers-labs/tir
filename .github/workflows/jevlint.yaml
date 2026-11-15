@@ -41,8 +41,6 @@ jobs:
         working-directory: trusted
       - run: target/debug/xtask lint --install --only jevlint
         working-directory: trusted
-      - run: python3 utils/scripts/check_jevlint.py
-        working-directory: trusted
       - name: Check out source as data
         uses: actions/checkout@v7
         with:

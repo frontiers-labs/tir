@@ -149,7 +149,7 @@ pub struct Tool {
 }
 
 impl Tool {
-    fn available(&self, root: &Path) -> bool {
+    pub(super) fn available(&self, root: &Path) -> bool {
         let Ok(sh) = Shell::new() else { return false };
         sh.change_dir(root);
         let program = self.probe[0];
@@ -167,7 +167,7 @@ impl Tool {
             })
     }
 
-    fn check(&self, root: &Path) -> anyhow::Result<()> {
+    pub(super) fn check(&self, root: &Path) -> anyhow::Result<()> {
         ensure!(
             self.available(root),
             "{}{} is unavailable; run `{}` or `cargo xtask lint --install`",
