@@ -3,6 +3,8 @@ name: Jevlint
 on:
   pull_request_target:
     branches: ["master"]
+  pull_request:
+    branches: ["master"]
   push:
     branches: ["master"]
 
@@ -10,19 +12,25 @@ permissions:
   contents: read
 
 concurrency:
-  group: jevlint-${{ github.event.pull_request.number || github.ref }}
+  group: jevlint-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Repository branches validate candidate tooling; forks use base tooling.
   jevlint:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository) ||
+      github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out trusted tooling
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.event.pull_request.base.sha || github.sha }}
           path: trusted
+          fetch-depth: 0
           persist-credentials: false
       - run: rustup toolchain install
         working-directory: trusted
@@ -46,11 +54,19 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           path: source
+          fetch-depth: 0
           persist-credentials: false
           allow-unsafe-pr-checkout: true
       # Replace even a fork-supplied symlink; the fork cannot select rules or packs.
       - run: cp --remove-destination trusted/.jevlint.json source/.jevlint.json
       # Only trusted binaries run. No Cargo command is run in the source checkout.
-      - run: trusted/target/debug/xtask lint --only jevlint --root source --deny-warnings
+      - run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] || [ "$GITHUB_EVENT_NAME" = pull_request_target ]; then
+            git -C source fetch --no-tags "$GITHUB_WORKSPACE/trusted" "$JEVLINT_BASE"
+          fi
+          base=$(git -C source rev-parse --verify --end-of-options "${JEVLINT_BASE}^{commit}")
+          base=$(git -C source merge-base "$base" HEAD)
+          trusted/target/debug/xtask lint --only jevlint --root source --diff "$base" --deny-warnings
         env:
+          JEVLINT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
