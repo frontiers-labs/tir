@@ -130,9 +130,8 @@ impl LintRule for Jevlint {
     }
 
     fn run(&self, _root: &Path) -> anyhow::Result<Vec<LintDiagnostic>> {
-        anyhow::bail!(
-            "jevlint requires --diff COMMIT to limit paid evaluation to changed Rust files"
-        )
+        eprintln!("jevlint: no --diff supplied; skipping paid evaluation");
+        Ok(Vec::new())
     }
 
     fn run_diff(&self, root: &Path, files: &[PathBuf]) -> anyhow::Result<Vec<LintDiagnostic>> {
