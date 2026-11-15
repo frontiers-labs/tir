@@ -392,6 +392,7 @@ struct Diagnostic {
 struct Span {
     file_name: String,
     line_start: u32,
+    line_end: u32,
     is_primary: bool,
 }
 
@@ -431,7 +432,7 @@ fn cargo_diagnostics(command: xshell::Cmd<'_>) -> anyhow::Result<Vec<LintDiagnos
                 severity: Severity::Error,
                 file: span.file_name.clone(),
                 line: span.line_start,
-                end_line: span.line_start,
+                end_line: span.line_end,
                 message,
             });
         } else {
