@@ -1,0 +1,64 @@
+{
+  "languages": {
+    "rust": {}
+  },
+  "minConfidence": 0.8,
+  "rules": [
+    {
+      "id": "wrong-layer-repair",
+      "description": "Preserve compiler phase and ownership boundaries. Flag a downstream checker, generic consumer or adapter that repairs inputs by inventing or overriding semantics owned by an earlier resolver, target description or producer, rather than reporting the problem or consuming the authoritative result. Examples include a post-resolution checker silently introducing builtin bindings, or a target-independent writer rederiving instruction encoding facts already represented by target metadata. Parsing, binding and forward-reference resolution in the parser, producer-side correction of metadata, and representation conversion at a genuine boundary pass. Judge the supplied definitions and callers; do not infer a violation from a function name or from missing code.",
+      "severity": "warning",
+      "kinds": [
+        "function"
+      ],
+      "allowAbstain": true,
+      "context": {
+        "callees": true,
+        "callers": true,
+        "relatedTypes": true
+      }
+    },
+    {
+      "id": "instruction-specific-semantics",
+      "description": "Flag generic compiler inference, semantic analysis or rewrite generation that special-cases individual instruction names to supply behavior which should derive from signatures, declared operand or register types, behavior graphs, or declarative rules. Renaming an instruction with unchanged declarations and behavior should not change such generic semantics. Target-specific opcode encoding, relocation dispatch, parsing registered names, and diagnostic labels legitimately use instruction names and pass. Require a demonstrated semantic override, not merely a string comparison.",
+      "severity": "warning",
+      "kinds": [
+        "function"
+      ],
+      "allowAbstain": true,
+      "context": {
+        "callees": true,
+        "callers": true,
+        "relatedTypes": true
+      }
+    },
+    {
+      "id": "self-confirming-check",
+      "description": "Flag tests whose claimed behavior is supplied by their fixtures, mocks or helper instead of being computed by the production operation under test. Examples include writing the generated output that is subsequently asserted, substituting a literal result for execution, or deriving both actual and expected from the same result. A separate valid assertion does not rescue a bypassed behavioral assertion. Input fixtures, independent expected constants, assertions on real emitted artifacts, and tests of actual public metadata or serialization contracts pass. Trace where the asserted actual value comes from; do not reject all metadata tests or all mocks.",
+      "severity": "warning",
+      "kinds": [
+        "function"
+      ],
+      "allowAbstain": true,
+      "context": {
+        "callees": true,
+        "callers": true,
+        "relatedTypes": true
+      }
+    },
+    {
+      "id": "abstraction-without-responsibility",
+      "description": "Flag additional adapters, strategy interfaces, factories, registries or configuration layers that add indirection without enforcing a distinct invariant, performing a meaningful transformation, owning a separate responsibility, or serving demonstrated different consumers. A single implementation alone is not a violation. Look for concrete extra machinery whose shown consumers all use the same behavior and which can be removed while preserving the domain contract. Stable public boundaries, useful named domain operations, foreign-function safety and error handling, real dependency substitution, and intentional ownership encapsulation pass. Do not claim an abstraction is unused from missing context; abstain if consumers needed for judgment are absent.",
+      "severity": "warning",
+      "kinds": [
+        "function"
+      ],
+      "allowAbstain": true,
+      "context": {
+        "callees": true,
+        "callers": true,
+        "relatedTypes": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+name: Jevlint
+
+on:
+  pull_request_target:
+    branches: ["master"]
+  push:
+    branches: ["master"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jevlint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jevlint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out trusted tooling
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          persist-credentials: false
+      - run: rustup toolchain install
+        working-directory: trusted
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: trusted -> target
+          shared-key: jevlint
+          save-if: ${{ github.event_name == 'push' }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: false
+      - run: cargo build --locked -p xtask --bin xtask
+        working-directory: trusted
+      - run: target/debug/xtask lint --install --only jevlint
+        working-directory: trusted
+      - name: Check out source as data
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: source
+          persist-credentials: false
+          allow-unsafe-pr-checkout: true
+      # Replace even a fork-supplied symlink; the fork cannot select rules or packs.
+      - run: cp --remove-destination trusted/.jevlint.json source/.jevlint.json
+      # Only trusted binaries run. No Cargo command is run in the source checkout.
+      - run: trusted/target/debug/xtask lint --only jevlint --root source --deny-warnings
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}

@@ -1,10 +1,24 @@
-use std::{collections::BTreeMap, path::Path, process::Command};
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{bail, ensure, Context};
 use serde::Deserialize;
 use xshell::{cmd, Shell};
 
-const AST_GREP: &str = env!("CARGO_BIN_FILE_AST_GREP_ast-grep");
+use crate::lint::{LintDiagnostic, LintRule, Severity, Tool};
+
+const TOOL: Tool = Tool {
+    probe: &["ast-grep", "--version"],
+    version: Some("0.51.0"),
+    install: &[
+        "cargo",
+        "install",
+        "ast-grep",
+        "--version",
+        "=0.51.0",
+        "--locked",
+        "--no-default-features",
+    ],
+};
 const CONFIG: &str = ".config/ast-grep/sgconfig.yml";
 const BASELINE: &str = ".config/ast-grep/baseline.tsv";
 
@@ -25,7 +39,7 @@ struct Range {
 
 #[derive(Deserialize)]
 struct Position {
-    line: usize,
+    line: u32,
 }
 
 fn counts<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, usize> {
@@ -36,71 +50,105 @@ fn counts<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, usize> {
     result
 }
 
-pub fn run(root: &Path) -> anyhow::Result<()> {
-    let sh = Shell::new()?;
-    sh.change_dir(root);
-    ensure!(
-        Command::from(cmd!(
-            sh,
-            "{AST_GREP} test --skip-snapshot-tests -c {CONFIG}"
-        ))
-        .status()?
-        .success(),
-        "ast-grep rule tests failed"
-    );
-    let output = cmd!(sh, "{AST_GREP} scan --json=stream . -c {CONFIG}")
-        .ignore_status()
-        .output()?;
-    if !output.status.success() && output.status.code() != Some(1) {
-        bail!(
-            "ast-grep failed: {}",
+pub struct RuleTests;
+pub struct AstGrep;
+
+impl LintRule for RuleTests {
+    fn name(&self) -> &'static str {
+        "ast-grep rule tests"
+    }
+
+    fn tools(&self) -> &'static [Tool] {
+        &[TOOL]
+    }
+
+    fn run(&self, root: &Path) -> anyhow::Result<Vec<LintDiagnostic>> {
+        let sh = Shell::new()?;
+        sh.change_dir(root);
+        let output = cmd!(sh, "ast-grep test --skip-snapshot-tests -c {CONFIG}")
+            .ignore_status()
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "ast-grep rule tests failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        Ok(Vec::new())
     }
-    let mut found = BTreeMap::<String, (usize, String)>::new();
-    for line in std::str::from_utf8(&output.stdout)?.lines() {
-        let finding: Finding = serde_json::from_str(line).context("invalid ast-grep output")?;
-        let text = finding
-            .lines
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        let key = format!("{}\t{}\t{}", finding.rule_id, finding.file, text);
-        let diagnostic = format!(
-            "error[{}]: {}:{}: {}",
-            finding.rule_id,
-            finding.file,
-            finding.range.start.line + 1,
-            finding.message
-        );
-        let entry = found.entry(key).or_insert((0, diagnostic));
-        entry.0 += 1;
-    }
-    let baseline = std::fs::read_to_string(root.join(BASELINE))?;
-    let listed = counts(baseline.lines());
-    let mut failed = false;
-    for (key, (count, diagnostic)) in &found {
-        if *count > *listed.get(key).unwrap_or(&0) {
-            eprintln!("{diagnostic}");
-            failed = true;
-        }
-    }
-    for (key, count) in &listed {
-        for _ in 0..count.saturating_sub(found.get(key).map_or(0, |v| v.0)) {
-            eprintln!("error: fixed, remove from {BASELINE}: {key}");
-            failed = true;
-        }
-    }
-    failed |= check_baseline(root, BASELINE, &baseline)?;
-    ensure!(!failed, "ast-grep check failed");
-    Ok(())
 }
 
-pub fn check_baseline(root: &Path, path: &str, baseline: &str) -> anyhow::Result<bool> {
-    let mut failed = false;
+impl LintRule for AstGrep {
+    fn name(&self) -> &'static str {
+        "ast-grep"
+    }
+
+    fn tools(&self) -> &'static [Tool] {
+        &[TOOL]
+    }
+
+    fn run(&self, root: &Path) -> anyhow::Result<Vec<LintDiagnostic>> {
+        let sh = Shell::new()?;
+        sh.change_dir(root);
+        let output = cmd!(sh, "ast-grep scan --json=stream . -c {CONFIG}")
+            .ignore_status()
+            .output()?;
+        if !output.status.success() && output.status.code() != Some(1) {
+            bail!(
+                "ast-grep failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let mut found = BTreeMap::<String, (usize, LintDiagnostic)>::new();
+        for line in std::str::from_utf8(&output.stdout)?.lines() {
+            let finding: Finding = serde_json::from_str(line).context("invalid ast-grep output")?;
+            let text = finding
+                .lines
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let key = format!("{}\t{}\t{}", finding.rule_id, finding.file, text);
+            let diagnostic = LintDiagnostic {
+                severity: Severity::Error,
+                file: finding.file,
+                line: finding.range.start.line + 1,
+                message: format!("[{}] {}", finding.rule_id, finding.message),
+            };
+            let entry = found.entry(key).or_insert((0, diagnostic));
+            entry.0 += 1;
+        }
+        let baseline = std::fs::read_to_string(root.join(BASELINE))?;
+        let listed = counts(baseline.lines());
+        let mut errors = Vec::new();
+        for (key, count) in &listed {
+            for _ in 0..count.saturating_sub(found.get(key).map_or(0, |v| v.0)) {
+                errors.push(LintDiagnostic {
+                    severity: Severity::Error,
+                    file: BASELINE.to_owned(),
+                    line: baseline.lines().position(|line| line == key).unwrap_or(0) as u32 + 1,
+                    message: format!("fixed, remove from {BASELINE}: {key}"),
+                });
+            }
+        }
+        for (key, (count, diagnostic)) in found {
+            if count > *listed.get(&key).unwrap_or(&0) {
+                errors.push(diagnostic);
+            }
+        }
+        errors.extend(check_baseline(root, BASELINE, &baseline)?);
+        Ok(errors)
+    }
+}
+
+pub fn check_baseline(
+    root: &Path,
+    path: &str,
+    baseline: &str,
+) -> anyhow::Result<Vec<LintDiagnostic>> {
+    let mut errors = Vec::new();
     let base = std::env::var("LINT_BASE").unwrap_or_else(|_| "master".to_owned());
     let sh = Shell::new()?;
     sh.change_dir(root);
@@ -128,10 +176,14 @@ pub fn check_baseline(root: &Path, path: &str, baseline: &str) -> anyhow::Result
         let previous = counts(old.lines());
         for (key, count) in counts(baseline.lines()) {
             for _ in 0..count.saturating_sub(*previous.get(&key).unwrap_or(&0)) {
-                eprintln!("error: {path} may only shrink; new line: {key}");
-                failed = true;
+                errors.push(LintDiagnostic {
+                    severity: Severity::Error,
+                    file: path.to_owned(),
+                    line: baseline.lines().position(|line| line == key).unwrap_or(0) as u32 + 1,
+                    message: format!("{path} may only shrink; new line: {key}"),
+                });
             }
         }
     }
-    Ok(failed)
+    Ok(errors)
 }
