@@ -9,6 +9,8 @@ on:
         required: true
   pull_request_target:
     branches: ["master"]
+  pull_request:
+    branches: ["master"]
   push:
     branches: ["master"]
 
@@ -16,18 +18,23 @@ permissions:
   contents: read
 
 concurrency:
-  group: jevlint-${{ github.event.pull_request.number || github.ref }}
+  group: jevlint-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Repository branches validate candidate tooling; forks use base tooling.
   jevlint:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository) ||
+      (github.event_name != 'pull_request' && github.event_name != 'pull_request_target')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out trusted tooling
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.event.pull_request.base.sha || github.sha }}
           path: trusted
           fetch-depth: 0
           persist-credentials: false
@@ -60,7 +67,7 @@ jobs:
       - run: cp --remove-destination trusted/.jevlint.json source/.jevlint.json
       # Only trusted binaries run. No Cargo command is run in the source checkout.
       - run: |
-          if [ "$GITHUB_EVENT_NAME" = pull_request_target ]; then
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] || [ "$GITHUB_EVENT_NAME" = pull_request_target ]; then
             git -C source fetch --no-tags "$GITHUB_WORKSPACE/trusted" "$JEVLINT_BASE"
           fi
           base=$(git -C source rev-parse --verify --end-of-options "${JEVLINT_BASE}^{commit}")
