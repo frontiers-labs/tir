@@ -14,7 +14,9 @@ pub struct Jevlint;
 const VERSION: &str = "v0.4.0-tir.1";
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Report {
+    scanned_files: usize,
     #[serde(deserialize_with = "Option::deserialize")]
     findings: Option<Vec<Finding>>,
 }
@@ -25,6 +27,7 @@ struct Finding {
     rule_id: String,
     path: String,
     start_line: u32,
+    end_line: u32,
     description: String,
 }
 
@@ -126,10 +129,30 @@ impl LintRule for Jevlint {
         tool.check(root)
     }
 
-    fn run(&self, root: &Path) -> anyhow::Result<Vec<LintDiagnostic>> {
+    fn run(&self, _root: &Path) -> anyhow::Result<Vec<LintDiagnostic>> {
+        anyhow::bail!(
+            "jevlint requires --diff COMMIT to limit paid evaluation to changed Rust files"
+        )
+    }
+
+    fn run_diff(&self, root: &Path, files: &[PathBuf]) -> anyhow::Result<Vec<LintDiagnostic>> {
+        let files: Vec<_> = files
+            .iter()
+            .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+            .filter(|path| {
+                root.join(path)
+                    .symlink_metadata()
+                    .is_ok_and(|metadata| metadata.file_type().is_file())
+            })
+            .collect();
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let file_count = files.len();
+        eprintln!("jevlint: checking {file_count} changed Rust files");
         let sh = Shell::new()?;
         sh.change_dir(root);
-        let output = cmd!(sh, "jevlint check --format json .")
+        let output = cmd!(sh, "jevlint check --format json -- {files...}")
             .env("JEVLINT_PROVIDER", "typesafe")
             .ignore_status()
             .output()?;
@@ -141,6 +164,11 @@ impl LintRule for Jevlint {
         );
         let report: Report =
             serde_json::from_slice(&output.stdout).context("invalid jevlint JSON report")?;
+        ensure!(
+            report.scanned_files <= file_count,
+            "jevlint scanned {} files, exceeding the {file_count} selected changed Rust files",
+            report.scanned_files,
+        );
         Ok(report
             .findings
             .unwrap_or_default()
@@ -149,7 +177,7 @@ impl LintRule for Jevlint {
                 severity: Severity::Error,
                 file: finding.path,
                 line: finding.start_line,
-                end_line: finding.start_line,
+                end_line: finding.end_line,
                 message: format!("jevlint {}: {}", finding.rule_id, finding.description),
             })
             .collect())

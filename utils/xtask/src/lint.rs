@@ -140,6 +140,10 @@ pub trait LintRule {
         Ok(())
     }
     fn run(&self, root: &Path) -> anyhow::Result<Vec<LintDiagnostic>>;
+    /// Run with changed-file scope when the check supports it.
+    fn run_diff(&self, root: &Path, _files: &[PathBuf]) -> anyhow::Result<Vec<LintDiagnostic>> {
+        self.run(root)
+    }
 }
 
 pub struct Tool {
@@ -546,7 +550,12 @@ pub fn run(root: &Path, options: Options) -> anyhow::Result<()> {
                 }
             }
             if prerequisites.is_empty() {
-                rule.run(root)
+                if let Some(changed) = &changed {
+                    let files: Vec<_> = changed.0.keys().cloned().collect();
+                    rule.run_diff(root, &files)
+                } else {
+                    rule.run(root)
+                }
             } else {
                 let severity = if rule.optional() {
                     Severity::Warning
