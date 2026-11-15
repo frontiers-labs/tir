@@ -216,6 +216,13 @@
    "subject": "refactor(xtask): construct commands with xshell (#794)",
    "time": "2026-11-15T09:19:17.000Z",
    "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-11-15T12-13-50-000Z-d28d9491ee46.json",
+   "commit": "d28d9491ee4685d33f30da629a898c25e474739b",
+   "subject": "chore: refactor lint rules (#795)",
+   "time": "2026-11-15T12:13:50.000Z",
+   "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
