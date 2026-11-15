@@ -209,6 +209,13 @@
    "subject": "chore: cleanup some agentic slop (#793)",
    "time": "2026-11-14T13:12:28.000Z",
    "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-11-15T09-19-17-000Z-27710709c601.json",
+   "commit": "27710709c6019cb5d718030f77682a3ade821b54",
+   "subject": "refactor(xtask): construct commands with xshell (#794)",
+   "time": "2026-11-15T09:19:17.000Z",
+   "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
