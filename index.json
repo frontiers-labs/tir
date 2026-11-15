@@ -223,6 +223,13 @@
    "subject": "chore: refactor lint rules (#795)",
    "time": "2026-11-15T12:13:50.000Z",
    "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-11-15T16-28-09-000Z-22ba524eb540.json",
+   "commit": "22ba524eb540fc60d20edb99df32758b5939e8c6",
+   "subject": "fix(jevlint): validate Rust parsing and scope paid scans (#796)",
+   "time": "2026-11-15T16:28:09.000Z",
+   "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
