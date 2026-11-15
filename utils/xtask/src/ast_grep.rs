@@ -2,7 +2,9 @@ use std::{collections::BTreeMap, path::Path, process::Command};
 
 use anyhow::{bail, ensure, Context};
 use serde::Deserialize;
+use xshell::{cmd, Shell};
 
+const AST_GREP: &str = env!("CARGO_BIN_FILE_AST_GREP_ast-grep");
 const CONFIG: &str = ".config/ast-grep/sgconfig.yml";
 const BASELINE: &str = ".config/ast-grep/baseline.tsv";
 
@@ -26,12 +28,6 @@ struct Position {
     line: usize,
 }
 
-fn ast_grep(root: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_FILE_AST_GREP_ast-grep"));
-    command.current_dir(root);
-    command
-}
-
 fn counts<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, usize> {
     let mut result = BTreeMap::new();
     for line in lines {
@@ -41,16 +37,19 @@ fn counts<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, usize> {
 }
 
 pub fn run(root: &Path) -> anyhow::Result<()> {
+    let sh = Shell::new()?;
+    sh.change_dir(root);
     ensure!(
-        ast_grep(root)
-            .args(["test", "--skip-snapshot-tests", "-c", CONFIG])
-            .status()?
-            .success(),
+        Command::from(cmd!(
+            sh,
+            "{AST_GREP} test --skip-snapshot-tests -c {CONFIG}"
+        ))
+        .status()?
+        .success(),
         "ast-grep rule tests failed"
     );
-    let output = ast_grep(root)
-        .args(["scan", "--json=stream", "."])
-        .args(["-c", CONFIG])
+    let output = cmd!(sh, "{AST_GREP} scan --json=stream . -c {CONFIG}")
+        .ignore_status()
         .output()?;
     if !output.status.success() && output.status.code() != Some(1) {
         bail!(
@@ -103,27 +102,22 @@ pub fn run(root: &Path) -> anyhow::Result<()> {
 pub fn check_baseline(root: &Path, path: &str, baseline: &str) -> anyhow::Result<bool> {
     let mut failed = false;
     let base = std::env::var("LINT_BASE").unwrap_or_else(|_| "master".to_owned());
-    let verify = Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "--verify", "--quiet", &base])
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let verify = cmd!(sh, "git rev-parse --verify --quiet {base}")
+        .ignore_status()
         .output()?;
     ensure!(verify.status.success(), "cannot resolve lint base {base}");
-    let previous = Command::new("git")
-        .current_dir(root)
-        .args(["show", &format!("{base}:{path}")])
-        .output()?;
+    let revision = format!("{base}:{path}");
+    let previous = cmd!(sh, "git show {revision}").ignore_status().output()?;
     if previous.status.success() {
         let mut old = String::from_utf8(previous.stdout)?;
-        let renames = Command::new("git")
-            .current_dir(root)
-            .args([
-                "diff",
-                "--name-status",
-                "--find-renames",
-                "--diff-filter=R",
-                &base,
-            ])
-            .output()?;
+        let renames = cmd!(
+            sh,
+            "git diff --name-status --find-renames --diff-filter=R {base}"
+        )
+        .ignore_status()
+        .output()?;
         ensure!(renames.status.success(), "git diff failed");
         for line in std::str::from_utf8(&renames.stdout)?.lines() {
             let mut fields = line.split('\t');

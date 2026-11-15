@@ -20,6 +20,8 @@
 use std::path::Path;
 use std::process::Command;
 
+use xshell::{cmd, Shell};
+
 use super::harness::{timed_output, COMPILE_TIMEOUT, RUN_TIMEOUT};
 
 /// Markers a sanitizer prints when it catches something. `-fno-sanitize-recover`
@@ -61,16 +63,11 @@ fn depends_on_uninitialized(source: &Path, work_dir: &Path) -> bool {
 }
 
 fn build_and_run(source: &Path, binary: &Path, flags: &[&str]) -> Option<std::process::Output> {
-    let mut compile = Command::new("gcc");
-    compile
-        .arg("-O0")
-        .args(flags)
-        .arg("-o")
-        .arg(binary)
-        .arg(source);
+    let sh = Shell::new().ok()?;
+    let mut compile = Command::from(cmd!(sh, "gcc -O0 {flags...} -o {binary} {source}"));
     let built = timed_output(&mut compile, COMPILE_TIMEOUT).ok()??;
     if !built.status.success() {
         return None;
     }
-    timed_output(&mut Command::new(binary), RUN_TIMEOUT).ok()?
+    timed_output(&mut Command::from(cmd!(sh, "{binary}")), RUN_TIMEOUT).ok()?
 }

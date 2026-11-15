@@ -1,0 +1,11 @@
+id: xtask-no-command-new
+valid:
+  - 'cmd!(sh, "cargo build");'
+  - 'std::process::Command::from(cmd!(sh, "cargo build"));'
+  - 'let text = "Command::new(\"cargo\")";'
+  - '// Command::new("cargo");'
+invalid:
+  - 'Command::new("cargo");'
+  - 'std::process::Command::new("cargo").arg("build");'
+  - '::std::process::Command::new(binary);'
+  - 'Command :: new(binary);'

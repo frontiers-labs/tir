@@ -1,7 +1,7 @@
 //! `cargo xtask lint`: every static check CI runs besides rustfmt.
 //!
 
-use std::{collections::BTreeSet, fs, io::ErrorKind, path::Path, process::Command};
+use std::{collections::BTreeSet, fs, io::ErrorKind, path::Path};
 
 use anyhow::ensure;
 use serde::Deserialize;
@@ -25,9 +25,10 @@ struct Dependency {
 }
 
 fn dependencies(root: &Path) -> anyhow::Result<()> {
-    let output = Command::new("cargo")
-        .current_dir(root)
-        .args(["metadata", "--no-deps", "--format-version", "1"])
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let output = cmd!(sh, "cargo metadata --no-deps --format-version 1")
+        .ignore_status()
         .output()?;
     ensure!(
         output.status.success(),
@@ -55,9 +56,10 @@ fn dependencies(root: &Path) -> anyhow::Result<()> {
 }
 
 pub fn install_git_hooks(root: &Path) -> anyhow::Result<()> {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "--git-path", "hooks/pre-commit"])
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let output = cmd!(sh, "git rev-parse --git-path hooks/pre-commit")
+        .ignore_status()
         .output()?;
     ensure!(
         output.status.success(),

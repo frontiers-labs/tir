@@ -1,0 +1,12 @@
+id: xtask-no-command-new
+language: rust
+severity: error
+message: Construct xtask commands with xshell::cmd! instead of Command::new
+files:
+  - utils/xtask/**
+rule:
+  kind: call_expression
+  has:
+    field: function
+    kind: scoped_identifier
+    regex: '(^|::)(r#)?Command\s*::\s*(r#)?new$'

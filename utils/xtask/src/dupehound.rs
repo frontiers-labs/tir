@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 
 use anyhow::ensure;
 use serde::Deserialize;
+use xshell::{cmd, Shell};
 
 const ALLOWED: &str = ".config/dupehound.allow";
 
@@ -25,6 +26,8 @@ struct Member {
 }
 
 pub fn run(root: &Path) -> anyhow::Result<()> {
+    let sh = Shell::new()?;
+    sh.change_dir(root);
     let cache = match std::env::var_os("XDG_CACHE_HOME") {
         Some(path) => std::path::PathBuf::from(path),
         None => std::path::PathBuf::from(
@@ -35,37 +38,17 @@ pub fn run(root: &Path) -> anyhow::Result<()> {
     .join("tir/dupehound/0.1.2");
     let binary = cache.join("bin/dupehound");
     if !binary.is_file() {
-        let status = Command::new("cargo")
-            .current_dir(root)
-            .args([
-                "install",
-                "dupehound",
-                "--version",
-                "=0.1.2",
-                "--locked",
-                "--no-default-features",
-                "--root",
-            ])
-            .arg(&cache)
-            .arg("--target-dir")
-            .arg(cache.join("target"))
+        let target = cache.join("target");
+        let status = Command::from(cmd!(sh, "cargo install dupehound --version =0.1.2 --locked --no-default-features --root {cache} --target-dir {target}"))
             .status()?;
         ensure!(status.success(), "failed to install dupehound");
     }
-    let output = Command::new(binary)
-        .current_dir(root)
-        .args([
-            "scan",
-            ".",
-            "--json",
-            "--threshold",
-            "0.85",
-            "--exclude",
-            "**/checks/**",
-            "--exclude",
-            "**/.lake/**",
-        ])
-        .output()?;
+    let output = cmd!(
+        sh,
+        "{binary} scan . --json --threshold 0.85 --exclude **/checks/** --exclude **/.lake/**"
+    )
+    .ignore_status()
+    .output()?;
     ensure!(
         output.status.success(),
         "dupehound failed: {}",

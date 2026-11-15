@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use clap::Args;
+use xshell::{cmd, Shell};
 
 const BUNDLE: &str = "test-bundle";
 
@@ -51,24 +52,30 @@ pub fn run(root: &Path, options: Options) -> Result<()> {
         return run_archive(root, archive, &options.runner_args);
     }
     let built = build(root, options.profile.as_deref(), options.torture)?;
-    let mut runner = Command::new("cargo");
-    if !options.cargo_test && has_nextest() {
-        runner.args(["nextest", "run", "--cargo-profile", &built.profile]);
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let profile = &built.profile;
+    let runner_args = &options.runner_args;
+    let runner = if !options.cargo_test && has_nextest() {
+        cmd!(
+            sh,
+            "cargo nextest run --cargo-profile {profile} --workspace --locked {runner_args...}"
+        )
     } else {
         if !options.cargo_test {
             eprintln!("cargo-nextest is not installed; running cargo test");
         }
-        runner.args(["test", "--profile", &built.profile]);
+        cmd!(
+            sh,
+            "cargo test --profile {profile} --workspace --locked {runner_args...}"
+        )
     }
-    runner
-        .current_dir(root)
-        .args(["--workspace", "--locked"])
-        .args(&options.runner_args)
-        .env("TIR_TEST_BIN_DIR", &built.binary_directory);
-    match &built.corpus {
+    .env("TIR_TEST_BIN_DIR", &built.binary_directory);
+    let runner = match &built.corpus {
         Some(corpus) => runner.env("TIR_TEST_CORPUS_DIR", corpus),
         None => runner.env_remove("TIR_TEST_CORPUS_DIR"),
     };
+    let mut runner = Command::from(runner);
     ensure!(runner.status()?.success(), "test run did not succeed");
     Ok(())
 }
@@ -76,17 +83,14 @@ pub fn run(root: &Path, options: Options) -> Result<()> {
 fn run_archive(root: &Path, archive: &Path, runner_args: &[String]) -> Result<()> {
     let extracted = tir_adt::TempDir::with_prefix("tir-tests-")?;
     let bundle = extracted.path().join("target").join(BUNDLE);
-    let status = Command::new("cargo")
-        .args(["nextest", "run", "--archive-file"])
-        .arg(archive)
-        .arg("--extract-to")
-        .arg(extracted.path())
-        .arg("--workspace-remap")
-        .arg(root)
-        .args(runner_args)
-        .env("TIR_TEST_BIN_DIR", bundle.join("bin"))
-        .env("TIR_TEST_CORPUS_DIR", bundle.join("gcc-corpus"))
-        .status()?;
+    let sh = Shell::new()?;
+    let extracted_path = extracted.path();
+    let status = Command::from(
+        cmd!(sh, "cargo nextest run --archive-file {archive} --extract-to {extracted_path} --workspace-remap {root} {runner_args...}")
+            .env("TIR_TEST_BIN_DIR", bundle.join("bin"))
+            .env("TIR_TEST_CORPUS_DIR", bundle.join("gcc-corpus")),
+    )
+    .status()?;
     ensure!(status.success(), "test run did not succeed");
     Ok(())
 }
@@ -115,19 +119,23 @@ pub fn pack(root: &Path, options: PackOptions) -> Result<()> {
         copy_tree(corpus, &bundle.join("gcc-corpus"))?;
     }
     let output = std::env::current_dir()?.join(options.output);
-    let status = Command::new("cargo")
-        .current_dir(root)
-        .args(["nextest", "archive", "--workspace", "--locked"])
-        .args(["--cargo-profile", &built.profile, "--archive-file"])
-        .arg(output)
-        .status()?;
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let profile = &built.profile;
+    let status = Command::from(cmd!(
+        sh,
+        "cargo nextest archive --workspace --locked --cargo-profile {profile} --archive-file {output}"
+    ))
+    .status()?;
     ensure!(status.success(), "cargo nextest archive failed");
     Ok(())
 }
 
 pub(crate) fn has_nextest() -> bool {
-    Command::new("cargo")
-        .args(["nextest", "--version"])
+    let Ok(sh) = Shell::new() else {
+        return false;
+    };
+    Command::from(cmd!(sh, "cargo nextest --version"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -146,9 +154,10 @@ fn selected_profile(explicit: Option<&str>) -> String {
 }
 
 fn target_directory(root: &Path) -> Result<PathBuf> {
-    let output = Command::new("cargo")
-        .current_dir(root)
-        .args(["metadata", "--no-deps", "--format-version", "1"])
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let output = cmd!(sh, "cargo metadata --no-deps --format-version 1")
+        .ignore_status()
         .output()?;
     ensure!(
         output.status.success(),
@@ -173,11 +182,13 @@ fn build(root: &Path, profile: Option<&str>, torture: bool) -> Result<Built> {
         binaries.insert("fcc".into());
     }
     // Tools and tests share one build graph, so the runner's own build is a no-op.
-    let status = Command::new("cargo")
-        .current_dir(root)
-        .args(["build", "--locked", "--workspace"])
-        .args(["--bins", "--tests", "--examples", "--profile", &profile])
-        .status()?;
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let status = Command::from(cmd!(
+        sh,
+        "cargo build --locked --workspace --bins --tests --examples --profile {profile}"
+    ))
+    .status()?;
     ensure!(status.success(), "Cargo test build failed");
     let binary_directory = target_directory(root)?.join(match profile.as_str() {
         "dev" => "debug",
@@ -192,7 +203,7 @@ fn build(root: &Path, profile: Option<&str>, torture: bool) -> Result<Built> {
         );
     }
     let corpus = torture
-        .then(|| crate::fcc_torture::fetch_corpus(&xshell::Shell::new()?, root))
+        .then(|| crate::fcc_torture::fetch_corpus(&Shell::new()?, root))
         .transpose()?;
     Ok(Built {
         profile,
