@@ -1,12 +1,6 @@
 name: Jevlint
 
 on:
-  workflow_dispatch:
-    inputs:
-      base:
-        description: Commit or ref to compare against
-        default: origin/master
-        required: true
   pull_request_target:
     branches: ["master"]
   pull_request:
@@ -27,7 +21,7 @@ jobs:
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository) ||
-      (github.event_name != 'pull_request' && github.event_name != 'pull_request_target')
+      github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -74,5 +68,5 @@ jobs:
           base=$(git -C source merge-base "$base" HEAD)
           trusted/target/debug/xtask lint --only jevlint --root source --diff "$base" --deny-warnings
         env:
-          JEVLINT_BASE: ${{ inputs.base || github.event.pull_request.base.sha || github.event.before }}
+          JEVLINT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
