@@ -99,20 +99,22 @@ impl LintRule for Dupehound {
                         format!("{}::{}", right.file, right.name),
                     ]);
                     if !allowed.contains(&pair) {
-                        errors.push(LintDiagnostic {
-                            severity: Severity::Error,
-                            file: left.file.clone(),
-                            line: left.start_line,
-                            message: format!(
-                                "unaccepted duplicate-cluster members: {}:{} ({}) and {}:{} ({})",
-                                left.file,
-                                left.start_line,
-                                left.name,
-                                right.file,
-                                right.start_line,
-                                right.name
-                            ),
-                        });
+                        for member in [left, right] {
+                            errors.push(LintDiagnostic {
+                                severity: Severity::Error,
+                                file: member.file.clone(),
+                                line: member.start_line,
+                                message: format!(
+                                    "unaccepted duplicate-cluster members: {}:{} ({}) and {}:{} ({})",
+                                    left.file,
+                                    left.start_line,
+                                    left.name,
+                                    right.file,
+                                    right.start_line,
+                                    right.name
+                                ),
+                            });
+                        }
                     }
                     seen.insert(pair);
                 }

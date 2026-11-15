@@ -99,7 +99,7 @@ impl LintRule for AstGrep {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        let mut found = BTreeMap::<String, (usize, LintDiagnostic)>::new();
+        let mut found = BTreeMap::<String, Vec<LintDiagnostic>>::new();
         for line in std::str::from_utf8(&output.stdout)?.lines() {
             let finding: Finding = serde_json::from_str(line).context("invalid ast-grep output")?;
             let text = finding
@@ -117,14 +117,13 @@ impl LintRule for AstGrep {
                 line: finding.range.start.line + 1,
                 message: format!("[{}] {}", finding.rule_id, finding.message),
             };
-            let entry = found.entry(key).or_insert((0, diagnostic));
-            entry.0 += 1;
+            found.entry(key).or_default().push(diagnostic);
         }
         let baseline = std::fs::read_to_string(root.join(BASELINE))?;
         let listed = counts(baseline.lines());
         let mut errors = Vec::new();
         for (key, count) in &listed {
-            for _ in 0..count.saturating_sub(found.get(key).map_or(0, |v| v.0)) {
+            for _ in 0..count.saturating_sub(found.get(key).map_or(0, Vec::len)) {
                 errors.push(LintDiagnostic {
                     severity: Severity::Error,
                     file: BASELINE.to_owned(),
@@ -133,9 +132,9 @@ impl LintRule for AstGrep {
                 });
             }
         }
-        for (key, (count, diagnostic)) in found {
-            if count > *listed.get(&key).unwrap_or(&0) {
-                errors.push(diagnostic);
+        for (key, diagnostics) in found {
+            if diagnostics.len() > *listed.get(&key).unwrap_or(&0) {
+                errors.extend(diagnostics);
             }
         }
         errors.extend(check_baseline(root, BASELINE, &baseline)?);

@@ -298,8 +298,8 @@ impl LintRule for Dependencies {
         for dependency in actual.difference(&allowed) {
             errors.push(LintDiagnostic {
                 severity: Severity::Error,
-                file: path.to_owned(),
-                line: 1,
+                file: String::new(),
+                line: 0,
                 message: format!(
                     "new production dependency `{dependency}`; implement it in-tree instead"
                 ),
@@ -307,8 +307,8 @@ impl LintRule for Dependencies {
         }
         for dependency in allowed.difference(&actual) {
             errors.push(LintDiagnostic { severity: Severity::Error,
-                file: path.to_owned(),
-                line: text.lines().position(|line| line.split_whitespace().any(|word| word == dependency)).unwrap_or(0) as u32 + 1,
+                file: String::new(),
+                line: 0,
                 message: format!("`{dependency}` is no longer a production dependency; remove it from production-dependencies.txt"),
             });
         }
@@ -377,6 +377,7 @@ struct CargoMessage {
 #[derive(Deserialize)]
 struct Diagnostic {
     message: String,
+    rendered: Option<String>,
     level: String,
     spans: Vec<Span>,
     children: Vec<Diagnostic>,
@@ -408,10 +409,13 @@ fn cargo_diagnostics(command: xshell::Cmd<'_>) -> anyhow::Result<Vec<LintDiagnos
         if !matches!(diagnostic.level.as_str(), "error" | "warning") {
             continue;
         }
-        let mut message = diagnostic.message;
-        for child in diagnostic.children {
-            message.push_str(&format!("\n{}: {}", child.level, child.message));
-        }
+        let message = diagnostic.rendered.unwrap_or_else(|| {
+            let mut message = diagnostic.message;
+            for child in diagnostic.children {
+                message.push_str(&format!("\n{}: {}", child.level, child.message));
+            }
+            message
+        });
         if let Some(span) = diagnostic
             .spans
             .iter()
