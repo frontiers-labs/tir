@@ -165,22 +165,14 @@ fn corpus_files(corpus: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 fn compile_case(fcc: &Path, file: &Path) -> bool {
-    let mut command = Command::new(fcc);
-    command
-        .args([
-            "compile",
-            "-O2",
-            "-std=gnu17",
-            "--stage",
-            "asm",
-            "--march",
-            "x86_64",
-            "-o",
-            "-",
-        ])
-        .arg(file)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    let Ok(sh) = Shell::new() else {
+        return false;
+    };
+    let mut command = Command::from(cmd!(
+        sh,
+        "{fcc} compile -O2 -std=gnu17 --stage asm --march x86_64 -o - {file}"
+    ));
+    command.stdout(Stdio::null()).stderr(Stdio::null());
     run_with_timeout(&mut command, COMPILE_TIMEOUT)
 }
 

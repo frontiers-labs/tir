@@ -56,7 +56,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
 
 use crate::utils::{download_file, project_root};
@@ -532,8 +531,9 @@ impl Tools {
             .map(PathBuf::from)
             .ok()
             .or_else(|| {
-                Command::new("bitwuzla")
-                    .arg("--version")
+                let sh = Shell::new().ok()?;
+                cmd!(sh, "bitwuzla --version")
+                    .ignore_status()
                     .output()
                     .ok()
                     .map(|_| PathBuf::from("bitwuzla"))
@@ -2491,18 +2491,18 @@ fn verify_instruction(
 }
 
 fn run_z3(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output> {
-    let first = Command::new(&tools.z3)
-        .args(["-smt2", "-T:30", "smt.random_seed=0"])
-        .arg(path)
+    let sh = Shell::new()?;
+    let z3 = &tools.z3;
+    let first = cmd!(sh, "{z3} -smt2 -T:30 smt.random_seed=0 {path}")
+        .ignore_status()
         .output()?;
     let statuses = solver_statuses(&first);
     let final_status = statuses.last().map(String::as_str);
     if matches!(final_status, Some("sat" | "unsat")) {
         return Ok(first);
     }
-    let second = Command::new(&tools.z3)
-        .args(["-smt2", "-T:30", "smt.random_seed=1"])
-        .arg(path)
+    let second = cmd!(sh, "{z3} -smt2 -T:30 smt.random_seed=1 {path}")
+        .ignore_status()
         .output()?;
     anyhow::ensure!(
         !solver_rejected(&second),
@@ -2583,9 +2583,9 @@ fn run_solver(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output
     let Some(bitwuzla) = &tools.bitwuzla else {
         return run_z3(tools, path);
     };
-    let output = Command::new(bitwuzla)
-        .args(["--time-limit", "5000"])
-        .arg(path)
+    let sh = Shell::new()?;
+    let output = cmd!(sh, "{bitwuzla} --time-limit 5000 {path}")
+        .ignore_status()
         .output();
     let Ok(output) = output else {
         return run_z3(tools, path);

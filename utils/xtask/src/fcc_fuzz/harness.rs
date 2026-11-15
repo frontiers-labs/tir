@@ -5,6 +5,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use xshell::{cmd, Shell};
+
 /// How long one compiled program may run before it is killed.
 pub(super) const RUN_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long one compiler invocation may run before it is killed.
@@ -210,21 +212,19 @@ fn compile_and_run(
         .to_string();
     let tag = variant.name.replace(['/', ':', ',', '(', ')', '='], "_");
     let executable = work_dir.join(format!("{stem}-{tag}.bin"));
+    let sh = Shell::new().map_err(|e| Failed::from(e.to_string()))?;
 
     let mut command = match &variant.backend {
         Backend::Fcc(spec) => {
             let object = work_dir.join(format!("{stem}-{tag}.o"));
-            let mut compile = Command::new(fcc);
-            compile
-                .args(["compile", "-O2", "--stage", "obj", "--march", "x86_64"])
-                .arg("-o")
-                .arg(&object)
-                .args(spec.args());
-            compile.arg(source);
+            let args = spec.args();
+            let mut compile = Command::from(cmd!(
+                sh,
+                "{fcc} compile -O2 --stage obj --march x86_64 -o {object} {args...} {source}"
+            ));
             run_command(&mut compile, "fcc")?;
 
-            let mut link = Command::new("cc");
-            link.arg(&object).arg("-o").arg(&executable);
+            let mut link = Command::from(cmd!(sh, "cc {object} -o {executable}"));
             // The linker dying is not the compiler under test dying, and
             // filing it against fcc would send a reader after the wrong
             // program.
@@ -232,9 +232,8 @@ fn compile_and_run(
             return run_program(&executable).map_err(Failed::from);
         }
         Backend::Gcc | Backend::Clang => {
-            let mut command = Command::new(variant.compiler());
-            command.arg("-O1").arg("-o").arg(&executable).arg(source);
-            command
+            let compiler = variant.compiler();
+            Command::from(cmd!(sh, "{compiler} -O1 -o {executable} {source}"))
         }
     };
     run_command(&mut command, variant.compiler())?;
@@ -295,7 +294,8 @@ pub(super) fn timed_output(
 }
 
 fn run_program(executable: &Path) -> Result<Behavior, String> {
-    let mut command = Command::new(executable);
+    let sh = Shell::new().map_err(|e| format!("run {}: {e}", executable.display()))?;
+    let mut command = Command::from(cmd!(sh, "{executable}"));
     command.stdout(std::process::Stdio::piped());
     let output = crate::utils::run_with_deadline(&mut command, RUN_TIMEOUT)
         .map_err(|e| format!("run {}: {e}", executable.display()))?

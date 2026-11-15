@@ -4,6 +4,7 @@ use std::{fs, path::Path, process::Command};
 
 use anyhow::{ensure, Context, Result};
 use clap::Args;
+use xshell::{cmd, Shell};
 
 #[derive(Args)]
 pub struct Options {
@@ -16,9 +17,10 @@ pub struct Options {
 }
 
 pub fn run(root: &Path, options: Options) -> Result<()> {
-    let metadata = Command::new("cargo")
-        .current_dir(root)
-        .args(["metadata", "--no-deps", "--format-version", "1"])
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let metadata = cmd!(sh, "cargo metadata --no-deps --format-version 1")
+        .ignore_status()
         .output()?;
     ensure!(metadata.status.success(), "cargo metadata failed");
     let metadata: serde_json::Value = serde_json::from_slice(&metadata.stdout)?;
@@ -33,23 +35,25 @@ pub fn run(root: &Path, options: Options) -> Result<()> {
     fs::create_dir_all(&results)?;
 
     let previous = report::snapshot(&results)?;
-    let mut runner = Command::new("cargo");
-    if crate::test::has_nextest() {
+    let profile = &options.profile;
+    let cargo_args = &options.cargo_args;
+    let runner = if crate::test::has_nextest() {
         // nextest's default profile leaves out the comparison baselines; CI
         // selects its perf profile to run them.
-        runner.args(["nextest", "bench", "--no-tests", "warn", "--cargo-profile"]);
+        cmd!(sh, "cargo nextest bench --no-tests warn --cargo-profile {profile} --locked {cargo_args...}")
     } else {
         eprintln!("cargo-nextest is not installed; running cargo bench with the comparisons");
-        runner.args(["bench", "--profile"]);
-    }
-    let status = runner
-        .current_dir(root)
-        .arg(&options.profile)
-        .arg("--locked")
-        .args(options.cargo_args)
-        .env("CARGO_TARGET_DIR", target)
-        .env("CRITERION_HOME", &results)
-        .status()?;
+        cmd!(
+            sh,
+            "cargo bench --profile {profile} --locked {cargo_args...}"
+        )
+    };
+    let status = Command::from(
+        runner
+            .env("CARGO_TARGET_DIR", target)
+            .env("CRITERION_HOME", &results),
+    )
+    .status()?;
     let csv = target.join("benchmarks.csv");
     report::write(&results, &previous, &csv, &mut std::io::stdout().lock())?;
     println!("Benchmark metrics saved to {}", csv.display());

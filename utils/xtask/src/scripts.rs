@@ -1,6 +1,7 @@
-use std::{fs::File, io::Read, path::Path, process::Command};
+use std::{fs::File, io::Read, path::Path};
 
 use anyhow::{ensure, Context, Result};
+use xshell::{cmd, Shell};
 
 fn script(path: &Path) -> Result<bool> {
     if path
@@ -57,15 +58,10 @@ fn allowed(path: &Path) -> bool {
 }
 
 pub fn run(root: &Path) -> Result<()> {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args([
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-        ])
+    let sh = Shell::new()?;
+    sh.change_dir(root);
+    let output = cmd!(sh, "git ls-files --cached --others --exclude-standard -z")
+        .ignore_status()
         .output()?;
     ensure!(
         output.status.success(),
