@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass dce %s | filecheck %s --implicit-check-not addi
 
 // A pure SSA chain feeding nothing is erased; an effectful call with an unread

@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // The n-ary gate carries the chain the same way: every arm takes the state

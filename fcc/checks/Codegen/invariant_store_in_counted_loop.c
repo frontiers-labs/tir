@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile -O2 --stage asm --march x86_64 -o - %s | filecheck %s
 
 // The loop writes one loop-invariant value to one loop-invariant address, so

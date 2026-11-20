@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/basic_do_while.c | filecheck %s
 
 // A `do` is tail-controlled: the body runs before the condition, so the

@@ -4,35 +4,17 @@ use tir::attributes::AttributeValue;
 use tir::builtin::{FloatType, IntegerType, ModuleOp as BuiltinModuleOp, UnitType, ops as bops};
 use tir::cfg::ops as cbops;
 use tir::func::{FuncOp, ops as func_ops};
-use tir::passes::Destructured;
 use tir::vector::VectorType;
-use tir::{BlockHandle, BlockId, Context, Operation, TypeId, ValueId};
+use tir::{BlockHandle, Context, Operation, TypeId, ValueId};
 
 use super::*;
 
 const MAGIC: u32 = 0x0723_0203;
 
-/// The `spirv` ops written as an opcode over their value operands, as
-/// `(name, opcode, has_result)`. Everything the SPIR-V grammar generates is in
-/// [`opcode_for_name`]; these are the hand-written ops of the dialect.
-const CORE_OPS: &[(&str, u16, bool)] = &[
-    ("Load", 61, true),
-    ("Store", 62, false),
-    ("AccessChain", 65, true),
-    ("ControlBarrier", 224, false),
-    ("MemoryBarrier", 225, false),
-];
-
 type Result<T> = std::result::Result<T, String>;
 
-pub fn write_binary(context: &Context, root: &BuiltinModuleOp) -> Result<Vec<u8>> {
-    let module = root
-        .body()
-        .iter(context.clone())
-        .find_map(|op| op.as_op::<ModuleOp>())
-        .ok_or("input has no spirv.module")?;
-    let words = Writer::new(context, module).write()?;
-    Ok(words.into_iter().flat_map(u32::to_le_bytes).collect())
+pub fn write_binary(_context: &Context, _root: &BuiltinModuleOp) -> Result<Vec<u8>> {
+    Err("SPIR-V binary emission is unavailable during the IR migration".into())
 }
 
 pub fn read_binary(context: &Context, bytes: &[u8]) -> Result<BuiltinModuleOp> {
@@ -46,471 +28,6 @@ pub fn read_binary(context: &Context, bytes: &[u8]) -> Result<BuiltinModuleOp> {
         .map(|word| u32::from_le_bytes(*word))
         .collect::<Vec<_>>();
     Reader::new(context, &words)?.read()
-}
-
-struct Writer<'a> {
-    context: &'a Context,
-    module: ModuleOp,
-    next_id: u32,
-    type_ids: HashMap<TypeId, u32>,
-    value_ids: HashMap<ValueId, u32>,
-    symbol_ids: HashMap<String, u32>,
-    type_words: Vec<u32>,
-    annotation_words: Vec<u32>,
-}
-
-impl<'a> Writer<'a> {
-    fn new(context: &'a Context, module: ModuleOp) -> Self {
-        Self {
-            context,
-            module,
-            next_id: 1,
-            type_ids: HashMap::new(),
-            value_ids: HashMap::new(),
-            symbol_ids: HashMap::new(),
-            type_words: Vec::new(),
-            annotation_words: Vec::new(),
-        }
-    }
-
-    fn id(&mut self) -> u32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
-
-    fn write(mut self) -> Result<Vec<u32>> {
-        let ops = self
-            .module
-            .body()
-            .iter(self.context.clone())
-            .collect::<Vec<_>>();
-        for op in &ops {
-            if let Some(global) = op.clone().as_op::<GlobalVariableOp>() {
-                let id = self.id();
-                self.value_ids.insert(global.result(), id);
-                self.symbol_ids.insert(global.sym_name(), id);
-            } else if let Some(func) = op.clone().as_op::<FuncOp>() {
-                let id = self.id();
-                self.symbol_ids.insert(func.sym_name(), id);
-            }
-        }
-
-        let mut capabilities = Vec::new();
-        let mut entries = Vec::new();
-        let mut modes = Vec::new();
-        let mut debug = Vec::new();
-        let mut globals = Vec::new();
-        let mut functions = Vec::new();
-        for op in &ops {
-            if let Some(capability) = op.clone().as_op::<CapabilityOp>() {
-                instruction(
-                    &mut capabilities,
-                    17,
-                    &[capability_number(&capability.name())?],
-                );
-            } else if let Some(entry) = op.clone().as_op::<EntryPointOp>() {
-                self.write_entry(&entry, &mut entries)?;
-            } else if let Some(mode) = op.clone().as_op::<ExecutionModeOp>() {
-                self.write_mode(&mode, &mut modes)?;
-            } else if let Some(global) = op.clone().as_op::<GlobalVariableOp>() {
-                self.write_global(&global, &mut debug, &mut globals)?;
-            } else if let Some(func) = op.clone().as_op::<FuncOp>() {
-                self.write_function(&func, &mut debug, &mut functions)?;
-            }
-        }
-        let addressing = addressing_number(&self.module.addressing_model())?;
-        let memory = memory_model_number(&self.module.memory_model())?;
-        let mut body = Vec::new();
-        body.extend(capabilities);
-        instruction(&mut body, 14, &[addressing, memory]);
-        body.extend(entries);
-        body.extend(modes);
-        body.extend(debug);
-        body.extend(self.annotation_words);
-        body.extend(self.type_words);
-        body.extend(globals);
-        body.extend(functions);
-        let version = version_word(&self.module.version())?;
-        let mut result = vec![MAGIC, version, 0, self.next_id, 0];
-        result.extend(body);
-        Ok(result)
-    }
-
-    fn write_entry(&self, op: &EntryPointOp, out: &mut Vec<u32>) -> Result<()> {
-        let function = op.function();
-        let mut operands = vec![
-            execution_model_number(&op.execution_model())?,
-            *self
-                .symbol_ids
-                .get(&function)
-                .ok_or_else(|| format!("unknown function @{function}"))?,
-        ];
-        operands.extend(encode_string(&function));
-        for name in attr_array(op, "interfaces")? {
-            let AttributeValue::Str(name) = name else {
-                return Err("entry point interfaces must be strings".into());
-            };
-            operands.push(
-                *self
-                    .symbol_ids
-                    .get(&*name)
-                    .ok_or_else(|| format!("unknown interface @{name}"))?,
-            );
-        }
-        instruction(out, 15, &operands);
-        Ok(())
-    }
-
-    fn write_mode(&self, op: &ExecutionModeOp, out: &mut Vec<u32>) -> Result<()> {
-        let function = op.function();
-        let mut operands = vec![
-            *self
-                .symbol_ids
-                .get(&function)
-                .ok_or_else(|| format!("unknown function @{function}"))?,
-            execution_mode_number(&op.mode())?,
-        ];
-        operands.extend(
-            attr_array(op, "values")?
-                .iter()
-                .map(attr_u32)
-                .collect::<Result<Vec<_>>>()?,
-        );
-        instruction(out, 16, &operands);
-        Ok(())
-    }
-
-    fn write_global(
-        &mut self,
-        op: &GlobalVariableOp,
-        debug: &mut Vec<u32>,
-        out: &mut Vec<u32>,
-    ) -> Result<()> {
-        let result = op.result();
-        let id = self.value_ids[&result];
-        let name = op.sym_name();
-        write_name(debug, id, &name);
-        let ty = self.context.get_value(result).ty();
-        let type_id = self.type_id(ty)?;
-        let storage = storage_class_number(&op.storage_class())?;
-        let decorations = attr_dict(op, "decorations")?;
-        for (name, value) in decorations {
-            let (decoration, literal) = decoration_number(&name, &value)?;
-            instruction(&mut self.annotation_words, 71, &[id, decoration, literal]);
-        }
-        instruction(out, 59, &[type_id, id, storage]);
-        Ok(())
-    }
-
-    fn write_function(
-        &mut self,
-        func: &FuncOp,
-        debug: &mut Vec<u32>,
-        out: &mut Vec<u32>,
-    ) -> Result<()> {
-        if !func.body_region().is_nodes() {
-            return self.write_blocks(func, &Destructured::default(), debug, out);
-        }
-        let copy = tir::clone_op(self.context, func.id());
-        self.module.body().append(copy);
-        let copy = FuncOp::from_op_instance(self.context.get_op(copy));
-        let name = func.sym_name();
-        let structure = tir::passes::recover_structured(
-            self.context,
-            copy.body_region().id(),
-            &tir::passes::CfgEdges {
-                context: self.context,
-            },
-        )
-        .map_err(|error| format!("cannot destructure {name}: {error}"))?;
-        let written = self.write_blocks(&copy, &structure, debug, out);
-        self.context
-            .erase_op(&tir::OperationRef::new(self.context.get_op(copy.id())))
-            .map_err(|error| error.to_string())?;
-        written
-    }
-
-    fn write_blocks(
-        &mut self,
-        func: &FuncOp,
-        structure: &Destructured,
-        debug: &mut Vec<u32>,
-        out: &mut Vec<u32>,
-    ) -> Result<()> {
-        let name = func.sym_name();
-        let function_id = self.symbol_ids[&name];
-        write_name(debug, function_id, &name);
-        let return_type = func.ret_type();
-        let return_id = self.type_id(return_type)?;
-        let entry = func.body();
-        let params = entry.value_arguments();
-        let param_types = params.iter().map(|value| value.ty()).collect::<Vec<_>>();
-        let function_type = self.function_type(return_type, &param_types)?;
-        instruction(out, 54, &[return_id, function_id, 0, function_type]);
-        for param in params {
-            let id = self.id();
-            self.value_ids.insert(param.id(), id);
-            instruction(out, 55, &[self.type_id(param.ty())?, id]);
-        }
-        let blocks = func
-            .regions()
-            .next()
-            .unwrap()
-            .iter(self.context.clone())
-            .collect::<Vec<_>>();
-        let block_ids = blocks
-            .iter()
-            .map(|block| (block.id(), self.id()))
-            .collect::<HashMap<_, _>>();
-        for (block_index, block) in blocks.iter().enumerate() {
-            if block_index != 0 {
-                for argument in block.value_arguments() {
-                    let id = self.id();
-                    self.value_ids.insert(argument.id(), id);
-                }
-            }
-            for operation in block.iter(self.context.clone()) {
-                for result in operation.results() {
-                    let id = self.id();
-                    self.value_ids.insert(result, id);
-                }
-            }
-        }
-        // A selection's header ends in a merge instruction naming where its
-        // arms rejoin; a loop's header names its merge and continue blocks.
-        let mut merges: HashMap<BlockId, Vec<u32>> = HashMap::new();
-        for gate in &structure.gates {
-            merges.insert(gate.head, vec![block_ids[&gate.merge], 0]);
-        }
-        for looped in &structure.loops {
-            merges.insert(
-                looped.header,
-                vec![block_ids[&looped.merge], block_ids[&looped.continue_], 0],
-            );
-        }
-        for (block_index, block) in blocks.iter().enumerate() {
-            instruction(out, 248, &[block_ids[&block.id()]]);
-            if block_index != 0 {
-                for (index, argument) in block.value_arguments().iter().enumerate() {
-                    let mut operands =
-                        vec![self.type_id(argument.ty())?, self.value_ids[&argument.id()]];
-                    for pred in &blocks {
-                        let terminator = pred
-                            .op_ids()
-                            .last()
-                            .map(|&op| self.context.get_op(op))
-                            .ok_or("empty predecessor block")?;
-                        if let Some(incoming) = branch_argument(terminator, block.id(), index) {
-                            operands.extend([self.value(incoming)?, block_ids[&pred.id()]]);
-                        }
-                    }
-                    if operands.len() == 2 {
-                        return Err("block argument has no incoming SPIR-V edge".into());
-                    }
-                    instruction(out, 245, &operands);
-                }
-            }
-            let ops = block.iter(self.context.clone()).collect::<Vec<_>>();
-            for (index, operation) in ops.iter().enumerate() {
-                if index + 1 == ops.len()
-                    && let Some(merge) = merges.get(&block.id())
-                {
-                    let opcode = if merge.len() == 2 { 247 } else { 246 };
-                    instruction(out, opcode, merge);
-                }
-                self.write_operation(operation.clone(), &block_ids, out)?;
-            }
-        }
-        instruction(out, 56, &[]);
-        Ok(())
-    }
-
-    fn write_operation(
-        &mut self,
-        op: tir::OpHandle,
-        block_ids: &HashMap<BlockId, u32>,
-        out: &mut Vec<u32>,
-    ) -> Result<()> {
-        // Memory order is a dependency, which is a fact about the program the
-        // binary states through instruction order alone.
-        if op.dialect().as_str() == "state" {
-            return Ok(());
-        }
-        if op.dialect().as_str() == "spirv"
-            && let Some(&(_, opcode, has_result)) = CORE_OPS
-                .iter()
-                .find(|(name, ..)| *name == op.name().as_str())
-        {
-            let values = op.value_operands();
-            if has_result {
-                return self.write_result_op(opcode, op.value_results()[0], &values, out);
-            }
-            let operands = values
-                .iter()
-                .map(|value| self.value(*value))
-                .collect::<Result<Vec<_>>>()?;
-            instruction(out, opcode, &operands);
-            return Ok(());
-        }
-        if let Some(extract) = op.clone().as_op::<CompositeExtractOp>() {
-            let mut operands = self.result_prefix(extract.result())?;
-            operands.push(self.value(extract.operands()[0])?);
-            operands.extend(
-                attr_array(&extract, "indices")?
-                    .iter()
-                    .map(attr_u32)
-                    .collect::<Result<Vec<_>>>()?,
-            );
-            instruction(out, 81, &operands);
-            Ok(())
-        } else if let Some(constant) = op.clone().as_op::<ConstantOp>() {
-            // A constant is a module-level declaration, wherever the function
-            // spells it.
-            let mut operands = self.result_prefix(constant.result())?;
-            operands.extend(constant_words(
-                self.context,
-                constant.result(),
-                &attr_value(&constant, "value")?,
-            )?);
-            instruction(&mut self.type_words, 43, &operands);
-            Ok(())
-        } else if let Some(branch) = op.clone().as_op::<tir::cfg::BranchOp>() {
-            instruction(out, 249, &[block_ids[&branch.dest()]]);
-            Ok(())
-        } else if let Some(branch) = op.clone().as_op::<tir::cfg::CondBranchOp>() {
-            instruction(
-                out,
-                250,
-                &[
-                    self.value(branch.condition())?,
-                    block_ids[&branch.true_dest()],
-                    block_ids[&branch.false_dest()],
-                ],
-            );
-            Ok(())
-        } else if let Some(ret) = op.clone().as_op::<ReturnOp>() {
-            if ret.operands().is_empty() {
-                instruction(out, 253, &[]);
-            } else {
-                instruction(out, 254, &[self.value(ret.operands()[0])?]);
-            }
-            Ok(())
-        } else if let Some(ret) = op.clone().as_op::<tir::func::ReturnOp>() {
-            match ret.returned_value() {
-                None => instruction(out, 253, &[]),
-                Some(value) => instruction(out, 254, &[self.value(value)?]),
-            }
-            Ok(())
-        } else if op.dialect().as_str() == "spirv" {
-            let opcode = opcode_for_name(op.name().as_str())
-                .ok_or_else(|| format!("unsupported SPIR-V operation {}", op.name()))?;
-            if op.results().len() != 1 {
-                return Err(format!("unsupported result count for {}", op.name()));
-            }
-            self.write_result_op(opcode, op.results()[0], &op.value_operands(), out)
-        } else {
-            Err(format!(
-                "unsupported operation {}.{} in SPIR-V function",
-                op.dialect(),
-                op.name()
-            ))
-        }
-    }
-
-    fn write_result_op(
-        &mut self,
-        opcode: u16,
-        result: ValueId,
-        values: &[ValueId],
-        out: &mut Vec<u32>,
-    ) -> Result<()> {
-        let mut operands = self.result_prefix(result)?;
-        operands.extend(
-            values
-                .iter()
-                .map(|value| self.value(*value))
-                .collect::<Result<Vec<_>>>()?,
-        );
-        instruction(out, opcode, &operands);
-        Ok(())
-    }
-
-    fn result_prefix(&mut self, result: ValueId) -> Result<Vec<u32>> {
-        let ty = self.context.get_value(result).ty();
-        let type_id = self.type_id(ty)?;
-        let id = if let Some(id) = self.value_ids.get(&result) {
-            *id
-        } else {
-            let id = self.id();
-            self.value_ids.insert(result, id);
-            id
-        };
-        Ok(vec![type_id, id])
-    }
-
-    fn value(&self, value: ValueId) -> Result<u32> {
-        self.value_ids
-            .get(&value)
-            .copied()
-            .ok_or_else(|| format!("value %{value:?} is used before definition"))
-    }
-
-    fn function_type(&mut self, return_type: TypeId, params: &[TypeId]) -> Result<u32> {
-        let id = self.id();
-        let mut operands = vec![id, self.type_id(return_type)?];
-        for param in params {
-            operands.push(self.type_id(*param)?);
-        }
-        instruction(&mut self.type_words, 33, &operands);
-        Ok(id)
-    }
-
-    fn type_id(&mut self, ty: TypeId) -> Result<u32> {
-        if let Some(id) = self.type_ids.get(&ty) {
-            return Ok(*id);
-        }
-        let id = self.id();
-        if let Some(integer) = IntegerType::view(self.context, ty) {
-            if integer.width() == 1 {
-                instruction(&mut self.type_words, 20, &[id]);
-            } else {
-                let width = u32::try_from(integer.width())
-                    .map_err(|_| "SPIR-V integers are narrower than 2^32 bits".to_string())?;
-                instruction(&mut self.type_words, 21, &[id, width, 0]);
-            }
-        } else if let Some(float) = FloatType::view(self.context, ty) {
-            let width = float.exp_width() + float.mant_width() + 1;
-            instruction(&mut self.type_words, 22, &[id, width]);
-        } else if UnitType::view(self.context, ty).is_some() {
-            instruction(&mut self.type_words, 19, &[id]);
-        } else if let Some(vector) = VectorType::view(self.context, ty) {
-            let element = self.type_id(vector.element())?;
-            let count = vector
-                .length()
-                .ok_or("SPIR-V vectors must be statically sized")?;
-            instruction(&mut self.type_words, 23, &[id, element, count]);
-        } else if let Some(array) = RuntimeArrayType::view(self.context, ty) {
-            let element = self.type_id(array.element())?;
-            instruction(&mut self.type_words, 29, &[id, element]);
-            instruction(&mut self.annotation_words, 71, &[id, 6, array.stride()]);
-        } else if let Some(pointer) = PointerType::view(self.context, ty) {
-            let pointee = self.type_id(pointer.pointee())?;
-            instruction(
-                &mut self.type_words,
-                32,
-                &[
-                    id,
-                    storage_class_number(pointer.storage_class().name())?,
-                    pointee,
-                ],
-            );
-        } else {
-            return Err("unsupported SPIR-V type".into());
-        }
-        self.type_ids.insert(ty, id);
-        Ok(id)
-    }
 }
 
 #[derive(Clone)]
@@ -789,8 +306,6 @@ impl<'a> Reader<'a> {
     }
 
     fn read_function(&mut self, instructions: &[RawInst]) -> Result<FuncOp> {
-        // The function's rows share chunks with no other function's.
-        let _scope = self.context.function_scope();
         let header = &instructions[0].operands;
         let return_type = self.type_ref(header[0])?;
         let function_id = header[1];
@@ -1062,25 +577,6 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn branch_argument(op: tir::OpHandle, destination: BlockId, index: usize) -> Option<ValueId> {
-    if let Some(branch) = op.clone().as_op::<tir::cfg::BranchOp>()
-        && branch.dest() == destination
-    {
-        return branch.dest_args().get(index).copied();
-    }
-    if let Some(branch) = op.as_op::<tir::cfg::CondBranchOp>() {
-        let args = if branch.true_dest() == destination {
-            branch.true_args()
-        } else if branch.false_dest() == destination {
-            branch.false_args()
-        } else {
-            return None;
-        };
-        return args.get(index).copied();
-    }
-    None
-}
-
 fn phi_edge_values(phis: &HashMap<u32, Vec<RawInst>>, target: u32, predecessor: u32) -> Vec<u32> {
     phis.get(&target)
         .into_iter()
@@ -1096,21 +592,6 @@ fn phi_edge_values(phis: &HashMap<u32, Vec<RawInst>>, target: u32, predecessor: 
         .collect()
 }
 
-fn instruction(out: &mut Vec<u32>, opcode: u16, operands: &[u32]) {
-    out.push((((operands.len() + 1) as u32) << 16) | u32::from(opcode));
-    out.extend_from_slice(operands);
-}
-fn encode_string(value: &str) -> Vec<u32> {
-    let mut bytes = value.as_bytes().to_vec();
-    bytes.push(0);
-    bytes.resize(bytes.len().div_ceil(4) * 4, 0);
-    bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|b| u32::from_le_bytes(*b))
-        .collect()
-}
 fn decode_string(words: &[u32]) -> Result<String> {
     Ok(decode_string_with_len(words)?.0)
 }
@@ -1126,69 +607,6 @@ fn decode_string_with_len(words: &[u32]) -> Result<(String, usize)> {
     let value =
         String::from_utf8(bytes[..end].to_vec()).map_err(|_| "invalid UTF-8 in SPIR-V string")?;
     Ok((value, (end + 1).div_ceil(4)))
-}
-fn write_name(out: &mut Vec<u32>, id: u32, name: &str) {
-    let mut operands = vec![id];
-    operands.extend(encode_string(name));
-    instruction(out, 5, &operands);
-}
-fn attr_value(op: &dyn Operation, name: &str) -> Result<AttributeValue> {
-    op.attr(name)
-        .ok_or_else(|| format!("missing attribute {name}"))
-}
-fn attr_array(op: &dyn Operation, name: &str) -> Result<Vec<AttributeValue>> {
-    match attr_value(op, name)? {
-        AttributeValue::Array(v) => Ok(v.to_vec()),
-        _ => Err(format!("attribute {name} must be an array")),
-    }
-}
-fn attr_dict(op: &dyn Operation, name: &str) -> Result<BTreeMap<String, AttributeValue>> {
-    match attr_value(op, name)? {
-        AttributeValue::Dict(v) => Ok((*v).clone()),
-        _ => Err(format!("attribute {name} must be a dictionary")),
-    }
-}
-fn attr_u32(value: &AttributeValue) -> Result<u32> {
-    match value {
-        AttributeValue::Int(v) => (*v)
-            .try_into()
-            .map_err(|_| "integer attribute is out of range".into()),
-        AttributeValue::UInt(v) => (*v)
-            .try_into()
-            .map_err(|_| "integer attribute is out of range".into()),
-        _ => Err("expected integer attribute".into()),
-    }
-}
-
-fn constant_words(context: &Context, result: ValueId, value: &AttributeValue) -> Result<Vec<u32>> {
-    let ty = context.get_value(result).ty();
-    if let Some(i) = IntegerType::view(context, ty) {
-        let bits = match value {
-            AttributeValue::Int(v) => *v as u64,
-            AttributeValue::UInt(v) => *v,
-            AttributeValue::Bool(v) => u64::from(*v),
-            _ => return Err("integer constant requires integer value".into()),
-        };
-        return Ok(if i.width() > 32 {
-            vec![bits as u32, (bits >> 32) as u32]
-        } else {
-            vec![bits as u32]
-        });
-    }
-    if let Some(f) = FloatType::view(context, ty) {
-        let value = match value {
-            AttributeValue::F32(v) => f64::from(*v),
-            AttributeValue::F64(v) => *v,
-            _ => return Err("float constant requires float value".into()),
-        };
-        return Ok(if f.exp_width() == 8 {
-            vec![(value as f32).to_bits()]
-        } else {
-            let bits = value.to_bits();
-            vec![bits as u32, (bits >> 32) as u32]
-        });
-    }
-    Err("unsupported constant type".into())
 }
 fn decode_constant(context: &Context, ty: TypeId, words: &[u32]) -> Result<AttributeValue> {
     if let Some(i) = IntegerType::view(context, ty) {
@@ -1211,18 +629,11 @@ fn decode_constant(context: &Context, ty: TypeId, words: &[u32]) -> Result<Attri
     Err("unsupported constant type".into())
 }
 
-fn version_word(value: &str) -> Result<u32> {
-    let (major, minor) = value.split_once('.').ok_or("version must be major.minor")?;
-    Ok(
-        (major.parse::<u32>().map_err(|_| "invalid SPIR-V version")? << 16)
-            | (minor.parse::<u32>().map_err(|_| "invalid SPIR-V version")? << 8),
-    )
-}
 fn version_string(word: u32) -> String {
     format!("{}.{}", word >> 16, (word >> 8) & 0xff)
 }
 
-macro_rules! names { ($number:ident, $name:ident, {$($text:literal => $value:literal),+ $(,)?}) => { fn $number(name: &str) -> Result<u32> { Ok(match name { $($text => $value,)+ _ => return Err(format!("unsupported {} {name}", stringify!($name))) }) } fn $name(value: u32) -> Result<&'static str> { Ok(match value { $($value => $text,)+ _ => return Err(format!("unsupported {} {value}", stringify!($name))) }) } }; }
+macro_rules! names { ($number:ident, $name:ident, {$($text:literal => $value:literal),+ $(,)?}) => { fn $name(value: u32) -> Result<&'static str> { Ok(match value { $($value => $text,)+ _ => return Err(format!("unsupported {} {value}", stringify!($name))) }) } }; }
 names!(addressing_number, addressing_name, {"Logical" => 0, "Physical32" => 1, "Physical64" => 2});
 names!(memory_model_number, memory_model_name, {"Simple" => 0, "GLSL450" => 1, "OpenCL" => 2, "Vulkan" => 3});
 names!(capability_number, capability_name, {"Matrix" => 0, "Shader" => 1, "Addresses" => 4, "Linkage" => 5, "Kernel" => 6, "Int64" => 11, "Int64Atomics" => 12, "ImageBasic" => 13, "Float64" => 10, "Int16" => 22, "Int8" => 39});
@@ -1232,18 +643,5 @@ names!(storage_class_number, storage_class_name, {"UniformConstant" => 0, "Input
 fn storage_class(value: u32) -> Result<StorageClass> {
     StorageClass::parse(storage_class_name(value)?)
         .ok_or_else(|| format!("unsupported storage class {value}"))
-}
-fn decoration_number(name: &str, value: &AttributeValue) -> Result<(u32, u32)> {
-    Ok(match name {
-        "builtin" => {
-            let AttributeValue::Str(value) = value else {
-                return Err("builtin decoration must be a string".into());
-            };
-            (11, builtin_number(value)?)
-        }
-        "binding" => (33, attr_u32(value)?),
-        "descriptor_set" => (34, attr_u32(value)?),
-        _ => return Err(format!("unsupported decoration {name}")),
-    })
 }
 names!(builtin_number, builtin_name, {"Position" => 0, "WorkgroupSize" => 25, "WorkgroupId" => 26, "LocalInvocationId" => 27, "GlobalInvocationId" => 28, "LocalInvocationIndex" => 29, "NumWorkgroups" => 24});

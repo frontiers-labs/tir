@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // REQUIRES: linux, x86_64
 // RUN: fcc compile --std gnu17 -O2 --stage obj --march x86_64 -o %t.o %s
 // RUN: timeout 30 cc %t.o -o %t

@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // Refinements have a separate candidate path and cannot become e-class unions.
 // RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
 

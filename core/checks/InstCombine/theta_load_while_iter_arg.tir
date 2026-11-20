@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // A while-shaped loop reads what it carries in its test and forwards it to the

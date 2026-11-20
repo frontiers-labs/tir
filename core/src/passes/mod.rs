@@ -15,12 +15,9 @@ pub mod restructure;
 pub mod symbol_uniqueness;
 pub mod verify_deps;
 
-pub use affine::{AffineSchedulePass, strip_mine};
+pub use affine::AffineSchedulePass;
 pub use dce::DeadCodeEliminationPass;
-pub use destructure::{
-    CfgEdges, DestructurePass, Destructured, Edges, GateBlocks, LoopBlocks, Test, recover_cfg,
-    recover_structured,
-};
+pub use destructure::DestructurePass;
 pub use erase_layout::EraseLayoutPass;
 pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombineNodesPass;
@@ -31,66 +28,4 @@ pub use promote_nodes::PromoteNodesPass;
 pub use resolve_fp::ResolveFpPass;
 pub use restructure::RestructureNodesPass;
 pub use symbol_uniqueness::CheckUniqueSymbolsPass;
-pub use verify_deps::{VerifyDepsPass, verify_deps};
-
-use crate::{ConstantLike, Context, OpHandle, OpId, Pure, RegionId, ValueId};
-
-pub(crate) fn regions_under(context: &Context, root: OpId) -> Vec<RegionId> {
-    context
-        .get_op(root)
-        .regions()
-        .iter()
-        .flat_map(|&region| context.nested_regions(region))
-        .collect()
-}
-
-pub(crate) fn demanded_ops(context: &Context, roots: &[RegionId]) -> crate::IdSet<OpId> {
-    demanded_ops_with(context, roots, &[], &|_| &[])
-}
-
-pub(crate) fn demanded_ops_with<'a>(
-    context: &Context,
-    roots: &[RegionId],
-    seeds: &[OpId],
-    implicit: &dyn Fn(OpId) -> &'a [OpId],
-) -> crate::IdSet<OpId> {
-    // A callee names a function already lowered, whose op is gone.
-    let defining = |values: Vec<ValueId>| {
-        values
-            .into_iter()
-            .filter_map(|value| context.get_value(value).defining_op())
-            .filter(|&op| context.has_operation(op))
-            .collect::<Vec<_>>()
-    };
-    let mut worklist: Vec<OpId> = roots
-        .iter()
-        .flat_map(|&region| defining(context.get_region(region).results()))
-        .chain(seeds.iter().copied())
-        .collect();
-    let mut demanded = crate::IdSet::new();
-    while let Some(op) = worklist.pop() {
-        if !demanded.insert(op) {
-            continue;
-        }
-        let instance = context.get_op(op);
-        worklist.extend(defining(instance.operands().to_vec()));
-        worklist.extend_from_slice(implicit(op));
-        for region in instance.regions() {
-            worklist.extend(defining(context.get_region(region).results()));
-        }
-    }
-    demanded
-}
-
-pub(crate) fn is_pure_value(instance: &OpHandle) -> bool {
-    instance.clone().as_interface::<dyn Pure>().is_some()
-        || instance
-            .clone()
-            .as_interface::<dyn ConstantLike>()
-            .is_some()
-        || instance
-            .clone()
-            .as_dyn_op()
-            .semantic_expr(&mut crate::sem::SemGraph::new())
-            .is_some()
-}
+pub use verify_deps::VerifyDepsPass;

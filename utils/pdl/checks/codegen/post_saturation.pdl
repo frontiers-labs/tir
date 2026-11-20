@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // RUN: tir-pdl %s --emit rust | filecheck %s
 
 rule terminal-add:

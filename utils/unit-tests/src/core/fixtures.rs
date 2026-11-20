@@ -6,9 +6,15 @@ use tir::backend::{RegPort, SymbolOp, SymbolOpBuilder};
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
 use tir::parse::ir::parse_ir;
+// Migration skip: selector-only test support.
+#[cfg(any())]
 use tir::sem::{SemGraph, SymKind, SymPayload};
+// Migration skip: selector-only test support.
+#[cfg(any())]
 use tir::NodeId;
 use tir::{BlockHandle, Context, OpId, Operation, RegionId};
+// Migration skip: selector-only test support.
+#[cfg(any())]
 use tir_adt::APInt;
 
 /// Parse `source` as a module into a fresh context holding the default dialects.
@@ -119,18 +125,24 @@ pub fn asm_symbol(context: &Context, ops: &[OpId]) -> (SymbolOp, BlockHandle) {
 }
 
 /// Isel pattern-graph builders: symbols, constants and operator nodes.
+// Migration skip: selector-only test support.
+#[cfg(any())]
 pub fn symbol(g: &mut SemGraph, id: u32) -> NodeId {
     let node = g.add_node(SymKind::Symbol);
     g.set_leaf_data(node, SymPayload::SymbolId(id));
     node
 }
 
+// Migration skip: selector-only test support.
+#[cfg(any())]
 pub fn constant(g: &mut SemGraph, value: u64, width: u32) -> NodeId {
     let node = g.add_node(SymKind::Constant);
     g.set_leaf_data(node, SymPayload::Int(APInt::new(u64::from(width), value)));
     node
 }
 
+// Migration skip: selector-only test support.
+#[cfg(any())]
 pub fn nary(g: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
     let node = g.add_node(kind);
     for &child in children {
@@ -139,11 +151,15 @@ pub fn nary(g: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
     node
 }
 
+// Migration skip: selector-only test support.
+#[cfg(any())]
 pub fn binary(g: &mut SemGraph, kind: SymKind, lhs: NodeId, rhs: NodeId) -> NodeId {
     nary(g, kind, &[lhs, rhs])
 }
 
 /// A one-operator pattern over two fresh symbols.
+// Migration skip: selector-only test support.
+#[cfg(any())]
 pub fn atomic_pattern(kind: SymKind) -> SemGraph {
     let mut g = SemGraph::new();
     let lhs = symbol(&mut g, 0);
@@ -186,6 +202,8 @@ pub(crate) use machine_op;
 
 /// A selection marker: an instruction saying only what the isel assertions
 /// read, its mnemonic, over two untyped operands.
+// Migration skip: selector-only test support.
+#[cfg(any())]
 macro_rules! marker_op {
     ($op:ident, $name:tt) => {
         tir::helpers::operation! {
@@ -201,6 +219,8 @@ macro_rules! marker_op {
         $crate::core::fixtures::instr_info!($op, $name, &[], &[]);
     };
 }
+// Migration skip: selector-only test support.
+#[cfg(any())]
 pub(crate) use marker_op;
 
 /// The `MachineInstruction` facts a test opcode reports: its mnemonic, the

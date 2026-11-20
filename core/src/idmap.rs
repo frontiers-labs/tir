@@ -1,16 +1,10 @@
-//! Columns a pass derives over the rows of one function: a value per
-//! operation, value, block or region id, stored by row position.
-//!
-//! An id is a chunk index and a row inside the chunk, and a function's rows
-//! sit in a handful of chunks. An [`IdMap`] keeps one vector per chunk it has
-//! seen, indexed by the row, so a lookup is a scan of those few chunk indices
-//! and one load, with no hashing. Iteration is in ascending id order.
+//! Maps and sets indexed by IR identities, iterated in ascending id order.
 
-use tir_relational::chunk::{chunk_of, row_of};
+use std::collections::BTreeMap;
 
 use crate::{BlockId, OpId, RegionId, ValueId};
 
-/// An id that names a row of the IR's storage.
+/// An id that names an IR entity.
 pub trait RowId: Copy {
     fn row(self) -> u32;
 }
@@ -39,23 +33,16 @@ impl RowId for RegionId {
     }
 }
 
-/// The entries of one chunk, a slot per row up to the highest written.
-type Slots<K, V> = Vec<Option<(K, V)>>;
-
-/// `id -> value` over the rows of a few chunks, with the interface of a
-/// `HashMap`.
+/// An ordered map keyed by IR identity.
 #[derive(Clone, Debug)]
 pub struct IdMap<K, V> {
-    /// The chunks seen, in the order they were first written.
-    chunks: Vec<(u32, Slots<K, V>)>,
-    len: usize,
+    rows: BTreeMap<u32, (K, V)>,
 }
 
 impl<K, V> Default for IdMap<K, V> {
     fn default() -> Self {
         IdMap {
-            chunks: Vec::new(),
-            len: 0,
+            rows: BTreeMap::new(),
         }
     }
 }
@@ -66,85 +53,46 @@ impl<K: RowId, V> IdMap<K, V> {
     }
 
     pub fn len(&self) -> usize {
-        self.len
+        self.rows.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.rows.is_empty()
     }
 
-    #[inline]
-    fn slot(&self, key: K) -> Option<&(K, V)> {
-        let (chunk, row) = (chunk_of(key.row()), row_of(key.row()));
-        let rows = &self.chunks.iter().find(|held| held.0 == chunk)?.1;
-        rows.get(row)?.as_ref()
-    }
-
-    fn slot_mut(&mut self, key: K) -> &mut Option<(K, V)> {
-        let (chunk, row) = (chunk_of(key.row()), row_of(key.row()));
-        let at = match self.chunks.iter().position(|held| held.0 == chunk) {
-            Some(at) => at,
-            None => {
-                self.chunks.push((chunk, Vec::new()));
-                self.chunks.len() - 1
-            }
-        };
-        let rows = &mut self.chunks[at].1;
-        if rows.len() <= row {
-            rows.resize_with(row + 1, || None);
-        }
-        &mut rows[row]
-    }
-
-    #[inline]
     pub fn get(&self, key: &K) -> Option<&V> {
-        self.slot(*key).map(|held| &held.1)
+        self.rows.get(&key.row()).map(|held| &held.1)
     }
 
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        let (chunk, row) = (chunk_of(key.row()), row_of(key.row()));
-        let rows = &mut self.chunks.iter_mut().find(|held| held.0 == chunk)?.1;
-        rows.get_mut(row)?.as_mut().map(|held| &mut held.1)
+        self.rows.get_mut(&key.row()).map(|held| &mut held.1)
     }
 
-    #[inline]
     pub fn contains_key(&self, key: &K) -> bool {
-        self.slot(*key).is_some()
+        self.rows.contains_key(&key.row())
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        let old = self.slot_mut(key).replace((key, value));
-        self.len += usize::from(old.is_none());
-        old.map(|held| held.1)
+        self.rows.insert(key.row(), (key, value)).map(|held| held.1)
     }
 
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        let (chunk, row) = (chunk_of(key.row()), row_of(key.row()));
-        let rows = &mut self.chunks.iter_mut().find(|held| held.0 == chunk)?.1;
-        let old = rows.get_mut(row)?.take()?;
-        self.len -= 1;
-        Some(old.1)
+        self.rows.remove(&key.row()).map(|held| held.1)
     }
 
     pub fn clear(&mut self) {
-        self.chunks.clear();
-        self.len = 0;
+        self.rows.clear();
     }
 
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
-        Entry { map: self, key }
-    }
-
-    fn ordered(&self) -> impl Iterator<Item = &Slots<K, V>> {
-        let mut order: Vec<usize> = (0..self.chunks.len()).collect();
-        order.sort_unstable_by_key(|at| self.chunks[*at].0);
-        order.into_iter().map(|at| &self.chunks[at].1)
+        Entry {
+            entry: self.rows.entry(key.row()),
+            key,
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        self.ordered()
-            .flat_map(|rows| rows.iter().flatten())
-            .map(|held| (&held.0, &held.1))
+        self.rows.values().map(|held| (&held.0, &held.1))
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &K> {
@@ -156,31 +104,19 @@ impl<K: RowId, V> IdMap<K, V> {
     }
 
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
-        self.chunks.sort_unstable_by_key(|held| held.0);
-        self.chunks
-            .iter_mut()
-            .flat_map(|held| held.1.iter_mut().flatten())
-            .map(|held| &mut held.1)
+        self.rows.values_mut().map(|held| &mut held.1)
     }
 }
 
-/// A slot of an [`IdMap`], filled or not; see `HashMap::entry`.
+/// A slot of an [`IdMap`], filled or not; see `BTreeMap::entry`.
 pub struct Entry<'a, K, V> {
-    map: &'a mut IdMap<K, V>,
+    entry: std::collections::btree_map::Entry<'a, u32, (K, V)>,
     key: K,
 }
 
 impl<'a, K: RowId, V> Entry<'a, K, V> {
     pub fn or_insert_with(self, make: impl FnOnce() -> V) -> &'a mut V {
-        let key = self.key;
-        if !self.map.contains_key(&key) {
-            self.map.len += 1;
-        }
-        &mut self
-            .map
-            .slot_mut(key)
-            .get_or_insert_with(|| (key, make()))
-            .1
+        &mut self.entry.or_insert_with(|| (self.key, make())).1
     }
 
     pub fn or_insert(self, value: V) -> &'a mut V {
@@ -232,13 +168,8 @@ impl<K: RowId + 'static, V: 'static> IntoIterator for IdMap<K, V> {
     type Item = (K, V);
     type IntoIter = Box<dyn Iterator<Item = (K, V)>>;
 
-    fn into_iter(mut self) -> Self::IntoIter {
-        self.chunks.sort_unstable_by_key(|held| held.0);
-        Box::new(
-            self.chunks
-                .into_iter()
-                .flat_map(|held| held.1.into_iter().flatten()),
-        )
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.rows.into_values())
     }
 }
 

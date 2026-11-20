@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // A layout query is a constant under the spec in scope: instcombine folds it

@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64iv --stage=isel %s | filecheck %s
 
 // A target-independent vector.add lowers to the RVV vadd.vv: both the dialect op

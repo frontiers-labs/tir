@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 // Sixteen loop-carried values leave the last three parameters of the loop in

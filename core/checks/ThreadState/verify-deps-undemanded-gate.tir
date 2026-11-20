@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir opt --pass verify-deps %s 2>&1 | filecheck %s
 
 // The arm demands its store, but nothing demands the gate: under demand

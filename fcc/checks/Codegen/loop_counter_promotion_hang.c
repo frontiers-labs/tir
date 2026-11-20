@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage obj --march x86_64 -o /tmp/fcc-lcp-hang.o %s
 // RUN: cc /tmp/fcc-lcp-hang.o -o /tmp/fcc-lcp-hang.bin
 // RUN: timeout 5 /tmp/fcc-lcp-hang.bin

@@ -18,7 +18,7 @@ use tir::ty::{Ctor, Kind, Param, TypeArg, TypeCtor, TypeSpelling};
 use tir::{Context, Error, OpHandle, TypeId, ValueId, parse::Span};
 use tir_symbolic::term::{no_carrier, valid};
 
-use crate::backend::liveness::PhysReg;
+use crate::analysis::defuse::PhysReg;
 use crate::backend::regalloc::RegClassId;
 
 static REG: Ctor = Ctor::new(TypeCtor {

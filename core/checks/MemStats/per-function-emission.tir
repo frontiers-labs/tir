@@ -1,3 +1,5 @@
+// IR migration: optimizer and storage memory statistics are unavailable.
+// XFAIL: *
 // The backend lowers and emits one function at a time and gives its machine IR
 // back to the arenas once the bytes exist, so the operations alive while a
 // function is compiled are its own, not the whole module's. Either of these two

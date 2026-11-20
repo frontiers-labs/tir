@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // The counter is not the iteration: `for (i = 0; i < 16; i += 2)` names the

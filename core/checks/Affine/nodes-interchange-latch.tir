@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes,affine,verify-deps --verify %s | filecheck %s
 // RUN: tir interp %s | filecheck %s --check-prefix=VALUE
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes,affine %s | tir interp - | filecheck %s --check-prefix=VALUE

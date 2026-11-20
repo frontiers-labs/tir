@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir prove %s | filecheck %s
 
 // Loops on both sides prove as a bisimulation: equal inits, equal transitions

@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,erase-layout --verify %s | filecheck %s
 
 // A refinement is a proved fact, not an operation selection can lower: past

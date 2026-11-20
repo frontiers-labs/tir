@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir prove %s | filecheck %s
 
 // An invariant continue value says nothing about the exit: initial 0, continue

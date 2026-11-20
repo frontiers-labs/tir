@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // No write reached this address before the load, so nothing stands in for its

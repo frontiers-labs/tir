@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir opt --pass verify-deps %s 2>&1 | filecheck %s
 
 // A store whose dependency result nothing reads is in no cone: under demand

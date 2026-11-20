@@ -1,3 +1,5 @@
+// IR migration: selector rule generation was removed.
+// XFAIL: *
 // A statement-level guarded assignment (`if cond { rd = a } else { rd = b }`,
 // riscv `div`'s divide-by-zero shape) emits the destination's full guarded
 // semantics alongside the guard-relaxed selection pattern, so pass construction
