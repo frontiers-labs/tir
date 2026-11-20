@@ -260,8 +260,8 @@ impl Program {
         let first = !self.prepared;
         if first {
             for (decl, &table) in self.file.tables.iter().zip(&self.tables) {
-                for order in &decl.symmetries {
-                    db.add_symmetry(table, order)?;
+                if !decl.symmetries.is_empty() {
+                    db.add_symmetries(table, &decl.symmetries)?;
                 }
             }
             let tables = &self.tables;
@@ -322,42 +322,15 @@ impl Program {
     }
 
     fn schedule(&mut self, db: &mut Database, schedule: &Schedule) -> Result<RunReport, Error> {
-        let mut report = RunReport::default();
-        match schedule {
-            Schedule::Run(_, config) => {
-                if let Some(facts) = &config.until
-                    && self.matches(db, &until_name(facts))?
-                {
-                    return Ok(report);
-                }
-                let iteration = self.step(db, &[&config.ruleset], true)?;
-                return Ok(RunReport::of(&config.ruleset, iteration, self.level));
+        schedule.execute(&mut |_, config| {
+            if let Some(facts) = &config.until
+                && self.matches(db, &until_name(facts))?
+            {
+                return Ok(RunReport::default());
             }
-            Schedule::Repeat(_, times, schedule) => {
-                for _ in 0..*times {
-                    let run = self.schedule(db, schedule)?;
-                    let stop = run.can_stop;
-                    report.union(run);
-                    if stop {
-                        break;
-                    }
-                }
-            }
-            Schedule::Saturate(_, schedule) => loop {
-                let run = self.schedule(db, schedule)?;
-                let updated = run.updated;
-                report.union(run);
-                if !updated {
-                    break;
-                }
-            },
-            Schedule::Sequence(_, schedules) => {
-                for schedule in schedules {
-                    report.union(self.schedule(db, schedule)?);
-                }
-            }
-        }
-        Ok(report)
+            let iteration = self.step(db, &[&config.ruleset], true)?;
+            Ok(RunReport::of(&config.ruleset, iteration, self.level))
+        })
     }
 
     // The rulesets of the file that a run of `name` runs: those of this name,

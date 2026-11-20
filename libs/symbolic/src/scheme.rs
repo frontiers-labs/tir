@@ -175,9 +175,13 @@ impl SchemeSyntax {
                     .iter()
                     .enumerate()
                     .map(|(index, arg)| {
-                        let kind = match params.get(index).map(|(_, param)| *param) {
+                        let mut parameter = params.get(index).map(|(_, param)| *param);
+                        while let Some(Param::Optional(inner)) = parameter {
+                            parameter = Some(*inner);
+                        }
+                        let kind = match parameter {
                             Some(Param::One(kind) | Param::Opt(kind)) => kind,
-                            _ => Kind::Data,
+                            _ => return Err(format!("constructor `{spelled}` has a non-scalar source parameter at {index}")),
                         };
                         self.resolve_pattern(terms, arg, kind, names)
                     })

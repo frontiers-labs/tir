@@ -494,6 +494,14 @@ pub(super) fn module<'a>(ctx: &'a Context<'a>) -> P<'a, Vec<DeclNode>> {
         public: false,
         binding,
     });
+    let interface = select! { Token::Ident(name) if name == "interface" => () }
+        .ignore_then(identifier(ctx))
+        .then(generics(ctx, expr.clone()))
+        .then(node(ctx, record(ctx, expr.clone()).map(Expression::Record)))
+        .map(|((name, generics), value)| Declaration::Interface {
+            public: false,
+            binding: Binding { path: vec![name], generics, ty: None, value },
+        });
     let variant = identifier(ctx)
         .then(generics(ctx, expr.clone()))
         .then(
@@ -532,11 +540,12 @@ pub(super) fn module<'a>(ctx: &'a Context<'a>) -> P<'a, Vec<DeclNode>> {
         .then_ignore(just(Token::Semi))
         .map(|((name, generics), ty)| Declaration::Axiom { public: false, name, generics, ty });
     let declaration = just(Token::Pub).or_not()
-        .then(choice((use_decl, mod_decl, let_decl, enumeration, axiom)))
+        .then(choice((use_decl, mod_decl, let_decl, interface, enumeration, axiom)))
         .map(move |(visibility, mut declaration)| {
             match &mut declaration {
                 Declaration::Mod { public, .. }
                 | Declaration::Let { public, .. }
+                | Declaration::Interface { public, .. }
                 | Declaration::Enum { public, .. }
                 | Declaration::Axiom { public, .. }
                 | Declaration::Use { public, .. } => *public = visibility.is_some(),

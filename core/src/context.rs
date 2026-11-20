@@ -1,21 +1,28 @@
+mod attribute_store;
+mod keys;
+mod op_spec;
+mod queries;
+mod records;
 use crate::{
     Dialect, Error, OpId, Operation, OperationParser, TypeId,
     attributes::{AttributeValue, NamedAttribute},
     block::{BlockHandle, BlockId},
     builtin::BuiltinDialect,
-    dialects::{cfg::CfgDialect, func::FuncDialect, scf::ScfDialect, state::StateDialect},
+    dialects::{
+        cfg::CfgDialect, fp::FpDialect, func::FuncDialect, scf::ScfDialect, state::StateDialect,
+    },
     ir_formatter::IRFormatter,
     operation::{
-        ImplementsOpInterface, OpHandle, OpInterfaceConverter, OpNameId, downcast_op_interface,
-        op_interface_converter,
+        ImplementsOpInterface, OpHandle, OpNameId, downcast_op_interface, op_interface_converter,
     },
     parse::text::Parser as IRParser,
     ptr::PtrDialect,
     region::{RegionHandle, RegionId},
-    ty::{Spellings, Terms, TypeParser, TypeSpelling},
+    ty::{Spellings, Terms, TypeArg, TypeParser, TypeSpelling},
     value::{Use, Value, ValueId},
     vector::VectorDialect,
 };
+use records::{BlockRow, Defines, OperationRow, Placement, Record, RegionRow, ValueRow};
 use std::rc::Rc;
 use std::{
     any::Any,
@@ -23,12 +30,11 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicU32, Ordering},
     },
 };
-use tir_adt::{Interner, Sym};
+use tir_adt::Sym;
 use tir_egglog::{EGraph, RawValues, Read, Value as EggValue, Write};
-use tir_symbolic::term::constructor_fields;
 
 /// A context owns the structural IR relations in its egglog engine.
 #[derive(Clone)]
@@ -51,42 +57,27 @@ pub trait GetFromContext {
 struct Registry {
     dialects: HashMap<&'static str, Arc<dyn Dialect>>,
     reg_classes: HashMap<(crate::ty::Name, crate::ty::Name), crate::backend::regalloc::RegClassId>,
-    interfaces: Vec<Vec<(std::any::TypeId, OpInterfaceConverter)>>,
     spellings: Spellings,
-    names: Interner,
-    op_names: Vec<OpName>,
-    op_name_ids: HashMap<(&'static str, &'static str), OpNameId>,
+    terms: Rc<Terms>,
     segment_sizes: Sym,
     core_types: bool,
+    op_names: Vec<(&'static str, &'static str)>,
     constructors: Option<Arc<HashMap<String, OpId>>>,
-}
-struct OpName {
-    identity: (&'static str, &'static str),
 }
 #[derive(Clone)]
 pub struct Names(Rc<RefCell<Registry>>);
 impl Names {
     /// The name `sym` was interned from.
     pub fn name(&self, sym: Sym) -> String {
-        let registry = self.0.borrow();
-        registry.names.resolve(sym).to_string()
+        self.0.borrow().terms.symbol_text(sym)
     }
 
-    /// The name whose [`Sym::index`] is `index`, if one is.
     pub fn name_at(&self, index: usize) -> Option<String> {
-        let registry = self.0.borrow();
-        registry.names.at(index).map(str::to_string)
+        self.0.borrow().terms.symbol_at(index)
     }
 
-    /// Intern `name`, as [`Context::intern`] does.
     pub fn intern(&self, name: &str) -> Sym {
-        let known = self.0.borrow();
-        if let Some(sym) = known.names.lookup(name) {
-            return sym;
-        }
-        drop(known);
-        let mut registry = self.0.borrow_mut();
-        registry.names.intern(name)
+        self.0.borrow().terms.intern_symbol(name)
     }
 
     /// `ty` as the IR spells it.
@@ -107,112 +98,81 @@ struct Inner {
     engine: Rc<RefCell<EGraph>>,
     next_id: Arc<AtomicU32>,
     origin: Cell<Option<crate::parse::Span>>,
-    defines_types: Cell<bool>,
-    indexes_dirty: Arc<AtomicBool>,
+    queries: queries::Queries,
     constructing: Cell<Option<OpId>>,
+    defines_types: Cell<bool>,
 }
 
 impl Context {
     pub fn new() -> Self {
         let mut engine = EGraph::default();
-        engine
-            .load_program(tir_ir_schema::IR_PROGRAM)
+        tir_egglog::Program::from_bytes(tir_ir_schema::IR_SCHEMA, engine.database_mut())
             .unwrap_or_else(|error| panic!("IR schema: {error}"));
+        engine
+            .attach_program(tir_ir_schema::IR_RULES)
+            .unwrap_or_else(|error| panic!("IR rules: {error}"));
+        keys::install(&mut engine).expect("IR entity keys");
+        let queries = queries::Queries::new(engine.database());
+        op_spec::install(&mut engine);
         let engine = Rc::new(RefCell::new(engine));
         let next_id = Arc::new(AtomicU32::new(0));
-        let indexes_dirty = Arc::new(AtomicBool::new(true));
-        let terms = Rc::new(Terms::with_engine(
-            engine.clone(),
-            next_id.clone(),
-            indexes_dirty.clone(),
-        ));
-        let mut names = Interner::new();
+        let terms = Rc::new(Terms::with_engine(engine.clone(), next_id.clone()));
         for schema in crate::schema::OP_SCHEMAS {
             for attribute in schema.attributes {
-                names.intern_static(attribute.name);
+                terms.intern_symbol(attribute.name);
             }
         }
-        let segment_sizes = names.intern("operand_segment_sizes");
-        let mut op_names = Vec::new();
-        let mut op_name_ids = HashMap::new();
-        for schema in crate::schema::OP_SCHEMAS {
-            op_name_ids
-                .entry((schema.dialect, schema.name))
-                .or_insert_with(|| {
-                    let id = OpNameId::new(op_names.len() as u32);
-                    op_names.push(OpName {
-                        identity: (schema.dialect, schema.name),
-                    });
-                    id
-                });
-        }
+        let segment_sizes = terms.intern_symbol("operand_segment_sizes");
         Self(std::rc::Rc::new(Inner {
             registry: Rc::new(RefCell::new(Registry {
                 dialects: HashMap::new(),
                 reg_classes: HashMap::new(),
-                interfaces: Vec::new(),
                 spellings: Spellings::new(terms.clone()),
-                names,
-                op_names,
-                op_name_ids,
+                terms: terms.clone(),
                 segment_sizes,
                 core_types: false,
+                op_names: Vec::new(),
                 constructors: None,
             })),
             engine,
             next_id,
             terms,
             origin: Cell::new(None),
-            defines_types: Cell::new(false),
-            indexes_dirty,
+            queries,
             constructing: Cell::new(None),
+            defines_types: Cell::new(false),
         }))
     }
 
-    /// Direct access to the authoritative engine. Derived indexes are invalidated
-    /// before the mutable guard is returned. Raw writes followed by queries
-    /// within the same guard require running `ir-index` explicitly.
+    /// Borrow the live IR with up-to-date derived relations. After raw edits,
+    /// release the guard and reacquire it to refresh the derived rows.
     pub fn egraph(&self) -> RefMut<'_, EGraph> {
-        self.refresh_indexes();
-        self.invalidate_indexes();
+        self.0.queries.verification(&mut self.engine());
         self.engine()
     }
 
     /// Access the authoritative engine with support for adding egglog rules.
-    /// The first call replaces the precompiled IR program with its source
-    /// rules, preserving the database. Later calls retain user rules.
+    /// Compiled structural rules and added user rules share the database.
     #[cfg(feature = "egglog-rules")]
     pub fn egraph_with_rules(&self) -> Result<RefMut<'_, EGraph>, tir_egglog::Error> {
-        use tir_egglog::{Rules, ast::Command};
-
-        let mut engine = self.egraph();
-        if engine.uses_loaded_program() {
-            let mut rules = Rules::new();
-            rules.add_ruleset("");
-            for command in engine.parse_program("IR schema", tir_ir_schema::IR_SCHEMA)? {
-                match command {
-                    Command::AddRuleset(_, name) => rules.add_ruleset(&name),
-                    Command::UnstableCombinedRuleset(_, name, members) => {
-                        rules.add_combined_ruleset(&name, &members)?;
-                    }
-                    command @ Command::Rule { .. } => {
-                        rules.add_command(engine.database(), command)?;
-                    }
-                    _ => {}
-                }
-            }
-            engine.set_rules(rules)?;
-        }
-        Ok(engine)
+        Ok(self.egraph())
     }
 
     fn engine(&self) -> RefMut<'_, EGraph> {
         self.0.engine.borrow_mut()
     }
 
-    /// Invalidate rule-derived facts after an external edit.
+    pub(crate) fn typing_engine(&self) -> Result<RefMut<'_, EGraph>, Error> {
+        drop(self.0.engine.try_borrow_mut().map_err(|_| {
+            Error::VerificationError("IR engine already borrowed during typechecking".into())
+        })?);
+        self.0.queries.verification(&mut self.engine());
+        Ok(self.engine())
+    }
+
+    /// Request a fresh evaluation of the structural queries after an external edit.
     pub fn invalidate_indexes(&self) {
-        self.0.indexes_dirty.store(true, Ordering::Relaxed);
+        self.0.queries.invalidate();
     }
 
     fn mint(&self) -> u32 {
@@ -220,7 +180,7 @@ impl Context {
     }
 
     pub fn intern(&self, name: &str) -> Sym {
-        self.registry_mut().names.intern(name)
+        self.terms().intern_symbol(name)
     }
     pub fn intern_fp_semantics(
         &self,
@@ -235,15 +195,14 @@ impl Context {
         Arc::new(contract.into())
     }
     pub(crate) fn intern_op_name(&self, dialect: &'static str, name: &'static str) -> OpNameId {
+        self.register_op_name(dialect, name);
         let mut registry = self.registry_mut();
-        if let Some(id) = registry.op_name_ids.get(&(dialect, name)) {
-            return *id;
+        let identity = (dialect, name);
+        if let Some(index) = registry.op_names.iter().position(|held| *held == identity) {
+            return OpNameId::new(index as u32);
         }
         let id = OpNameId::new(registry.op_names.len() as u32);
-        registry.op_names.push(OpName {
-            identity: (dialect, name),
-        });
-        registry.op_name_ids.insert((dialect, name), id);
+        registry.op_names.push(identity);
         id
     }
     pub(crate) fn defines_types(&self) -> bool {
@@ -281,8 +240,8 @@ impl Context {
         context.register_dialect::<crate::builtin::TypeDialect>();
         context.register_dialect::<crate::layout::LayoutDialect>();
         context.register_dialect::<CfgDialect>();
+        context.register_dialect::<FpDialect>();
         context.register_dialect::<FuncDialect>();
-        context.register_dialect::<crate::fp::FpDialect>();
         context.register_dialect::<PtrDialect>();
         context.register_dialect::<ScfDialect>();
         context.register_dialect::<StateDialect>();
@@ -294,15 +253,17 @@ impl Context {
     }
 
     fn declare_core_types(&self) {
-        for (name, default) in crate::dialects::layout::types::defaults(self) {
-            let Some(ctor) = self.terms().ctor_named("type", name) else {
+        let terms = self.terms();
+        for (name, default) in [
+            ("struct", TypeArg::Nat(0)),
+            ("variant", TypeArg::Type(terms.int(32))),
+        ] {
+            let Some(ctor) = terms.ctor_named("type", name) else {
                 continue;
             };
-            let default = crate::builtin::type_arg_of(&default)
-                .expect("a constructor's default is a type or a flag");
-            self.terms()
+            terms
                 .set_default(ctor, default)
-                .expect("the core type definitions give each constructor one default");
+                .expect("each core constructor has one default");
         }
         self.registry_mut().core_types = true;
     }
@@ -310,7 +271,7 @@ impl Context {
     pub(crate) fn core_type_names(&self) -> Option<&'static [&'static str]> {
         self.registry()
             .core_types
-            .then_some(&crate::dialects::layout::types::NAMES[..])
+            .then_some(&["struct", "variant", "union", "array"])
     }
 
     fn registry(&self) -> Ref<'_, Registry> {
@@ -330,11 +291,11 @@ impl Context {
     }
 
     pub fn sym(&self, name: &str) -> Option<Sym> {
-        self.registry().names.lookup(name)
+        self.terms().symbol_lookup(name)
     }
 
     pub fn resolve(&self, sym: Sym) -> String {
-        self.registry().names.resolve(sym).to_string()
+        self.terms().symbol_text(sym)
     }
 
     pub fn named_attribute(&self, name: &str, value: AttributeValue) -> NamedAttribute {
@@ -395,36 +356,6 @@ impl Context {
             })
     }
 
-    pub fn register_op_interface<I: ?Sized + 'static>(
-        &self,
-        dialect: &'static str,
-        op_name: &'static str,
-        converter: OpInterfaceConverter,
-    ) {
-        let name = self.intern_op_name(dialect, op_name).index();
-        let interface = std::any::TypeId::of::<I>();
-        let mut registry = self.registry_mut();
-        if registry.interfaces.len() <= name {
-            registry.interfaces.resize_with(name + 1, Vec::new);
-        }
-        let held = &mut registry.interfaces[name];
-        match held.iter_mut().find(|(ty, _)| *ty == interface) {
-            Some(entry) => entry.1 = converter,
-            None => held.push((interface, converter)),
-        }
-        drop(registry);
-        self.engine()
-            .update(|mut state| {
-                state.add(
-                    "Implements",
-                    (format!("{dialect}.{op_name}"), std::any::type_name::<I>()),
-                )?;
-                Ok(())
-            })
-            .unwrap_or_else(|error| panic!("operation interface: {error}"));
-        self.invalidate_indexes();
-    }
-
     pub fn register_operation_interface<Op, I>(&self)
     where
         Op: ImplementsOpInterface<I>,
@@ -440,22 +371,9 @@ impl Context {
     }
 
     pub(crate) fn get_op_interface<I: ?Sized + 'static>(&self, op: OpHandle) -> Option<Box<I>> {
-        let converter = self.find_op_interface::<I>(self.op_name_id(op.id))?;
+        let converter = self.find_op_interface::<I>(&self.operation_kind(op.id)?)?;
         let erased = converter(op);
         downcast_op_interface::<I>(erased)
-    }
-
-    pub(crate) fn find_op_interface<I: ?Sized + 'static>(
-        &self,
-        name: OpNameId,
-    ) -> Option<OpInterfaceConverter> {
-        let interface = std::any::TypeId::of::<I>();
-        self.registry()
-            .interfaces
-            .get(name.index())?
-            .iter()
-            .find(|(ty, _)| *ty == interface)
-            .map(|(_, converter)| *converter)
     }
 
     pub fn get_parser(&self, dialect: &str, name: &str) -> Result<OperationParser, Error> {
@@ -639,14 +557,12 @@ impl Context {
         engine
             .update(|mut state| state.set(table, RawValues(keys), value))
             .unwrap_or_else(|error| panic!("{table}: {error}"));
-        self.invalidate_indexes();
     }
 
     fn delete(&self, table: &str, keys: Vec<EggValue>) {
         self.engine()
             .update(|mut state| state.remove(table, RawValues(keys)))
             .unwrap_or_else(|error| panic!("{table}: {error}"));
-        self.invalidate_indexes();
     }
 
     fn boolean(&self, flag: bool) -> EggValue {
@@ -665,14 +581,26 @@ impl Context {
         self.engine().value_to_base(value)
     }
 
-    fn construct(&self, name: &str, fields: Vec<EggValue>) -> EggValue {
-        self.engine()
-            .update(|mut state| state.add(name, RawValues(fields)))
-            .unwrap_or_else(|error| panic!("{name}: {error}"))
+    fn insert_row(&self, table: &str, fields: impl tir_egglog::IntoValues) {
+        let mut engine = self.engine();
+        let db = engine.database_mut();
+        let row = fields.into_values(db.base_values()).collect::<Vec<_>>();
+        db.insert(db.table(table).expect("IR table"), &row)
+            .expect("IR row");
     }
 
-    fn fields(&self, name: &str, expression: EggValue) -> Option<Vec<EggValue>> {
-        constructor_fields(&mut self.engine(), name, expression)
+    fn erase_row(&self, name: &str, row: &[EggValue]) {
+        let mut engine = self.engine();
+        let db = engine.database_mut();
+        let table = db.table(name).expect("IR table");
+        let arity = db.schema().table(table).key_arity();
+        db.remove(table, &row[..arity]);
+    }
+
+    fn erase_by(&self, name: &str, columns: &[usize], key: &[EggValue]) {
+        for row in self.indexed(name, columns, key, &[]) {
+            self.erase_row(name, &row);
+        }
     }
 
     fn indexed(
@@ -693,137 +621,72 @@ impl Context {
             .collect()
     }
 
-    fn refresh_indexes(&self) {
-        if !self.0.indexes_dirty.swap(false, Ordering::Relaxed) {
-            return;
-        }
-        let mut engine = self.engine();
-        for table in [
-            "TypeItem",
-            "KindItem",
-            "RowItem",
-            "AttrItem",
-            "DictItem",
-            "OwnedRegion",
-            "HasInterface",
-            "DefinedValue",
-            "Result",
-            "BlockParam",
-            "RegionParam",
-            "Uses",
-            "EdgeArgument",
-            "GammaSelector",
-            "EntryValue",
-            "ExitValue",
-            "FeedbackValue",
-            "ParentOp",
-            "Within",
-            "Module",
-            "Function",
-            "OwningFunction",
-            "SelectedOp",
-            "GraphMember",
-            "BlockMember",
-            "BlocksOf",
-            "OpRegion",
-            "RegionUnder",
-            "OpUnderRegion",
-            "ReaderAt",
-            "SiblingRead",
-            "ScopedSiblingRead",
-            "OwnedEntity",
-        ] {
-            engine
-                .clear_function(table)
-                .unwrap_or_else(|error| panic!("{table}: {error}"));
-        }
-        engine.seminaive = false;
-        let schedule = tir_egglog::ast::Command::RunSchedule(tir_egglog::Schedule::Saturate(
-            tir_egglog::span!(),
-            Box::new(tir_egglog::Schedule::run("ir-index")),
-        ));
-        engine
-            .run_program(vec![schedule])
-            .unwrap_or_else(|error| panic!("IR indexes: {error}"));
-    }
-
     pub fn has_operation(&self, id: OpId) -> bool {
-        self.lookup("OpKind", i64::from(id.raw())).is_some()
+        self.record::<OperationRow>(id.raw()).is_some()
     }
     pub fn has_value(&self, id: ValueId) -> bool {
-        self.lookup("ValueType", i64::from(id.number())).is_some()
+        self.record::<ValueRow>(id.number()).is_some()
     }
     pub fn has_region(&self, id: RegionId) -> bool {
-        self.lookup("Mode", i64::from(id.raw())).is_some()
+        self.record::<RegionRow>(id.raw()).is_some()
     }
     pub fn has_block(&self, id: BlockId) -> bool {
-        self.lookup("BlockLayout", i64::from(id.raw())).is_some()
+        self.record::<BlockRow>(id.raw()).is_some()
     }
 
     pub fn get_value(&self, id: ValueId) -> Value {
-        let ty = self
-            .lookup("ValueType", i64::from(id.number()))
-            .unwrap_or_else(|| panic!("live value {id:?}"));
-        let defining = self
-            .definition(id, "ResultDef")
-            .map(|fields| OpId::new(self.integer(fields[0]) as u32));
-        Value::new(id, self.terms().expression_id(ty), defining)
-    }
-    fn definition(&self, value: ValueId, constructor: &str) -> Option<Vec<EggValue>> {
-        self.fields(
-            constructor,
-            self.lookup("ValueDefinition", i64::from(value.number()))?,
+        let row = self.record::<ValueRow>(id.number()).expect("live value");
+        Value::new(
+            id,
+            TypeId::from_number(row.ty as u32),
+            (row.definition == "result").then(|| OpId::new(row.owner as u32)),
         )
     }
-    pub fn region_of_port(&self, value: ValueId) -> Option<RegionId> {
-        Some(RegionId::new(
-            self.integer(self.definition(value, "RegionParamDef")?[0]) as u32,
-        ))
+    pub fn region_of_port(&self, id: ValueId) -> Option<RegionId> {
+        let row = self.record::<ValueRow>(id.number())?;
+        (row.definition == "region").then(|| RegionId::new(row.owner as u32))
     }
-    pub fn block_of_argument(&self, value: ValueId) -> Option<BlockId> {
-        Some(BlockId::new(
-            self.integer(self.definition(value, "BlockParamDef")?[0]) as u32,
-        ))
-    }
-    fn placement(&self, op: OpId, constructor: &str) -> Option<Vec<EggValue>> {
-        self.fields(
-            constructor,
-            self.lookup("OpPlacement", i64::from(op.raw()))?,
-        )
+    pub fn block_of_argument(&self, id: ValueId) -> Option<BlockId> {
+        let row = self.record::<ValueRow>(id.number())?;
+        (row.definition == "block").then(|| BlockId::new(row.owner as u32))
     }
     pub fn parent_block(&self, op: OpId) -> Option<BlockId> {
-        Some(BlockId::new(
-            self.integer(self.placement(op, "InBlock")?[0]) as u32,
-        ))
+        let row = self.record::<OperationRow>(op.raw())?;
+        (row.placement == "block").then(|| BlockId::new(row.container as u32))
     }
     pub fn parent_nodes_region(&self, op: OpId) -> Option<RegionId> {
-        Some(RegionId::new(
-            self.integer(self.placement(op, "InGraph")?[0]) as u32,
-        ))
+        let row = self.record::<OperationRow>(op.raw())?;
+        (row.placement == "graph").then(|| RegionId::new(row.container as u32))
     }
     pub fn region_of_op(&self, op: OpId) -> Option<RegionId> {
-        self.parent_nodes_region(op).or_else(|| {
-            self.parent_block(op)
-                .and_then(|block| self.parent_region(block))
-        })
+        let row = self.record::<OperationRow>(op.raw())?;
+        match row.placement.as_str() {
+            "graph" => Some(RegionId::new(row.container as u32)),
+            "block" => self.parent_region(BlockId::new(row.container as u32)),
+            _ => None,
+        }
     }
     pub fn parent_op(&self, op: OpId) -> Option<OpId> {
-        self.region_of_op(op)
-            .and_then(|region| self.region_parent_op(region))
+        self.region_parent_op(self.region_of_op(op)?)
     }
-    pub fn parent_region(&self, block: BlockId) -> Option<RegionId> {
-        Some(RegionId::new(
-            self.integer(self.lookup("BlockRegion", i64::from(block.raw()))?) as u32,
-        ))
+    pub fn parent_region(&self, b: BlockId) -> Option<RegionId> {
+        u32::try_from(self.record::<BlockRow>(b.raw())?.region)
+            .ok()
+            .map(RegionId::new)
     }
-    pub(crate) fn region_parent_op(&self, region: RegionId) -> Option<OpId> {
-        Some(OpId::new(
-            self.integer(self.lookup("RegionOwner", i64::from(region.raw()))?) as u32,
-        ))
+    pub(crate) fn region_parent_op(&self, r: RegionId) -> Option<OpId> {
+        u32::try_from(self.record::<RegionRow>(r.raw())?.owner)
+            .ok()
+            .map(OpId::new)
     }
-    pub(crate) fn region_is_nodes(&self, region: RegionId) -> bool {
-        self.lookup("Mode", i64::from(region.raw()))
-            .is_some_and(|mode| self.fields("Graph", mode).is_some())
+    pub(crate) fn region_entry(&self, region: RegionId) -> Option<BlockId> {
+        u32::try_from(self.record::<RegionRow>(region.raw())?.entry)
+            .ok()
+            .map(BlockId::new)
+    }
+    pub(crate) fn region_is_nodes(&self, r: RegionId) -> bool {
+        self.record::<RegionRow>(r.raw())
+            .is_some_and(|row| row.mode == "graph")
     }
     pub(crate) fn op_operands(&self, op: OpId) -> crate::operation::ValueIds {
         self.indexed("Operand", &[0], &[self.int(op.raw())], &[1])
@@ -832,54 +695,35 @@ impl Context {
             .collect()
     }
     pub(crate) fn op_results(&self, op: OpId) -> crate::operation::ValueIds {
-        self.refresh_indexes();
-        self.indexed("Result", &[0], &[self.int(op.raw())], &[1])
+        self.definitions(Defines::Result(op)).collect()
+    }
+    fn definitions(&self, definition: Defines) -> impl Iterator<Item = ValueId> {
+        let (kind, owner) = definition.key();
+        self.indexed("Value", &[2, 3], &[self.text(kind), self.int(owner)], &[4])
             .into_iter()
-            .map(|row| ValueId::from_number(self.integer(row[2]) as u32))
-            .collect()
+            .map(|r| ValueId::from_number(self.integer(r[0]) as u32))
     }
     pub(crate) fn op_regions(&self, op: OpId) -> crate::operation::RegionIds {
-        self.refresh_indexes();
-        self.indexed("OwnedRegion", &[0], &[self.int(op.raw())], &[1])
+        self.indexed("Region", &[2], &[self.int(op.raw())], &[3])
             .into_iter()
-            .map(|row| RegionId::new(self.integer(row[2]) as u32))
+            .map(|r| RegionId::new(self.integer(r[0]) as u32))
             .collect()
-    }
-    pub(crate) fn op_name_id(&self, op: OpId) -> OpNameId {
-        let name = self.string(
-            self.lookup("OpKind", i64::from(op.raw()))
-                .unwrap_or_else(|| panic!("live op {op:?}")),
-        );
-        let (dialect, name) = name
-            .split_once('.')
-            .unwrap_or_else(|| panic!("qualified op kind"));
-        *self
-            .registry()
-            .op_name_ids
-            .get(&(dialect, name))
-            .unwrap_or_else(|| panic!("registered op kind"))
-    }
-    pub(crate) fn op_identity(&self, op: OpId) -> (&'static str, &'static str) {
-        self.registry().op_names[self.op_name_id(op).index()].identity
     }
     pub(crate) fn block_arguments(&self, block: BlockId) -> Vec<Value> {
-        self.refresh_indexes();
-        self.indexed("BlockParam", &[0], &[self.int(block.raw())], &[1])
-            .into_iter()
-            .map(|row| self.declared_value(ValueId::from_number(self.integer(row[2]) as u32)))
+        self.definitions(Defines::BlockArgument(block))
+            .map(|v| self.declared_value(v))
             .collect()
     }
-    fn declared_value(&self, value: ValueId) -> Value {
+    fn declared_value(&self, id: ValueId) -> Value {
         let ty = self
-            .lookup("DeclaredType", i64::from(value.number()))
-            .unwrap_or_else(|| panic!("declared parameter type"));
-        Value::new(value, self.terms().expression_id(ty), None)
+            .record::<ValueRow>(id.number())
+            .expect("parameter")
+            .declared;
+        Value::new(id, TypeId::from_number(ty as u32), None)
     }
     pub(crate) fn region_ports(&self, region: RegionId) -> Vec<Value> {
-        self.refresh_indexes();
-        self.indexed("RegionParam", &[0], &[self.int(region.raw())], &[1])
-            .into_iter()
-            .map(|row| self.declared_value(ValueId::from_number(self.integer(row[2]) as u32)))
+        self.definitions(Defines::RegionPort(region))
+            .map(|v| self.declared_value(v))
             .collect()
     }
     pub(crate) fn region_results(&self, region: RegionId) -> Vec<ValueId> {
@@ -889,74 +733,98 @@ impl Context {
             .collect()
     }
     pub(crate) fn block_ops(&self, block: BlockId) -> Vec<OpId> {
-        self.refresh_indexes();
-        self.indexed("BlockMember", &[0], &[self.int(block.raw())], &[1])
-            .into_iter()
-            .map(|row| OpId::new(self.integer(row[2]) as u32))
-            .collect()
+        self.members("block", block.raw(), 4)
+    }
+    // A native container ID belongs to one block or graph. Raw IR may use
+    // the same number in both spaces, in which case select the placement too.
+    fn member_tail(&self, placement: &str, owner: u32) -> (usize, Option<i64>) {
+        let mut engine = self.engine();
+        let db = engine.database_mut();
+        let table = db.table("Operation").expect("operation table");
+        let index = db.add_kept_index(table, &[3], &[2, 4, 5]);
+        let owner = db.base(i64::from(owner));
+        let kind = db.base(placement.to_owned());
+        let key = [owner];
+        let count = db.listed_len(index, &key);
+        if count == 0 {
+            return (0, None);
+        }
+        let first = db.listed_nth(index, &key, 0).expect("first member");
+        let last = db.listed_nth(index, &key, count - 1).expect("last member");
+        if first[2] == kind && last[2] == kind {
+            return (count, Some(db.base_value(last[4])));
+        }
+        let mut count = 0;
+        let last = db
+            .listed(index, &key)
+            .filter(|row| row[2] == kind)
+            .map(|row| {
+                count += 1;
+                db.base_value(row[4])
+            })
+            .last();
+        (count, last)
+    }
+    fn members(&self, placement: &str, owner: u32, order: usize) -> Vec<OpId> {
+        self.indexed(
+            "Operation",
+            &[2, 3],
+            &[self.text(placement), self.int(owner)],
+            &[order],
+        )
+        .into_iter()
+        .map(|r| OpId::new(self.integer(r[0]) as u32))
+        .collect()
     }
     pub(crate) fn region_ops(&self, region: RegionId) -> Vec<OpId> {
-        self.refresh_indexes();
-        let mut ops = self
-            .indexed("GraphMember", &[0], &[self.int(region.raw())], &[])
-            .into_iter()
-            .map(|row| OpId::new(self.integer(row[1]) as u32))
-            .collect::<Vec<_>>();
-        ops.sort_by_key(|op| {
-            self.lookup("GraphLayout", i64::from(op.raw()))
-                .map(|n| self.integer(n))
-        });
-        ops
+        self.members("graph", region.raw(), 5)
     }
     pub(crate) fn region_blocks(&self, region: RegionId) -> Vec<BlockId> {
-        self.refresh_indexes();
-        self.indexed("BlocksOf", &[0], &[self.int(region.raw())], &[1])
+        self.indexed("Block", &[1], &[self.int(region.raw())], &[2])
             .into_iter()
-            .map(|row| BlockId::new(self.integer(row[2]) as u32))
+            .map(|r| BlockId::new(self.integer(r[0]) as u32))
             .collect()
     }
     pub(crate) fn subtree_ops(&self, roots: &[OpId]) -> Vec<OpId> {
-        {
-            let mut engine = self.engine();
-            engine
-                .update(|mut state| {
-                    for root in roots {
-                        state.add("Scope", i64::from(root.raw()))?;
-                    }
-                    Ok(())
-                })
-                .unwrap_or_else(|error| panic!("IR scope: {error}"));
-        }
-        self.invalidate_indexes();
-        self.refresh_indexes();
+        self.0.queries.structure(&mut self.engine());
         roots
             .iter()
-            .flat_map(|root| self.indexed("Within", &[0], &[self.int(root.raw())], &[]))
-            .map(|row| OpId::new(self.integer(row[1]) as u32))
+            .filter(|&&root| self.has_operation(root))
+            .flat_map(|&root| {
+                let mut ops = vec![root];
+                for region in self.op_regions(root) {
+                    ops.extend(
+                        self.indexed("ReaderAt", &[1], &[self.int(region.raw())], &[])
+                            .into_iter()
+                            .map(|r| OpId::new(self.integer(r[0]) as u32)),
+                    );
+                }
+                ops
+            })
             .collect()
     }
-
     pub(crate) fn region_under(&self, region: RegionId, root: RegionId) -> bool {
-        self.refresh_indexes();
-        self.engine()
-            .read(|state| {
-                state.contains(
-                    "RegionUnder",
-                    (i64::from(region.raw()), i64::from(root.raw())),
-                )
+        self.0.queries.structure(&mut self.engine());
+        (region == root && self.has_region(root))
+            || self.region_parent_op(region).is_some_and(|op| {
+                !self
+                    .indexed(
+                        "ReaderAt",
+                        &[0, 1],
+                        &[self.int(op.raw()), self.int(root.raw())],
+                        &[],
+                    )
+                    .is_empty()
             })
-            .unwrap_or_else(|error| panic!("IR containment: {error}"))
     }
     pub fn uses_of(&self, value: ValueId) -> Vec<Use> {
-        self.refresh_indexes();
-        self.indexed("Uses", &[0], &[self.int(value.number())], &[])
+        self.indexed("Operand", &[2], &[self.int(value.number())], &[])
             .into_iter()
-            .filter_map(|row| {
-                let fields = self.fields("OperandUse", row[2])?;
-                Some(Use::new(
-                    OpId::new(self.integer(row[1]) as u32),
-                    self.integer(fields[0]) as usize,
-                ))
+            .map(|r| {
+                Use::new(
+                    OpId::new(self.integer(r[0]) as u32),
+                    self.integer(r[1]) as usize,
+                )
             })
             .collect()
     }
@@ -975,568 +843,207 @@ impl Context {
             .collect()
     }
 
-    pub(crate) fn sibling_reads(&self, root: RegionId, nested: bool) -> Vec<(OpId, OpId)> {
-        self.refresh_indexes();
-        self.indexed(
-            "ScopedSiblingRead",
-            &[0, 1],
-            &[self.int(root.raw()), self.boolean(nested)],
-            &[],
-        )
-        .into_iter()
-        .map(|row| {
-            (
-                OpId::new(self.integer(row[2]) as u32),
-                OpId::new(self.integer(row[3]) as u32),
-            )
-        })
-        .collect()
+    pub(crate) fn sibling_reads(&self, root: RegionId) -> Vec<(OpId, OpId)> {
+        self.0.queries.structure(&mut self.engine());
+        self.indexed("DependsOn", &[0], &[self.int(root.raw())], &[])
+            .into_iter()
+            .map(|r| {
+                (
+                    OpId::new(self.integer(r[1]) as u32),
+                    OpId::new(self.integer(r[2]) as u32),
+                )
+            })
+            .collect()
     }
     fn normalize_binding(&self, region: RegionId, binding: &crate::Binding) {
-        for (port, operand) in binding.ports.clone().zip(binding.operands.clone()) {
-            self.put(
-                "EntryBinding",
-                vec![self.int(region.raw()), self.int(port as i64)],
-                self.int(operand as i64),
-            );
-        }
-        for (result, yield_slot) in binding.results.clone().zip(binding.exit.clone()) {
-            self.put(
-                "ExitBinding",
-                vec![self.int(region.raw()), self.int(result as i64)],
-                self.int(yield_slot as i64),
-            );
-        }
-        for (port, yield_slot) in binding.ports.clone().zip(binding.continue_.clone()) {
-            self.put(
-                "FeedbackBinding",
-                vec![self.int(region.raw()), self.int(port as i64)],
-                self.int(yield_slot as i64),
-            );
+        for (role, pairs) in [
+            ("entry", binding.ports.clone().zip(binding.operands.clone())),
+            ("exit", binding.results.clone().zip(binding.exit.clone())),
+            (
+                "feedback",
+                binding.ports.clone().zip(binding.continue_.clone()),
+            ),
+        ] {
+            for (from, to) in pairs {
+                self.put(
+                    "Binding",
+                    vec![
+                        self.int(region.raw()),
+                        self.text(role),
+                        self.int(from as i64),
+                    ],
+                    self.int(to as i64),
+                );
+            }
         }
     }
     fn normalize_op(&self, id: OpId) {
         if self.0.constructing.get() == Some(id) {
             return;
         }
+        let key = self.int(id.raw());
         let op = self.get_op(id);
-        for table in ["Successor", "SuccessorArg", "GammaArm"] {
-            let arity = self
-                .engine()
-                .get_function(table)
-                .unwrap_or_else(|| panic!("IR table"))
-                .func_type()
-                .input
-                .len();
-            for row in self.indexed(table, &[0], &[self.int(id.raw())], &[]) {
-                self.delete(table, row[..arity].to_vec());
-            }
+        for name in ["Successor", "SuccessorArgument", "Arm", "Control"] {
+            self.erase_by(name, &[0], &[key]);
         }
-        for table in [
-            "Gamma",
-            "Theta",
-            "GammaPredicate",
-            "GammaDefaultArm",
-            "ThetaBody",
-            "ThetaPredicate",
-            "ThetaContinueOn",
-        ] {
-            self.delete(table, vec![self.int(id.raw())]);
-        }
-        for region in op.regions() {
-            for table in ["EntryBinding", "ExitBinding", "FeedbackBinding"] {
-                for row in self.indexed(table, &[0], &[self.int(region.raw())], &[]) {
-                    self.delete(table, row[..2].to_vec());
-                }
-            }
+        for reg in op.regions() {
+            self.erase_by("Binding", &[0], &[self.int(reg.raw())]);
         }
         if let Some(branch) = op.clone().as_interface::<dyn crate::BranchTerminator>() {
             for (edge, (block, slots)) in branch.successor_operand_slots().into_iter().enumerate() {
                 self.put(
                     "Successor",
-                    vec![self.int(id.raw()), self.int(edge as i64)],
+                    vec![key, self.int(edge as i64)],
                     self.int(block.raw()),
                 );
-                for (parameter, operand) in slots.into_iter().enumerate() {
+                for (param, operand) in slots.into_iter().enumerate() {
                     self.put(
-                        "SuccessorArg",
-                        vec![
-                            self.int(id.raw()),
-                            self.int(edge as i64),
-                            self.int(parameter as i64),
-                        ],
+                        "SuccessorArgument",
+                        vec![key, self.int(edge as i64), self.int(param as i64)],
                         self.int(operand as i64),
                     );
                 }
             }
         }
-        if let Some(gamma) = op.clone().as_interface::<dyn crate::Gamma>() {
-            self.construct("Gamma", vec![self.int(id.raw())]);
-            self.put(
-                "GammaPredicate",
-                vec![self.int(id.raw())],
-                self.int(gamma.predicate_slot() as i64),
-            );
-            let arms = gamma.arms();
-            let cases = gamma.cases();
-            let binding = gamma.binding();
-            for region in &arms {
-                self.normalize_binding(*region, &binding);
+        let gamma = op.clone().as_interface::<dyn crate::Gamma>();
+        let theta = op.clone().as_interface::<dyn crate::Theta>();
+        if let Some(g) = &gamma {
+            let arms = g.arms();
+            let binding = g.binding();
+            for r in &arms {
+                self.normalize_binding(*r, &binding);
             }
-            for (case, region) in cases.into_iter().zip(&arms) {
-                let value = case
-                    .to_string()
-                    .parse::<tir_egglog::sort::BigInt>()
-                    .unwrap_or_else(|_| panic!("gamma case"));
-                let case = self.engine().base_to_value(value);
+            for (case, r) in g.cases().into_iter().zip(&arms) {
                 self.put(
-                    "GammaArm",
-                    vec![self.int(id.raw()), case],
-                    self.int(region.raw()),
+                    "Arm",
+                    vec![key, self.boolean(false), self.text(case.to_string())],
+                    self.int(r.raw()),
                 );
             }
-            if let Some(region) = arms.last() {
+            if let Some(r) = arms.last() {
                 self.put(
-                    "GammaDefaultArm",
-                    vec![self.int(id.raw())],
-                    self.int(region.raw()),
+                    "Arm",
+                    vec![key, self.boolean(true), self.text("")],
+                    self.int(r.raw()),
                 );
             }
         }
-        if let Some(theta) = op.clone().as_interface::<dyn crate::Theta>() {
-            self.construct("Theta", vec![self.int(id.raw())]);
-            let region = theta.body();
-            self.normalize_binding(region, &theta.binding());
-            self.put(
-                "ThetaBody",
-                vec![self.int(id.raw())],
-                self.int(region.raw()),
-            );
-            self.put(
-                "ThetaPredicate",
-                vec![self.int(id.raw())],
-                self.int(theta.predicate_slot() as i64),
-            );
-            self.put(
-                "ThetaContinueOn",
-                vec![self.int(id.raw())],
-                self.boolean(true),
-            );
+        if let Some(t) = &theta {
+            self.normalize_binding(t.body(), &t.binding());
         }
-        if let Some(binding) = op.as_interface::<dyn crate::RegionBinding>() {
-            self.normalize_binding(binding.region(), &binding.binding());
-        }
-    }
-    fn encode_attributes(&self, attributes: &[AttributeValue]) -> EggValue {
-        let mut tail = self.construct("ANil", vec![]);
-        for value in attributes.iter().rev() {
-            let head = self.encode_attribute(value);
-            tail = self.construct("ACons", vec![head, tail]);
-        }
-        tail
-    }
-    fn decode_attributes(&self, list: EggValue) -> Vec<AttributeValue> {
-        self.refresh_indexes();
-        self.indexed("AttrItem", &[0], &[list], &[1])
-            .into_iter()
-            .map(|row| self.decode_attribute(row[2]))
-            .collect()
-    }
-    fn encode_attribute(&self, value: &AttributeValue) -> EggValue {
-        use AttributeValue::*;
-        match value {
-            Str(text) => self.construct("StringAttr", vec![self.text(text.to_string())]),
-            Int(n) => self.construct(
-                "IntegerAttr",
-                vec![
-                    self.construct("Ctor", vec![self.text("$attr.signed")]),
-                    self.int(64_i64),
-                    self.text(format!("{:016x}", *n as u64)),
-                ],
-            ),
-            UInt(n) => self.construct(
-                "IntegerAttr",
-                vec![
-                    self.construct("Ctor", vec![self.text("$attr.unsigned")]),
-                    self.int(64_i64),
-                    self.text(format!("{n:016x}")),
-                ],
-            ),
-            Wide(limbs) => self.construct(
-                "IntegerAttr",
-                vec![
-                    self.construct("Ctor", vec![self.text("$attr.wide")]),
-                    self.int(limbs.len() as i64 * 64),
-                    self.text(
-                        limbs
-                            .iter()
-                            .rev()
-                            .map(|limb| format!("{limb:016x}"))
-                            .collect::<std::string::String>(),
-                    ),
-                ],
-            ),
-            F32(n) => self.construct(
-                "FloatAttr",
-                vec![
-                    self.terms().expression(self.terms().float(8, 23)),
-                    self.text("f32"),
-                    self.text(format!("{:08x}", n.to_bits())),
-                ],
-            ),
-            F64(n) => self.construct(
-                "FloatAttr",
-                vec![
-                    self.terms().expression(self.terms().float(11, 52)),
-                    self.text("f64"),
-                    self.text(format!("{:016x}", n.to_bits())),
-                ],
-            ),
-            Bool(flag) => self.construct("BoolAttr", vec![self.boolean(*flag)]),
-            Array(values) => self.construct("ListAttr", vec![self.encode_attributes(values)]),
-            Dict(values) => {
-                let mut tail = self.construct("DNil", vec![]);
-                for (key, value) in values.iter().rev() {
-                    tail = self.construct(
-                        "DCons",
-                        vec![self.text(key.clone()), self.encode_attribute(value), tail],
-                    );
-                }
-                self.construct("DictAttr", vec![tail])
-            }
-            Type(ty) => self.construct("TypeAttr", vec![self.terms().expression(*ty)]),
-            Value(value) => self.construct("ValueAttr", vec![self.int(value.number())]),
-            Block(block) => self.construct("BlockAttr", vec![self.int(block.raw())]),
-            Predicate(predicate) => {
-                self.construct("PredicateAttr", vec![self.text(predicate.name())])
-            }
-            Register(register) => {
-                let class = register.class();
-                self.note_reg_class(class);
-                let dialect = self.text(class.dialect());
-                let name = self.text(class.name());
-                match register {
-                    crate::attributes::RegisterAttr::Physical { index, .. } => self.construct(
-                        "PhysicalRegisterAttr",
-                        vec![dialect, name, self.int(i64::from(*index))],
-                    ),
-                    crate::attributes::RegisterAttr::Assigned { value, index, .. } => self
-                        .construct(
-                            "AssignedRegisterAttr",
-                            vec![
-                                self.int(value.number()),
-                                dialect,
-                                name,
-                                self.int(i64::from(*index)),
-                            ],
-                        ),
-                }
-            }
-            FpSemantics(semantics) => {
-                let fields = Dict(Box::new(
-                    semantics
-                        .fields()
-                        .into_iter()
-                        .map(|(k, v)| (k.to_owned(), Str(v.into())))
-                        .collect(),
-                ));
-                self.construct("FpSemanticsAttr", vec![self.encode_attribute(&fields)])
-            }
-            EvaluationContract(contract) => self.construct(
-                "EvaluationContractAttr",
-                vec![self.encode_attribute(&contract.attribute())],
-            ),
-            LayoutSpec(spec) => {
-                let mut options = self.construct("ANil", vec![]);
-                for (name, value) in spec.options.iter().rev() {
-                    let option = self.construct(
-                        "LayoutOptionAttr",
-                        vec![self.text(name.clone()), self.encode_attribute(value)],
-                    );
-                    options = self.construct("ACons", vec![option, options]);
-                }
-                let mut entries = self.construct("ANil", vec![]);
-                for entry in spec.entries.iter().rev() {
-                    let vars = self.encode_attributes(
-                        &entry
-                            .vars
-                            .iter()
-                            .map(|name| Str(name.clone().into()))
-                            .collect::<Vec<_>>(),
-                    );
-                    let preferred = entry
-                        .preferred
-                        .iter()
-                        .map(|arg| {
-                            self.construct(
-                                "TypeArgumentAttr",
-                                vec![self.terms().argument_expression(arg)],
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let mut preferred_list = self.construct("ANil", vec![]);
-                    for preferred in preferred {
-                        preferred_list = self.construct("ACons", vec![preferred, preferred_list]);
-                    }
-                    let row = self.construct(
-                        "LayoutEntryAttr",
-                        vec![
-                            self.terms().expression(entry.key),
-                            vars,
-                            self.terms().argument_expression(&entry.size),
-                            self.terms().argument_expression(&entry.abi),
-                            preferred_list,
-                        ],
-                    );
-                    entries = self.construct("ACons", vec![row, entries]);
-                }
-                self.construct("LayoutSpecAttr", vec![options, entries])
-            }
-        }
-    }
-    fn decode_attribute(&self, expression: EggValue) -> AttributeValue {
-        use AttributeValue::*;
-        if let Some(fields) = self.fields("StringAttr", expression) {
-            return Str(self.string(fields[0]).into());
-        }
-        if let Some(fields) = self.fields("IntegerAttr", expression) {
-            let kind = self
-                .fields("Ctor", fields[0])
-                .unwrap_or_else(|| panic!("integer attribute interpretation"));
-            let kind = self.string(kind[0]);
-            let bits = self.string(fields[2]);
-            return match kind.as_str() {
-                "$attr.signed" => Int(u64::from_str_radix(&bits, 16)
-                    .unwrap_or_else(|_| panic!("signed integer bits"))
-                    as i64),
-                "$attr.unsigned" => UInt(
-                    u64::from_str_radix(&bits, 16)
-                        .unwrap_or_else(|_| panic!("unsigned integer bits")),
+        if gamma.is_some() || theta.is_some() {
+            self.insert_row(
+                "Control",
+                (
+                    i64::from(id.raw()),
+                    gamma.is_some(),
+                    gamma.as_ref().map_or(-1, |g| g.predicate_slot() as i64),
+                    theta.is_some(),
+                    theta.as_ref().map_or(-1, |t| i64::from(t.body().raw())),
+                    theta.as_ref().map_or(-1, |t| t.predicate_slot() as i64),
+                    if theta.is_some() { "true" } else { "none" },
                 ),
-                "$attr.wide" => Wide(
-                    bits.as_bytes()
-                        .rchunks(16)
-                        .map(|chunk| {
-                            u64::from_str_radix(
-                                std::str::from_utf8(chunk).unwrap_or_else(|_| panic!("hex digits")),
-                                16,
-                            )
-                            .unwrap_or_else(|_| panic!("wide integer bits"))
-                        })
-                        .collect::<Vec<_>>()
-                        .into(),
-                ),
-                _ => panic!("unknown integer attribute interpretation"),
-            };
-        }
-        if let Some(fields) = self.fields("FloatAttr", expression) {
-            let bits = self.string(fields[2]);
-            return match self.string(fields[1]).as_str() {
-                "f32" => F32(f32::from_bits(
-                    u32::from_str_radix(&bits, 16).unwrap_or_else(|_| panic!("f32 bits")),
-                )),
-                "f64" => F64(f64::from_bits(
-                    u64::from_str_radix(&bits, 16).unwrap_or_else(|_| panic!("f64 bits")),
-                )),
-                _ => panic!("known float format"),
-            };
-        }
-        if let Some(fields) = self.fields("BoolAttr", expression) {
-            return Bool(self.engine().value_to_base(fields[0]));
-        }
-        if let Some(fields) = self.fields("ListAttr", expression) {
-            return Array(self.decode_attributes(fields[0]).into());
-        }
-        if let Some(fields) = self.fields("DictAttr", expression) {
-            self.refresh_indexes();
-            let values = self
-                .indexed("DictItem", &[0], &[fields[0]], &[1])
-                .into_iter()
-                .map(|row| (self.string(row[1]), self.decode_attribute(row[2])))
-                .collect();
-            return Dict(Box::new(values));
-        }
-
-        if let Some(fields) = self.fields("TypeAttr", expression) {
-            return Type(self.terms().expression_id(fields[0]));
-        }
-        if let Some(fields) = self.fields("ValueAttr", expression) {
-            return Value(ValueId::from_number(self.integer(fields[0]) as u32));
-        }
-        if let Some(fields) = self.fields("BlockAttr", expression) {
-            return Block(BlockId::new(self.integer(fields[0]) as u32));
-        }
-        if let Some(fields) = self.fields("PredicateAttr", expression) {
-            return Predicate(
-                crate::attributes::Predicate::parse(&self.string(fields[0]))
-                    .unwrap_or_else(|| panic!("known predicate")),
             );
         }
-        if let Some(fields) = self.fields("PhysicalRegisterAttr", expression) {
-            let class = self
-                .reg_class(
-                    self.terms().name(&self.string(fields[0])),
-                    self.terms().name(&self.string(fields[1])),
-                )
-                .unwrap_or_else(|| panic!("registered register class"));
-            return Register(crate::attributes::RegisterAttr::Physical {
-                class,
-                index: self.integer(fields[2]) as u16,
-            });
+        if let Some(b) = op.as_interface::<dyn crate::RegionBinding>() {
+            self.normalize_binding(b.region(), &b.binding());
         }
-        if let Some(fields) = self.fields("AssignedRegisterAttr", expression) {
-            let class = self
-                .reg_class(
-                    self.terms().name(&self.string(fields[1])),
-                    self.terms().name(&self.string(fields[2])),
-                )
-                .unwrap_or_else(|| panic!("registered register class"));
-            return Register(crate::attributes::RegisterAttr::Assigned {
-                value: ValueId::from_number(self.integer(fields[0]) as u32),
-                class,
-                index: self.integer(fields[3]) as u16,
-            });
-        }
-        if let Some(fields) = self.fields("FpSemanticsAttr", expression) {
-            return FpSemantics(Arc::new(
-                crate::fp::Semantics::parse_attribute(&self.decode_attribute(fields[0]))
-                    .unwrap_or_else(|error| panic!("FP semantics: {error}")),
-            ));
-        }
-        if let Some(fields) = self.fields("EvaluationContractAttr", expression) {
-            return EvaluationContract(Arc::new(
-                crate::fp::EvaluationContract::parse_attribute(&self.decode_attribute(fields[0]))
-                    .unwrap_or_else(|error| panic!("evaluation contract: {error}")),
-            ));
-        }
-        if let Some(fields) = self.fields("LayoutSpecAttr", expression) {
-            self.refresh_indexes();
-            let mut spec = crate::layout::LayoutSpec::new();
-            for row in self.indexed("AttrItem", &[0], &[fields[0]], &[1]) {
-                let option = self
-                    .fields("LayoutOptionAttr", row[2])
-                    .unwrap_or_else(|| panic!("layout option"));
-                spec = spec.with_option(&self.string(option[0]), self.decode_attribute(option[1]));
-            }
-            for row in self.indexed("AttrItem", &[0], &[fields[1]], &[1]) {
-                let fields = self
-                    .fields("LayoutEntryAttr", row[2])
-                    .unwrap_or_else(|| panic!("layout entry"));
-                let vars = self
-                    .decode_attributes(fields[1])
-                    .into_iter()
-                    .map(|value| {
-                        let Str(name) = value else {
-                            panic!("layout variable");
-                        };
-                        name.into_string()
-                    })
-                    .collect();
-                let preferred = self
-                    .indexed("AttrItem", &[0], &[fields[4]], &[1])
-                    .first()
-                    .map(|row| {
-                        let fields = self
-                            .fields("TypeArgumentAttr", row[2])
-                            .unwrap_or_else(|| panic!("layout preferred alignment"));
-                        self.terms().expression_argument(fields[0])
-                    });
-                spec = spec.with_entry(crate::layout::TypeEntry {
-                    key: self.terms().expression_id(fields[0]),
-                    vars,
-                    size: self.terms().expression_argument(fields[2]),
-                    abi: self.terms().expression_argument(fields[3]),
-                    preferred,
-                });
-            }
-            return LayoutSpec(Arc::new(spec));
-        }
-        panic!("an attribute constructor")
     }
-    fn attributes(&self, table: &str, id: u32) -> Vec<NamedAttribute> {
-        self.refresh_indexes();
-        self.indexed(table, &[0], &[self.int(id)], &[])
+    fn stored_attribute(&self, id: EggValue) -> AttributeValue {
+        (*attribute_store::get(self, id)).clone()
+    }
+    fn set_attribute(&self, kind: &str, id: u32, name: &str, value: AttributeValue) {
+        let handle = attribute_store::encode(self, value);
+        self.put(
+            "Attribute",
+            vec![self.text(kind), self.int(id), self.text(name)],
+            handle,
+        );
+    }
+    fn attributes(&self, kind: &str, id: u32) -> Vec<NamedAttribute> {
+        self.indexed("Attribute", &[0, 1], &[self.text(kind), self.int(id)], &[])
             .into_iter()
-            .map(|row| {
-                NamedAttribute::new(
-                    self.intern(&self.string(row[1])),
-                    self.decode_attribute(row[2]),
-                )
+            .map(|r| {
+                NamedAttribute::new(self.intern(&self.string(r[2])), self.stored_attribute(r[3]))
             })
             .collect()
     }
     pub(crate) fn op_attributes(&self, op: OpId) -> Vec<NamedAttribute> {
-        self.attributes("Attribute", op.raw())
+        self.attributes("operation", op.raw())
     }
-    pub(crate) fn block_attributes(&self, block: BlockId) -> Vec<NamedAttribute> {
-        self.attributes("BlockAttribute", block.raw())
+    pub(crate) fn block_attributes(&self, b: BlockId) -> Vec<NamedAttribute> {
+        self.attributes("block", b.raw())
     }
     pub(crate) fn op_attr_sym(&self, op: OpId, name: Sym) -> Option<AttributeValue> {
-        Some(
-            self.decode_attribute(
-                self.lookup("Attribute", (i64::from(op.raw()), self.resolve(name)))?,
-            ),
+        self.lookup(
+            "Attribute",
+            ("operation", i64::from(op.raw()), self.resolve(name)),
         )
+        .map(|v| self.stored_attribute(v))
     }
-    pub(crate) fn block_attr(&self, block: BlockId, name: &str) -> Option<AttributeValue> {
-        Some(self.decode_attribute(self.lookup("BlockAttribute", (i64::from(block.raw()), name))?))
+    pub(crate) fn block_attr(&self, b: BlockId, name: &str) -> Option<AttributeValue> {
+        self.lookup("Attribute", ("block", i64::from(b.raw()), name))
+            .map(|v| self.stored_attribute(v))
     }
-
     pub fn with_attr<R>(
         &self,
         op: OpId,
         name: &str,
         read: impl FnOnce(&AttributeValue) -> R,
     ) -> Option<R> {
-        Some(read(&self.decode_attribute(
-            self.lookup("Attribute", (i64::from(op.raw()), name))?,
-        )))
+        let id = self.lookup("Attribute", ("operation", i64::from(op.raw()), name))?;
+        let value = attribute_store::get(self, id);
+        Some(read(&value))
     }
-    pub(crate) fn set_block_attr(&self, block: BlockId, name: &str, value: AttributeValue) {
-        self.put(
-            "BlockAttribute",
-            vec![self.int(block.raw()), self.text(name)],
-            self.encode_attribute(&value),
-        );
+    pub(crate) fn set_block_attr(&self, b: BlockId, name: &str, value: AttributeValue) {
+        self.set_attribute("block", b.raw(), name, value);
     }
     pub fn set_op_attributes(&self, op: OpId, attributes: Vec<NamedAttribute>) {
-        for row in self.indexed("Attribute", &[0], &[self.int(op.raw())], &[]) {
-            self.delete("Attribute", row[..2].to_vec());
-        }
-        for attribute in attributes {
-            self.put(
-                "Attribute",
-                vec![self.int(op.raw()), self.text(self.resolve(attribute.name))],
-                self.encode_attribute(&attribute.value),
-            );
+        self.erase_by(
+            "Attribute",
+            &[0, 1],
+            &[self.text("operation"), self.int(op.raw())],
+        );
+        for attr in attributes {
+            self.set_attribute("operation", op.raw(), &self.resolve(attr.name), attr.value);
         }
         self.normalize_op(op);
     }
     pub fn create_value(&self, ty: TypeId, defining_op: Option<OpId>) -> Value {
         let id = ValueId::from_number(self.mint());
-        self.put(
-            "ValueType",
-            vec![self.int(id.number())],
-            self.terms().expression(ty),
-        );
+        let mut row = ValueRow {
+            id: id.number(),
+            ty: i64::from(ty.number()),
+            definition: "none".into(),
+            owner: -1,
+            slot: -1,
+            declared: -1,
+        };
         if let Some(op) = defining_op {
-            self.define_value(id, "ResultDef", op.raw(), self.op_results(op).len());
+            row.definition = "result".into();
+            row.owner = i64::from(op.raw());
+            row.slot = self.op_results(op).len() as i64;
         }
+        row.write(self);
         Value::new(id, ty, defining_op)
     }
-    fn define_value(&self, value: ValueId, constructor: &str, owner: u32, slot: usize) {
-        let definition = self.construct(constructor, vec![self.int(owner), self.int(slot as i64)]);
-        self.put(
-            "ValueDefinition",
-            vec![self.int(value.number())],
-            definition,
-        );
-        if constructor != "ResultDef" {
-            let ty = self
-                .lookup("ValueType", i64::from(value.number()))
-                .unwrap_or_else(|| panic!("parameter type"));
-            self.put("DeclaredType", vec![self.int(value.number())], ty);
-        }
+    fn define_value(&self, value: ValueId, definition: Defines, slot: usize) {
+        let (kind, owner) = definition.key();
+        self.edit_record::<ValueRow>(value.number(), |r| {
+            r.definition = kind.into();
+            r.owner = i64::from(owner);
+            r.slot = slot as i64;
+            if kind != "result" {
+                r.declared = r.ty;
+            }
+        });
+    }
+    fn detach_value(&self, id: ValueId) {
+        self.edit_record::<ValueRow>(id.number(), |r| {
+            r.definition = "none".into();
+            r.owner = -1;
+            r.slot = -1;
+        });
     }
     pub fn add_operation(
         &self,
@@ -1545,64 +1052,50 @@ impl Context {
     ) -> OpHandle {
         let id = OpId::new(self.mint());
         self.0.constructing.set(Some(id));
-        let (dialect, name) = self.registry().op_names[op.name.index()].identity;
-        let kind = format!("{dialect}.{name}");
-        self.put("OpKind", vec![self.int(id.raw())], self.text(kind.clone()));
-        let boundary = match (dialect, name) {
-            ("builtin", "module") => "ModuleBoundary",
-            ("func", "func" | "lambda") => "FunctionBoundary",
-            _ => "OrdinaryBoundary",
-        };
-        let boundary = self.construct(boundary, vec![]);
-        self.put("KindBoundary", vec![self.text(kind)], boundary);
-        self.insert(insertion, id);
-        if let Some(location) = self.0.origin.get() {
-            self.put("OpLocation", vec![self.int(id.raw())], self.int(location.0));
+        let (dialect, name) = self.registry().op_names[op.name.index()];
+        OperationRow {
+            id: id.raw(),
+            kind: format!("{dialect}.{name}"),
+            placement: "root".into(),
+            container: -1,
+            position: -1,
+            display: -1,
+            location: self.0.origin.get().map_or(-1, |s| i64::from(s.0)),
         }
+        .write(self);
         self.set_op_operands(id, op.operands);
-        for (slot, value) in op.results.into_iter().enumerate() {
-            self.define_value(value, "ResultDef", id.raw(), slot);
+        for (slot, v) in op.results.into_iter().enumerate() {
+            self.define_value(v, Defines::Result(id), slot);
         }
-        for (slot, region) in op.regions.into_iter().enumerate() {
-            self.put(
-                "RegionOwner",
-                vec![self.int(region.raw())],
-                self.int(id.raw()),
-            );
-            self.put(
-                "RegionSlot",
-                vec![self.int(region.raw())],
-                self.int(slot as i64),
-            );
+        for (slot, r) in op.regions.into_iter().enumerate() {
+            self.edit_record::<RegionRow>(r.raw(), |r| {
+                r.owner = i64::from(id.raw());
+                r.slot = slot as i64;
+            });
         }
         self.set_op_attributes(id, op.attributes);
         self.0.constructing.set(None);
+        self.insert(insertion, id);
         self.normalize_op(id);
         self.get_op(id)
     }
     pub fn op_location(&self, op: OpId) -> Option<crate::parse::Span> {
-        Some(crate::parse::Span(
-            self.integer(self.lookup("OpLocation", i64::from(op.raw()))?) as u32,
-        ))
+        u32::try_from(self.record::<OperationRow>(op.raw())?.location)
+            .ok()
+            .map(crate::parse::Span)
     }
     pub fn set_origin(&self, location: Option<crate::parse::Span>) -> Option<crate::parse::Span> {
         self.0.origin.replace(location)
     }
     pub fn retype_value(&self, value: ValueId, ty: TypeId) {
-        self.put(
-            "ValueType",
-            vec![self.int(value.number())],
-            self.terms().expression(ty),
-        );
+        self.edit_record::<ValueRow>(value.number(), |r| r.ty = i64::from(ty.number()));
     }
     pub fn retype_block_argument(&self, block: BlockId, index: usize, ty: TypeId) {
         if let Some(value) = self.block_arguments(block).get(index) {
-            self.retype_value(value.id(), ty);
-            self.put(
-                "DeclaredType",
-                vec![self.int(value.id().number())],
-                self.terms().expression(ty),
-            );
+            self.edit_record::<ValueRow>(value.id().number(), |r| {
+                r.ty = i64::from(ty.number());
+                r.declared = r.ty;
+            });
         }
     }
     pub fn set_op_operand(&self, op: OpId, index: usize, value: ValueId) {
@@ -1626,9 +1119,9 @@ impl Context {
     }
     pub fn set_op_result(&self, op: OpId, index: usize, value: ValueId) {
         if let Some(old) = self.op_results(op).get(index) {
-            self.delete("ValueDefinition", vec![self.int(old.number())]);
+            self.detach_value(*old);
         }
-        self.define_value(value, "ResultDef", op.raw(), index);
+        self.define_value(value, Defines::Result(op), index);
     }
     pub fn replace_value_uses(&self, old: ValueId, new: ValueId) {
         if old == new {
@@ -1640,11 +1133,14 @@ impl Context {
     }
     pub fn create_region(&self) -> RegionHandle {
         let id = RegionId::new(self.mint());
-        self.put(
-            "Mode",
-            vec![self.int(id.raw())],
-            self.construct("CFG", vec![]),
-        );
+        RegionRow {
+            id: id.raw(),
+            mode: "cfg".into(),
+            owner: -1,
+            slot: -1,
+            entry: -1,
+        }
+        .write(self);
         self.get_region(id)
     }
     pub fn create_nodes_region(
@@ -1664,21 +1160,15 @@ impl Context {
         ops: Vec<OpId>,
         results: Vec<ValueId>,
     ) {
-        self.put(
-            "Mode",
-            vec![self.int(region.raw())],
-            self.construct("Graph", vec![]),
-        );
+        self.edit_record::<RegionRow>(region.raw(), |r| r.mode = "graph".into());
         for (slot, value) in ports.into_iter().enumerate() {
-            self.define_value(value.id(), "RegionParamDef", region.raw(), slot);
+            self.define_value(value.id(), Defines::RegionPort(region), slot);
         }
         self.set_region_results(region, results);
         for op in ops {
             self.insert(crate::InsertionPoint::Region(region), op);
         }
     }
-    /// The operation's current placement. For an ordered operation, inserting
-    /// here places a new operation immediately before it.
     pub fn insertion_point(&self, op: OpId) -> crate::InsertionPoint {
         use crate::InsertionPoint;
         if let Some(region) = self.parent_nodes_region(op) {
@@ -1697,21 +1187,13 @@ impl Context {
         }
     }
 
-    /// Place an operation at `insertion`, replacing its previous placement.
-    /// Block positions refer to the sequence before moving the operation.
     pub fn insert(&self, insertion: crate::InsertionPoint, op: OpId) {
         use crate::InsertionPoint;
-        let placement = match insertion {
-            InsertionPoint::Root => self.construct("Root", vec![]),
+        match insertion {
+            InsertionPoint::Root => self.place(op, Placement::Root),
             InsertionPoint::Region(region) => {
-                debug_assert!(self.region_is_nodes(region));
-                let position = self.region_ops(region).len();
-                self.put(
-                    "GraphLayout",
-                    vec![self.int(op.raw())],
-                    self.int(position as i64),
-                );
-                self.construct("InGraph", vec![self.int(region.raw())])
+                let (position, _) = self.member_tail("graph", region.raw());
+                self.place(op, Placement::Graph(region, position));
             }
             InsertionPoint::Block {
                 block,
@@ -1724,23 +1206,27 @@ impl Context {
                 }
                 ops.insert(position, op);
                 self.set_block_ops(block, ops);
-                return;
             }
-        };
-        self.put("OpPlacement", vec![self.int(op.raw())], placement);
+        }
+    }
+    fn place(&self, op: OpId, placement: Placement) {
+        self.edit_record::<OperationRow>(op.raw(), |row| {
+            let (kind, container, position) = match placement {
+                Placement::Root => ("root", -1, -1),
+                Placement::Block(block, slot) => ("block", i64::from(block.raw()), slot as i64),
+                Placement::Graph(region, display) => {
+                    row.display = display as i64;
+                    ("graph", i64::from(region.raw()), -1)
+                }
+            };
+            row.placement = kind.into();
+            row.container = container;
+            row.position = position;
+        });
     }
     pub fn set_region_ops(&self, region: RegionId, ops: Vec<OpId>) {
         for (position, op) in ops.into_iter().enumerate() {
-            self.put(
-                "OpPlacement",
-                vec![self.int(op.raw())],
-                self.construct("InGraph", vec![self.int(region.raw())]),
-            );
-            self.put(
-                "GraphLayout",
-                vec![self.int(op.raw())],
-                self.int(position as i64),
-            );
+            self.place(op, Placement::Graph(region, position));
         }
     }
     pub fn set_region_results(&self, region: RegionId, results: Vec<ValueId>) {
@@ -1760,40 +1246,43 @@ impl Context {
     }
     pub fn create_block(&self, arguments: Vec<Value>) -> BlockHandle {
         let id = BlockId::new(self.mint());
-        self.put("BlockLayout", vec![self.int(id.raw())], self.int(0_i64));
+        BlockRow {
+            id: id.raw(),
+            region: -1,
+            layout: 0,
+        }
+        .write(self);
         for (slot, value) in arguments.into_iter().enumerate() {
-            self.define_value(value.id(), "BlockParamDef", id.raw(), slot);
+            self.define_value(value.id(), Defines::BlockArgument(id), slot);
         }
         self.get_block(id)
     }
     pub(crate) fn add_block_to_region(&self, region: RegionId, block: BlockId) {
         let slot = self.region_blocks(region).len();
-        self.put(
-            "BlockRegion",
-            vec![self.int(block.raw())],
-            self.int(region.raw()),
-        );
-        self.put(
-            "BlockLayout",
-            vec![self.int(block.raw())],
-            self.int(slot as i64),
-        );
+        self.edit_record::<BlockRow>(block.raw(), |r| {
+            r.region = i64::from(region.raw());
+            r.layout = slot as i64;
+        });
         if slot == 0 {
-            self.put("Entry", vec![self.int(region.raw())], self.int(block.raw()));
+            self.edit_record::<RegionRow>(region.raw(), |r| r.entry = i64::from(block.raw()));
         }
     }
     pub(crate) fn remove_block_from_region(&self, region: RegionId, block: BlockId) -> bool {
         if self.parent_region(block) != Some(region) {
             return false;
         }
-        self.delete("BlockRegion", vec![self.int(block.raw())]);
-        if self.lookup("Entry", i64::from(region.raw())) == Some(self.int(block.raw())) {
-            match self.region_blocks(region).first() {
-                Some(entry) => {
-                    self.put("Entry", vec![self.int(region.raw())], self.int(entry.raw()))
-                }
-                None => self.delete("Entry", vec![self.int(region.raw())]),
-            }
+        self.edit_record::<BlockRow>(block.raw(), |r| r.region = -1);
+        if self
+            .record::<RegionRow>(region.raw())
+            .expect("live region")
+            .entry
+            == i64::from(block.raw())
+        {
+            let next = self
+                .region_blocks(region)
+                .first()
+                .map_or(-1, |b| i64::from(b.raw()));
+            self.edit_record::<RegionRow>(region.raw(), |r| r.entry = next);
         }
         true
     }
@@ -1812,63 +1301,50 @@ impl Context {
             return Err("block order must be a permutation preserving the entry".into());
         }
         for (slot, block) in blocks.into_iter().enumerate() {
-            self.put(
-                "BlockLayout",
-                vec![self.int(block.raw())],
-                self.int(slot as i64),
-            );
+            self.edit_record::<BlockRow>(block.raw(), |r| r.layout = slot as i64);
         }
         Ok(())
     }
     pub(crate) fn set_block_ops(&self, block: BlockId, ops: Vec<OpId>) {
         for (slot, op) in ops.into_iter().enumerate() {
-            self.put(
-                "OpPlacement",
-                vec![self.int(op.raw())],
-                self.construct(
-                    "InBlock",
-                    vec![self.int(block.raw()), self.int(slot as i64)],
-                ),
-            );
+            self.place(op, Placement::Block(block, slot));
+        }
+    }
+    pub(crate) fn insert_op(&self, block: BlockId, index: usize, op: OpId) {
+        let mut ops = self.block_ops(block);
+        ops.insert(index, op);
+        self.set_block_ops(block, ops);
+    }
+    pub(crate) fn append_op(&self, block: BlockId, op: OpId) {
+        let (next, last) = self.member_tail("block", block.raw());
+        if last.is_none_or(|position| position == next as i64 - 1) {
+            self.place(op, Placement::Block(block, next));
+        } else {
+            // An earlier removal can leave a gap in the block order.
+            self.insert_op(block, next, op);
         }
     }
     pub(crate) fn remove_op_from_block(&self, block: BlockId, op: OpId) -> bool {
         if self.parent_block(op) != Some(block) {
             return false;
         }
-        self.put(
-            "OpPlacement",
-            vec![self.int(op.raw())],
-            self.construct("Root", vec![]),
-        );
+        self.place(op, Placement::Root);
         true
     }
     pub(crate) fn replace_op_in_block(&self, block: BlockId, old: OpId, new: OpId) -> bool {
-        let Some(fields) = self.placement(old, "InBlock") else {
+        let Some(row) = self.record::<OperationRow>(old.raw()) else {
             return false;
         };
-        if self.integer(fields[0]) != i64::from(block.raw()) {
+        if row.placement != "block" || row.container != i64::from(block.raw()) {
             return false;
         }
-        self.put(
-            "OpPlacement",
-            vec![self.int(new.raw())],
-            self.construct("InBlock", fields),
-        );
-        self.put(
-            "OpPlacement",
-            vec![self.int(old.raw())],
-            self.construct("Root", vec![]),
-        );
+        self.place(new, Placement::Block(block, row.position as usize));
+        self.place(old, Placement::Root);
         true
     }
     pub fn remove_from_region(&self, region: RegionId, op: OpId) {
         if self.parent_nodes_region(op) == Some(region) {
-            self.put(
-                "OpPlacement",
-                vec![self.int(op.raw())],
-                self.construct("Root", vec![]),
-            );
+            self.place(op, Placement::Root);
         }
     }
     pub fn append_block_argument(&self, block: BlockId, ty: TypeId) -> Value {
@@ -1879,27 +1355,27 @@ impl Context {
     pub fn adopt_block_argument(&self, block: BlockId, value: ValueId) {
         self.define_value(
             value,
-            "BlockParamDef",
-            block.raw(),
+            Defines::BlockArgument(block),
             self.block_arguments(block).len(),
         );
     }
     pub fn remove_block_argument(&self, block: BlockId, index: usize) {
         let mut values = self.block_arguments(block);
         let removed = values.remove(index);
-        self.delete("ValueDefinition", vec![self.int(removed.id().number())]);
+        self.detach_value(removed.id());
         for (slot, value) in values.into_iter().enumerate() {
-            self.define_value(value.id(), "BlockParamDef", block.raw(), slot);
+            self.define_value(value.id(), Defines::BlockArgument(block), slot);
         }
     }
     fn edit_segments(&self, op: OpId, edit: impl FnOnce(&mut [AttributeValue])) {
         let sym = self.registry().segment_sizes;
         if let Some(AttributeValue::Array(mut values)) = self.op_attr_sym(op, sym) {
             edit(&mut values);
-            self.put(
-                "Attribute",
-                vec![self.int(op.raw()), self.text(self.resolve(sym))],
-                self.encode_attribute(&AttributeValue::Array(values)),
+            self.set_attribute(
+                "operation",
+                op.raw(),
+                &self.resolve(sym),
+                AttributeValue::Array(values),
             );
         }
     }
@@ -1967,10 +1443,10 @@ impl Context {
     }
     fn set_results(&self, op: OpId, values: &[ValueId]) {
         for old in self.op_results(op) {
-            self.delete("ValueDefinition", vec![self.int(old.number())]);
+            self.detach_value(old);
         }
         for (slot, value) in values.iter().enumerate() {
-            self.define_value(*value, "ResultDef", op.raw(), slot);
+            self.define_value(*value, Defines::Result(op), slot);
         }
     }
     pub(crate) fn insert_result_at(&self, op: OpId, index: usize, value: ValueId) {
@@ -1986,17 +1462,18 @@ impl Context {
     pub(crate) fn remove_region_port(&self, region: RegionId, index: usize) {
         let mut values = self.region_ports(region);
         let removed = values.remove(index);
-        self.delete("ValueDefinition", vec![self.int(removed.id().number())]);
+        self.detach_value(removed.id());
         for (slot, value) in values.into_iter().enumerate() {
-            self.define_value(value.id(), "RegionParamDef", region.raw(), slot);
+            self.define_value(value.id(), Defines::RegionPort(region), slot);
         }
     }
     pub(crate) fn insert_region_port(&self, region: RegionId, index: usize, value: Value) {
-        let mut values = self.region_ports(region);
-        values.insert(index, value);
-        for (slot, value) in values.into_iter().enumerate() {
-            self.define_value(value.id(), "RegionParamDef", region.raw(), slot);
+        let owner = Defines::RegionPort(region);
+        let ports: Vec<_> = self.definitions(owner).collect();
+        for (slot, &port) in ports[index..].iter().enumerate().rev() {
+            self.define_value(port, owner, index + slot + 1);
         }
+        self.define_value(value.id(), owner, index);
     }
     pub(crate) fn insert_region_result(&self, region: RegionId, index: usize, value: ValueId) {
         let mut values = self.region_results(region);
@@ -2007,74 +1484,50 @@ impl Context {
         self.remove_operation_except(op, &[]);
     }
     pub(crate) fn remove_operation_except(&self, root: OpId, keep: &[ValueId]) {
-        self.subtree_ops(&[root]);
-        let owned = self.indexed("OwnedEntity", &[0], &[self.int(root.raw())], &[]);
-        for row in owned {
-            let category = self.string(row[1]);
-            let id = row[2];
-            let number = self.integer(id) as u32;
-            match category.as_str() {
-                "op" => {
-                    for table in [
-                        "Operand",
+        let ops = self.subtree_ops(&[root]);
+        for op in ops {
+            for r in self.op_regions(op) {
+                for b in self.region_blocks(r) {
+                    for v in self.definitions(Defines::BlockArgument(b)) {
+                        if !keep.contains(&v) {
+                            self.erase_by("Value", &[0], &[self.int(v.number())]);
+                        }
+                    }
+                    self.erase_by(
                         "Attribute",
-                        "Successor",
-                        "SuccessorArg",
-                        "GammaArm",
-                    ] {
-                        for row in self.indexed(table, &[0], &[id], &[]) {
-                            let arity = self
-                                .engine()
-                                .get_function(table)
-                                .unwrap_or_else(|| panic!("IR table"))
-                                .func_type()
-                                .input
-                                .len();
-                            self.delete(table, row[..arity].to_vec());
-                        }
-                    }
-                    for table in [
-                        "OpKind",
-                        "OpPlacement",
-                        "OpLocation",
-                        "GraphLayout",
-                        "Gamma",
-                        "Theta",
-                        "Scope",
-                        "SelectedScope",
-                        "GammaPredicate",
-                        "GammaDefaultArm",
-                        "ThetaBody",
-                        "ThetaPredicate",
-                        "ThetaContinueOn",
-                    ] {
-                        self.delete(table, vec![id]);
+                        &[0, 1],
+                        &[self.text("block"), self.int(b.raw())],
+                    );
+                    self.erase_by("Block", &[0], &[self.int(b.raw())]);
+                }
+                for v in self.definitions(Defines::RegionPort(r)) {
+                    if !keep.contains(&v) {
+                        self.erase_by("Value", &[0], &[self.int(v.number())]);
                     }
                 }
-                "value" if !keep.contains(&ValueId::from_number(number)) => {
-                    for table in ["ValueType", "ValueDefinition", "DeclaredType"] {
-                        self.delete(table, vec![id]);
-                    }
+                for table in ["Yield", "Binding", "Region"] {
+                    self.erase_by(table, &[0], &[self.int(r.raw())]);
                 }
-                "block" => {
-                    for row in self.indexed("BlockAttribute", &[0], &[id], &[]) {
-                        self.delete("BlockAttribute", row[..2].to_vec());
-                    }
-                    for table in ["BlockRegion", "BlockLayout"] {
-                        self.delete(table, vec![id]);
-                    }
+            }
+            for v in self.definitions(Defines::Result(op)) {
+                if !keep.contains(&v) {
+                    self.erase_by("Value", &[0], &[self.int(v.number())]);
                 }
-                "region" => {
-                    for table in ["Yield", "EntryBinding", "ExitBinding", "FeedbackBinding"] {
-                        for row in self.indexed(table, &[0], &[id], &[]) {
-                            self.delete(table, row[..2].to_vec());
-                        }
-                    }
-                    for table in ["Mode", "RegionOwner", "RegionSlot", "Entry"] {
-                        self.delete(table, vec![id]);
-                    }
-                }
-                _ => {}
+            }
+            self.erase_by(
+                "Attribute",
+                &[0, 1],
+                &[self.text("operation"), self.int(op.raw())],
+            );
+            for table in [
+                "Operand",
+                "Successor",
+                "SuccessorArgument",
+                "Arm",
+                "Control",
+                "Operation",
+            ] {
+                self.erase_by(table, &[0], &[self.int(op.raw())]);
             }
         }
     }

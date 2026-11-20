@@ -387,6 +387,11 @@ fn register_bigint(db: &mut Database) {
     prim!(db, "max", [z, z] -> z, |a: BigInt, c: BigInt| Some(a.max(c)));
     prim!(db, "to-string", [z] -> s, |a: BigInt| Some(a.to_string()));
     prim!(db, "from-string", [s] -> z, |a: String| a.parse::<BigInt>().ok());
+    prim!(db, "fits-unsigned-hex", [s, z] -> b, |digits: String, width: BigInt| {
+        let n = u64::from_str_radix(&digits, 16).ok()?;
+        let required = BigInt::new(i64::from(u64::BITS - n.leading_zeros()));
+        Some(required <= width)
+    });
 }
 
 #[rustfmt::skip]

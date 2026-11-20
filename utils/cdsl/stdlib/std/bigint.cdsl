@@ -1,0 +1,5 @@
+pub let BigInt: Type;
+pub let add: (BigInt, BigInt) -> BigInt;
+pub let sub: (BigInt, BigInt) -> BigInt;
+pub let from_string: String -> BigInt;
+pub let ge: (BigInt, BigInt) -> Bool;

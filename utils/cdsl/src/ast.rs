@@ -44,6 +44,11 @@ pub enum Declaration {
         public: bool,
         binding: Binding,
     },
+    /// A named operation interface whose contract is a record type.
+    Interface {
+        public: bool,
+        binding: Binding,
+    },
     Enum {
         public: bool,
         name: String,
@@ -195,6 +200,11 @@ pub enum OpField {
     Field {
         name: String,
         value: Expr,
+    },
+    /// An ordinary interfaces field after resolving its labels.
+    Interfaces {
+        receiver: String,
+        entries: Vec<(String, Path, Expr)>,
     },
 }
 

@@ -9,6 +9,7 @@ mod rebuild;
 mod schema;
 mod table;
 mod uf;
+mod unique;
 mod value;
 
 pub use base::{BaseValue, BaseValues, F64};

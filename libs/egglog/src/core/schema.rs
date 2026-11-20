@@ -268,6 +268,11 @@ pub enum Error {
         old: Value,
         new: Value,
     },
+    /// Two different relation rows have the same secondary key.
+    DuplicateKey {
+        table: String,
+        columns: Vec<usize>,
+    },
     /// No sort or table has this name.
     UnknownName(String),
     /// A row or key has the wrong number of columns.
@@ -333,6 +338,9 @@ impl fmt::Display for Error {
         match self {
             Self::Conflict { table, old, new } => {
                 write!(f, "merge of `{table}` rejects {old:?} and {new:?}")
+            }
+            Self::DuplicateKey { table, columns } => {
+                write!(f, "duplicate key on columns {columns:?} of `{table}`")
             }
             Self::UnknownName(name) => write!(f, "no sort or table named `{name}`"),
             Self::Arity {

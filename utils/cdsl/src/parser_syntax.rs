@@ -74,6 +74,10 @@ pub(crate) enum Declaration {
         public: bool,
         binding: Binding,
     },
+    Interface {
+        public: bool,
+        binding: Binding,
+    },
     Enum {
         public: bool,
         name: String,
@@ -230,7 +234,7 @@ impl Children for Declaration {
                 public.children(into);
                 name.children(into);
             }
-            Self::Let { public, binding } => {
+            Self::Let { public, binding } | Self::Interface { public, binding } => {
                 public.children(into);
                 binding.children(into);
             }

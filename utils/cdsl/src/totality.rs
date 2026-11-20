@@ -6,7 +6,9 @@ pub fn check(program: &Program) -> Result<(), Error> {
     let mut definitions = BTreeMap::new();
     for module in program.all_modules() {
         for declaration in &module.ast.declarations {
-            if let Declaration::Let { binding, .. } = &declaration.value {
+            if let Declaration::Let { binding, .. } | Declaration::Interface { binding, .. } =
+                &declaration.value
+            {
                 let mut path = module.path.clone();
                 path.extend(binding.path.clone());
                 definitions.insert(path, binding);
@@ -275,8 +277,14 @@ fn children(expr: &Expr, f: &mut impl FnMut(&Expr) -> Result<(), Error>) -> Resu
         }
         Expression::Op(fields) => {
             for field in fields {
-                if let OpField::Field { value, .. } = &field.value {
-                    f(value)?;
+                match &field.value {
+                    OpField::Field { value, .. } => f(value)?,
+                    OpField::Interfaces { entries, .. } => {
+                        for (_, _, methods) in entries {
+                            f(methods)?;
+                        }
+                    }
+                    OpField::Signature { .. } => {}
                 }
             }
         }
@@ -366,6 +374,22 @@ fn free(expr: &Expr, shadowed: &BTreeSet<String>, paths: &mut BTreeSet<Path>) ->
             free_block(&function.body, &scope, paths)
         }
         Expression::Block(body) => free_block(body, shadowed, paths),
+        Expression::Op(fields) => {
+            for field in fields {
+                match &field.value {
+                    OpField::Interfaces { receiver, entries } => {
+                        let mut scope = shadowed.clone();
+                        scope.insert(receiver.clone());
+                        for (_, _, methods) in entries {
+                            free(methods, &scope, paths)?;
+                        }
+                    }
+                    OpField::Field { value, .. } => free(value, shadowed, paths)?,
+                    OpField::Signature { .. } => {}
+                }
+            }
+            Ok(())
+        }
         Expression::Ir { bindings, value } => free_block(
             &Block {
                 bindings: bindings.clone(),

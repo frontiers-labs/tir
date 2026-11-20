@@ -10,6 +10,11 @@ use crate::FxBuildHasher;
 pub struct Sym(u32);
 
 impl Sym {
+    /// Recover a handle stored as a numeric symbol ID.
+    pub fn from_number(number: u32) -> Self {
+        Self(number)
+    }
+
     /// Position in the interner's id space: ids are handed out in intern order.
     pub fn index(self) -> usize {
         self.0 as usize

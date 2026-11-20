@@ -701,6 +701,7 @@ impl Checker {
                 lookup_type(types, &self.types, path)
                     .flatten()
                     .is_some_and(|ty| self.type_denotation(&ty))
+                    || self.interfaces.contains(path)
                     || definitions.get(path).is_some_and(|b| {
                         b.ty.as_ref().is_some_and(
                         |t| matches!(&t.value,Expression::Path(p) if p==&vec!["Type".to_owned()]),
@@ -710,6 +711,7 @@ impl Checker {
             Expression::Generic { value, .. } => {
                 matches!(&value.value,Expression::Path(path) if
                     (self.arities.contains_key(path) && !self.explicit.contains_key(path))
+                    || self.interfaces.contains(path)
                     || self.axioms.get(path).is_some_and(|(_, annotation)| type_family(annotation))
                     || definitions.get(path).is_some_and(|binding| matches!(binding.ty.as_ref().map(|e| &e.value), Some(Expression::Path(name)) if name == &vec!["Type".to_owned()])))
             }

@@ -231,6 +231,12 @@ impl Rules {
         self.compile_with(db, |_, _| None, false)
     }
 
+    /// Encodes all schema declarations without activating any rules.
+    /// Loading the resulting bytes binds existing tables and installs missing ones.
+    pub fn compile_schema(db: &Database) -> Result<Program, Error> {
+        Self::new().compile_with_schema(db)
+    }
+
     pub(crate) fn compile_with_schema(&self, db: &Database) -> Result<Program, Error> {
         self.compile_with(db, |_, _| None, true)
     }
@@ -454,6 +460,40 @@ fn rewrite(lhs: Expr, rhs: Expr) -> Rewrite {
 }
 
 impl Schedule {
+    pub(crate) fn execute(
+        &self,
+        run: &mut impl FnMut(&Schedule, &RunConfig) -> Result<crate::RunReport, Error>,
+    ) -> Result<crate::RunReport, Error> {
+        let mut report = crate::RunReport::default();
+        match self {
+            Self::Run(_, config) => return run(self, config),
+            Self::Repeat(_, times, schedule) => {
+                for _ in 0..*times {
+                    let iteration = schedule.execute(run)?;
+                    let stop = iteration.can_stop;
+                    report.union(iteration);
+                    if stop {
+                        break;
+                    }
+                }
+            }
+            Self::Saturate(_, schedule) => loop {
+                let iteration = schedule.execute(run)?;
+                let updated = iteration.updated;
+                report.union(iteration);
+                if !updated {
+                    break;
+                }
+            },
+            Self::Sequence(_, schedules) => {
+                for schedule in schedules {
+                    report.union(schedule.execute(run)?);
+                }
+            }
+        }
+        Ok(report)
+    }
+
     /// One iteration of a ruleset.
     pub fn run(ruleset: &str) -> Self {
         let config = RunConfig {

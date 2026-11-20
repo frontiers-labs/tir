@@ -211,6 +211,24 @@ fn replace(e: &Expr, values: &Values, next: &mut usize) -> Expr {
                             name: name.clone(),
                             value: replace(value, values, next),
                         },
+                        OpField::Interfaces { receiver, entries } => {
+                            let mut scope = values.clone();
+                            let renamed = vec![format!("\0cdsl{}", *next)];
+                            *next += 1;
+                            scope.insert(
+                                vec![receiver.clone()],
+                                replacement(&renamed, &field.range),
+                            );
+                            OpField::Interfaces {
+                                receiver: renamed[0].clone(),
+                                entries: entries
+                                    .iter()
+                                    .map(|(name, path, methods)| {
+                                        (name.clone(), path.clone(), replace(methods, &scope, next))
+                                    })
+                                    .collect(),
+                            }
+                        }
                         OpField::Signature {
                             parameters,
                             result,
@@ -279,11 +297,19 @@ pub fn head(
     constructors: &BTreeSet<Path>,
 ) -> Result<Expr, Error> {
     match &expr.value {
-        Expression::Op(fields) => head(
-            &crate::infer::sugar::operation_record(fields, expr.range.clone())?,
-            definitions,
-            constructors,
-        ),
+        Expression::Op(fields) => {
+            if fields.iter().any(|field| {
+                matches!(&field.value,
+                OpField::Interfaces { receiver, .. } if receiver == "self")
+            }) {
+                return head(
+                    &substitute(expr, &Values::new())?,
+                    definitions,
+                    constructors,
+                );
+            }
+            crate::infer::sugar::operation_record(fields, expr.range.clone())
+        }
         Expression::Ir { bindings, value } => head(
             &Node {
                 value: Expression::Block(Block {

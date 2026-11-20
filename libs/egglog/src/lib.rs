@@ -408,6 +408,7 @@ pub struct EGraph {
     pub(crate) db: Database,
     pub(crate) rules: Rules,
     pub(crate) program: Program,
+    attached: Vec<Program>,
     // The rule count the program was planned at, and whether it was loaded.
     planned: usize,
     loaded: bool,
@@ -458,6 +459,7 @@ impl EGraph {
             db,
             rules: Rules::new(),
             program,
+            attached: Vec::new(),
             planned: usize::MAX,
             loaded: false,
             planning_time: None,
@@ -925,10 +927,16 @@ impl EGraph {
     }
 
     pub(crate) fn has_ruleset(&self, name: &str) -> bool {
-        self.rules.has_ruleset(name) || (self.loaded && self.program.rulesets().any(|r| r == name))
+        self.rules.has_ruleset(name)
+            || (self.loaded && self.program.rulesets().any(|r| r == name))
+            || self
+                .attached
+                .iter()
+                .any(|p| p.rulesets().any(|r| r == name))
     }
 
     fn add_rule(&mut self, rule: Rule) -> Result<(), Error> {
+        self.check_attached_rulesets(std::iter::once(rule.ruleset.as_str()))?;
         if self.loaded {
             return Err(Error::Unsupported(
                 "a loaded program takes no new rules".to_owned(),
@@ -1120,12 +1128,34 @@ impl EGraph {
         Ok(values.chunks(vars.len()).map(row).collect())
     }
 
-    pub(crate) fn run_schedule(&mut self, schedule: &Schedule) -> Result<RunReport, Error> {
+    /// Runs a schedule across attached programs and source rules on this database.
+    pub fn run_schedule(&mut self, schedule: &Schedule) -> Result<RunReport, Error> {
         self.check_rulesets(schedule)?;
         self.time_compilation(|eg| eg.rules.plan_schedule(&eg.db, schedule))?;
         self.plan()?;
         self.program.set_naive(!self.seminaive);
-        let report = self.program.run(&mut self.db, schedule, &[])?;
+        let report = if self.attached.is_empty() {
+            self.program.run(&mut self.db, schedule, &[])?
+        } else {
+            self.db.rebuild()?;
+            schedule.execute(&mut |schedule, config| {
+                if let Some(program) = self
+                    .attached
+                    .iter_mut()
+                    .find(|p| p.rulesets().any(|r| r == config.ruleset))
+                {
+                    if let Some(facts) = &config.until
+                        && self.program.matches(&mut self.db, &vm::until_name(facts))?
+                    {
+                        return Ok(RunReport::default());
+                    }
+                    program.set_naive(!self.seminaive);
+                    let iteration = program.step(&mut self.db, &[&config.ruleset], true)?;
+                    return Ok(RunReport::of(&config.ruleset, iteration, self.report_level));
+                }
+                self.program.run(&mut self.db, schedule, &[])
+            })?
+        };
         self.overall_run_report.union(report.clone());
         Ok(report)
     }
@@ -1161,15 +1191,26 @@ impl EGraph {
         if !self.has_ruleset(ruleset) {
             return Err(Error::NoSuchRuleset(ruleset.to_owned(), span!()));
         }
+        if let Some(program) = self
+            .attached
+            .iter_mut()
+            .find(|p| p.rulesets().any(|r| r == ruleset))
+        {
+            program.set_naive(!self.seminaive);
+            let iteration = program.step(&mut self.db, &[ruleset], true)?;
+            return Ok(RunReport::of(ruleset, iteration, self.report_level));
+        }
         self.plan()?;
         self.program.set_naive(!self.seminaive);
         let iteration = self.program.step(&mut self.db, &[ruleset], true)?;
         Ok(RunReport::of(ruleset, iteration, self.report_level))
     }
 
-    pub fn set_ruleset_mode(&mut self, ruleset: &str, mode: Mode) {
+    pub fn set_ruleset_mode(&mut self, ruleset: &str, mode: Mode) -> Result<(), Error> {
+        self.check_attached_rulesets(std::iter::once(ruleset))?;
         self.rules.set_mode(ruleset, mode);
         self.planned = usize::MAX;
+        Ok(())
     }
 
     /// The program file of the rules, as [`Program::to_bytes`] writes it.
@@ -1189,9 +1230,52 @@ impl EGraph {
         self.loaded
     }
 
+    /// Attaches an independently compiled program to the shared database.
+    /// Its rulesets must have distinct names from existing programs and rules.
+    pub fn attach_program(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        let (file, _) = vm::decode(bytes).map_err(Error::Load)?;
+        for ruleset in &file.rulesets {
+            if self.has_ruleset(&ruleset.name) {
+                return Err(Error::Type(
+                    span!(),
+                    format!("ruleset `{}` already exists", ruleset.name),
+                ));
+            }
+        }
+        let mut program = Program::from_bytes(bytes, &mut self.db).map_err(Error::Load)?;
+        program.set_report_level(self.report_level);
+        self.attached.push(program);
+        self.sync_sorts();
+        Ok(())
+    }
+
+    fn check_attached_rulesets<'a>(
+        &self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), Error> {
+        for name in names {
+            if self
+                .attached
+                .iter()
+                .any(|p| p.rulesets().any(|r| r == name))
+            {
+                return Err(Error::Unsupported(format!(
+                    "ruleset `{name}` belongs to an attached program"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Replaces the executing program with source rules over the same database.
     /// Existing rows and schema remain intact; rule iteration history resets.
     pub fn set_rules(&mut self, rules: Rules) -> Result<(), Error> {
+        self.check_attached_rulesets(
+            self.attached
+                .iter()
+                .flat_map(|p| p.rulesets())
+                .filter(|name| rules.has_ruleset(name)),
+        )?;
         let mut program = rules.compile(&self.db)?;
         program.set_report_level(self.report_level);
         self.planned = rules.count();
@@ -1205,6 +1289,7 @@ impl EGraph {
     /// Callbacks of rust rules must be bound before.
     pub fn load_program(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let (file, _) = vm::decode(bytes).map_err(Error::Load)?;
+        self.check_attached_rulesets(file.rulesets.iter().map(|r| r.name.as_str()))?;
         for decl in file
             .sorts
             .iter()
@@ -1527,6 +1612,9 @@ impl EGraph {
     pub fn set_report_level(&mut self, level: ReportLevel) {
         self.report_level = level;
         self.program.set_report_level(level);
+        for program in &mut self.attached {
+            program.set_report_level(level);
+        }
     }
 
     /// Prints the size of every table to standard error.

@@ -56,7 +56,7 @@ pub struct ImplicitReg {
     pub role: AttributeRole,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RegisterAttr {
     /// A physical register the instruction names directly: an assembler input,
     /// a hardwired `x0`, the stack pointer in prologue code.

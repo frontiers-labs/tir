@@ -9,17 +9,24 @@ use super::fixtures;
 #[test]
 fn egglog_rules_update_context_attributes_and_survive_repeated_access() {
     let (context, module) = fixtures::parse("module { module_end }");
+    let value = tir::attributes::AttributeValue::Array(
+        vec![
+            tir::attributes::AttributeValue::Bool(true),
+            tir::attributes::AttributeValue::Bool(false),
+        ]
+        .into(),
+    );
+    context.set_op_attributes(module.id(), vec![context.named_attribute("seed", value)]);
     for source in [
         r#"
         (relation TagRequest (i64 String))
-        (rule ((TagRequest op tag))
-              ((set (Attribute op tag)
-                    (ListAttr (ACons (BoolAttr true) (ACons (BoolAttr false) (ANil)))))))
-        (rule ((= (OpKind op) "builtin.module")) ((TagRequest op "first")))
+        (rule ((TagRequest op tag) (= value (Attribute "operation" op "seed")))
+              ((set (Attribute "operation" op tag) value)))
+        (rule ((Operation op "builtin.module" place parent pos display loc)) ((TagRequest op "first")))
         (run 2)
         "#,
         r#"
-        (rule ((= (OpKind op) "builtin.module")) ((TagRequest op "second")))
+        (rule ((Operation op "builtin.module" place parent pos display loc)) ((TagRequest op "second")))
         (run 2)
         "#,
     ] {

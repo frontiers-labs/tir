@@ -336,7 +336,7 @@ pub(crate) struct SiblingReads {
 
 impl SiblingReads {
     pub(crate) fn of_region(context: &Context, region: RegionId) -> Self {
-        Self::sorted(context.sibling_reads(region, false))
+        Self::sorted(context.sibling_reads(region))
     }
 
     fn sorted(mut pairs: Vec<(OpId, OpId)>) -> Self {

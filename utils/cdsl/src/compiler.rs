@@ -93,6 +93,15 @@ impl Program {
 }
 
 pub fn compile_file(file: &Path) -> Result<Program, Error> {
+    finish(load_file(file)?)
+}
+
+pub(crate) fn check_file(file: &Path) -> Result<crate::CheckedProgram, Error> {
+    let program = resolve_package(load_file(file)?)?;
+    crate::infer::lower(&separate_embedded_std(program))
+}
+
+fn load_file(file: &Path) -> Result<Program, Error> {
     let root = file.parent().unwrap_or(Path::new("."));
     let mut program = Program {
         modules: Vec::new(),
@@ -108,7 +117,13 @@ pub fn compile_file(file: &Path) -> Result<Program, Error> {
         0,
         &mut BTreeSet::new(),
     )?;
-    finish(program)
+    Ok(program)
+}
+
+/// Compile standalone source through the shared parser, resolver and checker.
+pub fn compile_source(source: &str) -> Result<Program, Error> {
+    let file = Path::new("stdin.cdsl");
+    compile_single(parse_source(source, file)?, file)
 }
 
 /// Compile a workspace member's defs/lib.cdsl, located by its package name.
@@ -263,7 +278,13 @@ fn expand_inline_modules(program: &mut Program) {
     }
 }
 
-fn finish(mut program: Program) -> Result<Program, Error> {
+fn finish(program: Program) -> Result<Program, Error> {
+    let program = resolve_package(program)?;
+    crate::infer::check(&program)?;
+    Ok(separate_embedded_std(program))
+}
+
+fn resolve_package(mut program: Program) -> Result<Program, Error> {
     load_source(
         &mut program,
         "<embedded std>",
@@ -274,14 +295,17 @@ fn finish(mut program: Program) -> Result<Program, Error> {
     )?;
     expand_inline_modules(&mut program);
     resolve_names(&mut program, false)?;
-    crate::infer::check(&program)?;
+    Ok(program)
+}
+
+fn separate_embedded_std(mut program: Program) -> Program {
     let (modules, support) = program
         .modules
         .into_iter()
         .partition(|m| m.package != "<embedded std>");
     program.modules = modules;
     program.support = support;
-    Ok(program)
+    program
 }
 
 fn parse_source(source: &str, file: &Path) -> Result<Ast, Error> {
@@ -410,6 +434,7 @@ struct Scope<'a> {
     imports: &'a BTreeMap<String, Vec<String>>,
     symbols: &'a BTreeSet<Vec<String>>,
     constructors: &'a BTreeSet<Vec<String>>,
+    interfaces: &'a BTreeSet<Vec<String>>,
     resolved: bool,
     exported: &'a BTreeSet<Vec<String>>,
     exports: &'a BTreeMap<Vec<String>, BTreeMap<String, Vec<String>>>,
@@ -418,6 +443,7 @@ struct Scope<'a> {
 fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
     let mut entries = BTreeMap::<Vec<String>, Entry>::new();
     let mut constructors = BTreeSet::new();
+    let mut interfaces = BTreeSet::new();
     let mut declarations = BTreeSet::new();
     for module in &program.modules {
         entries.entry(module.path.clone()).or_insert(Entry {
@@ -428,13 +454,19 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
         for declaration in &module.ast.declarations {
             let (path, public, is_module) = match &declaration.value {
                 Declaration::Mod { name, public, .. } => (vec![name.clone()], *public, true),
-                Declaration::Let { binding, public } => (binding.path.clone(), *public, false),
+                Declaration::Let { binding, public }
+                | Declaration::Interface { binding, public } => {
+                    (binding.path.clone(), *public, false)
+                }
                 Declaration::Enum { name, public, .. }
                 | Declaration::Axiom { name, public, .. } => (vec![name.clone()], *public, false),
                 Declaration::Use { .. } => continue,
             };
             let mut full = module.path.clone();
             full.extend(path);
+            if matches!(declaration.value, Declaration::Interface { .. }) {
+                interfaces.insert(full.clone());
+            }
             for depth in module.path.len() + 1..full.len() {
                 entries.entry(full[..depth].to_vec()).or_insert(Entry {
                     package: module.package.clone(),
@@ -535,6 +567,7 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             imports: imported,
             symbols: &symbols,
             constructors: &constructors,
+            interfaces: &interfaces,
             resolved,
             exported: &exported,
             exports: &exports,
@@ -579,6 +612,10 @@ fn resolve_path(path: &[String], scope: &Scope<'_>) -> Option<Vec<String>> {
     if scope.resolved && (scope.symbols.contains(path) || scope.exported.contains(path)) {
         return Some(path.to_vec());
     }
+    resolve_lexical_path(path, scope)
+}
+
+fn resolve_lexical_path(path: &[String], scope: &Scope<'_>) -> Option<Vec<String>> {
     if path.is_empty() {
         return None;
     }
@@ -646,7 +683,7 @@ fn resolve_declaration(
 ) -> Result<(), String> {
     match &mut declaration.value {
         Declaration::Use { .. } | Declaration::Mod { .. } => Ok(()),
-        Declaration::Let { binding, .. } => {
+        Declaration::Let { binding, .. } | Declaration::Interface { binding, .. } => {
             let mut locals = BTreeSet::new();
             for generic in &mut binding.generics {
                 resolve_expr(&mut generic.ty, scope, &locals)?;
@@ -740,6 +777,20 @@ fn resolve_expr(
         }
         Expression::Op(fields) => {
             for field in fields {
+                if let OpField::Field { name, value } = &mut field.value
+                    && name == "interfaces"
+                {
+                    let Expression::Record(entries) = &mut value.value else {
+                        return Err("operation interfaces require a record".into());
+                    };
+                    field.value = OpField::Interfaces {
+                        receiver: "self".into(),
+                        entries: std::mem::take(entries)
+                            .into_iter()
+                            .map(|(name, methods)| (name, Vec::new(), methods))
+                            .collect(),
+                    };
+                }
                 match &mut field.value {
                     OpField::Signature {
                         parameters, result, ..
@@ -749,6 +800,23 @@ fn resolve_expr(
                         resolve_expr(result, scope, &local_scope)?;
                     }
                     OpField::Field { value, .. } => resolve_expr(value, scope, locals)?,
+                    OpField::Interfaces { receiver, entries } => {
+                        let mut attached = BTreeSet::new();
+                        let mut method_scope = locals.clone();
+                        method_scope.insert(receiver.clone());
+                        for (name, declaration, methods) in entries {
+                            let path = resolve_lexical_path(std::slice::from_ref(name), scope)
+                                .filter(|path| {
+                                    !locals.contains(name) && scope.interfaces.contains(path)
+                                })
+                                .ok_or_else(|| format!("unknown operation interface {name}"))?;
+                            if !attached.insert(path.clone()) {
+                                return Err(format!("duplicate attachment of {}", path.join("::")));
+                            }
+                            *declaration = path;
+                            resolve_expr(methods, scope, &method_scope)?;
+                        }
+                    }
                 }
             }
         }
