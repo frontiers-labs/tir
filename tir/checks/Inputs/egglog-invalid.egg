@@ -1,0 +1,1 @@
+(check (= (OpKind 0) "not-an-imported-kind"))
