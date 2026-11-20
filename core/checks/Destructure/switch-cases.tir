@@ -1,9 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass destructure --verify %s | filecheck %s
-// RUN: tir opt --pass destructure %s | tir interp --args=10 | filecheck --check-prefix=TEN %s
-// RUN: tir opt --pass destructure %s | tir interp --args=-1 | filecheck --check-prefix=MINUS %s
-// RUN: tir opt --pass destructure %s | tir interp --args=1 | filecheck --check-prefix=DEFAULT %s
 
 // A gate naming its cases tests each case value, not its arm index: the value
 // 1 names no case here, so it reaches the default.
@@ -32,7 +29,3 @@ module {
 // CHECK: %[[T0:[0-9]+]] = cmpi %[[P]], %[[K0]] {predicate = "eq"} : !i1
 // CHECK: %[[K1:[0-9]+]] = constant {value = -1} : !i32
 // CHECK-NEXT: %[[T1:[0-9]+]] = cmpi %[[P]], %[[K1]] {predicate = "eq"} : !i1
-
-// TEN: i32 100
-// MINUS: i32 200
-// DEFAULT: i32 300

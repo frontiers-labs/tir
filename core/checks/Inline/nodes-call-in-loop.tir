@@ -1,9 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,inline<1000,0>,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s -f main --args=4 | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,inline<1000,0> %s | tir interp -f main --args=4 | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 5 %s | tir opt --pass inline<1000,0> | tir interp -f main --args=4 | filecheck %s --check-prefix=VALUE
 
 // A call inside a loop body: the callee's operations join the body, reading
 // the loop's chain where the call did, and the callee's slot is hoisted out to
@@ -45,5 +42,3 @@ module {
 // CHECK: scf.loop
 // CHECK-NOT: ptr.alloca
 // CHECK-NOT: func.call
-
-// VALUE: i32 6

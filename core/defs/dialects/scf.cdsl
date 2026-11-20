@@ -1,0 +1,60 @@
+pub let r#yield = {
+    rust_name: "YieldOp",
+    name: "yield",
+    dialect: "scf",
+    operands: { values: "*_" },
+    interfaces: "Terminator",
+    state: "none",
+};
+
+pub let r#loop = {
+    rust_name: "LoopOp",
+    name: "loop",
+    dialect: "scf",
+    operands: { inits: "*_" },
+    results: { results: "*_" },
+    interfaces: "ExitScope",
+    regions: { body: { kind: "Nodes", variadic: false } },
+    state: "none",
+    binds: "Theta { carried: inits ~ body.ports ~ body.results[1..n+1] ~ body.results[n+1..] ~ results, predicate: body.results[0], }",
+};
+
+pub let r#switch = {
+    rust_name: "SwitchOp",
+    name: "switch",
+    dialect: "scf",
+    operands: { predicate: "int<_>", inputs: "*_" },
+    results: { results: "*_" },
+    interfaces: "ExitScope",
+    regions: { arms: { kind: "Nodes", variadic: true } },
+    state: "none",
+    binds: "Gamma { predicate, forwarded: inputs ~ arms.ports, joined: arms.results ~ results, }",
+};
+
+pub let r#for = {
+    rust_name: "ForOp",
+    name: "for",
+    dialect: "scf",
+    quantified: "forall C: index | int<_>.",
+    operands: { lb: "C", inits: "*_", ub: "C", step: "C" },
+    results: { results: "*_" },
+    interfaces: "ExitScope",
+    regions: { body: { kind: "Nodes", variadic: false } },
+    custom_format: true,
+    state: "none",
+    binds: "Theta { carried: (lb, inits) ~ body.ports ~ body.results[1..n+1] ~ body.results[n+1..] ~ results, predicate: body.results[0], }",
+    counted: "{ induction: 0, lb, ub, step }",
+};
+
+pub let ordered_for = {
+    rust_name: "OrderedForOp",
+    name: "ordered_for",
+    dialect: "scf",
+    quantified: "forall C: index | int<_>.",
+    operands: { lb: "C", inits: "*_", ub: "C", step: "C" },
+    results: { results: "*_" },
+    interfaces: ("ExitScope", "CountedLoop"),
+    regions: { body: { kind: "Blocks", variadic: false } },
+    custom_format: true,
+    state: "none",
+};

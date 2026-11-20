@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 module {
   %external = func.declare @external(!i32) -> !i32
@@ -9,4 +9,4 @@ module {
   module_end
 }
 
-// CHECK: call resources must be a non-empty list of distinct resource names
+// CHECK: failed typechecking: call resource summary

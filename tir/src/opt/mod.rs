@@ -55,6 +55,8 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         tir::symbol_table::merge_modules(&context, module.id(), other.id())?;
     }
 
+    tir::check_types(&context).map_err(|error| error.to_string())?;
+
     if !args.passes.is_empty() {
         let pipeline = args.passes.join(",");
         let mut pm = tir::parse_pipeline(&pipeline).map_err(|e| {
@@ -65,6 +67,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         })?;
         pm.run(&context, module.id())
             .map_err(|e| format!("pass pipeline failed: {e}"))?;
+        tir::check_types(&context).map_err(|error| error.to_string())?;
     }
 
     if args.print_affine {
@@ -72,8 +75,8 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     }
 
     if args.verify {
-        tir::verify_op_tree(&context, module.id())
-            .map_err(|e| format!("verification failed: {e}"))?;
+        tir::SymbolTable::build(&context, module.id()).verify(&context)?;
+        tir::verify_state_forks(&context, module.id())?;
     }
 
     let mut rendered = String::new();

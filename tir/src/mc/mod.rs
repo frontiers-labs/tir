@@ -83,7 +83,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             return Err("--march is required for assembly input".into());
         }
         None if kind == InputKind::Llvm => {
-            return Err("--march is required for LLVM input".into());
+            return Err("--march is required for LLVM IR input".into());
         }
         None => {
             let module = parse_tir(&context, &read_input(args.input.as_ref())?)?;
@@ -98,8 +98,9 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     };
 
     if needs_lowering {
-        tir::verify_op_tree(&context, module.id())
-            .map_err(|e| format!("verification failed: {e}"))?;
+        tir::check_types(&context).map_err(|error| error.to_string())?;
+        tir::SymbolTable::build(&context, module.id()).verify(&context)?;
+        tir::verify_state_forks(&context, module.id())?;
         // IR text and LLVM IR hold control-flow graphs; the backend takes
         // regions.
         structure(&context, context.get_op(module.id()))

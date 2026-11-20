@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // An unordered body produces exactly what its function declares.
 
@@ -10,4 +10,4 @@ module {
   module_end
 }
 
-// CHECK: produces (!i32, !i32), but its signature returns !i32
+// CHECK: failed typechecking: function yields

@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // Nothing sequences an unordered region against a sibling, so a value defined
 // in one is not available in the other.
@@ -15,4 +15,4 @@ module {
   module_end
 }
 
-// CHECK: is defined outside the unordered region reading it
+// CHECK: failed typechecking: value outside its region scope

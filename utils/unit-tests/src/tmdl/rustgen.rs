@@ -50,15 +50,17 @@ instruction Add for [TestIsa] : Binary {
         .add_input(arithmetic.to_str().unwrap())
         .split_input(arithmetic.to_str().unwrap())
         .build()
-        .compile()
+        .compile_with_rust_writer(|source, package| {
+            Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?)
+        })
         .unwrap();
 
     let root = fs::read_to_string(&output).unwrap();
     let child = fs::read_to_string(dir.join("arithmetic.rs")).unwrap();
     assert!(root.contains("mod arithmetic"));
     assert!(root.contains("include!(\"arithmetic.rs\")"));
-    assert!(!root.contains("operation! {\n    AddOp"));
-    assert!(child.contains("operation! {\n    AddOp"));
+    assert!(!root.contains("pub struct AddOp"));
+    assert!(child.contains("pub struct AddOp"));
 
     fs::remove_dir_all(dir).unwrap();
 }

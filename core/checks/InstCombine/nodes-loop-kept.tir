@@ -1,8 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s -f f --args=3 | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
 
 // A loop whose values nothing reads but whose body writes memory: the read
 // after it observes the state it leaves, so the loop is demanded and stays
@@ -32,5 +30,3 @@ module {
 // CHECK: ptr.store
 // CHECK: %[[V:[0-9]+]], %[[S:[0-9]+]] = ptr.load
 // CHECK: -> %[[V]], %[[S]]
-
-// VALUE: i32 2

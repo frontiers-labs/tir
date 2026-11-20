@@ -6,45 +6,10 @@ use tir::{
     Binding, Context, Gamma, Operation, RegionId, Theta, TypeId, ValueId,
 };
 
-tir::helpers::operation! {
-    ThetaOp {
-        name: "theta",
-        dialect: "test",
-        scheme: "(_*) -> _*",
-        operands: O { inits },
-        results: R { results },
-        regions: R {
-            body: Region {
-                kind: Nodes,
-            }
-        },
-        binds: Theta {
-            carried: inits ~ body.ports ~ body.results[1..n+1] ~ body.results[n+1..] ~ results,
-            predicate: body.results[0],
-        },
-    }
-}
-
-tir::helpers::operation! {
-    GammaOp {
-        name: "gamma",
-        dialect: "test",
-        scheme: "(int<_>, _*) -> _*",
-        operands: O { predicate, inputs },
-        results: R { results },
-        regions: R {
-            arms: Region {
-                kind: Nodes,
-                variadic: true,
-            }
-        },
-        binds: Gamma {
-            predicate,
-            forwarded: inputs ~ arms.ports,
-            joined: arms.results ~ results,
-        },
-    }
-}
+use tir::scf::{
+    LoopOp as ThetaOp, LoopOpBuilder as ThetaOpBuilder, SwitchOp as GammaOp,
+    SwitchOpBuilder as GammaOpBuilder,
+};
 
 fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]) -> RegionId {
     let ports = port_types
@@ -105,19 +70,17 @@ fn a_theta_binding_aligns_inits_ports_continue_exit_and_results() {
     );
     let body = context.get_region(Theta::body(&op));
     assert_eq!(op.predicate(), body.value_results()[0]);
-    op.verify(&context).expect("an aligned theta verifies");
+    tir::check_types(&context).expect("an aligned theta verifies");
 }
 
 #[test]
 fn a_theta_port_must_have_its_init_type() {
     let context = Context::with_default_dialects();
     let i64_ty = builtin::IntegerType::new(&context, 64);
-    let op = build_theta(&context, &[i64_ty], &[(1, 1), (2, 32), (3, 32)]);
+    let _op = build_theta(&context, &[i64_ty], &[(1, 1), (2, 32), (3, 32)]);
 
-    let error = op
-        .verify(&context)
-        .expect_err("the port is wider than its init");
-    assert!(error.to_string().contains("port"), "{error}");
+    let error = tir::check_types(&context).expect_err("the port is wider than its init");
+    assert!(error.to_string().contains("region entry"), "{error}");
 }
 
 fn build_gamma(context: &Context, arm_results: &[&[(i64, u32)]]) -> GammaOp {
@@ -168,7 +131,7 @@ fn a_gamma_binding_forwards_inputs_and_joins_arm_results() {
     );
     assert_eq!(op.arms().len(), 2);
     assert_eq!(Gamma::predicate(&op), op.operands()[0]);
-    op.verify(&context).expect("an aligned gamma verifies");
+    tir::check_types(&context).expect("an aligned gamma verifies");
 }
 
 fn counted(
@@ -277,7 +240,7 @@ fn a_counted_loop_pins_its_comparison_increment_and_exits() {
         |[i, cmp, next, a, doubled]| vec![*cmp, *next, *doubled, *i, *a],
     );
 
-    op.verify(&context).expect("the pinned shape verifies");
+    tir::check_types(&context).expect("the pinned shape verifies");
     assert_eq!(tir::CountedLoop::induction(&op), Some(0));
 }
 
@@ -286,8 +249,8 @@ fn counted_error(
     shape: impl Fn(&[ValueId; 5]) -> Vec<ValueId>,
 ) -> String {
     let context = Context::with_default_dialects();
-    let op = counted(&context, predicate, shape);
-    op.verify(&context)
+    let _op = counted(&context, predicate, shape);
+    tir::check_types(&context)
         .expect_err("the loop is not counted")
         .to_string()
 }
@@ -315,5 +278,8 @@ fn a_counted_loop_leaves_every_port_unchanged() {
         tir::attributes::Predicate::Slt,
         |[i, cmp, next, _, doubled]| vec![*cmp, *next, *doubled, *i, *doubled],
     );
-    assert!(error.contains("exit value 1 must be port 1"), "{error}");
+    assert!(
+        error.contains("exit value must be the corresponding port"),
+        "{error}"
+    );
 }

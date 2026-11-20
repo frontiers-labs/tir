@@ -1,5 +1,7 @@
 use crate::ty::{Ctor, Kind, TypeCtor};
-use crate::{Context, Error, Operation, dialect, operation};
+use crate::{Context, Error, Operation, dialect};
+
+use crate as tir;
 
 /// The constructor of an explicit control-flow token.
 pub static CONTROL: Ctor = Ctor::new(TypeCtor {
@@ -11,37 +13,9 @@ pub static CONTROL: Ctor = Ctor::new(TypeCtor {
     carrier: tir_symbolic::term::no_carrier,
 });
 
-operation! {
-    MergeOp {
-        name: "merge",
-        dialect: "son",
-        scheme: "(son.control*) -> son.control",
-        operands: O { incoming },
-        results: R { control },
-    }
-}
-
-operation! {
-    EdgeOp {
-        name: "edge",
-        dialect: "son",
-        scheme: "(son.control, _*) -> son.control",
-        operands: O { control, arguments },
-        results: R { edge },
-        state: "in",
-    }
-}
-
-operation! {
-    BranchOp {
-        name: "branch",
-        dialect: "son",
-        scheme: "(son.control, int<1>) -> (son.control, son.control)",
-        format: "custom",
-        operands: O { control, predicate },
-        results: R { taken, fallthrough },
-    }
-}
+__cdsl_son_MergeOp!();
+__cdsl_son_EdgeOp!();
+__cdsl_son_BranchOp!();
 
 impl BranchOp {
     fn custom_print(&self, fmt: &mut crate::IRFormatter) -> Result<(), std::fmt::Error> {
@@ -70,14 +44,9 @@ impl BranchOp {
             .terms()
             .intern(CONTROL.id(context), vec![])
             .map_err(|error| (parser.span(), Error::VerificationError(error)))?;
-        Ok(Box::new(BranchOp::new(
-            context,
-            *control,
-            *predicate,
-            vec![control_type; 2],
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
+        Ok(Box::new(
+            branch(context, *control, *predicate, control_type, control_type).build(),
+        ))
     }
 }
 

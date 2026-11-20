@@ -425,11 +425,7 @@ fn a_pathological_graph_grows_linearly() {
     let mut measured = Vec::new();
     for blocks in [4, 8, 16, 32] {
         let (context, func, before) = restructure_source(&tangle(blocks));
-        assert!(
-            func.verify(&context).is_ok(),
-            "restructured IR must verify: {:?}",
-            func.verify(&context)
-        );
+        tir::check_types(&context).expect("restructured IR must typecheck");
         let after = count_ops(&context, func.id());
         assert!(
             after <= 6 * before,

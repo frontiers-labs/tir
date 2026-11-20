@@ -1,11 +1,9 @@
-use crate::{
-    BlockId, Context, ContextIterator, GetFromContext, IdMap, OpId, Terminator, Value, ValueId,
-};
+use crate::{BlockId, Context, ContextIterator, GetFromContext, IdMap, OpId, Value, ValueId};
 
 id_newtype!(RegionId);
 
-/// Which kind of body an operation declares for a region, as spelled in
-/// `operation!`. `Any` accepts either, so the parser reads the kind off the
+/// Which kind of body an operation declares for a region.
+/// `Any` accepts either, so the parser reads the kind off the
 /// text and a walker has to ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegionKind {
@@ -74,7 +72,9 @@ impl RegionHandle {
     /// The entry block of an ordered region: where control enters and where its
     /// arguments live.
     pub fn entry_block(&self) -> BlockId {
-        self.block_ids()[0]
+        self.context()
+            .region_entry(self.id)
+            .expect("ordered region with entry block")
     }
 
     /// Every operation the region holds, in no particular order for an
@@ -141,93 +141,6 @@ impl RegionHandle {
 
     pub fn iter(&self, context: Context) -> ContextIterator<BlockId> {
         ContextIterator::new(context, self.block_ids())
-    }
-
-    pub fn verify(&self, context: &Context) -> Result<(), crate::Error> {
-        if self.is_nodes() {
-            return self.verify_nodes(context);
-        }
-        for block_id in self.block_ids() {
-            let block = context.get_block(block_id);
-            let ops = block.op_ids();
-            if ops.is_empty() {
-                return Err(crate::Error::VerificationError(
-                    "basic blocks must have at least one operation".to_string(),
-                ));
-            }
-
-            let op = ops.last().unwrap().get_from_context(context);
-            if op.as_interface::<dyn Terminator>().is_none() {
-                return Err(crate::Error::VerificationError(
-                    "basic blocks must end with a terminator".to_string(),
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn verify_nodes(&self, context: &Context) -> Result<(), crate::Error> {
-        let ops = self.op_ids();
-        for op in &ops {
-            let instance = context.get_op(*op);
-            if instance.clone().as_interface::<dyn Terminator>().is_some()
-                && !instance
-                    .value_operands()
-                    .iter()
-                    .any(|&value| crate::son::CONTROL.is(context, context.get_value(value).ty()))
-            {
-                return Err(crate::Error::VerificationError(format!(
-                    "{}.{} is a terminator, which an unordered region has no place for",
-                    instance.dialect(),
-                    instance.name()
-                )));
-            }
-        }
-        for op in &ops {
-            let instance = context.get_op(*op);
-            for value in instance.operands() {
-                self.verify_in_scope(context, value).map_err(|error| {
-                    crate::Error::VerificationError(format!(
-                        "{}.{} reads {error}",
-                        instance.dialect(),
-                        instance.name()
-                    ))
-                })?;
-            }
-        }
-        for value in self.results() {
-            self.verify_in_scope(context, value).map_err(|error| {
-                crate::Error::VerificationError(format!("a region result names {error}"))
-            })?;
-        }
-        topological_order(context, self.id).map(|_| ())
-    }
-
-    fn verify_in_scope(&self, context: &Context, value: ValueId) -> Result<(), crate::Error> {
-        if !context.has_value(value) {
-            return Err(crate::Error::VerificationError(format!(
-                "%{} does not exist",
-                value.number()
-            )));
-        }
-        let Some(owner) = defining_region(context, value) else {
-            return Ok(());
-        };
-        let mut scope = Some(self.id);
-        while let Some(region) = scope {
-            if region == owner {
-                return Ok(());
-            }
-            scope = context
-                .get_region(region)
-                .parent_op()
-                .and_then(|op| context.region_of_op(op));
-        }
-        Err(crate::Error::VerificationError(format!(
-            "%{} is defined outside the unordered region reading it",
-            value.number()
-        )))
     }
 }
 

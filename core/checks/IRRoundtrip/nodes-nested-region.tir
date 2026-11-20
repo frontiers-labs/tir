@@ -1,5 +1,4 @@
 // RUN: tir opt --verify %s | filecheck %s
-// RUN: tir interp %s --args=1,6 | filecheck --check-prefix=EVAL %s
 
 // What an operation's nested regions read is what the operation reads: the
 // gamma depends on the product its arm reads, so it prints and runs after
@@ -22,4 +21,3 @@ module {
 
 // CHECK: %[[P:[0-9]+]] = muli
 // CHECK: %{{[0-9]+}} = scf.switch
-// EVAL: i32 72

@@ -13,7 +13,6 @@ tmdl.workspace = true
 tir.workspace = true
 tir-riscv.workspace = true
 tir-arm64.workspace = true
-tir-pdl = { path = "../pdl", default-features = false }
 tir-jit.workspace = true
 
 [lib]
@@ -39,13 +38,6 @@ bench = false
 [[bin]]
 name = "arm64-assembly-fuzz"
 path = "fuzz_targets/arm64-assembly.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "pdl-fuzz"
-path = "fuzz_targets/pdl.rs"
 test = false
 doc = false
 bench = false

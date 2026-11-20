@@ -1,10 +1,9 @@
 //! Nominal types. `type.def !Name = !body` names a type in a module, and
 //! `!Name` is then the term `type.named<Name, []>`: its identity is the name,
-//! never the body. The body is read only where a layout is computed.
+//! never the body.
 //!
 //! The constructors a body is built from, `!struct`, `!union` and `!variant`,
-//! hold `(name, type)` fields. Their layouts are regions of their core
-//! definitions (`dialects/layout/types.rs`, see [`crate::layout`]).
+//! hold `(name, type)` fields.
 
 use std::collections::BTreeMap;
 
@@ -13,9 +12,7 @@ use tir_symbolic::term::{ctor, no_carrier, valid};
 use crate::attributes::AttributeValue;
 use crate::parse::common::Cursor;
 use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
-use crate::{
-    Context, Error, IRFormatter, Operation, Symbol, TypeId, Visibility, dialect, operation,
-};
+use crate::{Context, Error, IRFormatter, Operation, Symbol, TypeId, Visibility, dialect};
 
 use crate as tir;
 
@@ -161,8 +158,8 @@ impl AggregateKind {
 /// `!struct<{a: !i32, b: !f64}>`, `!union<{..}>` or `!variant<{..}>`, the
 /// variant optionally with its tag type: `!variant<{..}, !i8>`, a struct
 /// with every field at byte alignment `!struct<{..}, true>`. A field's type
-/// is a bound variable inside a generic definition. An argument equal to the
-/// default the core type definitions give it is left out of the term.
+/// is a bound variable inside a generic definition. A default argument is
+/// left out of the term.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AggregateType {
     kind: AggregateKind,
@@ -365,15 +362,6 @@ pub(crate) fn contained_by_value(
     }
 }
 
-// A parameter default as the term argument it stands for.
-pub(crate) fn type_arg_of(value: &AttributeValue) -> Option<TypeArg> {
-    match value {
-        AttributeValue::Type(ty) => Some(TypeArg::Type(*ty)),
-        AttributeValue::Bool(flag) => Some(TypeArg::Nat(u64::from(*flag))),
-        value => Some(TypeArg::Nat(u64::try_from(value.as_int()?).ok()?)),
-    }
-}
-
 /// Replace each bound variable `i` of `arg` by `values[i]`.
 pub fn substitute(
     terms: &impl AsRef<Terms>,
@@ -408,62 +396,36 @@ pub fn substitute(
     })
 }
 
-// What a layout region takes for each kind of parameter: a field list as
-// the field types, a type, a number, a flag.
 const PARAM_KINDS: [&str; 4] = ["fields", "data", "nat", "bool"];
 
-// `type.def !Name<params> layout {packed} = !body layout (%spec: ..) {..}`.
+// `type.def !Name<params> layout {packed} = !body`.
 //
 // A definition with no body is incomplete: a pointer can point at it, nothing
-// can hold it. The core type definitions, named after the
-// aggregate constructors, give their layout regions.
-operation! {
-    TypeDefOp {
-        name: "def",
-        dialect: "type",
-        scheme: "() -> ()",
-        format: "custom",
-        verifier: "true",
-        interfaces: [Symbol],
-        attributes: A {
-            sym_name: "Str",
-            // [[name, kind]] or [[name, kind, default]]; absent when ground.
-            params: "?Array",
-            // `packed`, `align` (bits).
-            layout: "?Dict",
-            // Absent: an incomplete type, pointers only.
-            body: "?Type",
-        },
-        regions: R {
-            region: Region {
-                kind: Blocks,
-                variadic: true,
-            }
-        },
-    }
-}
+// can hold it.
+__cdsl_type_TypeDefOp!();
 
 /// A `type.def` of `name` with `body`, or an incomplete one.
-pub fn type_def(
-    context: &Context,
-    name: &str,
-    body: Option<TypeId>,
-    mut parts: tir::NewOpParts,
-    insertion: tir::InsertionPoint,
-) -> TypeDefOp {
-    if let Some(body) = body {
-        define(context, name, body);
-        parts.attributes.insert(
-            0,
-            context.named_attribute("body", AttributeValue::Type(body)),
-        );
+pub fn type_def(context: &Context, name: &str, body: Option<TypeId>) -> TypeDefOpBuilder {
+    let builder = TypeDefOpBuilder::new(context).sym_name(name);
+    match body {
+        Some(body) => {
+            define(context, name, body);
+            builder.body(body)
+        }
+        None => builder,
     }
-    TypeDefOp::new(context, name, vec![], parts, insertion)
 }
 
 pub(crate) fn define(context: &Context, name: &str, body: TypeId) {
     let terms = context.terms();
     terms.define(terms.name(name), terms.kind(body));
+}
+
+impl TypeDefOpBuilder {
+    /// The `layout {..}` options: `packed` and `align` (in bits).
+    pub fn layout_options(self, options: BTreeMap<String, AttributeValue>) -> Self {
+        self.attr("layout", AttributeValue::Dict(Box::new(options)))
+    }
 }
 
 impl Symbol for TypeDefOp {
@@ -542,11 +504,6 @@ impl TypeDefOp {
             .ok()
     }
 
-    /// The region computing the layout, when the definition has its own.
-    pub fn layout_region(&self) -> Option<tir::RegionId> {
-        self.0.regions().first().copied()
-    }
-
     /// The body with `args` for the parameters: what `!Name<args>` stands for.
     pub fn expand(&self, args: &[TypeArg]) -> Option<TypeId> {
         let body = self.body()?;
@@ -597,20 +554,7 @@ impl TypeDefOp {
             context.print_type(body, fmt)?;
         }
         fmt.set_type_params(vec![]);
-        let Some(region) = self.layout_region() else {
-            return fmt.write("\n");
-        };
-        fmt.write(" layout (")?;
-        let arguments = context.get_region(region).value_arguments();
-        for (index, argument) in arguments.iter().enumerate() {
-            if index > 0 {
-                fmt.write(", ")?;
-            }
-            fmt.write(format!("%{}: ", argument.id().number()))?;
-            context.print_type(argument.ty(), fmt)?;
-        }
-        fmt.write(")")?;
-        tir::region_format::print_op_region(fmt, &context, self, 0)
+        fmt.write("\n")
     }
 
     fn custom_parse(
@@ -650,8 +594,8 @@ impl TypeDefOp {
             })?
             .unwrap_or_default();
         parser.type_defs.insert(name.clone());
-        let mut parts = tir::NewOpParts::default();
-        let mut regions = vec![];
+        let mut builder =
+            TypeDefOpBuilder::new(context).attr("sym_name", AttributeValue::from(name.as_str()));
         if !params.is_empty() {
             let params: Vec<AttributeValue> = params
                 .iter()
@@ -664,9 +608,7 @@ impl TypeDefOp {
                     AttributeValue::Array(param.into())
                 })
                 .collect();
-            parts
-                .attributes
-                .push(context.named_attribute("params", AttributeValue::Array(params.into())));
+            builder = builder.attr("params", AttributeValue::Array(params.into()));
         }
 
         let mark = parser.pos();
@@ -685,10 +627,7 @@ impl TypeDefOp {
                 Ok((key, value))
             })?
         {
-            parts.attributes.push(context.named_attribute(
-                "layout",
-                AttributeValue::Dict(Box::new(options.into_iter().collect())),
-            ));
+            builder = builder.layout_options(options.into_iter().collect());
         } else {
             parser.set_pos(mark);
         }
@@ -709,39 +648,10 @@ impl TypeDefOp {
         if let Some(body) = body {
             let body = body?;
             define(context, &name, body);
-            parts
-                .attributes
-                .push(context.named_attribute("body", AttributeValue::Type(body)));
+            builder = builder.attr("body", AttributeValue::Type(body));
         }
 
-        if parser.parse_token("layout") {
-            let arguments = parser
-                .parse_delimited("(", ")", |parser| {
-                    let name = parser
-                        .parse_value_ref()
-                        .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
-                        .to_string();
-                    if !parser.parse_token(":") {
-                        return Err((parser.span(), Error::ExpectedToken(":")));
-                    }
-                    let ty = parser
-                        .parse_type(context)?
-                        .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-                    let value = context.create_value(ty, None);
-                    parser.define_value(&name, value.id());
-                    Ok(value)
-                })?
-                .ok_or_else(|| (parser.span(), Error::ExpectedToken("(")))?;
-            let region = parser.parse_region_with_entry_args(context, arguments)?;
-            regions.push(region.id());
-        }
-        Ok(Box::new(TypeDefOp::new(
-            context,
-            name.as_str(),
-            regions,
-            parts,
-            tir::InsertionPoint::Root,
-        )))
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -759,8 +669,8 @@ impl TypeDefOp {
     }
 }
 
-impl tir::Verifiable for TypeDefOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+impl TypeDefOp {
+    pub(crate) fn verify_declaration(&self, context: &Context) -> Result<(), Error> {
         let name = self.sym_name();
         let holder = context.parent_op(self.0.id);
         if let Some(holder) = holder
@@ -774,9 +684,7 @@ impl tir::Verifiable for TypeDefOp {
                 "type definition `!{name}` inside {inside}; move it to module scope"
             )));
         }
-        // The core type definitions define the constructors, so only there is a
-        // definition spelled like one.
-        if Self::is_core_type_name(context, &name) && !context.defines_types() {
+        if Self::is_core_type_name(context, &name) {
             return Err(Error::VerificationError(format!(
                 "type name `!{name}` is spelled like a builtin type"
             )));

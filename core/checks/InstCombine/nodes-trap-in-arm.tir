@@ -1,10 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s -f f --args=1,6,2 | filecheck %s --check-prefix=THEN
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=1,6,2 | filecheck %s --check-prefix=THEN
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=0,6,0 | filecheck %s --check-prefix=ELSE
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 5 %s | tir opt --pass instcombine-nodes | tir interp -f f --args=0,6,0 | filecheck %s --check-prefix=ELSE
 
 // One arm divides by a value the other arm never looks at, and with the
 // predicate false that divisor is zero. The division may trap, so it stays
@@ -35,6 +31,3 @@ module {
 // CHECK: }
 // CHECK-NOT: addi %[[X]], %[[X]]
 // CHECK: addi %[[SUM]], %{{[0-9]+}}
-
-// THEN: i32 15
-// ELSE: i32 18

@@ -296,7 +296,7 @@ fn report_timing(
     let disasm = |id: tir::OpId, pc: u64| {
         let op = context.get_op(id);
         let text = printer
-            .print_instruction(context, &op, &tir::backend::RegAssignment::default())
+            .print_instruction(context, &op)
             .ok()
             .flatten()
             .unwrap_or_else(|| op.name().to_string());

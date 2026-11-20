@@ -239,6 +239,7 @@ pub(super) fn emit_instruction_encoder(
     constraints: &HashMap<String, OperandConstraint>,
     resolved_params: &HashMap<String, (Type, Option<ast::Expr>)>,
     ctx: &crate::shapes::Context,
+    fixup_operands: &mut BTreeSet<String>,
 ) -> Result<Option<proc_macro2::TokenStream>, TMDLError> {
     if shapes.is_empty() {
         return Ok(None);
@@ -321,6 +322,7 @@ pub(super) fn emit_instruction_encoder(
             if declared.is_none_or(|declared| carried < declared) {
                 continue;
             }
+            fixup_operands.insert(name.clone());
             let range = match bounded {
                 Some(n) => {
                     let min = proc_macro2::Literal::i64_suffixed(-(1i64 << (n - 1)));
@@ -336,6 +338,7 @@ pub(super) fn emit_instruction_encoder(
                     attr: #name_lit,
                     range: #range,
                     dropped_mask: #dropped_mask,
+                    nonzero: #nonzero,
                     runs: #runs,
                 }
             });

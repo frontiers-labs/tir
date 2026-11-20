@@ -1,7 +1,7 @@
 use crate::attributes::AttributeValue;
 use crate::{
     BlockId, BranchGuard, BranchTerminator, CaseGuard, Context, Error, Operation, Terminator,
-    ValueId, dialect, operation,
+    ValueId, dialect,
 };
 
 use crate as tir;
@@ -18,19 +18,7 @@ dialect! {
     }
 }
 
-operation! {
-    BranchOp {
-        name: "br",
-        dialect: "cfg",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { dest_args },
-        attributes: A {
-            dest: "Block",
-        },
-        interfaces: [Terminator, BranchTerminator],
-    }
-}
+__cdsl_cfg_BranchOp!();
 
 impl Terminator for BranchOp {
     fn successors(&self) -> Vec<BlockId> {
@@ -65,31 +53,15 @@ impl BranchOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let (dest, dest_args) = parse_successor(parser, context)?;
-        let op = BranchOp::new(
-            context,
-            dest_args,
-            tir::attributes::AttributeValue::Block(dest),
-            Default::default(),
-            tir::InsertionPoint::Root,
-        );
+        let op = BranchOpBuilder::new(context)
+            .dest_args(dest_args)
+            .dest(dest)
+            .build();
         Ok(Box::new(op))
     }
 }
 
-operation! {
-    CondBranchOp {
-        name: "cond_br",
-        dialect: "cfg",
-        scheme: "(int<1>, _*, _*) -> ()",
-        format: "custom",
-        operands: O { condition, true_args, false_args },
-        attributes: A {
-            true_dest: "Block",
-            false_dest: "Block",
-        },
-        interfaces: [Terminator, BranchTerminator, BranchGuard],
-    }
-}
+__cdsl_cfg_CondBranchOp!();
 
 impl Terminator for CondBranchOp {
     fn successors(&self) -> Vec<BlockId> {
@@ -158,36 +130,23 @@ impl CondBranchOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let condition = parse_value_id(parser, context)?;
-        parser.expect_token(",")?;
+        expect_token(parser, ",")?;
         let (true_dest, true_args) = parse_successor(parser, context)?;
-        parser.expect_token(",")?;
+        expect_token(parser, ",")?;
         let (false_dest, false_args) = parse_successor(parser, context)?;
 
-        let op = CondBranchOp::new(
-            context,
-            condition,
-            true_args,
-            false_args,
-            tir::attributes::AttributeValue::Block(true_dest),
-            tir::attributes::AttributeValue::Block(false_dest),
-            Default::default(),
-            tir::InsertionPoint::Root,
-        );
+        let op = CondBranchOpBuilder::new(context)
+            .condition(condition)
+            .true_args(true_args)
+            .false_args(false_args)
+            .true_dest(true_dest)
+            .false_dest(false_dest)
+            .build();
         Ok(Box::new(op))
     }
 }
 
-operation! {
-    SwitchOp {
-        name: "switch",
-        dialect: "cfg",
-        scheme: "(int<_>, _*) -> ()",
-        format: "custom",
-        verifier: "true",
-        operands: O { selector, args },
-        interfaces: [Terminator, BranchTerminator, CaseGuard],
-    }
-}
+__cdsl_cfg_SwitchOp!();
 
 /// The successor blocks, one per case and the default last.
 const DESTS: &str = "dests";
@@ -206,34 +165,22 @@ fn unsigned_list(values: impl IntoIterator<Item = u64>) -> AttributeValue {
     )
 }
 
-impl SwitchOp {
+impl SwitchOpBuilder {
     /// Take `cases[i].1` where the selector's bits are `cases[i].0`, and
     /// `default` where they are none of them, each entered on its values.
-    pub fn with_successors(
-        context: &Context,
-        selector: ValueId,
-        cases: Vec<(u64, Successor)>,
-        default: Successor,
-        mut parts: tir::NewOpParts,
-        insertion: tir::InsertionPoint,
-    ) -> Self {
+    pub fn successors(self, cases: Vec<(u64, Successor)>, default: Successor) -> Self {
         let (values, edges): (Vec<u64>, Vec<Successor>) = cases.into_iter().unzip();
         let edges = edges.into_iter().chain([default]).collect::<Vec<_>>();
         let dests = edges.iter().map(|(dest, _)| AttributeValue::Block(*dest));
         let counts = edges.iter().map(|(_, args)| args.len() as u64);
         let args = edges.iter().flat_map(|(_, args)| args.clone()).collect();
-        parts.attributes.splice(
-            ..0,
-            [
-                context.named_attribute(
-                    DESTS,
-                    AttributeValue::Array(dests.collect::<Vec<_>>().into()),
-                ),
-                context.named_attribute(CASES, unsigned_list(values)),
-                context.named_attribute(ARG_COUNTS, unsigned_list(counts)),
-            ],
-        );
-        Self::new(context, selector, args, parts, insertion)
+        self.args(args)
+            .attr(
+                DESTS,
+                AttributeValue::Array(dests.collect::<Vec<_>>().into()),
+            )
+            .attr(CASES, unsigned_list(values))
+            .attr(ARG_COUNTS, unsigned_list(counts))
     }
 }
 
@@ -313,16 +260,16 @@ impl SwitchOp {
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         use tir::parse::common::Cursor;
         let selector = parse_value_id(parser, context)?;
-        parser.expect_token(":")?;
+        expect_token(parser, ":")?;
         let ty = parse_arg_type(parser, context)?;
         let width = context
             .terms()
             .bit_width(ty)
             .map_or(64, |width| width as u32);
-        parser.expect_token(",")?;
-        parser.expect_token("[")?;
-        parser.expect_token("default")?;
-        parser.expect_token(":")?;
+        expect_token(parser, ",")?;
+        expect_token(parser, "[")?;
+        expect_token(parser, "default")?;
+        expect_token(parser, ":")?;
         let default = parse_successor(parser, context)?;
         let mut cases = Vec::new();
         while parser.parse_token(",") {
@@ -330,64 +277,16 @@ impl SwitchOp {
             let case = parser
                 .parse_number()
                 .ok_or((span, Error::ExpectedToken("case value")))?;
-            parser.expect_token(":")?;
+            expect_token(parser, ":")?;
             let successor = parse_successor(parser, context)?;
             cases.push((crate::binding::truncate_bits(case, width), successor));
         }
-        parser.expect_token("]")?;
-        let op = SwitchOp::with_successors(
-            context,
-            selector,
-            cases,
-            default,
-            Default::default(),
-            tir::InsertionPoint::Root,
-        );
+        expect_token(parser, "]")?;
+        let op = SwitchOpBuilder::new(context)
+            .selector(selector)
+            .successors(cases, default)
+            .build();
         Ok(Box::new(op))
-    }
-}
-
-impl tir::Verifiable for SwitchOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let fail = |message: String| Err(Error::VerificationError(format!("cfg.switch {message}")));
-        for name in [CASES, ARG_COUNTS] {
-            if let Some(AttributeValue::Array(items)) = self.attr(name)
-                && items
-                    .iter()
-                    .any(|item| !matches!(item, AttributeValue::UInt(_)))
-            {
-                return fail(format!("{name} must be unsigned integers"));
-            }
-        }
-        let edges = self.edges();
-        let cases = self.cases();
-        let counts = self.unsigned(ARG_COUNTS);
-        if edges.len() != cases.len() + 1 || counts.len() != edges.len() {
-            return fail(format!(
-                "names {} successors for {} cases: each case and the default has one",
-                edges.len(),
-                cases.len()
-            ));
-        }
-        if counts.iter().sum::<u64>() as usize + 1 != self.operands().len() {
-            return fail("forwards values its successors do not take".to_string());
-        }
-        let width = context
-            .terms()
-            .bit_width(context.get_value(self.selector()).ty())
-            .map_or(64, |width| width as u32);
-        let mut seen = std::collections::HashSet::new();
-        for &case in &cases {
-            if crate::binding::truncate_bits(case as i64, width) != case {
-                return fail(format!(
-                    "case {case:#x} does not fit its {width}-bit selector"
-                ));
-            }
-            if !seen.insert(case) {
-                return fail(format!("names case {case:#x} twice"));
-            }
-        }
-        Ok(())
     }
 }
 
@@ -471,7 +370,7 @@ fn parse_successor(
                 }
                 break;
             }
-            parser.expect_token(":")?;
+            expect_token(parser, ":")?;
             loop {
                 arg_types.push(parse_arg_type(parser, context)?);
                 if parser.parse_token(",") {
@@ -480,7 +379,7 @@ fn parse_successor(
                 break;
             }
         }
-        parser.expect_token(")")?;
+        expect_token(parser, ")")?;
     }
 
     let block = parser.resolve_region_block_label(context, &label, &arg_types)?;
@@ -506,4 +405,16 @@ fn parse_arg_type(
     parser
         .parse_type(context)?
         .ok_or_else(|| (parser.span(), Error::ExpectedType))
+}
+
+fn expect_token(
+    parser: &mut tir::parse::text::Parser,
+    token: &'static str,
+) -> Result<(), (tir::parse::Span, Error)> {
+    use tir::parse::common::Cursor;
+    if parser.parse_token(token) {
+        Ok(())
+    } else {
+        Err((parser.span(), Error::ExpectedToken(token)))
+    }
 }

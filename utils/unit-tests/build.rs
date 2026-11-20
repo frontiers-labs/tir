@@ -14,7 +14,9 @@ fn main() {
             .output(OutputKind::File(format!("{output}/{name}")))
             .add_input(input)
             .build()
-            .compile()
+            .compile_with_rust_writer(|source, package| {
+                Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?)
+            })
             .unwrap();
     }
 }

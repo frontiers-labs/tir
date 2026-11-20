@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // A carried chain needs a continue and an exit result, like a carried value.
 
@@ -14,4 +14,4 @@ module {
   module_end
 }
 
-// CHECK: scf.loop carries 2 values but has 1 exit values
+// CHECK: failed typechecking: theta shape

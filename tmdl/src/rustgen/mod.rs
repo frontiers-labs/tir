@@ -18,6 +18,7 @@ use crate::utils::{
 pub struct GeneratedRust {
     pub root: String,
     pub modules: Vec<(String, String)>,
+    pub cdsl: Vec<(String, String)>,
     /// The serialized sem programs the generated code embeds; written to
     /// [`SEM_BLOB_FILE`] beside the Rust.
     pub sem_blob: Vec<u8>,
@@ -30,6 +31,7 @@ pub fn generate_rust_modules<'a>(
     text_only: bool,
     custom_assembly: bool,
     split_inputs: &[String],
+    writer: &crate::compiler::RustWriter<'_>,
 ) -> Result<GeneratedRust, TMDLError> {
     begin_sem_blob();
     let features = emit_features(files)?;
@@ -57,6 +59,7 @@ pub fn generate_rust_modules<'a>(
         })
         .collect();
 
+    let mut root_cdsl = String::new();
     let instructions = emit_instructions(
         files,
         &root_files,
@@ -68,7 +71,11 @@ pub fn generate_rust_modules<'a>(
             custom_assembly,
             module_fragment: has_split,
         },
+        &mut root_cdsl,
     )?;
+    let rust = render_operation_cdsl(writer, &root_cdsl, dialect)?;
+    let instructions = quote! { #rust #instructions };
+    let mut cdsl = vec![(format!("{dialect}.ops.cdsl"), root_cdsl)];
 
     let mut modules = Vec::new();
     let mut module_idents = Vec::new();
@@ -105,6 +112,7 @@ pub fn generate_rust_modules<'a>(
                 "multiple split inputs produce '{file_name}'"
             )));
         }
+        let mut module_cdsl = String::new();
         let module_instructions = emit_instructions(
             files,
             &[file],
@@ -116,9 +124,13 @@ pub fn generate_rust_modules<'a>(
                 custom_assembly,
                 module_fragment: true,
             },
+            &mut module_cdsl,
         )?;
+        let rust = render_operation_cdsl(writer, &module_cdsl, dialect)?;
+        cdsl.push((format!("{stem}.ops.cdsl"), module_cdsl));
         let child = format_rust(quote! {
             use super::*;
+            #rust
             #module_instructions
         });
         module_sections.push(quote! {
@@ -175,8 +187,22 @@ pub fn generate_rust_modules<'a>(
     Ok(GeneratedRust {
         root: format_rust(final_rust),
         modules,
+        cdsl,
         sem_blob,
     })
+}
+
+fn render_operation_cdsl(
+    writer: &crate::compiler::RustWriter<'_>,
+    source: &str,
+    dialect: &str,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    if source.is_empty() {
+        return Ok(proc_macro2::TokenStream::new());
+    }
+    let rust = writer(source, dialect).map_err(|error| TMDLError::Codegen(error.to_string()))?;
+    rust.parse()
+        .map_err(|error: proc_macro2::LexError| TMDLError::Codegen(error.to_string()))
 }
 
 pub(crate) fn generated_lint_allow() -> proc_macro2::TokenStream {

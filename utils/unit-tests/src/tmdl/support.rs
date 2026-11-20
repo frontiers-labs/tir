@@ -23,19 +23,20 @@ pub struct Generated {
 }
 
 impl Generated {
-    /// The blob offset of the first `extend_sem_bytes` call after `marker`.
-    pub fn offset_after(&self, marker: &str) -> u32 {
+    /// The blob offset of the first effect after an instruction record marker.
+    pub fn effect_offset(&self, marker: &str) -> u32 {
         let (_, rest) = self.rust.split_once(marker).unwrap();
-        let (_, rest) = rest.split_once("SEM_BLOB, ").unwrap();
-        let (offset, _) = rest.split_once(')').unwrap();
+        let (record, _) = rest.split_once("\n};").unwrap();
+        let (_, rest) = record.split_once("offset: ").unwrap();
+        let (offset, _) = rest.split_once(',').unwrap();
         offset.trim().parse().unwrap()
     }
 
-    /// The program the first `extend_sem_bytes` call after `marker` replays.
-    pub fn program_after(&self, marker: &str) -> String {
+    /// The program used by the first effect after an instruction record marker.
+    pub fn effect_program(&self, marker: &str) -> String {
         render(&decode_sem_ops(
             &self.blob,
-            self.offset_after(marker),
+            self.effect_offset(marker),
             &self.kinds,
         ))
     }
@@ -82,7 +83,12 @@ fn generate_with(input: &str, source: Option<&str>, dialect: &str, text_only: bo
         Some(source) => builder.add_source(input, source),
         None => builder.add_input(input),
     };
-    builder.build().compile().unwrap();
+    builder
+        .build()
+        .compile_with_rust_writer(|source, package| {
+            Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?)
+        })
+        .unwrap();
 
     let rust = fs::read_to_string(dir.join("generated.rs")).unwrap();
     let kinds = kind_table(&rust);

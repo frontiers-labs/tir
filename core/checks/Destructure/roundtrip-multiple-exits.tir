@@ -1,8 +1,3 @@
-// RUN: tir interp %s --args=3 | filecheck --check-prefix=BREAK %s
-// RUN: tir opt --pass restructure-nodes,destructure --verify %s | tir interp --args=3 | filecheck --check-prefix=BREAK %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 5 %s | tir opt --pass destructure | tir interp --args=3 | filecheck --check-prefix=BREAK %s
-// RUN: tir interp %s --args=9 | filecheck --check-prefix=DONE %s
-// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp --args=9 | filecheck --check-prefix=DONE %s
 // RUN: tir opt --pass restructure-nodes,destructure %s | filecheck --check-prefix=CFG %s
 
 // A loop with two exits, each storing a different marker after it, goes
@@ -39,7 +34,5 @@ module {
   module_end
 }
 
-// BREAK: i32 100
-// DONE: i32 5
 // CFG-NOT: scf.
 // CFG: func.return

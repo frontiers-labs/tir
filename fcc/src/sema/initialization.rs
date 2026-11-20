@@ -93,10 +93,10 @@ impl Analyzer<'_> {
         if !typedef {
             let message = match self.types.kind(ty) {
                 TypeKind::Void => Some(format!("object '{name}' cannot have void type")),
-                TypeKind::Record(_) if self.type_layout(ty).is_none() => {
+                TypeKind::Record(_) if !self.is_complete_object_type(ty) => {
                     Some(format!("object '{name}' has incomplete struct type"))
                 }
-                TypeKind::Array(_, _) if self.type_layout(ty).is_none() => {
+                TypeKind::Array(_, _) if !self.is_complete_object_type(ty) => {
                     Some(format!("object '{name}' has incomplete array type"))
                 }
                 _ => None,

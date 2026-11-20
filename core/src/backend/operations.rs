@@ -1,4 +1,3 @@
-use tir::helpers::operation;
 use tir::{
     Operation, ResourceAccess, ResourceEffect, ResourceEffects, Terminator, builtin::StateResource,
 };
@@ -25,79 +24,27 @@ const fn virtual_call_info(name: &'static str) -> InstrInfo {
     }
 }
 
-operation! {
-    SectionOp {
-        name: "section",
-        dialect: "asm",
-        scheme: "() -> ()",
-        regions: R {
-            body: Region {}
-        }
-    }
-}
+__cdsl_asm_SectionOp!();
 
-operation! {
-    SectionEndOp {
-        name: "section_end",
-        dialect: "asm",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
+__cdsl_asm_SectionEndOp!();
 
 impl Terminator for SectionEndOp {}
 
-operation! {
-    SymbolOp {
-        name: "symbol",
-        dialect: "asm",
-        scheme: "() -> ()",
-        regions: R {
-            body: Region {}
-        }
-    }
-}
+__cdsl_asm_SymbolOp!();
 
-operation! {
-    SymbolEndOp {
-        name: "symbol_end",
-        dialect: "asm",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
+__cdsl_asm_SymbolEndOp!();
 
 impl Terminator for SymbolEndOp {}
 
 // A data definition directive (`.dword 42`, `.string "hi"`, `.space 16`).
 // `kind` names the directive, `value` holds the literal (Int or Str).
-operation! {
-    LiteralOp {
-        name: "literal",
-        dialect: "asm",
-        scheme: "() -> ()",
-        attributes: A {
-            kind: "Str",
-        }
-    }
-}
+__cdsl_asm_LiteralOp!();
 
 // The address of a symbol, materialized inside a function. Module-level λ and δ
 // values are not reachable from machine code, so the module prologue rewrites
 // the uses of one into this op, and each target lowers it to the
 // relocation-bearing form its assembler spells.
-operation! {
-    SymbolAddressOp {
-        name: "symbol_address",
-        dialect: "asm",
-        scheme: "() -> ptr.p<_>",
-        attributes: A {
-            sym_name: "Str",
-        },
-        results: R { result },
-        interfaces: [tir::Pure, tir::Speculatable],
-    }
-}
+__cdsl_asm_SymbolAddressOp!();
 
 impl tir::Speculatable for SymbolAddressOp {}
 
@@ -105,49 +52,19 @@ impl tir::Pure for SymbolAddressOp {}
 
 /// The address of `name`, as an opaque pointer.
 pub fn symbol_address_of(context: &tir::Context, name: &str) -> SymbolAddressOp {
-    SymbolAddressOp::new(
-        context,
-        tir::attributes::AttributeValue::Str((name).into()),
-        tir::ptr::PtrType::opaque(context),
-        Default::default(),
-        tir::InsertionPoint::Root,
-    )
+    SymbolAddressOpBuilder::new(context)
+        .sym_name(name)
+        .result_type(tir::ptr::PtrType::opaque(context))
+        .build()
 }
 
-operation! {
-    DataRelocOp {
-        name: "data_reloc",
-        dialect: "asm",
-        scheme: "() -> ()",
-        attributes: A {
-            symbol: "Str",
-            width: "UInt",
-            addend: "Int",
-        }
-    }
-}
+__cdsl_asm_DataRelocOp!();
 
-operation! {
-    BlockEndOp {
-        name: "block_end",
-        dialect: "asm",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
+__cdsl_asm_BlockEndOp!();
 
 impl Terminator for BlockEndOp {}
 
-operation! {
-    VirtualReturnOp {
-        name: "vret",
-        dialect: "asm",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { values },
-        interfaces: [Terminator, tir::backend::MachineInstruction],
-    }
-}
+__cdsl_asm_VirtualReturnOp!();
 
 impl VirtualReturnOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
@@ -159,6 +76,12 @@ impl VirtualReturnOp {
         _context: &tir::Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
         Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+    }
+}
+
+impl VirtualReturnOpBuilder {
+    pub fn value(self, value: tir::ValueId) -> Self {
+        self.values(vec![value])
     }
 }
 
@@ -175,19 +98,7 @@ impl MachineInstruction for VirtualReturnOp {
     }
 }
 
-operation! {
-    VirtualBranchOp {
-        name: "vbr",
-        dialect: "asm",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { dest_args },
-        attributes: A {
-            dest: "Block",
-        },
-        interfaces: [Terminator, tir::backend::MachineInstruction],
-    }
-}
+__cdsl_asm_VirtualBranchOp!();
 
 impl MachineInstruction for VirtualBranchOp {
     fn info(&self) -> &'static InstrInfo {
@@ -222,16 +133,7 @@ impl VirtualBranchOp {
 // A parallel copy: every result takes its source at once, as one point. The
 // register allocator splits the live ranges at a constrained instruction with
 // one (Hack's thesis, paper § 4) and sequences it on the assigned registers.
-operation! {
-    ParallelCopyOp {
-        name: "pcopy",
-        dialect: "asm",
-        scheme: "(_*) -> _*",
-        operands: O { sources },
-        results: R { copies },
-        interfaces: [tir::backend::MachineInstruction],
-    }
-}
+__cdsl_asm_ParallelCopyOp!();
 
 impl MachineInstruction for ParallelCopyOp {
     fn info(&self) -> &'static InstrInfo {
@@ -244,21 +146,7 @@ impl MachineInstruction for ParallelCopyOp {
     }
 }
 
-operation! {
-    VirtualCallOp {
-        name: "vcall",
-        dialect: "asm",
-        scheme: "(_*) -> _*",
-        operands: O { args },
-        results: R { results },
-        attributes: A {
-            callee: "Str",
-            outgoing_stack_size: "UInt",
-        },
-        interfaces: [tir::backend::MachineInstruction, ResourceEffects],
-        state: "in_out",
-    }
-}
+__cdsl_asm_VirtualCallOp!();
 
 impl MachineInstruction for VirtualCallOp {
     fn info(&self) -> &'static InstrInfo {
@@ -271,20 +159,7 @@ impl MachineInstruction for VirtualCallOp {
     }
 }
 
-operation! {
-    VirtualIndirectCallOp {
-        name: "vcall_indirect",
-        dialect: "asm",
-        scheme: "(backend.reg<_, _>, _*) -> _*",
-        operands: O { callee, args },
-        results: R { results },
-        attributes: A {
-            outgoing_stack_size: "UInt",
-        },
-        interfaces: [tir::backend::MachineInstruction, ResourceEffects],
-        state: "in_out",
-    }
-}
+__cdsl_asm_VirtualIndirectCallOp!();
 
 impl MachineInstruction for VirtualIndirectCallOp {
     fn info(&self) -> &'static InstrInfo {
@@ -298,27 +173,12 @@ impl MachineInstruction for VirtualIndirectCallOp {
 }
 
 fn call_effects(op: &tir::OpHandle) -> Vec<ResourceEffect> {
-    [StateResource::Memory, StateResource::FpEnv]
-        .into_iter()
-        .map(|resource| ResourceEffect {
-            resource,
-            access: ResourceAccess::Change,
-            observed: op
-                .state_operands()
-                .into_iter()
-                .filter(|value| {
-                    op.context.state_resource(op.context.get_value(*value).ty()) == Some(resource)
-                })
-                .collect(),
-            produced: op
-                .state_results()
-                .into_iter()
-                .filter(|value| {
-                    op.context.state_resource(op.context.get_value(*value).ty()) == Some(resource)
-                })
-                .collect(),
-        })
-        .collect()
+    vec![ResourceEffect {
+        resource: StateResource::Memory,
+        access: ResourceAccess::Change,
+        observed: op.state_operands().into_vec(),
+        produced: op.state_results().into_vec(),
+    }]
 }
 
 impl ResourceEffects for VirtualCallOp {

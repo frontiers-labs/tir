@@ -1,0 +1,9 @@
+pub let def = {
+    rust_name: "TypeDefOp",
+    name: "def",
+    dialect: "type",
+    attributes: { sym_name: "Str", params: "?Array", layout: "?Dict", body: "?Type" },
+    interfaces: "Symbol",
+    custom_format: true,
+    state: "none",
+};

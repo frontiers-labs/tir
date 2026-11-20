@@ -49,10 +49,6 @@ fn parent_op(context: &Context, op: OpId) -> Option<OpId> {
     context.parent_op(op)
 }
 
-pub(crate) fn invalid_spec(message: impl Into<String>) -> crate::Error {
-    crate::Error::VerificationError(message.into())
-}
-
 pub(crate) fn merge_into(base: &mut AttributeDict, overlay: AttributeDict) {
     for (key, value) in overlay {
         match (base.get_mut(&key), value) {

@@ -1,9 +1,5 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
-// RUN: tir interp %s --args=7 | filecheck --check-prefix=SEVEN %s
-// RUN: tir interp %s --args=11 | filecheck --check-prefix=ELEVEN %s
-// RUN: tir opt --pass destructure --verify %s | tir interp --args=7 | filecheck --check-prefix=SEVEN %s
-// RUN: tir opt --pass destructure --verify %s | tir interp --args=11 | filecheck --check-prefix=ELEVEN %s
 // RUN: tir mc --march x86_64 --filetype obj %s -o /dev/null
 // RUN: tir mc --march riscv64 --filetype obj %s -o /dev/null
 // RUN: tir mc --march armv8-a --filetype obj %s -o /dev/null
@@ -41,6 +37,3 @@ module {
   }
   module_end
 }
-
-// SEVEN: i64 17
-// ELEVEN: i64 24

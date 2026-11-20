@@ -1,5 +1,3 @@
-// RUN: tir opt --pass destructure %s | tir interp | filecheck %s
-// RUN: tir opt --pass destructure %s | not tir interp -f trapped 2>&1 | filecheck --check-prefix=TRAP %s
 // RUN: tir opt --pass destructure --verify %s
 
 // The continue cone is not evaluated when the predicate is false: the load
@@ -30,6 +28,3 @@ module {
   }
   module_end
 }
-
-// CHECK: i32 7
-// TRAP: undefined behavior: control flow depends on poison

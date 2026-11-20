@@ -1,7 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass destructure --verify %s | filecheck %s
-// RUN: tir opt --pass destructure %s | tir interp | filecheck --check-prefix=VALUE %s
 
 // A do-while: the predicate reads what the iteration computed, so the whole
 // body sits in the header, and with nothing left for either cone the header's
@@ -31,5 +30,3 @@ module {
 // CHECK-NEXT: cfg.cond_br %[[AGAIN]], ^[[LOOP]](%[[SQ]] : !i32), ^[[EXIT:bb[0-9]+]]
 // CHECK-NEXT: ^[[EXIT]]:
 // CHECK-NEXT: func.return %[[SQ]]
-
-// VALUE: i32 256

@@ -209,12 +209,6 @@ pub fn print_generic(
         .attributes()
         .into_iter()
         .filter(|attribute| Some(attribute.name) != segments)
-        .filter(|attribute| {
-            !matches!(
-                &attribute.value,
-                crate::attributes::AttributeValue::FpSemantics(semantics) if semantics.is_default()
-            )
-        })
         .collect();
     if !attributes.is_empty() {
         fmt.write(" {")?;

@@ -14,7 +14,7 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
     // Memory order is the same discipline it is in the mid-end — selection keeps
     // the chains rather than re-deriving them, so the rule that describes them
     // is the one that already did.
-    crate::operation::verify_state_forks(context, root)?;
+    crate::verify_state_forks(context, root)?;
     let mut stack = vec![root];
     while let Some(op_id) = stack.pop() {
         if !context.has_operation(op_id) {
@@ -78,6 +78,7 @@ fn verify_instruction_ports(context: &Context, op: &OpHandle) -> Result<(), Erro
     else {
         return Ok(());
     };
+    instruction.verify_immediates(context)?;
     let schema = crate::schema::OP_SCHEMAS
         .iter()
         .find(|s| s.dialect == op.dialect().as_str() && s.name == op.name().as_str());

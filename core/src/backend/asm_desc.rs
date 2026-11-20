@@ -20,6 +20,7 @@ use tir::parse::tokens::Parser;
 use tir::{Context, OpHandle, Operation};
 
 use crate::backend::Token;
+use crate::backend::operand::{ImmediateConstraint, check_immediate};
 use crate::backend::parser::parse_hex;
 use crate::backend::regalloc::RegClassId;
 
@@ -58,29 +59,7 @@ pub enum ParseStep {
     /// [`ParseStep::Sign`] applies to it, and the values it admits. A value
     /// outside them fails the candidate so per-mnemonic dispatch can backtrack
     /// to a wider form.
-    Immediate(&'static str, bool, ImmConstraint),
-}
-
-/// The values an immediate operand admits: the half-open interval its `bits<N>`
-/// width spells, plus the `#[align]`/`#[nonzero]` constraints it declares.
-#[derive(Debug, Clone, Copy)]
-pub struct ImmConstraint {
-    pub range: Option<(i64, i64)>,
-    /// The declared alignment; 1 when the operand declares none.
-    pub align: u32,
-    pub nonzero: bool,
-}
-
-impl ImmConstraint {
-    /// Whether the operand admits `value`.
-    pub fn admits(&self, value: i64) -> bool {
-        if let Some((min, max)) = self.range
-            && !(min..max).contains(&value)
-        {
-            return false;
-        }
-        (value as u64).is_multiple_of(u64::from(self.align)) && !(self.nonzero && value == 0)
-    }
+    Immediate(&'static str, bool, ImmediateConstraint),
 }
 
 /// One element of an instruction's printed assembly, in syntax order.
@@ -108,7 +87,11 @@ pub struct InstrDesc {
 /// Parse an instruction body (the tokens after its mnemonic) per `desc`, build
 /// the op from the parsed attributes and insert it.
 #[allow(clippy::result_unit_err)]
-pub fn parse_and_insert<'src, T: Operation, F: FnOnce(Vec<NamedAttribute>) -> T>(
+pub fn parse_and_insert<
+    'src,
+    T: Operation,
+    F: FnOnce(Vec<NamedAttribute>) -> Result<T, tir::Error>,
+>(
     context: &Context,
     desc: &InstrDesc,
     parser: &mut Parser<'src, Token<'src>>,
@@ -122,7 +105,7 @@ pub fn parse_and_insert<'src, T: Operation, F: FnOnce(Vec<NamedAttribute>) -> T>
     if matches!(parser.peek(), Some(Token::Comma)) {
         return Err(());
     }
-    let op = build(attributes);
+    let op = build(attributes).map_err(|_| ())?;
     let handle = context.get_op(op.id());
     if let Some(instruction) = handle
         .clone()
@@ -219,7 +202,7 @@ fn parse_immediate<'src>(
     parser: &mut Parser<'src, Token<'src>>,
     signed: bool,
     sign: i64,
-    constraint: ImmConstraint,
+    constraint: ImmediateConstraint,
 ) -> Result<AttributeValue, ()> {
     let value = match parser.peek() {
         Some(Token::DecNumber(number)) => number.parse::<i64>().map_err(|_| ())?,
@@ -241,11 +224,10 @@ fn parse_immediate<'src>(
     } else {
         value
     };
-    if !constraint.admits(value) {
-        return Err(());
-    }
+    let value = AttributeValue::Int(value);
+    check_immediate(constraint, &value).map_err(|_| ())?;
     let _ = parser.bump();
-    Ok(AttributeValue::Int(value))
+    Ok(value)
 }
 
 /// Render an instruction's assembly per `desc`, or `None` if an operand

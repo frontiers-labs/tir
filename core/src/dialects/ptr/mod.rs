@@ -13,9 +13,7 @@ use tir_symbolic::term::{no_carrier, valid};
 use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
 use crate::{
     Context, Error, MemoryRead, MemoryWrite, Operation, PromotableAllocation, ResourceAccess,
-    ResourceEffect, ResourceEffects, TypeId,
-    attributes::{AttributeValue, Predicate},
-    dialect, operation,
+    ResourceEffect, ResourceEffects, TypeId, dialect,
 };
 
 use crate as tir;
@@ -129,31 +127,9 @@ impl PtrType {
     }
 }
 
-operation! {
-    AllocaOp {
-        name: "alloca",
-        dialect: "ptr",
-        scheme: "() -> ptr.p<_>",
-        attributes: A {
-            size: "UInt",
-            align: "UInt",
-        },
-        results: R { result },
-        interfaces: [PromotableAllocation, crate::interp::Interp],
-        state: "out",
-    }
-}
+__cdsl_ptr_AllocaOp!();
 
-operation! {
-    NullOp {
-        name: "null",
-        dialect: "ptr",
-        scheme: "() -> ptr.p<_>",
-        results: R { result },
-        interfaces: [crate::ConstantLike],
-        sem: "(set result $null_address)",
-    }
-}
+__cdsl_ptr_NullOp!();
 
 impl crate::ConstantLike for NullOp {
     fn constant_value(&self) -> tir::utils::APInt {
@@ -164,95 +140,20 @@ impl crate::ConstantLike for NullOp {
     }
 }
 
-impl NullOp {
-    fn null_address(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-        let context = self.0.context.clone();
-        let width = crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
-        let node = g.add_node(tir::sem::SymKind::Constant);
-        g.set_leaf_data(
-            node,
-            tir::sem::SymPayload::Int(tir::utils::APInt::new(u64::from(width), 0)),
-        );
-        Some(node)
-    }
-}
-
-operation! {
-    CmpOp {
-        name: "cmp",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, ptr.p<_>) -> int<1>",
-        attributes: A {
-            predicate: "Predicate in POINTER",
-        },
-        operands: O { lhs, rhs },
-        results: R { result },
-        sem: "(set result $cmp_expr)",
-    }
-}
-
-impl CmpOp {
-    fn cmp_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-        let context = self.0.context.clone();
-        crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
-
-        crate::builtin::compare_expr(g, predicate(self)?, true)
-    }
-}
-
-fn predicate(op: &impl Operation) -> Option<Predicate> {
-    match op.attr("predicate")? {
-        AttributeValue::Predicate(value) => Some(value),
-        _ => None,
-    }
-}
+__cdsl_ptr_CmpOp!();
 
 // `base + offset` modulo 2^W, W the pointer width. The offset is exactly W bits
 // wide: a narrower or wider index is sign- or zero-extended or truncated by an
 // op of its own, so the IR spells which one the source language means.
-operation! {
-    PtrAddOp {
-        name: "ptradd",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, int<_>) -> ptr.p<_>",
-        verifier: "true",
-        operands: O { base, offset },
-        results: R { result },
-        interfaces: [crate::Additive],
-        sem: "(set result (add base offset))",
-    }
-}
+__cdsl_ptr_PtrAddOp!();
 
 impl crate::Additive for PtrAddOp {}
 
 // `lhs - rhs` modulo 2^W, as a W-bit integer, W the pointer width. A narrower
 // or wider result is a truncation or extension of its own.
-operation! {
-    PtrDiffOp {
-        name: "ptrdiff",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, ptr.p<_>) -> int<_>",
-        verifier: "true",
-        operands: O { lhs, rhs },
-        results: R { result },
-        interfaces: [crate::Subtractive],
-        sem: "(set result (sub lhs rhs))",
-    }
-}
+__cdsl_ptr_PtrDiffOp!();
 
 impl crate::Subtractive for PtrDiffOp {}
-
-impl tir::Verifiable for PtrAddOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        pointer_sized(context, &self.0, &[self.operands()[1]], "offset")
-    }
-}
-
-impl tir::Verifiable for PtrDiffOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        pointer_sized(context, &self.0, &[self.result()], "result")
-    }
-}
 
 /// The integer type of a pointer offset at `op`: as wide as the pointer the
 /// layout in scope declares. With no layout nothing fixes the width or checks
@@ -262,30 +163,6 @@ pub fn offset_type(context: &Context, op: crate::OpId) -> TypeId {
         .and_then(|layout| layout.pointer_size())
         .unwrap_or(64);
     crate::builtin::IntegerType::new(context, u64::from(width))
-}
-
-fn pointer_sized(
-    context: &Context,
-    op: &tir::OpHandle,
-    values: &[crate::ValueId],
-    what: &str,
-) -> Result<(), Error> {
-    let Some(width) =
-        crate::DataLayout::for_instance(context, op).and_then(|layout| layout.pointer_size())
-    else {
-        return Ok(());
-    };
-    for &value in values {
-        let actual = crate::builtin::IntegerType::view(context, context.get_value(value).ty())
-            .map(|int| int.width());
-        if actual != Some(u64::from(width)) {
-            return Err(Error::VerificationError(format!(
-                "ptr.{} {what} must be {width} bits wide, the pointer width",
-                op.name()
-            )));
-        }
-    }
-    Ok(())
 }
 
 // `lhs + lhs_size <= rhs || rhs + rhs_size <= lhs`, the addresses unsigned: the
@@ -299,135 +176,27 @@ fn pointer_sized(
 // runtime range check guarding a copy of a loop — emits this op, and the alias
 // analysis reads it by name rather than pattern-matching a tree of compares.
 // It reads addresses, not memory, so it is pure and takes no state.
-operation! {
-    DisjointOp {
-        name: "disjoint",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, int<_>, ptr.p<_>, int<_>) -> int<1>",
-        verifier: "true",
-        operands: O { lhs, lhs_size, rhs, rhs_size },
-        results: R { result },
-        sem: "(set result (or (ule (add lhs lhs_size) rhs) (ule (add rhs rhs_size) lhs)))",
-    }
-}
+__cdsl_ptr_DisjointOp!();
 
-impl tir::Verifiable for DisjointOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let operands = self.operands();
-        let (lhs_size, rhs_size) = (operands[1], operands[3]);
-        if context.get_value(lhs_size).ty() != context.get_value(rhs_size).ty() {
-            return Err(Error::VerificationError(
-                "ptr.disjoint sizes must have one type".to_string(),
-            ));
-        }
-        pointer_sized(context, &self.0, &[lhs_size, rhs_size], "size")
-    }
-}
+__cdsl_ptr_LoadOp!();
 
-operation! {
-    LoadOp {
-        name: "load",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>) -> _",
-        verifier: "true",
-        operands: O { ptr },
-        results: R { result },
-        interfaces: [MemoryRead, ResourceEffects, crate::interp::Interp],
-        state: "in_out",
-    }
-}
-
-operation! {
-    StoreOp {
-        name: "store",
-        dialect: "ptr",
-        scheme: "(_, ptr.p<_>) -> ()",
-        verifier: "true",
-        operands: O { value, ptr },
-        interfaces: [MemoryWrite, ResourceEffects, crate::interp::Interp],
-        state: "in_out",
-    }
-}
-
-impl tir::Verifiable for LoadOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        reject_function_value(context, self.result(), "load")
-    }
-}
-
-impl tir::Verifiable for StoreOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        reject_function_value(context, self.operands()[0], "store")
-    }
-}
-
-fn reject_function_value(context: &Context, value: crate::ValueId, op: &str) -> Result<(), Error> {
-    match crate::builtin::FnType::view(context, context.get_value(value).ty()) {
-        Some(_) => Err(Error::VerificationError(format!(
-            "{op} moves a function value through memory"
-        ))),
-        None => Ok(()),
-    }
-}
+__cdsl_ptr_StoreOp!();
 
 // Copy exactly `size` bytes between non-overlapping ranges. A zero-sized copy
 // accesses neither pointer. This operation has no volatile or atomic semantics.
-operation! {
-    MemcpyOp {
-        name: "memcpy",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, ptr.p<_>, int<64>) -> ()",
-        operands: O { destination, source, size },
-        interfaces: [ResourceEffects, crate::interp::Interp, crate::Intrinsic],
-        state: "in_out",
-    }
-}
+__cdsl_ptr_MemcpyOp!();
 
-operation! {
-    MemsetOp {
-        name: "memset",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, int<8>, int<64>) -> ()",
-        operands: O { destination, value, size },
-        interfaces: [MemoryWrite, ResourceEffects, crate::interp::Interp, crate::Intrinsic],
-        state: "in_out",
-    }
-}
+__cdsl_ptr_MemsetOp!();
 
 // The address of field `field` of the `ty` that `base` points at: a field by
 // name, never a byte offset, which the layout in scope gives.
-operation! {
-    FieldOp {
-        name: "field",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>) -> ptr.p<_>",
-        attributes: A {
-            ty: "Type",
-            field: "Str",
-        },
-        operands: O { base },
-        results: R { result },
-        interfaces: [crate::interp::Interp, crate::Speculatable],
-    }
-}
+__cdsl_ptr_FieldOp!();
 
 impl crate::Speculatable for FieldOp {}
 
 // Copy one `ty` from `source` to `destination`: a struct assignment, as many
 // bytes as the layout in scope gives `ty`.
-operation! {
-    CopyOp {
-        name: "copy",
-        dialect: "ptr",
-        scheme: "(ptr.p<_>, ptr.p<_>) -> ()",
-        attributes: A {
-            ty: "Type",
-        },
-        operands: O { destination, source },
-        interfaces: [ResourceEffects, crate::Congruent, crate::interp::Interp],
-        state: "in_out",
-    }
-}
+__cdsl_ptr_CopyOp!();
 
 impl crate::Congruent for CopyOp {}
 

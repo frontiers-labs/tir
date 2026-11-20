@@ -15,13 +15,15 @@ chumsky.workspace = true
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tir-cdsl = { workspace = true, optional = true }
 tir-adt.workspace = true
 tir-symbolic.workspace = true
 
 # The AST JSON document and its schema are a documentation surface; the
 # backend build scripts compile tmdl without them.
 [features]
-default = ["json"]
+default = ["json", "rust-cli"]
+rust-cli = ["dep:tir-cdsl"]
 json = ["dep:schemars"]
 
 [lib]
@@ -33,6 +35,7 @@ doctest = false
 bench = false
 name = "tmdlc"
 path = "bin.rs"
+required-features = ["rust-cli"]
 
 [dev-dependencies]
 tir-bench.workspace = true

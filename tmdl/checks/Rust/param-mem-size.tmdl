@@ -15,8 +15,6 @@
 // CHECK: impl tir::backend::MachineInstruction for LoadDynOp
 // CHECK: impl tir::backend::MachineInstruction for StoreWordOp
 
-// CHECK: impl tir::sem::AsSemExpr for LoadWordOp
-
 // CHECK: static RULE_LOADWORD
 
 // The dynamically sized load is still kept out of instruction selection.

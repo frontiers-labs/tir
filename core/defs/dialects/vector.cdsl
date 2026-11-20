@@ -1,0 +1,39 @@
+pub let vector_len = {
+    rust_name: "VectorLenOp",
+    name: "vector_len",
+    dialect: "vector",
+    operands: { avl: "index" },
+    results: { result: "index" },
+    attributes: { sew: "Int" },
+    state: "none",
+};
+
+pub let add = {
+    rust_name: "AddOp",
+    name: "add",
+    dialect: "vector",
+    quantified: "forall N: nat, T.",
+    operands: { lhs: "vector.v<N, T>", rhs: "vector.v<N, T>", vl: "?index" },
+    results: { result: "vector.v<N, T>" },
+    state: "none",
+};
+
+pub let sub = {
+    rust_name: "SubOp",
+    name: "sub",
+    dialect: "vector",
+    quantified: "forall N: nat, T.",
+    operands: { lhs: "vector.v<N, T>", rhs: "vector.v<N, T>", vl: "?index" },
+    results: { result: "vector.v<N, T>" },
+    state: "none",
+};
+
+pub let mul = {
+    rust_name: "MulOp",
+    name: "mul",
+    dialect: "vector",
+    quantified: "forall N: nat, T.",
+    operands: { lhs: "vector.v<N, T>", rhs: "vector.v<N, T>", vl: "?index" },
+    results: { result: "vector.v<N, T>" },
+    state: "none",
+};

@@ -1,29 +1,5 @@
 use super::*;
 
-pub(super) fn emit_as_sem_expr_impl(
-    rhs: &ast::Expr,
-    name_ident: &proc_macro2::Ident,
-    numeric_params: &HashMap<String, i64>,
-    isa_param_values: &HashMap<String, i64>,
-) -> Option<proc_macro2::TokenStream> {
-    let mut dag = tir_symbolic::sem::SemGraph::<()>::new();
-    let lowering = rhs.lower_to_sema(&mut dag, numeric_params, isa_param_values)?;
-    // The AsSemExpr impl carries no type annotations (the program-graph builder
-    // infers them), so pass no widths.
-    let root_expr = emit_dag_as_code(&dag, lowering.root, &[]);
-
-    Some(quote! {
-        impl tir::sem::AsSemExpr for #name_ident {
-            fn convert(
-                &self,
-                g: &mut tir::sem::SemGraph,
-            ) -> tir::NodeId {
-                #root_expr
-            }
-        }
-    })
-}
-
 pub(super) fn is_store_call(expr: &ast::Expr) -> bool {
     matches!(
         expr,
@@ -279,10 +255,27 @@ pub(super) fn lowered_value_offset(
     dag: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
 ) -> proc_macro2::Literal {
-    // Behavior value terms carry no type annotations, so no typed nodes.
-    let (offset, has_typed_node) = intern_dag(dag, root, &[]);
-    assert!(!has_typed_node);
-    proc_macro2::Literal::u32_unsuffixed(offset)
+    let mut ops: Vec<tir_symbolic::sem::SemOp> = Vec::new();
+    let mut node_indices: HashMap<usize, u32> = HashMap::new();
+    for (counter, node_id) in dag.postorder(root).enumerate() {
+        ops.push(tir_symbolic::sem::SemOp::Node(*dag.get_node(node_id)));
+
+        if let Some(data) = dag.get_leaf_data(node_id) {
+            ops.push(tir_symbolic::sem::SemOp::Payload(payload_desc(data)));
+        }
+
+        let children: Vec<tir_adt::NodeId> = dag.children(node_id).collect();
+        for child_id in children {
+            ops.push(tir_symbolic::sem::SemOp::Edge(
+                counter as u32,
+                node_indices[&child_id.index()],
+            ));
+        }
+
+        node_indices.insert(node_id.index(), counter as u32);
+    }
+
+    proc_macro2::Literal::u32_unsuffixed(intern_sem_ops(&ops))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -437,89 +430,6 @@ fn emit_graph_destination(
     }
 
     None
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn intern_dag(
-    dag: &tir_symbolic::sem::SemGraph,
-    root: tir_adt::NodeId,
-    widths: &[Option<u32>],
-) -> (u32, bool) {
-    let mut ops: Vec<tir_symbolic::sem::SemOp> = Vec::new();
-    let mut node_indices: HashMap<usize, u32> = HashMap::new();
-    let mut has_typed_node = false;
-    let terms = tir_symbolic::term::Terms::new();
-    let inferred_types = tir_symbolic::lang::infer_types(&terms, dag, |_| None).ok();
-    for (counter, node_id) in dag.postorder(root).enumerate() {
-        ops.push(tir_symbolic::sem::SemOp::Node(*dag.get_node(node_id)));
-
-        if let Some(data) = dag.get_leaf_data(node_id) {
-            ops.push(tir_symbolic::sem::SemOp::Payload(payload_desc(data)));
-        }
-
-        if !matches!(
-            inferred_types
-                .as_ref()
-                .and_then(|types| types.get(node_id.index()))
-                .and_then(tir_symbolic::term::TypeArg::as_type)
-                .map(|ty| terms.ctor(ty)),
-            Some(tir_symbolic::term::ctor::FLOAT)
-        ) && !matches!(
-            dag.get_node(node_id),
-            tir_symbolic::lang::SymKind::FAdd
-                | tir_symbolic::lang::SymKind::FSub
-                | tir_symbolic::lang::SymKind::FMul
-                | tir_symbolic::lang::SymKind::FDiv
-                | tir_symbolic::lang::SymKind::FCvt
-                | tir_symbolic::lang::SymKind::SIToFP
-                | tir_symbolic::lang::SymKind::UIToFP
-                | tir_symbolic::lang::SymKind::Bitcast
-                | tir_symbolic::lang::SymKind::LoadMemory
-                | tir_symbolic::lang::SymKind::LoadReserved
-        ) && (dag.get_leaf_data(node_id).is_none()
-            || *dag.get_node(node_id) == tir_symbolic::lang::SymKind::Symbol)
-            && let Some(Some(width)) = widths.get(node_id.index()).copied()
-        {
-            ops.push(tir_symbolic::sem::SemOp::Typed(width));
-            has_typed_node = true;
-        }
-
-        let children: Vec<tir_adt::NodeId> = dag.children(node_id).collect();
-        for child_id in children {
-            ops.push(tir_symbolic::sem::SemOp::Edge(
-                counter as u32,
-                node_indices[&child_id.index()],
-            ));
-        }
-
-        node_indices.insert(node_id.index(), counter as u32);
-    }
-
-    (intern_sem_ops(&ops), has_typed_node)
-}
-
-fn emit_dag_as_code(
-    dag: &tir_symbolic::sem::SemGraph,
-    root: tir_adt::NodeId,
-    widths: &[Option<u32>],
-) -> proc_macro2::TokenStream {
-    let (offset, has_typed_node) = intern_dag(dag, root, widths);
-    let offset_lit = proc_macro2::Literal::u32_unsuffixed(offset);
-    if has_typed_node {
-        quote! {
-            {
-                use tir::sem::ExtendSemBytesTyped as _;
-                g.extend_sem_bytes_typed(_context, SEM_KINDS, SEM_BLOB, #offset_lit)
-            }
-        }
-    } else {
-        quote! {
-            {
-                use tir::sem::ExtendSemBytes as _;
-                g.extend_sem_bytes(SEM_KINDS, SEM_BLOB, #offset_lit)
-            }
-        }
-    }
 }
 
 fn payload_desc(

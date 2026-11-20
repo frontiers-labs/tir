@@ -179,15 +179,18 @@ impl TypedAst {
         self.layouts.type_of(&self.types, self.target, &record, ty)
     }
 
-    /// Size and alignment of `ty`, in bytes; `None` for an incomplete type.
+    /// Size and alignment of `ty`, in bytes, when the target layout supplies them.
     pub fn type_layout(&self, ty: QualType) -> Option<(u64, u64)> {
         self.layouts.size_align(self.layout_type(ty)?)
     }
 
     /// The offset of each field of the record `id`, in bytes.
     pub fn field_offsets(&self, id: RecordId) -> Option<Vec<u64>> {
-        self.layouts
-            .field_offsets(self.layouts.record_type(&self.record(id)?.name))
+        let record = self.record(id)?;
+        let offsets = self
+            .layouts
+            .field_offsets(self.layouts.record_type(&record.name))?;
+        (offsets.len() == record.fields.len()).then_some(offsets)
     }
 
     pub fn integer_width(&self, ty: QualType) -> Option<u32> {

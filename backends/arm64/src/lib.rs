@@ -1,5 +1,5 @@
 use tir::backend::normalize_name;
-use tir::helpers::{dialect, operation};
+use tir::helpers::dialect;
 
 include!(concat!(env!("OUT_DIR"), "/model_check_sources.rs"));
 

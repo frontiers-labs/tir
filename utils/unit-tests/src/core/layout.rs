@@ -2,7 +2,7 @@
 
 use tir::{
     attributes::AttributeValue,
-    builtin::{ops, FloatType, IntegerType, ModuleOp, UnitType},
+    builtin::{ops, FloatType, IntegerType, ModuleOp, NamedType, UnitType},
     func::ops as func_ops,
     parse::ir::parse_ir,
     ptr::PtrType,
@@ -10,6 +10,31 @@ use tir::{
 };
 
 use super::fixtures;
+
+#[test]
+fn aggregates_require_explicit_layout() {
+    let (context, module) = fixtures::parse(
+        r#"module {layout.spec = #layout.spec<!i32 = {size = 32, abi = 32}, !Declared = {size = 64, abi = 32}>} {
+  type.def !Alias = !i32
+  type.def !Declared = !struct<{tag: !i8, value: !i32}>
+  type.def !Undeclared = !struct<{tag: !i8, value: !i32}>
+  module_end
+}"#,
+    );
+    let layout = DataLayout::for_op(&context, module.id()).expect("layout in scope");
+    assert_eq!(
+        layout.size_in_bits(NamedType::new(&context, "Alias")),
+        Some(32)
+    );
+    assert_eq!(
+        layout.size_in_bits(NamedType::new(&context, "Declared")),
+        Some(64)
+    );
+    assert_eq!(
+        layout.size_in_bits(NamedType::new(&context, "Undeclared")),
+        None
+    );
+}
 
 fn layout(context: &Context, spec: &str) -> DataLayout {
     let src = format!("module {{layout.spec = {spec}}} {{\n  module_end\n}}");

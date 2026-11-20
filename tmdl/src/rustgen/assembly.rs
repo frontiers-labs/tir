@@ -142,10 +142,6 @@ pub(super) fn compile_asm_printer_template(template: &str, mnemonic: &str) -> Ve
     parts
 }
 
-// ---------------------------------------------------------------------------
-// AsSemExpr code generation
-// ---------------------------------------------------------------------------
-
 pub(super) fn synthesize_branch_value(behavior: &ast::Expr, width_bytes: u64) -> Option<ast::Expr> {
     let ast::Expr::If(if_) = unwrap_single_stmt_block(behavior) else {
         return None;

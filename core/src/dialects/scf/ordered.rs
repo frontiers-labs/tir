@@ -7,25 +7,9 @@
 use crate as tir;
 use crate::binding;
 use crate::parse::common::Cursor;
-use crate::{Context, CountedLoop, Error, ExitScope, ExitScopeKind, Operation, ValueId, operation};
+use crate::{Context, CountedLoop, Error, ExitScope, ExitScopeKind, Operation, ValueId};
 
-operation! {
-    OrderedForOp {
-        name: "ordered_for",
-        dialect: "scf",
-        scheme: "forall C: index | int<_>. (C, _*, C, C) -> _*",
-        format: "custom",
-        verifier: "true",
-        operands: O { lb, inits, ub, step },
-        results: R { results },
-        regions: R {
-            body: Region {
-                kind: Blocks,
-            }
-        },
-        interfaces: [ExitScope, CountedLoop],
-    }
-}
+__cdsl_scf_OrderedForOp!();
 
 impl ExitScope for OrderedForOp {
     fn exit_scope(&self) -> ExitScopeKind {
@@ -100,78 +84,13 @@ impl OrderedForOp {
 
         let mut result_types = vec![counter_type];
         result_types.extend(bound.ports.iter().map(tir::Value::ty));
-        Ok(Box::new(OrderedForOp::new(
-            context,
-            lb,
-            bound.inits,
-            ub,
-            step,
-            result_types,
-            Some(body),
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
+        let builder = OrderedForOpBuilder::new(context)
+            .lb(lb)
+            .inits(bound.inits)
+            .ub(ub)
+            .step(step)
+            .body(body)
+            .result_types(result_types);
+        Ok(Box::new(builder.build()))
     }
-}
-
-impl tir::Verifiable for OrderedForOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_body(context, self)
-    }
-}
-
-fn verify_body(context: &Context, op: &OrderedForOp) -> Result<(), Error> {
-    let body = context.get_region(op.0.regions()[0]);
-    let ports = body.ports();
-    let inits = op.inits();
-    let fail = |message: String| Err(Error::VerificationError(message));
-    if ports.len() != inits.len() + 1 {
-        return fail(format!(
-            "scf.ordered_for takes {} initial values but its body carries {} ports past the counter",
-            inits.len(),
-            ports.len().saturating_sub(1)
-        ));
-    }
-    for (index, (port, &init)) in ports[1..].iter().zip(&inits).enumerate() {
-        if port.ty() != context.get_value(init).ty() {
-            return fail(format!(
-                "scf.ordered_for port {} and its init differ in type",
-                index + 1
-            ));
-        }
-    }
-    let results = op.0.value_results();
-    if results.len() != ports.len() {
-        return fail(format!(
-            "scf.ordered_for carries {} ports but has {} results",
-            ports.len(),
-            results.len()
-        ));
-    }
-    let Some(entry) = body.block_ids().first().map(|&id| context.get_block(id)) else {
-        return fail("scf.ordered_for has an empty body".into());
-    };
-    let Some(latch) = entry.op_ids().last().map(|&id| context.get_op(id)) else {
-        return fail("scf.ordered_for body has no terminator".into());
-    };
-    if !latch.is::<crate::scf::YieldOp>() {
-        return fail("an scf.ordered_for body must end in scf.yield".into());
-    }
-    let yielded = latch.value_operands();
-    if yielded.len() + 1 != ports.len() {
-        return fail(format!(
-            "scf.ordered_for carries {} values past its counter but its body yields {}",
-            ports.len() - 1,
-            yielded.len()
-        ));
-    }
-    for (index, (port, &value)) in ports[1..].iter().zip(&yielded).enumerate() {
-        if port.ty() != context.get_value(value).ty() {
-            return fail(format!(
-                "scf.ordered_for port {} and the value its body yields differ in type",
-                index + 1
-            ));
-        }
-    }
-    Ok(())
 }

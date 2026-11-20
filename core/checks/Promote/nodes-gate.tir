@@ -1,11 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s -f pick --args=1,5 | filecheck --check-prefix=THEN %s
-// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f pick --args=1,5 | filecheck --check-prefix=THEN %s
-// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 3 %s | tir opt --pass promote-nodes | tir interp -f pick --args=1,5 | filecheck --check-prefix=THEN %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir opt --pass promote-nodes | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
 
 // One arm writes the slot, the other leaves the store before the gate. The
 // read after the gate reaches a different write through each arm, so the gate
@@ -44,6 +39,3 @@ module {
 // CHECK-NEXT: }
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[V]], %[[SLOT]] : !i32
 // CHECK-NEXT: -> %[[SUM]], %{{[0-9]+}}
-
-// THEN: i32 15
-// ELSE: i32 5

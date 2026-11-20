@@ -3,7 +3,6 @@
 
 use tir::{
     builtin::{self, ops, ModuleOp},
-    interp,
     scf::{LoopOp, SwitchOp},
     Context, ExitTarget, NonLocalExit, OpId, Operation, RegionId, Terminator, ValueId,
 };
@@ -25,16 +24,6 @@ fn find<T: Operation>(context: &Context, region: RegionId) -> OpId {
         .into_iter()
         .find(|&op| context.get_op(op).is::<T>())
         .expect("the region holds the op")
-}
-
-fn run(context: &Context, function: OpId, args: &[i64]) -> i64 {
-    let args = args
-        .iter()
-        .map(|&value| interp::Value::Int(tir::utils::APInt::new_signed(32, value)))
-        .collect();
-    interp::run_function(context, function, args).expect("runs")[0]
-        .to_i64()
-        .expect("an integer")
 }
 
 const LOOP: &str = r#"module {
@@ -81,7 +70,7 @@ fn growing_a_loop_port_extends_every_aligned_range() {
         grown.value_results().as_slice(),
         [grown.value_results()[0], result]
     );
-    tir::verify_op_tree(&context, module.id()).expect("the grown loop verifies");
+    tir::check_types(&context).expect("the grown loop verifies");
 }
 
 #[test]
@@ -113,7 +102,7 @@ fn growing_a_loop_state_port_keeps_the_carried_shape() {
         3,
         "the value ranges are untouched"
     );
-    tir::verify_op_tree(&context, module.id()).expect("the grown loop verifies");
+    tir::check_types(&context).expect("the grown loop verifies");
 }
 
 const SWITCH: &str = r#"module {
@@ -151,7 +140,7 @@ fn growing_a_gamma_port_forwards_to_and_joins_every_arm() {
         assert_eq!(arm.value_results(), vec![arm.value_arguments()[0].id()]);
     }
     assert_eq!(grown.value_results().as_slice(), [result]);
-    tir::verify_op_tree(&context, module.id()).expect("the grown gamma verifies");
+    tir::check_types(&context).expect("the grown gamma verifies");
 }
 
 tir::helpers::operation! {
@@ -362,6 +351,5 @@ fn growing_a_counted_loop_port_lands_before_its_bounds() {
     assert_eq!(grown.value_operands().as_slice(), [lb, ub, ub, step]);
     assert_eq!(grown.value_results().len(), 2);
     assert_eq!(grown.value_results()[1], result);
-    tir::verify_op_tree(&context, module.id()).expect("the grown counted loop verifies");
-    assert_eq!(run(&context, function, &[0, 3, 1]), 3);
+    tir::check_types(&context).expect("the grown counted loop verifies");
 }

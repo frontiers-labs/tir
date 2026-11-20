@@ -1,0 +1,700 @@
+use std::Bits;
+use std::El;
+use std::bits;
+use std::List;
+use std::Option;
+use std::Optional;
+use std::Vec;
+use std::option;
+use std::EffectSet;
+use std::Cfg;
+use std::Region;
+use std::Function;
+use std::Ptr;
+use std::State;
+use std::ExclusiveResource;
+use std::Ty as IrTy;
+
+pub enum Bound<Size: Nat, Offset: Nat, Width: Nat> {
+    Within<Offset: Nat, Width: Nat, Rest: Nat>: Bound<Offset + Width + Rest, Offset, Width>,
+}
+pub let Alignment: Type = {
+    log2: Nat,
+    bound: Bound<63, log2, 0>,
+};
+
+pub enum DifferenceWidth<Width: Nat> {
+    W1: DifferenceWidth<1>,
+    W2: DifferenceWidth<2>,
+    W4: DifferenceWidth<4>,
+    W8: DifferenceWidth<8>,
+}
+pub let SymbolDifference<Size: Nat>: Type = {
+    offset: Nat,
+    width: Nat,
+    width_proof: DifferenceWidth<width>,
+    bounds: Bound<Size, offset, width>,
+    symbol: String,
+    base: String,
+};
+pub enum GlobalStorage<Kind: Nat, Size: Nat> {
+    External: GlobalStorage<0, 0>,
+    Bytes<Size: Nat>(Alignment, Vec<El<Bits<8>>, Size>): GlobalStorage<1, Size>,
+    Zero<Size: Nat>(Alignment): GlobalStorage<2, Size>,
+}
+pub enum DifferenceSet<Kind: Nat, Size: Nat> {
+    None<Kind: Nat, Size: Nat>: DifferenceSet<Kind, Size>,
+    Bytes<Size: Nat>(List<SymbolDifference<Size>>): DifferenceSet<1, Size>,
+    Zero<Size: Nat>(List<SymbolDifference<Size>>): DifferenceSet<2, Size>,
+}
+
+pub enum Visibility {
+    Public,
+    Private,
+}
+pub interface SymbolInterface<Ty: Type> {
+    symbol_name: () -> String,
+    symbol_signature: () -> Option<List<Ty>>,
+    symbol_result_type: () -> Option<Ty>,
+    symbol_visibility: () -> Visibility,
+    is_definition: () -> Bool,
+}
+
+use SymbolInterface as Symbol;
+use PureInterface as Pure;
+
+pub interface Terminator<Block: Type> { successors: () -> List<Block> }
+
+pub interface ConstantLike<w: Nat> { constant_value: () -> El<Bits<w>> }
+
+pub interface PureInterface {}
+
+pub interface Additive {}
+
+pub interface Subtractive {}
+
+pub interface IntegerArithmetic {}
+
+pub interface SameOperandAndResultType {}
+
+pub interface Congruent {}
+
+pub interface Commutative { is_commutative: () -> Bool }
+
+pub interface Speculatable { is_speculatable: () -> Bool }
+
+pub interface OpCost { cost: () -> El<Bits<32>> }
+
+let rust_interfaces = {
+    Additive: "Additive",
+    Commutative: "Commutative",
+    Congruent: "Congruent",
+    ConstantLike: "ConstantLike",
+    IntegerArithmetic: "IntegerArithmetic",
+    OpCost: "OpCost",
+    PureInterface: "Pure",
+    SameOperandAndResultType: "SameOperandAndResultType",
+    Speculatable: "Speculatable",
+    Subtractive: "Subtractive",
+    SymbolInterface: "Symbol",
+    Terminator: "Terminator",
+};
+
+pub enum StateResource {
+    Memory,
+}
+
+pub enum AggregateKind {
+    Struct,
+    Union,
+    Variant,
+}
+
+let ConstantAttributes: Type = { value: Int };
+let constant_rust = { interfaces: { ConstantLike: true } };
+
+let ConstantOperation<w: Nat> = {
+    signature: Type,
+    attributes: Type,
+    exec: (ConstantAttributes) -> El<Bits<w>>,
+    interfaces: {
+        ConstantLike: ConstantLike<w>,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let constant<w: Nat>: ConstantOperation<w> = op {
+    signature: () -> El<Bits<w>>,
+    attributes: ConstantAttributes,
+    exec: fn (self: ConstantAttributes) -> El<Bits<w>> { bits::from_int<w>(self.value) },
+
+    interfaces: {
+        ConstantLike: { constant_value: fn () -> El<Bits<w>> { bits::from_int<w>(self.value) } },
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let AddiAttributes: Type = { nsw: Optional<Bool>, nuw: Optional<Bool> };
+
+let AddiOperation<w: Nat> = {
+    signature: Type,
+    attributes: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    poison: (AddiAttributes, El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        Additive: Additive,
+        Commutative: Commutative,
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let addi<w: Nat>: AddiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    attributes: AddiAttributes,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> {
+        bits::add_wrapping(lhs, rhs)
+    },
+    poison: fn (self: AddiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool {
+        (option::get_or(self.nsw, false) && bits::signed_add_overflows(lhs, rhs)) ||
+        (option::get_or(self.nuw, false) && bits::unsigned_add_overflows(lhs, rhs))
+    },
+
+    interfaces: {
+        Additive: {},
+        Commutative: { is_commutative: fn () -> Bool { true } },
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let SubiAttributes: Type = { nsw: Optional<Bool>, nuw: Optional<Bool> };
+
+let SubiOperation<w: Nat> = {
+    signature: Type,
+    attributes: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    poison: (SubiAttributes, El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        Subtractive: Subtractive,
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let subi<w: Nat>: SubiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    attributes: SubiAttributes,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::sub_wrapping(lhs, rhs) },
+    poison: fn (self: SubiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool {
+        (option::get_or(self.nsw, false) && bits::signed_sub_overflows(lhs, rhs)) ||
+        (option::get_or(self.nuw, false) && bits::unsigned_sub_overflows(lhs, rhs))
+    },
+
+    interfaces: {
+        Subtractive: {},
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let muli_rust = { interfaces: { OpCost: true } };
+
+let MuliOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    interfaces: {
+        Commutative: Commutative,
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+        OpCost: OpCost,
+    },
+};
+
+pub let muli<w: Nat>: MuliOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::mul_wrapping(lhs, rhs) },
+
+    interfaces: {
+        Commutative: { is_commutative: fn () -> Bool { true } },
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        OpCost: { cost: fn () -> El<Bits<32>> { bits::literal<32>(4) } },
+    },
+};
+
+let DivsiOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    requires: (El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+    },
+};
+
+pub let divsi<w: Nat>: DivsiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::sdiv(lhs, rhs) },
+    requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::signed_div_defined(lhs, rhs) },
+
+    interfaces: {
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+    },
+};
+
+let DivuiOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    requires: (El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+    },
+};
+
+pub let divui<w: Nat>: DivuiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::udiv(lhs, rhs) },
+    requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::ne(rhs, bits::zero<w>()) },
+
+    interfaces: {
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+    },
+};
+
+let RemsiOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    requires: (El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+    },
+};
+
+pub let remsi<w: Nat>: RemsiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::srem(lhs, rhs) },
+    requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::signed_div_defined(lhs, rhs) },
+
+    interfaces: {
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+    },
+};
+
+let RemuiOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    requires: (El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+    },
+};
+
+pub let remui<w: Nat>: RemuiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::urem(lhs, rhs) },
+    requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::ne(rhs, bits::zero<w>()) },
+
+    interfaces: {
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+    },
+};
+
+let AndiOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    interfaces: {
+        Commutative: Commutative,
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let andi<w: Nat>: AndiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::and(lhs, rhs) },
+
+    interfaces: {
+        Commutative: { is_commutative: fn () -> Bool { true } },
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let OriOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    interfaces: {
+        Commutative: Commutative,
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let ori<w: Nat>: OriOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::or(lhs, rhs) },
+
+    interfaces: {
+        Commutative: { is_commutative: fn () -> Bool { true } },
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let XoriOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    interfaces: {
+        Commutative: Commutative,
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let xori<w: Nat>: XoriOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::xor(lhs, rhs) },
+
+    interfaces: {
+        Commutative: { is_commutative: fn () -> Bool { true } },
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let ShliOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    poison: (El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let shli<w: Nat>: ShliOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::shl(lhs, rhs) },
+    poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
+
+    interfaces: {
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let ShruiOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    poison: (El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let shrui<w: Nat>: ShruiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::lshr(lhs, rhs) },
+    poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
+
+    interfaces: {
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let ShrsiOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
+    poison: (El<Bits<w>>, El<Bits<w>>) -> Bool,
+    interfaces: {
+        SameOperandAndResultType: SameOperandAndResultType,
+        IntegerArithmetic: IntegerArithmetic,
+        Speculatable: Speculatable,
+    },
+};
+
+pub let shrsi<w: Nat>: ShrsiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::ashr(lhs, rhs) },
+    poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
+
+    interfaces: {
+        SameOperandAndResultType: {},
+        IntegerArithmetic: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let ExtsiOperation<In: Nat, Out: Nat> = {
+    signature: Type,
+    exec: (El<Bits<In>>) -> El<Bits<Out>>,
+    interfaces: {
+        Speculatable: Speculatable,
+    },
+};
+
+pub let extsi<In: Nat, Out: Nat>: ExtsiOperation<In, Out> = op {
+    signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
+    exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::sext<In, Out>(input) },
+
+    interfaces: {
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let ExtuiOperation<In: Nat, Out: Nat> = {
+    signature: Type,
+    exec: (El<Bits<In>>) -> El<Bits<Out>>,
+    interfaces: {
+        Speculatable: Speculatable,
+    },
+};
+
+pub let extui<In: Nat, Out: Nat>: ExtuiOperation<In, Out> = op {
+    signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
+    exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::zext<In, Out>(input) },
+
+    interfaces: {
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let TrunciOperation<In: Nat, Out: Nat> = {
+    signature: Type,
+    exec: (El<Bits<In>>) -> El<Bits<Out>>,
+    interfaces: {
+        Speculatable: Speculatable,
+    },
+};
+
+pub let trunci<In: Nat, Out: Nat>: TrunciOperation<In, Out> = op {
+    signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
+    exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::trunc<In, Out>(input) },
+
+    interfaces: {
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let bitcast_rust = { widened: true };
+
+let BitcastOperation<w: Nat> = {
+    signature: Type,
+    exec: (El<Bits<w>>) -> El<Bits<w>>,
+    interfaces: {
+        Speculatable: Speculatable,
+    },
+};
+
+pub let bitcast<w: Nat>: BitcastOperation<w> = op {
+    signature: (input: El<Bits<w>>) -> El<Bits<w>>,
+    exec: fn (input: El<Bits<w>>) -> El<Bits<w>> { bits::bitcast<w, w>(input) },
+    interfaces: {
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let AssumeOperation = {
+    signature: Type,
+    exec: (El<Bits<1>>) -> (),
+    requires: (El<Bits<1>>) -> Bool,
+};
+
+pub let assume: AssumeOperation = op {
+    signature: (condition: El<Bits<1>>) -> (),
+    exec: fn (condition: El<Bits<1>>) -> () { () },
+    requires: fn (condition: El<Bits<1>>) -> Bool { bits::ne(condition, bits::zero<1>()) },
+};
+
+pub let freeze<T: Type> = op {
+    signature: (input: T) -> T,
+    interfaces: {
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+let RefineOperation<T: Type> = {
+    signature: Type,
+    exec: (T, El<Bits<1>>) -> T,
+    interfaces: {
+        Congruent: Congruent,
+    },
+};
+
+pub let refine<T: Type>: RefineOperation<T> = op {
+    signature: (input: T, predicate: El<Bits<1>>) -> T,
+    exec: fn (input: T, predicate: El<Bits<1>>) -> T { input },
+    interfaces: {
+        Congruent: {},
+    },
+};
+
+let module_end_rust = { interfaces: { Terminator: true } };
+
+pub let module_end<Block: Type> = op {
+    signature: () -> (),
+    interfaces: {
+        Terminator: { successors: fn () -> List<Block> { List::Nil<Block> } },
+    },
+};
+
+pub enum IntegerPredicate {
+    Eq, Ne, Slt, Sgt, Sle, Sge, Ult, Ugt, Ule, Uge,
+}
+
+let CmpiAttributes: Type = { predicate: IntegerPredicate };
+
+let CmpiOperation<w: Nat> = {
+    signature: Type,
+    attributes: Type,
+    exec: (CmpiAttributes, El<Bits<w>>, El<Bits<w>>) -> El<Bits<1>>,
+    interfaces: {
+        Speculatable: Speculatable,
+    },
+};
+
+pub let cmpi<w: Nat>: CmpiOperation<w> = op {
+    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<1>>,
+    attributes: CmpiAttributes,
+    exec: fn (self: CmpiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<1>> {
+        bits::from_bool(match self.predicate {
+            IntegerPredicate::Eq => bits::eq(lhs, rhs),
+            IntegerPredicate::Ne => bits::ne(lhs, rhs),
+            IntegerPredicate::Slt => bits::slt(lhs, rhs),
+            IntegerPredicate::Sgt => bits::sgt(lhs, rhs),
+            IntegerPredicate::Sle => bits::sle(lhs, rhs),
+            IntegerPredicate::Sge => bits::sge(lhs, rhs),
+            IntegerPredicate::Ult => bits::ult(lhs, rhs),
+            IntegerPredicate::Ugt => bits::ugt(lhs, rhs),
+            IntegerPredicate::Ule => bits::ule(lhs, rhs),
+            IntegerPredicate::Uge => bits::uge(lhs, rhs),
+        })
+    },
+
+    interfaces: {
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+pub let Integer<w: Nat> = Bits<w>;
+
+let ModuleOperation = {
+    signature: Type,
+    regions: { body: Type },
+};
+
+pub let module<Params: Type, Results: Type, Input: Type, Trace: Type>: ModuleOperation = op {
+    signature: () -> (),
+    regions: { body: Region<Cfg, Params, Results, Input, Trace> },
+};
+
+let global_rust = {
+    attributes: { sym_name: String },
+    format: true,
+    interfaces: { Symbol: true, Global: true },
+};
+
+pub let global<P: IrTy, Ty: Type> = op {
+    signature: () -> Ptr<P>,
+    attributes: {
+        sym_name: String,
+        sym_visibility: Optional<String>,
+        kind: Nat,
+        size: Nat,
+        storage: GlobalStorage<kind, size>,
+        size_bound: Bound<18446744073709551615, 0, size>,
+        section: Optional<String>,
+        relocations: Optional<List<{ offset: Nat, symbol: String, addend: Int, width: Nat }>>,
+        symbol_differences: DifferenceSet<kind, size>,
+    },
+    interfaces: {
+        Symbol: {
+                symbol_name: fn () -> String { self.sym_name },
+                symbol_signature: fn () -> Option<List<Ty>> { option::none<List<Ty>> },
+                symbol_result_type: fn () -> Option<Ty> { option::none<Ty> },
+                symbol_visibility: fn () -> Visibility {
+                    if option::get_or(self.sym_visibility, "") == "private" {
+                        Visibility::Private
+                    } else {
+                        Visibility::Public
+                    }
+                },
+                is_definition: fn () -> Bool { self.kind != 0 },
+            },
+    },
+};
+
+pub let fn_to_ptr<Args: List<IrTy>, Ret: IrTy, E: EffectSet, P: IrTy> = op {
+    signature: (callee: Function<Args, std::list::singleton<IrTy>(Ret), E>) -> Ptr<P>,
+    interfaces: {
+        Pure: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+pub let ptr_to_fn<Args: List<IrTy>, Ret: IrTy, E: EffectSet, P: IrTy> = op {
+    signature: (address: Ptr<P>) -> Function<Args, std::list::singleton<IrTy>(Ret), E>,
+    interfaces: {
+        Pure: {},
+        Speculatable: { is_speculatable: fn () -> Bool { true } },
+    },
+};
+
+
+pub let GlobalInterface<Addr: Type> = {
+    address: () -> Addr,
+    initializer: () -> Option<List<El<Bits<8>>>>,
+};
+
+pub let InterpInterface<V: Type, S: Type, R: Type> = {
+    evaluate: (List<V>, S) -> (R, S),
+};
+
+pub let MemoryState = State<ExclusiveResource<"memory">>;
+
+pub let make_tuple = {
+    rust_name: "MakeTupleOp",
+    name: "make_tuple",
+    dialect: "builtin",
+    operands: { elements: "*_" },
+    results: { result: "tuple<_>" },
+    interfaces: "crate::Speculatable",
+    state: "none",
+};
+
+pub let tuple_get = {
+    rust_name: "TupleGetOp",
+    name: "tuple_get",
+    dialect: "builtin",
+    operands: { tuple: "tuple<_>" },
+    results: { result: "_" },
+    attributes: { index: "UInt" },
+    interfaces: "crate::Speculatable",
+    state: "none",
+};

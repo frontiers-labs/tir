@@ -330,6 +330,7 @@ pub struct PatchField {
     /// scatter (e.g. bit 0 of RISC-V branch offsets); a value with any of them
     /// set cannot be represented.
     pub dropped_mask: u128,
+    pub nonzero: bool,
     pub runs: &'static [FieldRun],
 }
 
@@ -436,7 +437,7 @@ pub fn patch_with(bytes: &mut [u8], value: i64, field: &PatchField) -> Option<()
     {
         return None;
     }
-    if field.dropped_mask != 0 && (value as u128) & field.dropped_mask != 0 {
+    if (value as u128) & field.dropped_mask != 0 || (field.nonzero && value == 0) {
         return None;
     }
     let width_bits = bytes.len().min(16) * 8;

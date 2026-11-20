@@ -1,0 +1,120 @@
+pub let module = {
+    rust_name: "ModuleOp",
+    name: "module",
+    dialect: "spirv",
+    attributes: { version: "Str", addressing_model: "Str", memory_model: "Str" },
+    regions: { body: { kind: "Blocks", variadic: false } },
+    state: "none",
+};
+
+pub let module_end = {
+    rust_name: "ModuleEndOp",
+    name: "module_end",
+    dialect: "spirv",
+    interfaces: "Terminator",
+    state: "none",
+};
+
+pub let Capability = {
+    rust_name: "CapabilityOp",
+    name: "Capability",
+    dialect: "spirv",
+    attributes: { name: "Str" },
+    state: "none",
+};
+
+pub let GlobalVariable = {
+    rust_name: "GlobalVariableOp",
+    name: "GlobalVariable",
+    dialect: "spirv",
+    results: { result: "_" },
+    attributes: { sym_name: "Str", storage_class: "Str", decorations: "Dict" },
+    state: "none",
+};
+
+pub let EntryPoint = {
+    rust_name: "EntryPointOp",
+    name: "EntryPoint",
+    dialect: "spirv",
+    attributes: { execution_model: "Str", function: "Str", interfaces: "Array" },
+    state: "none",
+};
+
+pub let ExecutionMode = {
+    rust_name: "ExecutionModeOp",
+    name: "ExecutionMode",
+    dialect: "spirv",
+    attributes: { function: "Str", mode: "Str", values: "Array" },
+    state: "none",
+};
+
+pub let Constant = {
+    rust_name: "ConstantOp",
+    name: "Constant",
+    dialect: "spirv",
+    results: { result: "_" },
+    attributes: { value: "any" },
+    state: "none",
+};
+
+pub let Load = {
+    rust_name: "LoadOp",
+    name: "Load",
+    dialect: "spirv",
+    operands: { pointer: "_" },
+    results: { result: "_" },
+    state: "none",
+};
+
+pub let Store = {
+    rust_name: "StoreOp",
+    name: "Store",
+    dialect: "spirv",
+    operands: { pointer: "_", value: "_" },
+    state: "none",
+};
+
+pub let ControlBarrier = {
+    rust_name: "ControlBarrierOp",
+    name: "ControlBarrier",
+    dialect: "spirv",
+    operands: { execution_scope: "_", memory_scope: "_", memory_semantics: "_" },
+    state: "none",
+};
+
+pub let MemoryBarrier = {
+    rust_name: "MemoryBarrierOp",
+    name: "MemoryBarrier",
+    dialect: "spirv",
+    operands: { memory_scope: "_", memory_semantics: "_" },
+    state: "none",
+};
+
+pub let CompositeExtract = {
+    rust_name: "CompositeExtractOp",
+    name: "CompositeExtract",
+    dialect: "spirv",
+    operands: { composite: "_" },
+    results: { result: "_" },
+    attributes: { indices: "Array" },
+    state: "none",
+};
+
+pub let AccessChain = {
+    rust_name: "AccessChainOp",
+    name: "AccessChain",
+    dialect: "spirv",
+    operands: { base: "_", indices: "*_" },
+    results: { result: "_" },
+    custom_format: true,
+    state: "none",
+};
+
+pub let Return = {
+    rust_name: "ReturnOp",
+    name: "Return",
+    dialect: "spirv",
+    operands: { value: "?_" },
+    interfaces: "Terminator",
+    state: "none",
+};

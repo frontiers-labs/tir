@@ -1,0 +1,233 @@
+use std::ir::Bits;
+use std::ir::El;
+
+pub mod model {
+    use std::ir::Bits;
+    use std::ir::El;
+
+    pub enum Format { Binary16, Binary32, Binary64, }
+
+    pub enum Float<format: Format> {
+        Binary16(El<Bits<16>>): Float<Format::Binary16>,
+        Binary32(El<Bits<32>>): Float<Format::Binary32>,
+        Binary64(El<Bits<64>>): Float<Format::Binary64>,
+    }
+
+    pub enum Rounding { NearestEven, NearestAway, TowardZero, TowardPositive, TowardNegative, }
+
+    pub enum Contraction { Separate, Permitted, }
+
+    pub enum Computation<format: Format, rounding: Rounding, contraction: Contraction> {
+        Capture(Float<format>),
+        Add(Computation<format, rounding, contraction>, Computation<format, rounding, contraction>),
+        Sub(Computation<format, rounding, contraction>, Computation<format, rounding, contraction>),
+        Mul(Computation<format, rounding, contraction>, Computation<format, rounding, contraction>),
+        Div(Computation<format, rounding, contraction>, Computation<format, rounding, contraction>),
+        Fma(
+            Computation<format, rounding, contraction>,
+            Computation<format, rounding, contraction>,
+            Computation<format, rounding, contraction>
+        ),
+    }
+
+    pub let ValueAlgebra<format: Format> = {
+        add: (Rounding, Float<format>, Float<format>) -> Float<format>,
+        sub: (Rounding, Float<format>, Float<format>) -> Float<format>,
+        mul: (Rounding, Float<format>, Float<format>) -> Float<format>,
+        div: (Rounding, Float<format>, Float<format>) -> Float<format>,
+        fma: (Rounding, Float<format>, Float<format>, Float<format>) -> Float<format>,
+    };
+
+    pub let materialize<format: Format, rounding: Rounding, contraction: Contraction> = fn(
+        algebra: ValueAlgebra<format>,
+        computation: Computation<format, rounding, contraction>
+    ) -> Float<format> decreases computation {
+        match computation {
+            Computation::Capture(value) => value,
+            Computation::Add(lhs, rhs) => algebra.add(
+                rounding,
+                materialize(algebra, lhs),
+                materialize(algebra, rhs)
+            ),
+            Computation::Sub(lhs, rhs) => algebra.sub(
+                rounding,
+                materialize(algebra, lhs),
+                materialize(algebra, rhs)
+            ),
+            Computation::Mul(lhs, rhs) => algebra.mul(
+                rounding,
+                materialize(algebra, lhs),
+                materialize(algebra, rhs)
+            ),
+            Computation::Div(lhs, rhs) => algebra.div(
+                rounding,
+                materialize(algebra, lhs),
+                materialize(algebra, rhs)
+            ),
+            Computation::Fma(lhs, rhs, addend) => algebra.fma(
+                rounding,
+                materialize(algebra, lhs),
+                materialize(algebra, rhs),
+                materialize(algebra, addend)
+            ),
+        }
+    };
+
+    pub enum Refinement<format: Format, rounding: Rounding> {
+        Contract(
+            Computation<format, rounding, Contraction::Permitted>,
+            Computation<format, rounding, Contraction::Permitted>,
+            Computation<format, rounding, Contraction::Permitted>
+        ),
+    }
+
+    pub let reference<format: Format, rounding: Rounding> = fn(refinement: Refinement<format, rounding>) -> Computation<
+        format,
+        rounding,
+        Contraction::Permitted
+    > {
+        match refinement {
+            Refinement::Contract(lhs, rhs, addend) => Computation::Add(
+                Computation::Mul(lhs, rhs),
+                addend
+            ),
+        }
+    };
+
+    pub let implementation<format: Format, rounding: Rounding> = fn(
+        refinement: Refinement<format, rounding>
+    ) -> Computation<format, rounding, Contraction::Permitted> {
+        match refinement {
+            Refinement::Contract(lhs, rhs, addend) => Computation::Fma(lhs, rhs, addend),
+        }
+    };
+}
+
+pub use model::Format;
+pub use model::Float;
+pub use model::Rounding;
+pub use model::Contraction;
+pub use model::Computation;
+pub use model::ValueAlgebra;
+pub use model::Refinement;
+pub use model::reference;
+pub use model::implementation;
+use model::materialize as evaluate;
+
+
+let Capture<format: Format, rounding: Rounding, contraction: Contraction> = {
+    signature: Type,
+    exec: Float<format> -> Computation<format, rounding, contraction>,
+};
+
+pub let capture<format: Format, rounding: Rounding, contraction: Contraction>: Capture<
+    format, rounding, contraction
+> = op {
+    signature: (input: Float<format>) -> Computation<format, rounding, contraction>,
+    exec: Computation::Capture,
+};
+
+let Binary<format: Format, rounding: Rounding, contraction: Contraction> = {
+    signature: Type,
+    exec: (
+        Computation<format, rounding, contraction>,
+        Computation<format, rounding, contraction>,
+    ) -> Computation<format, rounding, contraction>,
+};
+
+pub let add<format: Format, rounding: Rounding, contraction: Contraction>: Binary<
+    format, rounding, contraction
+> = op {
+    signature: (
+        lhs: Computation<format, rounding, contraction>,
+        rhs: Computation<format, rounding, contraction>,
+    ) -> Computation<format, rounding, contraction>,
+    exec: Computation::Add,
+};
+
+pub let sub<format: Format, rounding: Rounding, contraction: Contraction>: Binary<
+    format, rounding, contraction
+> = op {
+    signature: (
+        lhs: Computation<format, rounding, contraction>,
+        rhs: Computation<format, rounding, contraction>,
+    ) -> Computation<format, rounding, contraction>,
+    exec: Computation::Sub,
+};
+
+pub let mul<format: Format, rounding: Rounding, contraction: Contraction>: Binary<
+    format, rounding, contraction
+> = op {
+    signature: (
+        lhs: Computation<format, rounding, contraction>,
+        rhs: Computation<format, rounding, contraction>,
+    ) -> Computation<format, rounding, contraction>,
+    exec: Computation::Mul,
+};
+
+pub let div<format: Format, rounding: Rounding, contraction: Contraction>: Binary<
+    format, rounding, contraction
+> = op {
+    signature: (
+        lhs: Computation<format, rounding, contraction>,
+        rhs: Computation<format, rounding, contraction>,
+    ) -> Computation<format, rounding, contraction>,
+    exec: Computation::Div,
+};
+
+let Materialize<format: Format, rounding: Rounding, contraction: Contraction> = {
+    signature: Type,
+    evaluate: (
+        ValueAlgebra<format>,
+        Computation<format, rounding, contraction>,
+    ) -> Float<format>,
+};
+
+pub let materialize<format: Format, rounding: Rounding, contraction: Contraction>: Materialize<
+    format, rounding, contraction
+> = op {
+    signature: (input: Computation<format, rounding, contraction>) -> Float<format>,
+    evaluate: evaluate<format, rounding, contraction>,
+};
+
+enum FloatPredicate { Oeq, Ogt, Oge, Olt, Ole, Une, }
+
+let Comparison = {
+    signature: Type,
+    attributes: { predicate: Type },
+};
+
+pub let cmp<format: Format>: Comparison = op {
+    signature: (lhs: Float<format>, rhs: Float<format>) -> El<Bits<1>>,
+    attributes: { predicate: FloatPredicate },
+};
+
+let Conversion = {
+    signature: Type,
+    rounding: Rounding,
+};
+
+pub let from_si<format: Format, width: Nat>: Conversion = op {
+    signature: (input: El<Bits<width>>) -> Float<format>,
+    rounding: Rounding::NearestEven,
+};
+
+pub let from_ui<format: Format, width: Nat>: Conversion = op {
+    signature: (input: El<Bits<width>>) -> Float<format>,
+    rounding: Rounding::NearestEven,
+};
+
+pub let to_si<format: Format, width: Nat>: Conversion = op {
+    signature: (input: Float<format>) -> El<Bits<width>>,
+    rounding: Rounding::TowardZero,
+};
+
+pub let to_ui<format: Format, width: Nat>: Conversion = op {
+    signature: (input: Float<format>) -> El<Bits<width>>,
+    rounding: Rounding::TowardZero,
+};
+
+pub let convert<from: Format, to: Format>: Conversion = op {
+    signature: (input: Float<from>) -> Float<to>,
+    rounding: Rounding::NearestEven,
+};

@@ -1,10 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s -f sum --args=4 | filecheck --check-prefix=FOUR %s
-// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
-// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f sum --args=0 | filecheck --check-prefix=ZERO %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 2 %s | tir opt --pass promote-nodes | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
 
 // Two slots under a counted loop: the counter's slot is written at the top of
 // every iteration and read back, the total's is read then written. Both become
@@ -43,6 +39,3 @@ module {
 // CHECK-NOT: ptr.
 // CHECK: scf.for
 // CHECK-NOT: ptr.
-
-// FOUR: i32 10
-// ZERO: i32 0

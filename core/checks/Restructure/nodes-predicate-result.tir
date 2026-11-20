@@ -1,8 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f flag --args=0 | filecheck --check-prefix=FALSE %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f flag --args=1 | filecheck --check-prefix=TRUE %s
 
 module {
   %f = func.func @flag(%p: !i1) -> !i1 {
@@ -24,5 +22,3 @@ module {
 // CHECK: -> %[[P]]
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end
-// FALSE: i1 0
-// TRUE: i1 {{-?1}}

@@ -20,11 +20,7 @@ fn attr_kind_code(value: &AttributeValue) -> i32 {
         AttributeValue::F64(_) => 4,
         AttributeValue::Bool(_) => 5,
         AttributeValue::Array(_) => 6,
-        AttributeValue::Dict(_)
-        | AttributeValue::Wide(_)
-        | AttributeValue::FpSemantics(_)
-        | AttributeValue::EvaluationContract(_)
-        | AttributeValue::LayoutSpec(_) => 7,
+        AttributeValue::Dict(_) | AttributeValue::Wide(_) | AttributeValue::LayoutSpec(_) => 7,
         AttributeValue::Register(_) => 8,
         AttributeValue::Type(_) => 9,
         AttributeValue::Block(_) => 10,

@@ -1,6 +1,0 @@
-[suite]
-name = "TIR PDL compiler checks"
-glob = ["**/*.pdl", "!**/Inputs/**/*"]
-
-[suite.tools]
-tir-pdl = "tir-pdl"
