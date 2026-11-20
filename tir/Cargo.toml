@@ -19,7 +19,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 tmdl.workspace = true
-tir = { workspace = true, features = ["egglog-rules"] }
+tir.workspace = true
 tir-egglog.workspace = true
 tir-cdsl.workspace = true
 tir-riscv.workspace = true
