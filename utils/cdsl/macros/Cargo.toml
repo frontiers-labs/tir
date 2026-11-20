@@ -1,0 +1,13 @@
+[package]
+name = "tir-cdsl-macros"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+proc-macro = true
+
+
+[dependencies]
+tir-cdsl = { path = ".." }

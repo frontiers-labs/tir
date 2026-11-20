@@ -1,0 +1,23 @@
+[package]
+name = "tir-cst"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tir-adt.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false
+
+[dev-dependencies]
+criterion.workspace = true
+tir-bench.workspace = true
+
+[[bench]]
+name = "baseline"
+harness = false

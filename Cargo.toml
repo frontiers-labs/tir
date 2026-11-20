@@ -19,6 +19,8 @@ members = [
     "tools/isasim",
     "tools/llvm",
     "utils/pdl",
+    "utils/cdsl",
+    "libs/cst",
     "utils/unit-tests",
     "utils/arrange",
     "utils/bench",
@@ -48,6 +50,9 @@ tir-egglog = { path = "libs/egglog" }
 tir-ir-schema = { path = "libs/ir-schema" }
 tir-bench = { path = "utils/bench" }
 tir-pdl = { path = "utils/pdl", default-features = false }
+
+tir-cdsl = { path = "utils/cdsl" }
+tir-cst = { path = "libs/cst" }
 
 # Per-target crates
 tir-riscv = { path = "backends/riscv" }

@@ -1,0 +1,1 @@
+pub enum Option<A: Type> { None, Some(A) }

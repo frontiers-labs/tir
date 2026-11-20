@@ -1,0 +1,7 @@
+[tools]
+aeneas = "build-2b9e3ea"
+charon = "nightly-2026.10.31"
+
+[versions]
+lean = "leanprover/lean4:v4.35.0"
+hax-lean-lib = "v0.3.41"
