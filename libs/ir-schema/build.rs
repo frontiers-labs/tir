@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, error::Error, path::PathBuf};
+use std::{error::Error, path::PathBuf};
 use tir_cdsl::{Schema, ast::Declaration};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -6,11 +6,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let source = manifest.join("src/ir.cdsl");
     println!("cargo:rerun-if-changed={}", source.display());
     let checked = tir_cdsl::compile_file(&source)?.lower()?;
-    let mut names = BTreeMap::from([
-        (vec!["equal_id".into()], "bool-=".into()),
-        (vec!["less_id".into()], "bool-<".into()),
-        (vec!["index".into()], "ir-index".into()),
-    ]);
+    let mut names = Schema::ir_names(&[]);
     for module in &checked.artifact().modules {
         if module.path == ["tables"] {
             for declaration in &module.ast.declarations {

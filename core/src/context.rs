@@ -95,6 +95,7 @@ struct Inner {
     next_id: Arc<AtomicU32>,
     origin: Cell<Option<crate::parse::Span>>,
     queries: queries::Queries,
+    analyses: crate::AnalysisManager,
     constructing: Cell<Option<OpId>>,
 }
 
@@ -132,6 +133,7 @@ impl Context {
             terms,
             origin: Cell::new(None),
             queries,
+            analyses: crate::AnalysisManager::new(),
             constructing: Cell::new(None),
         }))
     }
@@ -141,6 +143,11 @@ impl Context {
     pub fn egraph(&self) -> RefMut<'_, EGraph> {
         self.0.queries.verification(&mut self.engine());
         self.engine()
+    }
+
+    /// The producer catalog and cache for this context.
+    pub fn analyses(&self) -> &crate::AnalysisManager {
+        &self.0.analyses
     }
 
     pub(crate) fn eqsat_database(&self) -> Result<tir_egglog::Database, tir_egglog::Error> {

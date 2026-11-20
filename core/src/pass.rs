@@ -332,6 +332,11 @@ pub trait Pass: Send {
         context: &Context,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError>;
+
+    /// Declare which analysis producers may remain valid after a successful run.
+    fn preserved(&self) -> crate::analysis::Preserved {
+        crate::analysis::Preserved::Only(Box::new([]))
+    }
 }
 
 impl Context {
@@ -520,7 +525,7 @@ impl PassManager {
     }
 
     pub fn run(&mut self, context: &Context, op: OpId) -> Result<(), PassError> {
-        self.run_on_op_id(context, op, &AnalysisManager::new())?;
+        self.run_on_op_id(context, op, context.analyses())?;
         Ok(())
     }
 
@@ -530,6 +535,7 @@ impl PassManager {
         root: OpId,
         analyses: &AnalysisManager,
     ) -> Result<OpId, PassError> {
+        let catalog = context.analyses();
         for step in &mut self.steps {
             if !context.has_operation(root) {
                 break;
@@ -556,7 +562,9 @@ impl PassManager {
                             });
                         }
                     }
-                    pass.run(root, context, analyses)?;
+                    let result = pass.run(root, context, analyses);
+                    catalog.finish(context, result.as_ref().ok().map(|()| pass.preserved()));
+                    result?;
                 }
                 PipelineStep::Nest(name, pipeline) => {
                     for id in context.subtree_ops(&[root]) {
@@ -578,7 +586,8 @@ impl PassManager {
                     let version = || {
                         let engine = context.egraph();
                         let db = engine.database();
-                        (db.table_count(), db.writes_to_first(db.table_count()))
+                        let tables = catalog.ir_tables(db);
+                        (tables, db.writes_to_first(tables))
                     };
                     for _ in 0..*cap {
                         let previous = version();

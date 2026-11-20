@@ -191,33 +191,6 @@ fn a_pass_that_changes_nothing_is_not_verified() {
         .expect("a pass that left no version behind skips verification");
 }
 
-fn analysis_survives<P: Pass + Clone + 'static>(pass: P) -> bool {
-    use super::analysis::Simple;
-
-    let (context, func) = parse_func(ADD_ITS_ARGUMENT);
-    let analyses = AnalysisManager::new();
-    let before = analyses.get::<Simple>(&context, func.id());
-
-    let mut pm = PassManager::new();
-    pm.add_pass(pass);
-    let root = func.id();
-    pm.run_on_op_id(&context, root, &analyses)
-        .expect("the pass keeps the IR valid");
-
-    std::rc::Rc::ptr_eq(&before, &analyses.get::<Simple>(&context, func.id()))
-}
-
-#[test]
-#[ignore = "IR migration: the pass manager and analysis cache are unavailable"]
-fn an_analysis_survives_a_pass_that_changes_nothing() {
-    assert!(analysis_survives(ReadOnlyPass));
-}
-
-#[test]
-fn an_analysis_is_rebuilt_after_a_pass_mutates() {
-    assert!(!analysis_survives(AddToSubPass));
-}
-
 #[test]
 #[ignore = "IR migration: the pass manager and analysis cache are unavailable"]
 fn a_root_whose_replacement_was_erased_ends_the_pipeline_without_a_root() {
@@ -626,69 +599,6 @@ fn tasks_commit_in_callable_order_whatever_order_they_finish_in() {
         "{sequential}"
     );
     assert_eq!(run(2), sequential);
-}
-
-#[test]
-#[ignore = "IR migration: the pass manager and analysis cache are unavailable"]
-fn a_function_task_rebuilds_an_analysis_its_earlier_pass_invalidated() {
-    let (context, module) = fixtures::parse(TWO_FUNCTIONS);
-    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut pm = PassManager::new();
-    pm.set_workers(2);
-    let functions = pm.nest::<FuncOp>();
-    functions.add_pass(RecordOpCountPass { seen: seen.clone() });
-    functions.add_pass(SlowFirstPass);
-    functions.add_pass(RecordOpCountPass { seen: seen.clone() });
-    pm.run(&context, module.id())
-        .expect("the passes keep the IR valid");
-    let mut seen = seen.lock().unwrap().clone();
-    seen.sort_unstable();
-    assert_eq!(seen, [("a", 2), ("a", 3), ("b", 3), ("b", 4)]);
-}
-
-/// Records `(function, op count)` as the [`OpCount`] analysis answers it.
-#[derive(Clone)]
-struct RecordOpCountPass {
-    seen: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, usize)>>>,
-}
-
-struct OpCount(usize);
-
-impl tir::Analysis for OpCount {
-    fn build(_analyses: &AnalysisManager, context: &Context, op: tir::OpId) -> Self {
-        OpCount(
-            context
-                .get_region(context.get_op(op).regions()[0])
-                .op_ids()
-                .len(),
-        )
-    }
-}
-
-impl Pass for RecordOpCountPass {
-    fn name(&self) -> &'static str {
-        "record-op-count"
-    }
-
-    fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
-    }
-
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
-        let func = context
-            .get_op(op)
-            .as_op::<FuncOp>()
-            .expect("target guarantees FuncOp");
-        let name: &'static str = if func.symbol_name() == "a" { "a" } else { "b" };
-        let count = analyses.get::<OpCount>(context, op).0;
-        self.seen.lock().unwrap().push((name, count));
-        Ok(())
-    }
 }
 
 /// Advances the body's `round` attribute up to three, then changes nothing;

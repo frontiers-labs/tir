@@ -15,10 +15,7 @@ use std::collections::HashMap;
 
 use crate::attributes::{AttributeRole, AttributeValue, RegisterAttr};
 use crate::backend::regalloc::RegClassId;
-use crate::{
-    Context, OpHandle, OpId, ValueId,
-    analysis::{Analysis, AnalysisManager},
-};
+use crate::{Context, OpHandle, OpId, ValueId};
 
 /// A physical register: its class handle and encoding index.
 pub type PhysReg = (RegClassId, u16);
@@ -145,8 +142,7 @@ pub struct DefUse {
 }
 
 impl DefUse {
-    /// Index the ops nested under `root` directly, for a caller with no
-    /// [`AnalysisManager`] to cache the result in.
+    /// Index the ops nested under `root`.
     pub fn new<O: Into<OpId>>(context: &Context, root: O) -> Self {
         let mut result = Self::default();
         let mut stack = context.get_op(root.into()).regions().to_vec();
@@ -171,11 +167,5 @@ impl DefUse {
     /// The ops writing `value`.
     pub fn defs_of(&self, value: u32) -> &[OpId] {
         self.defs.get(&value).map(Vec::as_slice).unwrap_or(&[])
-    }
-}
-
-impl Analysis for DefUse {
-    fn build(_: &AnalysisManager, context: &Context, op: OpId) -> Self {
-        Self::new(context, op)
     }
 }

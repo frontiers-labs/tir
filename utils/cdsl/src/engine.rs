@@ -16,6 +16,7 @@ pub struct Schema {
     names: BTreeMap<Path, String>,
     functions: BTreeSet<Path>,
     constructors: BTreeSet<Path>,
+    ir_catalog: bool,
 }
 
 fn error(error: impl std::fmt::Display) -> Error {
@@ -85,16 +86,54 @@ fn propositions(expr: &Expr) -> Vec<&Expr> {
 }
 
 impl Schema {
+    /// Host ABI aliases for the IR catalog.
+    pub fn ir_names(prefix: &[String]) -> BTreeMap<Path, String> {
+        [
+            ("equal_id", "bool-="),
+            ("less_id", "bool-<"),
+            ("index", "ir-index"),
+        ]
+        .into_iter()
+        .map(|(name, host)| ([prefix, &[name.into()]].concat(), host.into()))
+        .collect()
+    }
+
     /// Start with the tables from a compiled catalog.
     pub fn from_catalog(bytes: &[u8]) -> Result<Self, Error> {
         let mut engine = EGraph::default();
         tir_egglog::Program::from_bytes(bytes, engine.database_mut()).map_err(error)?;
-        Ok(Self {
+        Ok(Self::from_engine(engine))
+    }
+
+    fn from_engine(engine: EGraph) -> Self {
+        Self {
             engine,
             names: BTreeMap::new(),
             functions: BTreeSet::new(),
             constructors: BTreeSet::new(),
-        })
+            ir_catalog: false,
+        }
+    }
+
+    /// Check and compile producers with the IR table ABI already installed.
+    pub fn compile_producers(
+        engine: EGraph,
+        source: &str,
+        catalog: &str,
+    ) -> Result<(EGraph, tir_egglog::Program, Vec<tir_egglog::Producer>), Error> {
+        let source = format!("pub mod ir {{\n{catalog}\n}}\npub mod producers {{\n{source}\n}}");
+        let program = crate::compile_source(&source)?.select(&["producers".into()])?;
+        let checked = program.lower()?;
+        let mut schema = Self::from_engine(engine);
+        schema.names = Self::ir_names(&["ir".into()]);
+        schema.ir_catalog = true;
+        schema.extend(&checked)?;
+        let (program, producers) = schema
+            .lower(&checked)?
+            .rules
+            .compile_producers(schema.database())
+            .map_err(error)?;
+        Ok((schema.engine, program, producers))
     }
 
     /// Install declarations once, using canonical CDSL paths as engine names.
@@ -107,12 +146,8 @@ impl Schema {
         program: &CheckedProgram,
         names: BTreeMap<Path, String>,
     ) -> Result<Self, Error> {
-        let mut schema = Self {
-            engine: EGraph::default(),
-            names,
-            functions: BTreeSet::new(),
-            constructors: BTreeSet::new(),
-        };
+        let mut schema = Self::from_engine(EGraph::default());
+        schema.names = names;
         schema.extend(program)?;
         Ok(schema)
     }
@@ -235,6 +270,15 @@ impl Schema {
                         .iter()
                         .map(|ty| self.sort(ty))
                         .collect::<Result<Vec<_>, _>>()?;
+                    if path(out)? == &["std", "table", "IntSet"]
+                        && self.database().schema().sort_named("IntSet").is_none()
+                    {
+                        let span = tir_egglog::span!();
+                        let set = Some(("Set".into(), vec![ast::Expr::Var(span, "i64".into())]));
+                        self.engine
+                            .declare_sort("IntSet", &set, span)
+                            .map_err(error)?;
+                    }
                     let out = self.sort(out)?;
                     let merge = match path(merge)?.last().map(String::as_str) {
                         Some("Unique") => Merge::AssertEq,
@@ -249,6 +293,24 @@ impl Schema {
                                 ));
                             }
                             Merge::Union
+                        }
+                        Some(kind @ ("Min" | "Max" | "SetUnion")) => {
+                            let name = match kind {
+                                "Min" => "min",
+                                "Max" => "max",
+                                _ => "set-union",
+                            };
+                            let schema = self.database().schema();
+                            let prim = schema
+                                .primitives(name)
+                                .find(|&id| {
+                                    let sig = schema.primitive(id).1;
+                                    sig.inputs == [out, out] && sig.output == out
+                                })
+                                .ok_or_else(|| {
+                                    Error(format!("invalid output sort for {kind} merge"))
+                                })?;
+                            Merge::Prim(prim, vec![Merge::Old, Merge::New])
                         }
                         _ => return Err(Error("unsupported executable table merge".into())),
                     };
@@ -327,6 +389,19 @@ impl Schema {
 
     fn name(&self, path: &[String]) -> String {
         self.names.get(path).cloned().unwrap_or_else(|| match path {
+            [module, middle @ .., name]
+                if self.ir_catalog
+                    && matches!(module.as_str(), "ir" | "producers")
+                    && (middle.is_empty() || middle == ["tables"]) =>
+            {
+                name.clone()
+            }
+            [s, t, name] if s == "std" && t == "table" => match name.as_str() {
+                "IntSet" => "IntSet".into(),
+                "singleton" => "set-of".into(),
+                "cardinality" => "set-length".into(),
+                _ => path_name(path),
+            },
             [namespace, module, name] if namespace == "std" && module == "bigint" => {
                 match name.as_str() {
                     "BigInt" => "BigInt".into(),
@@ -399,7 +474,7 @@ impl Schema {
                             signature.inputs == inputs && signature.output == output
                         })
                     });
-                    if !schema && !primitive {
+                    if !schema && (!primitive || self.ir_catalog) {
                         return Err(Error(format!(
                             "unsupported executable axiom declaration: {name}"
                         )));
