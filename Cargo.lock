@@ -2084,7 +2084,6 @@ dependencies = [
 name = "tir-egglog"
 version = "0.1.0"
 dependencies = [
- "chumsky",
  "criterion",
  "fearless_simd",
  "tir-adt",

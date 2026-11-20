@@ -18,8 +18,6 @@ mod core;
 mod desugar;
 mod exec_state;
 pub mod extract;
-#[cfg(feature = "parser")]
-mod grammar;
 mod plan;
 pub mod prelude;
 mod report;

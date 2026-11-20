@@ -1,17 +1,26 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use clap::Args;
 use tir::Context;
-use tir_egglog::{EGraph, ast::Command};
+use tir_cdsl::{Schema, ast::Declaration, lexer::TokenStream};
+use tir_egglog::{EGraph, Program, TableKind};
 
 #[derive(Args)]
+#[command(
+    after_help = "Declare the script's schema in CDSL and define `let execute = std::schedule::saturate(rules);`. Tables declared in the root `tables` module bind to existing TIR tables with the same name. Enum constructors bind to matching host constructor names. REPL declarations accumulate; each accepted revision runs the selected schedule when it exists."
+)]
 pub struct ToolArgs {
     /// Input TIR file
     input: PathBuf,
-    /// Egglog file to execute; omit to read commands interactively
+    /// CDSL file to execute; omit to read CDSL declarations interactively
     rules: Option<PathBuf>,
+    /// Named CDSL schedule to run
+    #[arg(long, default_value = "execute")]
+    schedule: String,
 }
 
 pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
@@ -21,45 +30,93 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     context.register_dialect::<tir_gpu::spirv::SpirvDialect>();
     crate::common::parse_tir(&context, &input)
         .map_err(|err| format!("{}: {err}", args.input.display()))?;
-
-    let mut egraph = context.egraph_with_rules()?;
-
+    let mut egraph = context.egraph();
+    let schedule = args
+        .schedule
+        .split("::")
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     if let Some(path) = args.rules {
         let source =
-            std::fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
-        let commands = egraph
-            .parse_program("egglog input", &source)
+            tir_cdsl::compile_file(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+        execute(&mut egraph, &source, &schedule, false)
             .map_err(|err| format!("{}: {err}", path.display()))?;
-        execute(&mut egraph, commands).map_err(|err| format!("{}: {err}", path.display()))?;
     } else {
-        repl(&mut egraph)?;
+        repl(&mut egraph, &schedule)?;
     }
     Ok(())
 }
 
-fn execute(egraph: &mut EGraph, commands: Vec<Command>) -> Result<(), Box<dyn Error>> {
-    let (outputs, timing) = egraph.run_program_timed(commands)?;
-    for output in outputs {
-        print!("{output}");
+fn execute(
+    egraph: &mut EGraph,
+    source: &tir_cdsl::Program,
+    schedule: &[String],
+    allow_missing_schedule: bool,
+) -> Result<(), Box<dyn Error>> {
+    let start = Instant::now();
+    let checked = source.lower()?;
+    let mut names = BTreeMap::new();
+    let host = egraph.database().schema();
+    for module in &checked.artifact().modules {
+        for declaration in &module.ast.declarations {
+            match &declaration.value {
+                Declaration::Axiom { name, .. }
+                    if module.path == ["tables"] && host.table_named(name).is_some() =>
+                {
+                    let mut path = module.path.clone();
+                    path.push(name.clone());
+                    names.insert(path, name.clone());
+                }
+                Declaration::Enum { name, variants, .. } => {
+                    for variant in variants {
+                        if host
+                            .table_named(&variant.name)
+                            .is_some_and(|table| host.table(table).kind() == TableKind::Constructor)
+                        {
+                            let mut path = module.path.clone();
+                            path.extend([name.clone(), variant.name.clone()]);
+                            names.insert(path, variant.name.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
+    let schema = Schema::with_names(&checked, names)?;
+    let lowered = schema.lower(&checked)?;
+    let Some(selected) = lowered.schedules().get(schedule) else {
+        if allow_missing_schedule {
+            return Ok(());
+        }
+        return Err(format!("CDSL schedule {} does not exist", schedule.join("::")).into());
+    };
+    let bytes = lowered.compile(schema.database())?.to_bytes();
+    let database = egraph.database_mut();
+    Program::from_bytes(&schema.to_bytes()?, database)?;
+    let mut program = Program::from_bytes(&bytes, database)?;
+    let compilation = start.elapsed();
+    let start = Instant::now();
+    program.run(database, selected, &[])?;
     eprintln!(
         "egglog: compile={:.6}s exec={:.6}s",
-        timing.compilation.as_secs_f64(),
-        timing.execution.as_secs_f64()
+        compilation.as_secs_f64(),
+        start.elapsed().as_secs_f64()
     );
     Ok(())
 }
 
-fn repl(egraph: &mut EGraph) -> Result<(), Box<dyn Error>> {
+fn repl(egraph: &mut EGraph, schedule: &[String]) -> Result<(), Box<dyn Error>> {
     let stdin = io::stdin();
     let interactive = stdin.is_terminal();
-    let mut stdin = stdin.lock();
-    let mut source = String::new();
+    let mut input = stdin.lock();
+    let mut accepted = String::new();
+    let mut pending = String::new();
     loop {
         if interactive {
             print!(
                 "{}",
-                if source.is_empty() {
+                if pending.is_empty() {
                     "egglog> "
                 } else {
                     "...> "
@@ -67,22 +124,45 @@ fn repl(egraph: &mut EGraph) -> Result<(), Box<dyn Error>> {
             );
             io::stdout().flush()?;
         }
-        if stdin.read_line(&mut source)? == 0 {
-            egraph
-                .parse_program("stdin", &source)
-                .map_err(|err| err.to_string())?;
+        if input.read_line(&mut pending)? == 0 {
+            if !pending.trim().is_empty() {
+                tir_cdsl::compile_source(&format!("{accepted}{pending}"))?;
+            }
             return Ok(());
         }
-        match egraph.parse_program("stdin", &source) {
-            Err(tir_egglog::Error::Unfinished(_)) => continue,
-            Err(err) => eprintln!("{err}"),
-            Ok(commands) if commands.is_empty() => {}
-            Ok(commands) => {
-                if let Err(err) = execute(egraph, commands) {
-                    eprintln!("{err}");
+        let stream = match TokenStream::from_source(&pending) {
+            Ok(stream) => stream,
+            Err(errors)
+                if errors
+                    .iter()
+                    .all(|error| error.message == "unterminated block comment")
+                    || TokenStream::from_source(&format!("{pending}\"")).is_ok() =>
+            {
+                continue;
+            }
+            Err(errors) => {
+                eprintln!("{errors:?}");
+                pending.clear();
+                continue;
+            }
+        };
+        match tir_cdsl::parser::parse(stream) {
+            Err(errors) if errors.iter().all(|error| error.found.is_none()) => continue,
+            Err(errors) => eprintln!("{errors:?}"),
+            Ok(ast) if ast.declarations.is_empty() => {}
+            Ok(_) => {
+                let revision = format!("{accepted}{pending}");
+                match tir_cdsl::compile_source(&revision) {
+                    Ok(program) => {
+                        // Loading and running can change the database before an error.
+                        execute(egraph, &program, schedule, true)
+                            .map_err(|error| error.to_string())?;
+                        accepted = revision;
+                    }
+                    Err(err) => eprintln!("{err}"),
                 }
             }
         }
-        source.clear();
+        pending.clear();
     }
 }
