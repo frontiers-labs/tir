@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::rc::Rc;
 
 pub use tir_symbolic::term::{
     CtorId, Kind, Name, Param, Terms, TypeArg, TypeCtor, TypeId, TypeTerm,
@@ -76,7 +76,7 @@ impl Ctor {
 
 /// The spellings a context parses and prints types with.
 pub struct Spellings {
-    terms: Arc<Terms>,
+    terms: Rc<Terms>,
     printers: HashMap<CtorId, TypePrinter>,
     variadic_tails: Vec<CtorId>,
     parsers: HashMap<&'static str, HashMap<&'static str, TypeParser>>,
@@ -89,7 +89,7 @@ impl AsRef<Terms> for Spellings {
 }
 
 impl Spellings {
-    pub(crate) fn new(terms: Arc<Terms>) -> Self {
+    pub(crate) fn new(terms: Rc<Terms>) -> Self {
         Self {
             terms,
             printers: HashMap::new(),

@@ -10,6 +10,6 @@ fuzz_target!(|data: &[u8]| {
     }
 
     if let Ok(input) = std::str::from_utf8(data) {
-        let _ = tir_pdl::compile_to_rust(input);
+        let _ = tir_pdl::compile(input);
     }
 });

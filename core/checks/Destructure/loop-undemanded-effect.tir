@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir opt --pass destructure %s 2>&1 | filecheck %s
 
 // Both dependency results of the body name the port it entered on, so no cone

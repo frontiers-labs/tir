@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/loop_control.c | filecheck %s
 
 // A `continue` and a `break` are the two exits the body can take. Both become

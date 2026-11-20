@@ -20,8 +20,9 @@ module {
   module_end
 }
 
+// CHECK: func.func @f(%[[INPUT:[0-9]+]]: !i32)
 // CHECK:      %[[P:[0-9]+]], %[[S0:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: %[[S1:[0-9]+]] = ptr.store %0, %[[P]] state(%[[S0]])
+// CHECK-NEXT: %[[S1:[0-9]+]] = ptr.store %[[INPUT]], %[[P]] state(%[[S0]])
 // CHECK-NEXT: %[[X:[0-9]+]], %[[S2:[0-9]+]] = ptr.load %[[P]] state(%[[S1]]) : !i32
 // CHECK-NEXT: %[[R:[0-9]+]], %[[RS:[0-9]+]] = scf.loop (%[[C:[0-9]+]] = %[[X]], %[[CS:[0-9]+]] = %[[S2]]) {
 // CHECK-NEXT: %[[W:[0-9]+]] = ptr.store %[[C]], %[[P]] state(%[[CS]])

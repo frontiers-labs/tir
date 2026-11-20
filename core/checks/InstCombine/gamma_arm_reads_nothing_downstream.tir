@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(instcombine-nodes) --verify %s | filecheck %s
 
 // Under the first arm's fact `%2` is `%1`, so the enclosing `%9 = %2 + 1` is

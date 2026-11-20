@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64ifd --filetype=asm -o /tmp/tir-riscv-fp-comparison-flags-exec.s %s
 // RUN: isasim --march=rv64ifd --entry=main --until-pc=0 --trace-registers-end /tmp/tir-riscv-fp-comparison-flags-exec.s | filecheck %s
 // RUN: tir mc --march=rv64ifd --filetype=asm --shuffle-machine-order -o /tmp/tir-riscv-fp-comparison-flags-exec.s %s

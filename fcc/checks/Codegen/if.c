@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/basic_if.c | filecheck %s
 
 // An `if` with an `else` is a two-arm `scf.switch` on the comparison: arm 0

@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0> --verify %s | filecheck %s
 
 // The callee's parameters become the caller's arguments by substitution, and

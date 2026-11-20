@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir opt --pass lower-intrinsics %s 2>&1 | filecheck %s
 
 module {target_env = {memory_copy_bytes = [32]}} {

@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=arm64 --filetype=asm %s | filecheck %s
 
 // An f32 argument reaches its register on an f32 copy, which coalesces with

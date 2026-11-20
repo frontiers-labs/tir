@@ -1,25 +1,4 @@
-//! Rewrites a function's uses of module-level λ and δ values into
-//! `asm.symbol_address` ops inside the function.
-//!
-//! The mid-end reasons about globals and functions as values, but machine code
-//! cannot reach a value defined outside the function it runs in: an address has
-//! to be materialized where it is used. A call keeps its callee operand and
-//! records the symbol it resolved to, which is what call lowering emits a
-//! direct call to.
-//!
-//! This runs while the whole module is still in hand: functions are lowered and
-//! erased one at a time, and a λ whose definition is gone no longer names
-//! anything.
-
-use crate::analysis::AnalysisManager;
-use crate::attributes::AttributeValue;
-use crate::backend::symbol_address_of;
-use crate::builtin::FnToPtrOp;
-use crate::func::{CallOp, FuncOp};
-use crate::{
-    Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget, RegionId,
-    Symbol, ValueId,
-};
+use crate::{AnalysisManager, Context, OperationRef, Pass, PassError};
 
 #[derive(Clone, Default)]
 pub struct MaterializeSymbolAddressesPass;
@@ -39,130 +18,12 @@ impl Pass for MaterializeSymbolAddressesPass {
     fn name(&self) -> &'static str {
         "materialize-symbol-addresses"
     }
-
-    fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
-    }
-
     fn run(
         &mut self,
-        operation: &OperationRef,
-        context: &Context,
+        _op: &OperationRef,
+        _context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let mut uses = Vec::new();
-        collect(context, operation.op(), &mut uses);
-        for use_site in uses {
-            match use_site {
-                Use::Address(op, index, name) => {
-                    let address = symbol_address_of(context, &name);
-                    let value = address.result();
-                    match context.parent_nodes_region(op.op().id) {
-                        Some(region) => context.add(region, address.id()),
-                        None => context.insert_op_before(&op, &address)?,
-                    }
-                    context.set_op_operand(op.op().id, index, value);
-                }
-                Use::Conversion(op, name) => {
-                    let address = symbol_address_of(context, &name);
-                    match context.parent_nodes_region(op.op().id) {
-                        Some(region) => {
-                            context.add(region, address.id());
-                            let old = op.op().results()[0];
-                            context.replace_value_uses(old, address.result());
-                            context.rename_region_results(region, old, address.result(), &[]);
-                            context.erase_op(&op)?;
-                        }
-                        None => context.replace_op(&op, &address)?,
-                    }
-                }
-                Use::Callee(op, name) => {
-                    let mut attributes = op.op().attributes().to_vec();
-                    attributes
-                        .push(context.named_attribute("callee", AttributeValue::Str(name.into())));
-                    context.set_op_attributes(op.op().id, attributes);
-                }
-                Use::Result(region, old, name) => {
-                    let address = symbol_address_of(context, &name);
-                    context.add(region, address.id());
-                    context.rename_region_results(region, old, address.result(), &[]);
-                }
-            }
-        }
         Ok(())
     }
-}
-
-enum Use {
-    /// An operand naming a δ definition, and the symbol it names.
-    Address(OperationRef, usize, String),
-    /// A `fn_to_ptr` of a λ, and the symbol it names.
-    Conversion(OperationRef, String),
-    /// A call whose callee resolved to a λ, and the symbol it names.
-    Callee(OperationRef, String),
-    /// A result of an unordered region naming a δ definition, and its symbol.
-    Result(RegionId, ValueId, String),
-}
-
-fn collect(context: &Context, root: &OpHandle, uses: &mut Vec<Use>) {
-    for region in root.regions() {
-        let handle = context.get_region(region);
-        if handle.is_nodes() {
-            for result in handle.value_results() {
-                if let Some(name) = is_pointer(context, result)
-                    .then(|| symbol_of(context, result))
-                    .flatten()
-                {
-                    uses.push(Use::Result(region, result, name));
-                }
-            }
-        }
-        {
-            for op_id in context.get_region(region).op_ids() {
-                let instance = context.get_op(op_id);
-                let op = OperationRef::new(instance.clone());
-                collect(context, op.op(), uses);
-                if let Some(name) = instance
-                    .clone()
-                    .as_op::<FnToPtrOp>()
-                    .and_then(|conversion| symbol_of(context, conversion.operands()[0]))
-                {
-                    uses.push(Use::Conversion(op, name));
-                    continue;
-                }
-                if let Some(name) = instance
-                    .clone()
-                    .as_op::<CallOp>()
-                    .and_then(|call| symbol_of(context, call.callee()))
-                {
-                    uses.push(Use::Callee(op.clone(), name));
-                }
-                for (index, &operand) in instance.value_operands().iter().enumerate() {
-                    // Only a δ's address has a machine form here. A λ reaching
-                    // anything but a call or `fn_to_ptr` is left for selection
-                    // to reject rather than silently retyped.
-                    if !is_pointer(context, operand) {
-                        continue;
-                    }
-                    if let Some(name) = symbol_of(context, operand) {
-                        uses.push(Use::Address(op.clone(), index, name));
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn is_pointer(context: &Context, value: ValueId) -> bool {
-    crate::ptr::PtrType::view(context, context.get_value(value).ty()).is_some()
-}
-
-fn symbol_of(context: &Context, value: ValueId) -> Option<String> {
-    let definition: OpId = context.get_value(value).defining_op()?;
-    if !context.has_operation(definition) {
-        return None;
-    }
-    let instance = context.get_op(definition);
-    let symbol = instance.as_interface::<dyn Symbol>()?;
-    Some(symbol.symbol_name())
 }

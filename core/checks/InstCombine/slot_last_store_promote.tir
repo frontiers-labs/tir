@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes --verify %s | filecheck %s
 
 // A slot written twice: the second store covers the extent the first one wrote

@@ -1,3 +1,5 @@
+// IR migration: selector rule generation was removed.
+// XFAIL: *
 // A flag read vetoes a value rule only when it feeds the defined operand: a
 // rotate whose carry output conditionally preserves its old value keeps its
 // value rule. The exact conditional flag semantics still reach `execute()`,

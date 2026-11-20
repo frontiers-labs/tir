@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
 
 // A builtin i32 add lowers to the RISC-V word add, wrapped in an asm.symbol

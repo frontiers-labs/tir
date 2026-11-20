@@ -1,26 +1,17 @@
-//! Type terms: every IR type and every semantic type is one interned term of
-//! one store.
+//! Structural type terms in the shared egglog IR engine.
 //!
-//! A term is a constructor applied to arguments. A [`TypeId`] is the position
-//! of the term's row in the store; rows are minted once, never move and are
-//! never reused, so two equal terms have one id and equality is id equality.
-//! The rows are a chunked relation: a column of constructors and a clustered
-//! table of argument cells. A writer appends under a lock and publishes the
-//! rows; a reader reads the rows last published under a shared lock. An id
-//! means a type only in the store that minted it; whoever interns owns the
-//! store and hands it to every reader.
-//!
-//! A term interns in normal form. A sum of widths is kept as one sorted
-//! [`ctor::NAT_ADD`] term with its constants folded, so equal sums have one id
-//! without associative or commutative rewriting.
+//! A type handle names a `TypeExpr`. Constructors and arguments remain
+//! inspectable as egglog terms. Structural terms are never unioned.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{OnceLock, RwLock};
+use std::{cell::RefCell, rc::Rc};
 
 use smallvec::SmallVec;
-use tir_relational::chunk::{CHUNK_ROWS, Chunk, Space, chunk_of, id_at, row_of};
+use std::sync::Arc;
+use tir_egglog::{Core, EGraph, Read, Value as EggValue, Write};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(u32);
@@ -31,10 +22,6 @@ impl TypeId {
     pub const STATE: TypeId = TypeId(0);
     /// `builtin.state<fp.env>`, the second term the store interns.
     pub const FP_ENV: TypeId = TypeId(1);
-    /// `builtin.i<1>`; the integers up to [`FIXED_INT_WIDTHS`] bits follow it
-    /// in width order, so [`Terms::int`] finds them without a lookup.
-    const FIRST_INT: u32 = 2;
-
     pub fn number(self) -> u32 {
         self.0
     }
@@ -70,7 +57,7 @@ impl CtorId {
 }
 
 /// A name a term argument holds: a definition, a resource, a register class.
-/// It is interned by the term store, not by a context.
+/// Its identity comes from the shared context entity allocator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Name(u32);
 
@@ -293,130 +280,14 @@ impl TypeTerm {
     }
 }
 
-// Argument cells. A term's arguments are one stream of cells in the clustered
-// table: a tag cell, then the payload.
-const NAT: u32 = 0;
-const SYM: u32 = 1;
-const TYPE: u32 = 2;
-const VAR: u32 = 3;
-const LAM: u32 = 4;
-const LIST: u32 = 5;
-
-fn encode(arg: &TypeArg, cells: &mut SmallVec<[u32; 16]>) {
-    match arg {
-        TypeArg::Nat(n) => cells.extend([NAT, *n as u32, (*n >> 32) as u32]),
-        TypeArg::Sym(Name(name)) => cells.extend([SYM, *name]),
-        TypeArg::Type(id) => cells.extend([TYPE, id.0]),
-        TypeArg::Var(index) => cells.extend([VAR, *index]),
-        TypeArg::Lam(arity, body) => {
-            cells.extend([LAM, *arity]);
-            encode(body, cells);
-        }
-        TypeArg::List(items) => {
-            cells.extend([LIST, items.len() as u32]);
-            for item in items {
-                encode(item, cells);
-            }
-        }
-    }
-}
-
-fn decode(cells: &[u32], at: &mut usize) -> TypeArg {
-    let tag = cells[*at];
-    let first = cells[*at + 1];
-    *at += 2;
-    match tag {
-        NAT => {
-            let high = cells[*at];
-            *at += 1;
-            TypeArg::Nat(u64::from(first) | u64::from(high) << 32)
-        }
-        SYM => TypeArg::Sym(Name(first)),
-        TYPE => TypeArg::Type(TypeId(first)),
-        VAR => TypeArg::Var(first),
-        LAM => TypeArg::Lam(first, Box::new(decode(cells, at))),
-        LIST => TypeArg::List((0..first).map(|_| decode(cells, at)).collect()),
-        _ => unreachable!("an argument tag"),
-    }
-}
-
-fn skip(cells: &[u32], at: &mut usize) {
-    let tag = cells[*at];
-    let first = cells[*at + 1];
-    *at += 2;
-    match tag {
-        NAT => *at += 1,
-        LAM => skip(cells, at),
-        LIST => (0..first).for_each(|_| skip(cells, at)),
-        _ => {}
-    }
-}
-
-/// The arguments of one term, read out of its cells: a term of up to four
-/// flat arguments allocates nothing.
+/// The arguments of one term.
 pub type Args = SmallVec<[TypeArg; 4]>;
 
-fn decode_all(cells: &[u32]) -> Args {
-    let mut at = 0;
-    let mut args = Args::new();
-    while at < cells.len() {
-        args.push(decode(cells, &mut at));
-    }
-    args
-}
+/// The normalized structural IR and type schema.
+pub const IR_SCHEMA: &str = include_str!("ir-schema.egg");
 
-// Every argument among `cells`, in a slice of exactly their count.
-fn decode_boxed(cells: &[u32]) -> Box<[TypeArg]> {
-    let mut count = 0;
-    let mut at = 0;
-    while at < cells.len() {
-        skip(cells, &mut at);
-        count += 1;
-    }
-    let mut args = Vec::with_capacity(count);
-    at = 0;
-    while at < cells.len() {
-        args.push(decode(cells, &mut at));
-    }
-    args.into_boxed_slice()
-}
-
-// Argument `index` among `cells` when it is a constant width, read in place.
-fn nat_at(cells: &[u32], index: usize) -> Option<u64> {
-    let mut at = 0;
-    for _ in 0..index {
-        if at >= cells.len() {
-            return None;
-        }
-        skip(cells, &mut at);
-    }
-    match cells.get(at..at + 3)? {
-        &[NAT, low, high] => Some(u64::from(low) | u64::from(high) << 32),
-        _ => None,
-    }
-}
-
-// The width of one of the integers every store interns up front.
-fn fixed_int(id: TypeId) -> Option<u64> {
-    let width = u64::from(id.0.checked_sub(TypeId::FIRST_INT)?) + 1;
-    (width <= FIXED_INT_WIDTHS).then_some(width)
-}
-
-// Argument `index` among `cells`, decoded alone.
-fn decode_at(cells: &[u32], index: usize) -> Option<TypeArg> {
-    let mut at = 0;
-    for _ in 0..index {
-        if at >= cells.len() {
-            return None;
-        }
-        skip(cells, &mut at);
-    }
-    (at < cells.len()).then(|| decode(cells, &mut at))
-}
-
-type Rows = Space<1, 1>;
-
-const SHARDS: usize = 16;
+/// Build-time compiled rules and declarations of the structural IR.
+pub const IR_PROGRAM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ir-schema.bin"));
 
 /// The integer widths every store interns up front.
 pub const FIXED_INT_WIDTHS: u64 = 128;
@@ -462,20 +333,13 @@ impl<T> Segmented<T> {
     }
 }
 
-/// A store of type terms. Every store registers the base constructors in one
-/// order and interns the two states, then the integers up to
-/// [`FIXED_INT_WIDTHS`] bits, first, so [`ctor`] ids, [`TypeId::STATE`],
-/// [`TypeId::FP_ENV`] and those integers' ids hold in each.
+/// The type-algebra API over the context's structural engine. Base type
+/// handles are interned in a fixed order for the two resource-state constants.
 pub struct Terms {
-    /// The rows a writer appends to.
-    rows: Mutex<Rows>,
-    /// The rows as the last append left them, which a reader reads.
-    published: RwLock<Rows>,
-    /// Ids published so far.
+    engine: Rc<RefCell<EGraph>>,
     minted: AtomicU32,
-    // Sharded by constructor so parallel interning of different constructors
-    // takes different locks.
-    lookup: [RwLock<HashMap<u32, Vec<TypeId>, tir_adt::FxBuildHasher>>; SHARDS],
+    entities: Arc<AtomicU32>,
+    indexes_dirty: Arc<AtomicBool>,
     ctors: Segmented<&'static TypeCtor>,
     // Each registered constructor's id by the address of its description, so
     // a dialect's static finds its id without hashing its name.
@@ -483,14 +347,6 @@ pub struct Terms {
     // By constructor: the value its omitted optional last argument stands for.
     defaults: Segmented<TypeArg>,
     registered: RwLock<HashMap<(&'static str, &'static str), CtorId>>,
-    names: RwLock<Names>,
-    defined: RwLock<HashMap<Name, Kind>>,
-}
-
-#[derive(Default)]
-struct Names {
-    text: Vec<Box<str>>,
-    ids: HashMap<Box<str>, u32>,
 }
 
 impl AsRef<Terms> for Terms {
@@ -507,82 +363,217 @@ impl Default for Terms {
 
 impl Terms {
     pub fn new() -> Self {
+        let mut engine = EGraph::default();
+        engine
+            .load_program(IR_PROGRAM)
+            .expect("the compiled structural IR schema loads");
+        Self::with_engine(
+            Rc::new(RefCell::new(engine)),
+            Arc::new(AtomicU32::new(0)),
+            Arc::new(AtomicBool::new(true)),
+        )
+    }
+
+    /// Use the context's structural engine and shared entity allocator.
+    pub fn with_engine(
+        engine: Rc<RefCell<EGraph>>,
+        entities: Arc<AtomicU32>,
+        indexes_dirty: Arc<AtomicBool>,
+    ) -> Self {
         let terms = Terms {
-            rows: Mutex::default(),
-            published: RwLock::default(),
+            engine,
+            entities,
+            indexes_dirty,
             minted: AtomicU32::new(0),
-            lookup: std::array::from_fn(|_| RwLock::default()),
             ctors: Segmented::new(),
             by_address: RwLock::default(),
             defaults: Segmented::new(),
             registered: RwLock::default(),
-            names: RwLock::default(),
-            defined: RwLock::default(),
         };
         for ctor in &ctor::BASE {
             terms.register(ctor);
         }
-        for (resource, id) in [("memory", TypeId::STATE), ("fp.env", TypeId::FP_ENV)] {
+        for resource in ["memory", "fp.env"] {
             let resource = TypeArg::Sym(terms.name(resource));
-            let state = terms.intern(ctor::STATE, vec![resource]);
-            assert_eq!(state, Ok(id));
+            terms
+                .intern(ctor::STATE, vec![resource])
+                .expect("a state type");
         }
-        // Found by `try_intern` from their width, so the lookup holds none.
         for width in 1..=FIXED_INT_WIDTHS {
-            let cells = [NAT, width as u32, 0];
-            let int = terms.push(&mut terms.lock_rows(), ctor::INT, &cells);
-            debug_assert_eq!(int, TypeId(TypeId::FIRST_INT + width as u32 - 1));
+            terms
+                .intern(ctor::INT, vec![TypeArg::Nat(width)])
+                .expect("an integer type");
         }
-        terms.publish(&terms.lock_rows());
         terms
     }
 
-    fn lock_rows(&self) -> std::sync::MutexGuard<'_, Rows> {
-        self.rows.lock().unwrap_or_else(|e| e.into_inner())
+    /// The structural expression named by a type handle.
+    pub fn expression(&self, id: TypeId) -> EggValue {
+        self.engine.borrow_mut().read(|state| {
+            state
+                .lookup("TypeHandle", i64::from(id.0))
+                .expect("type handle table")
+                .expect("a type this engine interned")
+        })
     }
 
-    // Publish `rows` for readers: a clone copies a pointer per page, and the
-    // next append copies only the chunk it writes.
-    fn publish(&self, rows: &Rows) {
-        *self.published.write().unwrap_or_else(|e| e.into_inner()) = rows.clone();
-        // Counted once readable: an id below `len` is in what a reader loads.
-        let minted = match rows.chunks() {
-            0 => 0,
-            n => id_at(n - 1, rows.chunk(n - 1).len()),
+    /// Find the handle of a structural expression already interned here.
+    pub fn expression_id(&self, expression: EggValue) -> TypeId {
+        let engine = self.engine.borrow_mut();
+        let id = engine
+            .read(|state| state.lookup("TypeHandleOf", expression))
+            .expect("type handle table")
+            .expect("an interned type expression");
+        TypeId(engine.value_to_base::<i64>(id) as u32)
+    }
+
+    fn read<R>(&self, id: TypeId, read: impl FnOnce(CtorId, &[TypeArg]) -> R) -> R {
+        let expression = self.expression(id);
+        let mut engine = self.engine.borrow_mut();
+        let (ctor, args) = if let Some(fields) =
+            constructor_fields(&mut engine, "FunctionType", expression)
+        {
+            let inputs = self.decode_list(&mut engine, fields[0]);
+            let outputs = self.decode_list(&mut engine, fields[1]);
+            (
+                self.ctor_named("builtin", "fn")
+                    .expect("function type constructor"),
+                vec![
+                    TypeArg::List(inputs.into()),
+                    outputs
+                        .into_iter()
+                        .next()
+                        .expect("one functional result type"),
+                ],
+            )
+        } else if let Some(fields) = constructor_fields(&mut engine, "ProductType", expression) {
+            (
+                ctor::TUPLE,
+                vec![TypeArg::List(
+                    self.decode_list(&mut engine, fields[0]).into(),
+                )],
+            )
+        } else if let Some(fields) = constructor_fields(&mut engine, "Nominal", expression) {
+            let name = Name(engine.value_to_base::<i64>(fields[0]) as u32);
+            (
+                ctor::NAMED,
+                vec![
+                    TypeArg::Sym(name),
+                    TypeArg::List(self.decode_list(&mut engine, fields[1]).into()),
+                ],
+            )
+        } else {
+            let fields = constructor_fields(&mut engine, "Apply", expression)
+                .expect("a constructor application");
+            let ctor =
+                constructor_fields(&mut engine, "Ctor", fields[0]).expect("a named constructor");
+            let name = engine.value_to_base::<String>(ctor[0]);
+            let (dialect, name) = name.split_once('.').expect("a qualified constructor");
+            (
+                self.ctor_named(dialect, name)
+                    .expect("a registered constructor"),
+                self.decode_list(&mut engine, fields[1]),
+            )
         };
-        self.minted.store(minted, Ordering::Release);
+        drop(engine);
+        read(ctor, &args)
     }
 
-    // Append a row under the next id; it is read once published.
-    fn push(&self, rows: &mut Rows, ctor: CtorId, cells: &[u32]) -> TypeId {
-        let last = rows.chunks().checked_sub(1);
-        let index = match last {
-            Some(index) if !rows.chunk(index).is_full() => index,
-            _ => {
-                let index = rows.chunks();
-                rows.put(index, std::sync::Arc::new(Chunk::new(0)));
-                index
+    fn encode_arg(&self, engine: &mut EGraph, arg: &TypeArg) -> EggValue {
+        match arg {
+            TypeArg::Nat(n) => engine
+                .update(|mut state| {
+                    let n = state.base_to_value(
+                        n.to_string()
+                            .parse::<tir_egglog::sort::BigInt>()
+                            .expect("a natural number"),
+                    );
+                    state.add("NatLit", n)
+                })
+                .expect("natural expression"),
+            TypeArg::Sym(name) => engine
+                .update(|mut state| state.add("SymbolParam", i64::from(name.0)))
+                .expect("symbol expression"),
+            TypeArg::Type(id) => engine
+                .read(|state| state.lookup("TypeHandle", i64::from(id.0)))
+                .expect("type handle")
+                .expect("an interned child"),
+            TypeArg::Var(index) => engine
+                .update(|mut state| state.add("UnkindedBound", i64::from(*index)))
+                .expect("bound argument"),
+            TypeArg::Lam(arity, body) => {
+                let body = self.encode_arg(engine, body);
+                engine
+                    .update(|mut state| state.add("UnkindedLambda", (i64::from(*arity), body)))
+                    .expect("argument binder")
             }
-        };
-        let chunk = rows.chunk_mut(index);
-        let row = chunk.push([ctor.0], 0);
-        debug_assert!(row < CHUNK_ROWS);
-        chunk.seg_mut(0).replace(row, cells);
-        TypeId(id_at(index, row))
+            TypeArg::List(items) => {
+                let items = self.encode_list(engine, items);
+                engine
+                    .update(|mut state| state.add("ListArg", items))
+                    .expect("type argument list")
+            }
+        }
     }
 
-    // `read` of the constructor and argument cells of `id`, in the rows last
-    // published: an id is handed out once the rows holding it are.
-    fn read<R>(&self, id: TypeId, read: impl FnOnce(CtorId, &[u32]) -> R) -> R {
-        let (index, row) = (chunk_of(id.0), row_of(id.0));
-        fn cells(rows: &Rows, index: u32, row: usize) -> Option<(CtorId, &[u32])> {
-            let chunk = rows.find(index).filter(|chunk| row < chunk.len())?;
-            Some((CtorId(chunk.cell(0, row)), chunk.seg(0).of(row)))
+    fn encode_list(&self, engine: &mut EGraph, args: &[TypeArg]) -> EggValue {
+        let mut tail = engine
+            .update(|mut state| state.add("TNil", tir_egglog::RawValues(vec![])))
+            .expect("type list");
+        for arg in args.iter().rev() {
+            let head = self.encode_arg(engine, arg);
+            tail = engine
+                .update(|mut state| state.add("TCons", (head, tail)))
+                .expect("type list");
         }
-        // `read` takes no lock, so holding this one cannot deadlock.
-        let rows = self.published.read().unwrap_or_else(|e| e.into_inner());
-        let (ctor, found) = cells(&rows, index, row).expect("an id this store minted");
-        read(ctor, found)
+        tail
+    }
+
+    fn decode_list(&self, engine: &mut EGraph, list: EggValue) -> Vec<TypeArg> {
+        let schedule = tir_egglog::ast::Command::RunSchedule(tir_egglog::Schedule::Saturate(
+            tir_egglog::span!(),
+            Box::new(tir_egglog::Schedule::run("ir-type-index")),
+        ));
+        engine.seminaive = false;
+        engine
+            .run_program(vec![schedule])
+            .expect("structural type projections");
+        let db = engine.database_mut();
+        let table = db.table("TypeItem").expect("type item relation");
+        let index = db.add_kept_index(table, &[0], &[1]);
+        let items = db
+            .listed(index, &[list])
+            .map(|row| row[2])
+            .collect::<Vec<_>>();
+        items
+            .into_iter()
+            .map(|item| self.decode_arg(engine, item))
+            .collect()
+    }
+
+    fn decode_arg(&self, engine: &mut EGraph, expression: EggValue) -> TypeArg {
+        if let Some(fields) = constructor_fields(engine, "NatLit", expression) {
+            let value = engine.value_to_base::<tir_egglog::sort::BigInt>(fields[0]);
+            return TypeArg::Nat(value.to_string().parse().expect("a u64 natural argument"));
+        }
+        if let Some(fields) = constructor_fields(engine, "SymbolParam", expression) {
+            return TypeArg::Sym(Name(engine.value_to_base::<i64>(fields[0]) as u32));
+        }
+        if let Some(fields) = constructor_fields(engine, "UnkindedBound", expression) {
+            return TypeArg::Var(engine.value_to_base::<i64>(fields[0]) as u32);
+        }
+        if let Some(fields) = constructor_fields(engine, "ListArg", expression) {
+            return TypeArg::List(self.decode_list(engine, fields[0]).into());
+        }
+        if let Some(fields) = constructor_fields(engine, "UnkindedLambda", expression) {
+            let arity = engine.value_to_base::<i64>(fields[0]) as u32;
+            return TypeArg::Lam(arity, Box::new(self.decode_arg(engine, fields[1])));
+        }
+        let id = engine
+            .read(|state| state.lookup("TypeHandleOf", expression))
+            .expect("type handle table")
+            .expect("a child type handle");
+        TypeArg::Type(TypeId(engine.value_to_base::<i64>(id) as u32))
     }
 
     /// Register `ctor`, or find the id it was registered under before.
@@ -604,9 +595,66 @@ impl Terms {
                 id
             }
         };
+        drop(registered);
+        let mut engine = self.engine.borrow_mut();
+        let mut kind = Self::kind_expression(&mut engine, ctor.kind);
+        for (_, param) in ctor.params.iter().rev() {
+            let input = match param {
+                Param::One(kind) | Param::Opt(kind) => Self::kind_expression(&mut engine, *kind),
+                Param::List(kind) => {
+                    let kind = Self::kind_expression(&mut engine, *kind);
+                    engine
+                        .update(|mut state| state.add("KList", kind))
+                        .expect("list kind")
+                }
+                Param::Fields => engine
+                    .update(|mut state| state.add("KRow", tir_egglog::RawValues(vec![])))
+                    .expect("row kind"),
+                Param::Any => engine
+                    .update(|mut state| state.add("KAny", tir_egglog::RawValues(vec![])))
+                    .expect("argument kind"),
+            };
+            kind = engine
+                .update(|mut state| state.add("KArrow", (input, kind)))
+                .expect("constructor kind");
+        }
+        let name = format!("{}.{}", ctor.dialect, ctor.name);
+        engine
+            .update(|mut state| state.set("ConstructorKind", name, kind))
+            .expect("registered constructor kind");
+        self.indexes_dirty.store(true, Ordering::Relaxed);
+        drop(engine);
         let mut known = self.by_address.write().unwrap_or_else(|e| e.into_inner());
         known.insert(address, id);
         id
+    }
+
+    fn kind_expression(engine: &mut EGraph, kind: Kind) -> EggValue {
+        let name = match kind {
+            Kind::Data => "KType",
+            Kind::Ghost => "KGhost",
+            Kind::Nat => "KNat",
+            Kind::Sym => "KSym",
+            Kind::Bool => "KBool",
+        };
+        engine
+            .update(|mut state| state.add(name, tir_egglog::RawValues(vec![])))
+            .expect("registered kind")
+    }
+
+    fn decode_kind(engine: &mut EGraph, value: EggValue) -> Kind {
+        for (name, kind) in [
+            ("KType", Kind::Data),
+            ("KGhost", Kind::Ghost),
+            ("KNat", Kind::Nat),
+            ("KSym", Kind::Sym),
+            ("KBool", Kind::Bool),
+        ] {
+            if constructor_fields(engine, name, value).is_some() {
+                return kind;
+            }
+        }
+        panic!("a registered scalar kind")
     }
 
     pub fn ctor_named(&self, dialect: &str, name: &str) -> Option<CtorId> {
@@ -631,27 +679,43 @@ impl Terms {
     }
 
     pub fn name(&self, text: &str) -> Name {
-        if let Some(&id) = self
-            .names
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .ids
-            .get(text)
+        let mut engine = self.engine.borrow_mut();
+        if let Some(id) = engine
+            .read(|state| state.lookup("SymbolId", text))
+            .expect("symbol identity table")
         {
-            return Name(id);
+            return Name(engine.value_to_base::<i64>(id) as u32);
         }
-        let mut names = self.names.write().unwrap_or_else(|e| e.into_inner());
-        let next = names.text.len() as u32;
-        let id = *names.ids.entry(text.into()).or_insert(next);
-        if id == next {
-            names.text.push(text.into());
-        }
+        self.indexes_dirty.store(true, Ordering::Relaxed);
+        let id = self.entities.fetch_add(1, Ordering::Relaxed);
+        engine
+            .update(|mut state| {
+                state.set("SymbolName", i64::from(id), text)?;
+                state.set("SymbolId", text, i64::from(id))
+            })
+            .expect("symbol identity");
         Name(id)
     }
 
     pub fn name_text(&self, name: Name) -> String {
-        let names = self.names.read().unwrap_or_else(|e| e.into_inner());
-        names.text[name.0 as usize].to_string()
+        let engine = self.engine.borrow_mut();
+        let value = engine
+            .read(|state| state.lookup("SymbolName", i64::from(name.0)))
+            .expect("symbol name table")
+            .expect("an interned symbol");
+        engine.value_to_base(value)
+    }
+
+    /// A structural term argument, including binders and lists.
+    pub fn argument_expression(&self, arg: &TypeArg) -> EggValue {
+        let mut engine = self.engine.borrow_mut();
+        self.encode_arg(&mut engine, arg)
+    }
+
+    /// Decode an argument stored structurally in this engine.
+    pub fn expression_argument(&self, expression: EggValue) -> TypeArg {
+        let mut engine = self.engine.borrow_mut();
+        self.decode_arg(&mut engine, expression)
     }
 
     /// Intern `ctor` applied to `args`; see [`Terms::try_intern`].
@@ -662,40 +726,51 @@ impl Terms {
     /// Check `ctor` applied to `args` and intern it in normal form.
     pub fn try_intern(&self, ctor: CtorId, args: Box<[TypeArg]>) -> Result<TypeId, String> {
         let args = self.normal_form(ctor, args);
-        if let (ctor::INT, [TypeArg::Nat(width @ 1..=FIXED_INT_WIDTHS)]) = (ctor, &*args) {
-            return Ok(TypeId(TypeId::FIRST_INT + *width as u32 - 1));
-        }
-        let mut cells = SmallVec::<[u32; 16]>::new();
-        for arg in args.iter() {
-            encode(arg, &mut cells);
-        }
-        let key = tir_adt::simd::hash_row(&cells) ^ ctor.0.wrapping_mul(0x9e37_79b9);
-        let shard = &self.lookup[ctor.0 as usize % SHARDS];
-        let same =
-            |id: &&TypeId| self.read(**id, |found, held| found == ctor && held == &cells[..]);
-        {
-            let lookup = shard.read().unwrap_or_else(|e| e.into_inner());
-            if let Some(&id) = lookup.get(&key).and_then(|found| found.iter().find(same)) {
-                return Ok(id);
-            }
-        }
-        // A default spelled out is the term without it, so both name one id.
         if let Some(args) = self.without_default(ctor, &args) {
             return self.try_intern(ctor, args);
         }
-        // Only a term not interned yet is checked: one that is passed.
         self.check(ctor, &args)?;
-        let mut lookup = shard.write().unwrap_or_else(|e| e.into_inner());
-        // Another thread can have interned it between the two locks.
-        if let Some(&id) = lookup.get(&key).and_then(|found| found.iter().find(same)) {
-            return Ok(id);
+        let info = self.ctor_info(ctor);
+        let mut engine = self.engine.borrow_mut();
+        let expression = match (info.dialect, info.name, &*args) {
+            ("builtin", "fn", [TypeArg::List(inputs), output]) => {
+                let inputs = self.encode_list(&mut engine, inputs);
+                let outputs = self.encode_list(&mut engine, std::slice::from_ref(output));
+                engine.update(|mut state| state.add("FunctionType", (inputs, outputs)))
+            }
+            ("builtin", "tuple", [TypeArg::List(items)]) => {
+                let items = self.encode_list(&mut engine, items);
+                engine.update(|mut state| state.add("ProductType", items))
+            }
+            ("type", "named", [TypeArg::Sym(name), TypeArg::List(args)]) => {
+                let args = self.encode_list(&mut engine, args);
+                engine.update(|mut state| state.add("Nominal", (i64::from(name.0), args)))
+            }
+            _ => {
+                let name = format!("{}.{}", info.dialect, info.name);
+                let head = engine
+                    .update(|mut state| state.add("Ctor", name))
+                    .map_err(|e| e.to_string())?;
+                let args = self.encode_list(&mut engine, &args);
+                engine.update(|mut state| state.add("Apply", (head, args)))
+            }
         }
-        let mut rows = self.lock_rows();
-        let id = self.push(&mut rows, ctor, &cells);
-        self.publish(&rows);
-        drop(rows);
-        lookup.entry(key).or_default().push(id);
-        Ok(id)
+        .map_err(|e| e.to_string())?;
+        if let Some(id) = engine
+            .read(|state| state.lookup("TypeHandleOf", expression))
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(TypeId(engine.value_to_base::<i64>(id) as u32));
+        }
+        self.indexes_dirty.store(true, Ordering::Relaxed);
+        let id = self.minted.fetch_add(1, Ordering::Relaxed);
+        engine
+            .update(|mut state| {
+                state.set("TypeHandle", i64::from(id), expression)?;
+                state.set("TypeHandleOf", expression, i64::from(id))
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(TypeId(id))
     }
 
     /// Let the optional last argument of `ctor` default to `value`: a term
@@ -829,9 +904,6 @@ impl Terms {
     }
 
     pub fn ctor(&self, id: TypeId) -> CtorId {
-        if fixed_int(id).is_some() {
-            return ctor::INT;
-        }
         self.read(id, |ctor, _| ctor)
     }
 
@@ -840,9 +912,14 @@ impl Terms {
         if ctor == ctor::NAMED
             && let Some(TypeArg::Sym(name)) = self.arg(id, 0)
         {
-            let defined = self.defined.read().unwrap_or_else(|e| e.into_inner());
-            // A name with no definition yet is an incomplete data type.
-            return defined.get(&name).copied().unwrap_or(Kind::Data);
+            let mut engine = self.engine.borrow_mut();
+            if let Some(kind) = engine
+                .read(|state| state.lookup("NominalKind", i64::from(name.0)))
+                .expect("nominal kind")
+            {
+                return Self::decode_kind(&mut engine, kind);
+            }
+            return Kind::Data;
         }
         self.ctor_info(ctor).kind
     }
@@ -852,31 +929,38 @@ impl Terms {
     /// modules of one store that define a name with different kinds keep
     /// theirs apart only once a merge renames one.
     pub fn define(&self, name: Name, kind: Kind) {
-        let mut defined = self.defined.write().unwrap_or_else(|e| e.into_inner());
-        defined.insert(name, kind);
+        let mut engine = self.engine.borrow_mut();
+        let kind = Self::kind_expression(&mut engine, kind);
+        engine
+            .update(|mut state| state.remove("NominalKind", i64::from(name.0)))
+            .expect("nominal kind");
+        engine
+            .update(|mut state| state.set("NominalKind", i64::from(name.0), kind))
+            .expect("nominal kind");
+        self.indexes_dirty.store(true, Ordering::Relaxed);
     }
 
     pub fn term(&self, id: TypeId) -> TypeTerm {
-        let (ctor, args) = self.read(id, |ctor, cells| (ctor, decode_boxed(cells)));
+        let (ctor, args) = self.read(id, |ctor, args| (ctor, args.into()));
         TypeTerm { ctor, args }
     }
 
     /// The arguments of `id`.
     pub fn args(&self, id: TypeId) -> Args {
-        self.read(id, |_, cells| decode_all(cells))
+        self.read(id, |_, args| args.iter().cloned().collect())
     }
 
     /// Argument `index` of `id`, read without decoding the others.
     pub fn arg(&self, id: TypeId, index: usize) -> Option<TypeArg> {
-        self.read(id, |_, cells| decode_at(cells, index))
+        self.read(id, |_, args| args.get(index).cloned())
     }
 
     /// Argument `index` of `id` when it is a constant [`TypeArg::Nat`].
     pub fn nat(&self, id: TypeId, index: usize) -> Option<u64> {
-        if let Some(width) = fixed_int(id) {
-            return (index == 0).then_some(width);
+        match self.arg(id, index)? {
+            TypeArg::Nat(n) => Some(n),
+            _ => None,
         }
-        self.read(id, |_, cells| nat_at(cells, index))
     }
 
     /// Argument `index` of `id` when it is a child type.
@@ -886,21 +970,13 @@ impl Terms {
 
     /// The width of `builtin.i<W>` when `W` is a constant.
     pub fn int_width(&self, id: TypeId) -> Option<u64> {
-        if let Some(width) = fixed_int(id) {
-            return Some(width);
-        }
-        self.read(id, |ctor, cells| {
-            (ctor == ctor::INT).then(|| nat_at(cells, 0))?
-        })
+        (self.ctor(id) == ctor::INT).then(|| self.nat(id, 0))?
     }
 
     /// The carrier width of `id`; see [`TypeCtor::carrier`].
     pub fn carrier(&self, id: TypeId) -> Option<TypeArg> {
-        if let Some(width) = fixed_int(id) {
-            return Some(TypeArg::Nat(width));
-        }
-        let (ctor, args) = self.read(id, |ctor, cells| (ctor, decode_all(cells)));
-        (self.ctor_info(ctor).carrier)(self, &args)
+        let term = self.term(id);
+        (self.ctor_info(term.ctor).carrier)(self, &term.args)
     }
 
     /// The carrier width of `id` when it is a constant.
@@ -913,9 +989,6 @@ impl Terms {
 
     /// `builtin.i<width>`.
     pub fn int(&self, width: u64) -> TypeId {
-        if (1..=FIXED_INT_WIDTHS).contains(&width) {
-            return TypeId(TypeId::FIRST_INT + width as u32 - 1);
-        }
         self.intern(ctor::INT, vec![TypeArg::Nat(width)])
             .expect("an integer type")
     }
@@ -978,4 +1051,18 @@ fn sum_order(arg: &TypeArg) -> (u8, u32) {
         TypeArg::Type(id) => (1, id.0),
         _ => (2, 0),
     }
+}
+
+/// Read a structural constructor by its output index. No structural terms are unioned.
+pub fn constructor_fields(
+    engine: &mut EGraph,
+    name: &str,
+    expression: EggValue,
+) -> Option<Vec<EggValue>> {
+    let db = engine.database_mut();
+    let table = db.table(name).ok()?;
+    let arity = db.schema().table(table).key_arity();
+    let index = db.add_kept_index(table, &[arity], &[]);
+    let row = db.listed(index, &[expression]).next()?;
+    Some(row.values().take(arity).collect())
 }

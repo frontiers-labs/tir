@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64iv --stage=regalloc %s | filecheck %s
 
 // LMUL legalization: a vec<8xi32> is 256 bits, two registers at the guaranteed

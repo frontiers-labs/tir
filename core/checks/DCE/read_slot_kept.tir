@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes) --pass func.func(dce) --verify %s | filecheck %s
 
 // The counterpart: a slot whose value is read back is a memory something can

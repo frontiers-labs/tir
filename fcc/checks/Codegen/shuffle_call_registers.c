@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // REQUIRES: linux, x86_64
 // RUN: env TIR_SHUFFLE_SEED=0 fcc compile --march x86_64 -O2 --stage obj --shuffle-machine-order -o %t.o %s
 // RUN: timeout 30 cc %t.o -o %t

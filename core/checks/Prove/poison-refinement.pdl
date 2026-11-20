@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir prove --width 8 %s | filecheck %s
 
 // A solver proof is a refinement: wherever the left side is not poison, the

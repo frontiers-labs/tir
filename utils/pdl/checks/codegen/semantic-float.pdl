@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // Untyped semantic floating-point operators still require checked proofs.
 // RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
 

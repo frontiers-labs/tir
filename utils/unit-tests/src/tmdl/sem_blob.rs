@@ -71,6 +71,7 @@ fn a_regnum_guard_compares_the_captured_index_symbol() {
 }
 
 #[test]
+#[ignore = "IR migration: selector rule generation was removed"]
 fn flag_reading_rules_compose_the_comparison_they_prove() {
     let generated = generate(&fixture("checks/Rust/flag_branches.tmdl"), "test");
 

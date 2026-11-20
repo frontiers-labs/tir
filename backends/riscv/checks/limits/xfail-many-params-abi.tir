@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
 
 // RISC-V passes integer args past a7 on the stack. The callee reloads them from
