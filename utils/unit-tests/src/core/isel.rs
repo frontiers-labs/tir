@@ -61,7 +61,7 @@ fn run_pass(
     let functions = pm.nest::<FuncOp>();
     functions.add_pass(tir::passes::RestructureNodesPass::new());
     functions.add_boxed_pass(Box::new(pass));
-    pm.run(context, context.get_op(module.id()))
+    pm.run(context, module.id())
 }
 
 fn selection_pass(context: &Context, rules: Vec<Rule>) -> InstructionSelectPass {

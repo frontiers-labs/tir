@@ -296,8 +296,7 @@ fn flattening_resolves_a_labeled_break_to_the_loop_it_names() {
     let mut pm = tir::PassManager::new();
     pm.nest::<tir::func::FuncOp>()
         .add_pass(fcc::passes::RaiseLoopsPass::new());
-    pm.run(&context, context.get_op(module.id()))
-        .expect("loops flatten");
+    pm.run(&context, module.id()).expect("loops flatten");
     verify_op_tree(&context, module.id()).expect("flattened module verifies");
 
     let main = find::<tir::func::FuncOp>(&context, &module);

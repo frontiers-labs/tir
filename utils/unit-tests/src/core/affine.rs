@@ -265,7 +265,7 @@ fn modular_recurrence_preserves_base_step_and_wrapped_exits() {
         let (context, module) = fixtures::parse(&source);
         tir::parse_pipeline("restructure-nodes,affine,instcombine-nodes")
             .unwrap()
-            .run(&context, context.get_op(module.id()))
+            .run(&context, module.id())
             .unwrap();
         tir::verify_op_tree(&context, module.id()).unwrap();
         let function = fixtures::module_ops(&context, module.id())
