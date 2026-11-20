@@ -4,7 +4,7 @@
 use crate as tir;
 use crate::attributes::Predicate;
 use crate::binding::{self, PortBindings};
-use crate::builtin::{AddIOpBuilder, CmpIOpBuilder, IntegerType};
+use crate::builtin::{AddIOp, CmpIOp, IntegerType};
 use crate::parse::common::Cursor;
 use crate::{Context, Error, ExitScope, ExitScopeKind, Operation, Theta, ValueId, operation};
 
@@ -65,17 +65,6 @@ operation! {
 impl ExitScope for SwitchOp {
     fn exit_scope(&self) -> ExitScopeKind {
         ExitScopeKind::Switch
-    }
-}
-
-impl SwitchOpBuilder {
-    /// Run arm `i` on the predicate bits `cases[i]` and the last arm on every
-    /// other value.
-    pub fn cases(self, cases: &[u64]) -> Self {
-        match binding::gamma_cases_attribute(cases) {
-            Some(cases) => self.attr(binding::GAMMA_CASES, cases),
-            None => self,
-        }
     }
 }
 
@@ -174,14 +163,17 @@ impl ForOp {
 
         let mut result_types = vec![counter_type];
         result_types.extend(bound.ports.iter().map(tir::Value::ty));
-        let builder = ForOpBuilder::new(context)
-            .lb(lb)
-            .inits(bound.inits)
-            .ub(ub)
-            .step(step)
-            .body(body)
-            .result_types(result_types);
-        Ok(Box::new(builder.build()))
+        Ok(Box::new(ForOp::new(
+            context,
+            lb,
+            bound.inits,
+            ub,
+            step,
+            result_types,
+            Some(body),
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 
@@ -227,25 +219,29 @@ fn materialize_counted_shape(
             && op.operands().as_slice() == [counter, ub]
     })
     .unwrap_or_else(|| {
-        let compare = CmpIOpBuilder::new(context)
-            .lhs(counter)
-            .rhs(ub)
-            .predicate(Predicate::Slt)
-            .result_type(IntegerType::new(context, 1))
-            .build();
-        context.add(body, compare.id());
+        let compare = CmpIOp::new(
+            context,
+            counter,
+            ub,
+            Predicate::Slt,
+            IntegerType::new(context, 1),
+            Default::default(),
+            tir::InsertionPoint::Region(body),
+        );
         compare.result()
     });
     let advance = existing(&|op| {
         op.is::<crate::builtin::AddIOp>() && op.operands().as_slice() == [counter, step]
     })
     .unwrap_or_else(|| {
-        let advance = AddIOpBuilder::new(context)
-            .lhs(counter)
-            .rhs(step)
-            .result_type(context.get_value(counter).ty())
-            .build();
-        context.add(body, advance.id());
+        let advance = AddIOp::new(
+            context,
+            counter,
+            step,
+            context.get_value(counter).ty(),
+            Default::default(),
+            tir::InsertionPoint::Region(body),
+        );
         advance.result()
     });
 

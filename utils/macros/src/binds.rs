@@ -235,7 +235,6 @@ impl Parse for Counted {
 /// What the generator needs to know about the op around the declaration.
 pub struct OpShape<'a> {
     pub struct_name: &'a Ident,
-    pub builder_name: &'a Ident,
     /// `dialect.name` as printed.
     pub spelled: String,
     /// Declared operand groups: name and whether variadic.
@@ -243,6 +242,7 @@ pub struct OpShape<'a> {
     /// Declared regions: name and whether variadic.
     pub regions: &'a [(String, bool)],
     pub custom_format: bool,
+    pub state_results: bool,
 }
 
 /// The code a `binds:` declaration contributes to the op.
@@ -491,9 +491,20 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
             inits.len() == 1 && shape.operands.len() == 1 && shape.operands[0].1,
             "binds: the generic Theta syntax needs one variadic operand group; spell a custom format"
         );
-        let inits = inits[0].clone();
-        let body = body.clone();
-        let builder = shape.builder_name;
+        let region_args: Vec<_> = shape
+            .regions
+            .iter()
+            .map(|(name, variadic)| {
+                if name == &body.to_string() {
+                    quote! { Some(parsed.body) }
+                } else if *variadic {
+                    quote! { vec![] }
+                } else {
+                    quote! { None }
+                }
+            })
+            .collect();
+        let state_result_arg = shape.state_results.then(|| quote! { vec![], });
         (
             Some(quote! {
                 fn print<'a, 'b: 'a>(&'a self, fmt: &'a mut tir::IRFormatter<'b>) -> Result<(), std::fmt::Error> {
@@ -510,11 +521,11 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
                 fn parse<'src>(parser: &mut tir::parse::text::Parser<'src>, context: &tir::Context)
                 -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
                     let parsed = tir::binding::parse_theta(parser, context)?;
-                    let builder = #builder::new(context)
-                        .#inits(parsed.inits)
-                        .#body(parsed.body)
-                        .result_types(parsed.result_types);
-                    Ok(Box::new(builder.build()))
+                    Ok(Box::new(Self::new(
+                        context, parsed.inits,
+                        parsed.result_types, #(#region_args,)* #state_result_arg
+                        tir::NewOpParts::default(), tir::InsertionPoint::Root,
+                    )))
                 }
             }),
         )
@@ -627,10 +638,31 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
             inputs.len() == 1 && shape.operands.len() == 2 && shape.operands[1].1,
             "binds: the generic Gamma syntax needs a predicate and one variadic operand group; spell a custom format"
         );
-        let predicate = predicate[0].clone();
-        let inputs = inputs[0].clone();
-        let arms = arms.clone();
-        let builder = shape.builder_name;
+        let operand_args: Vec<_> = shape
+            .operands
+            .iter()
+            .map(|(name, _)| {
+                if name == &predicate[0].to_string() {
+                    quote! { parsed.predicate }
+                } else {
+                    quote! { parsed.inputs }
+                }
+            })
+            .collect();
+        let region_args: Vec<_> = shape
+            .regions
+            .iter()
+            .map(|(name, variadic)| {
+                if name == &arms.to_string() {
+                    quote! { parsed.arms }
+                } else if *variadic {
+                    quote! { vec![] }
+                } else {
+                    quote! { None }
+                }
+            })
+            .collect();
+        let state_result_arg = shape.state_results.then(|| quote! { vec![], });
         (
             Some(quote! {
                 fn print<'a, 'b: 'a>(&'a self, fmt: &'a mut tir::IRFormatter<'b>) -> Result<(), std::fmt::Error> {
@@ -648,16 +680,14 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
                 fn parse<'src>(parser: &mut tir::parse::text::Parser<'src>, context: &tir::Context)
                 -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
                     let parsed = tir::binding::parse_gamma(parser, context)?;
-                    let builder = #builder::new(context)
-                        .#predicate(parsed.predicate)
-                        .#inputs(parsed.inputs)
-                        .#arms(parsed.arms)
-                        .result_types(parsed.result_types);
-                    let builder = match parsed.cases {
-                        Some(cases) => builder.attr(tir::binding::GAMMA_CASES, cases),
-                        None => builder,
-                    };
-                    Ok(Box::new(builder.build()))
+                    let attributes = parsed.cases.into_iter().map(|cases| {
+                        context.named_attribute(tir::binding::GAMMA_CASES, cases)
+                    }).collect();
+                    Ok(Box::new(Self::new(
+                        context, #(#operand_args,)*
+                        parsed.result_types, #(#region_args,)* #state_result_arg
+                        tir::NewOpParts { attributes }, tir::InsertionPoint::Root,
+                    )))
                 }
             }),
         )

@@ -248,7 +248,7 @@ struct InstrEmitCtx<'a> {
     op_name: &'a str,
     ops: &'a [(String, Type)],
     mnemonic_name: &'a str,
-    builder_ident: &'a proc_macro2::Ident,
+    op_ident: &'a proc_macro2::Ident,
     ops_map: &'a HashMap<String, Type>,
     operand_constraints: &'a HashMap<String, OperandConstraint>,
     defined_register_operands: &'a [String],
@@ -271,7 +271,7 @@ fn attrs_schema_ts(ops: &[(String, Type)]) -> proc_macro2::TokenStream {
     quote! { #(#items,)* }
 }
 
-fn instruction_values(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> proc_macro2::TokenStream {
+fn instruction_ports(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<(String, bool)> {
     let mut ports: Vec<(String, bool)> = vec![];
     for (name, ty) in ctx.ops {
         if !matches!(ty, Type::Struct(_)) {
@@ -296,7 +296,11 @@ fn instruction_values(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> proc_mac
     ) {
         ports.push((slot, is_def));
     }
+    ports
+}
 
+fn instruction_values(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> proc_macro2::TokenStream {
+    let ports = instruction_ports(tables, ctx);
     let fields = |def| {
         let names: Vec<_> = ports
             .iter()
@@ -406,7 +410,12 @@ fn emit_assembly_template(
     custom_assembly: bool,
     out: &mut InstrOutputs<'_>,
 ) -> Option<proc_macro2::Ident> {
-    let builder_ident = ctx.builder_ident;
+    let op_ident = ctx.op_ident;
+    let operand_segments = instruction_ports(tables, ctx)
+        .iter()
+        .filter(|(_, is_def)| !is_def)
+        .count()
+        + 2;
     let mut desc_ident = None;
     let actions = compile_asm_template(template);
     let syntax_arity = actions
@@ -462,20 +471,31 @@ fn emit_assembly_template(
         out.instruction_parsers_impls.push(quote! {
             fn #parse_fn_ident<'src>(
                 context: &tir::Context,
-                builder: &mut tir::backend::AsmCursor,
+                insertion: tir::InsertionPoint,
                 parser: &mut tir::parse::tokens::Parser<'src, tir::backend::Token<'src>>,
             ) -> Result<(), ()> {
                 asm_desc::parse_and_insert(
                     context,
                     &#ident,
                     parser,
-                    builder,
-                    |attributes| {
-                        let mut op_builder = #builder_ident::new(context);
-                        for attribute in attributes {
-                            op_builder = op_builder.attr_sym(attribute.name, attribute.value);
-                        }
-                        op_builder.build()
+                    insertion,
+                    |mut attributes| {
+                        attributes.push(context.named_attribute(
+                            "operand_segment_sizes",
+                            tir::attributes::AttributeValue::Array(vec![
+                                tir::attributes::AttributeValue::UInt(0); #operand_segments
+                            ].into()),
+                        ));
+                        <#op_ident as tir::Operation>::from_op_instance(context.add_operation(
+                            tir::InsertionPoint::Root,
+                            tir::NewOp::new::<#op_ident>(
+                                context.clone(),
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                                tir::NewOpParts { attributes },
+                            ),
+                        ))
                     },
                 )
             }
@@ -791,7 +811,6 @@ fn emit_instruction(
 ) -> Result<(), TMDLError> {
     let dialect = options.dialect;
     let name_ident = format_ident!("{}Op", &inst.name);
-    let builder_ident = format_ident!("{}OpBuilder", &inst.name);
     let resolved_params = resolve_params_for_instruction(inst, item_cache);
     let mnemonic = resolved_params
         .get("MNEMONIC")
@@ -905,7 +924,7 @@ fn emit_instruction(
         op_name,
         ops: &ops,
         mnemonic_name,
-        builder_ident: &builder_ident,
+        op_ident: &name_ident,
         ops_map: &ops_map,
         operand_constraints: &operand_constraints,
         defined_register_operands: &defined_register_operands,

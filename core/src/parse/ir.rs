@@ -375,7 +375,7 @@ impl<'src> TextParser<'src> {
 
             let op = parse_single_op(self, context)?;
             match &current {
-                Some(block) => block.append(op.id()),
+                Some(block) => context.insert(block.end(), op.id()),
                 None => loose.push(op.id()),
             }
         }
@@ -394,7 +394,7 @@ impl<'src> TextParser<'src> {
         let entry = self.entry_block(context, region);
         let block = context.get_block(entry);
         for op in loose {
-            block.append(*op);
+            context.insert(block.end(), *op);
         }
         *current = Some(block);
     }

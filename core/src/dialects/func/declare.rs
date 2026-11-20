@@ -129,23 +129,37 @@ impl DeclareOp {
             .parse_type(context)?
             .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
 
-        let mut builder = DeclareOpBuilder::new(context)
-            .attr("sym_name", AttributeValue::Str(sym_name.into()))
-            .result_type(FnType::new(context, &arg_types, ret_type));
-        if is_private {
-            builder = builder.attr(
+        let attributes = if is_private {
+            vec![context.named_attribute(
                 "sym_visibility",
                 AttributeValue::Str("private".to_string().into()),
-            );
-        }
-
-        Ok(Box::new(builder.build()))
+            )]
+        } else {
+            vec![]
+        };
+        Ok(Box::new(DeclareOp::new(
+            context,
+            AttributeValue::Str(sym_name.into()),
+            FnType::new(context, &arg_types, ret_type),
+            tir::NewOpParts { attributes },
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 
-pub fn declare_op(context: &Context, name: &str, ret: TypeId, args: &[TypeId]) -> DeclareOp {
-    DeclareOpBuilder::new(context)
-        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
-        .result_type(FnType::new(context, args, ret))
-        .build()
+pub fn declare_op(
+    context: &Context,
+    name: &str,
+    ret: TypeId,
+    args: &[TypeId],
+    parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> DeclareOp {
+    DeclareOp::new(
+        context,
+        AttributeValue::Str(name.to_string().into()),
+        FnType::new(context, args, ret),
+        parts,
+        insertion,
+    )
 }

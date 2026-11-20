@@ -60,11 +60,22 @@ fn fusion_pair(
     let mut slots = Vec::new();
     let mut pc = first_pc;
     for (index, src, imm) in specifications {
-        let op_id = AddImmOpBuilder::new(&context)
-            .attr("dst", phys_attr((RegClass::Gpr.id(), 1)))
-            .attr("src", phys_attr((RegClass::Gpr.id(), src)))
-            .attr("imm", AttributeValue::Int(imm))
-            .build();
+        let op_id = AddImmOp::new(
+            &context,
+            tir::Operand::none(),
+            tir::Operand::none(),
+            AttributeValue::Int(imm),
+            vec![],
+            vec![],
+            vec![],
+            tir::NewOpParts {
+                attributes: vec![
+                    context.named_attribute("dst", phys_attr((RegClass::Gpr.id(), 1))),
+                    context.named_attribute("src", phys_attr((RegClass::Gpr.id(), src))),
+                ],
+            },
+            tir::InsertionPoint::Root,
+        );
         let op = context.get_op(op_id.id());
         let mi = op.clone().as_interface::<dyn MachineInstruction>().unwrap();
         let info = mi.info();
@@ -191,9 +202,17 @@ fn add_imm_latency(imm: i64) -> u16 {
     use tir::Operation;
     let context = tir::Context::with_default_dialects();
     context.register_dialect::<LatencyDialect>();
-    let op = AddImmOpBuilder::new(&context)
-        .attr("imm", AttributeValue::Int(imm))
-        .build();
+    let op = AddImmOp::new(
+        &context,
+        tir::Operand::none(),
+        tir::Operand::none(),
+        AttributeValue::Int(imm),
+        vec![],
+        vec![],
+        vec![],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let mi = context
         .get_op(op.id())
         .as_interface::<dyn MachineInstruction>()
@@ -220,11 +239,21 @@ fn div_schedule(
     use tir::Operation;
     let context = tir::Context::with_default_dialects();
     context.register_dialect::<LatencyDialect>();
-    let mut builder = DivOpBuilder::new(&context);
-    if let Some(rhs) = rhs {
-        builder = builder.attr("rhs", phys_attr((RegClass::Gpr.id(), rhs)));
-    }
-    let op = builder.build();
+    let attributes = rhs
+        .into_iter()
+        .map(|rhs| context.named_attribute("rhs", phys_attr((RegClass::Gpr.id(), rhs))))
+        .collect();
+    let op = DivOp::new(
+        &context,
+        tir::Operand::none(),
+        tir::Operand::none(),
+        tir::Operand::none(),
+        vec![],
+        vec![],
+        vec![],
+        tir::NewOpParts { attributes },
+        tir::InsertionPoint::Root,
+    );
     let mi = context
         .get_op(op.id())
         .as_interface::<dyn MachineInstruction>()

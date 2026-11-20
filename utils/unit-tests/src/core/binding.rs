@@ -58,8 +58,9 @@ fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]
                 context,
                 value,
                 builtin::IntegerType::new(context, u64::from(width)),
+                Default::default(),
+                tir::InsertionPoint::Root,
             )
-            .build()
         })
         .collect();
     let values: Vec<ValueId> = constants.iter().map(|c| c.result()).collect();
@@ -69,12 +70,21 @@ fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]
 
 fn build_theta(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]) -> ThetaOp {
     let i32_ty = builtin::IntegerType::new(context, 32);
-    let init = ops::constant(context, 7, i32_ty).build();
-    ThetaOpBuilder::new(context)
-        .inits(vec![init.result()])
-        .body(nodes_region(context, port_types, results))
-        .result_types(vec![i32_ty])
-        .build()
+    let init = ops::constant(
+        context,
+        7,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    ThetaOp::new(
+        context,
+        vec![init.result()],
+        vec![i32_ty],
+        Some(nodes_region(context, port_types, results)),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    )
 }
 
 #[test]
@@ -112,18 +122,33 @@ fn a_theta_port_must_have_its_init_type() {
 
 fn build_gamma(context: &Context, arm_results: &[&[(i64, u32)]]) -> GammaOp {
     let i32_ty = builtin::IntegerType::new(context, 32);
-    let predicate = ops::constant(context, 0, i32_ty).build();
-    let input = ops::constant(context, 5, i32_ty).build();
+    let predicate = ops::constant(
+        context,
+        0,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    let input = ops::constant(
+        context,
+        5,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let arms = arm_results
         .iter()
         .map(|results| nodes_region(context, &[i32_ty], results))
         .collect();
-    GammaOpBuilder::new(context)
-        .predicate(predicate.result())
-        .inputs(vec![input.result()])
-        .arms(arms)
-        .result_types(vec![i32_ty])
-        .build()
+    GammaOp::new(
+        context,
+        predicate.result(),
+        vec![input.result()],
+        vec![i32_ty],
+        arms,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    )
 }
 
 #[test]
@@ -151,27 +176,49 @@ fn counted(
     predicate: tir::attributes::Predicate,
     shape: impl Fn(&[ValueId; 5]) -> Vec<ValueId>,
 ) -> tir::scf::ForOp {
-    use tir::builtin::{AddIOpBuilder, CmpIOpBuilder};
+    use tir::builtin::{AddIOp, CmpIOp};
     let i32_ty = builtin::IntegerType::new(context, 32);
     let i1 = builtin::IntegerType::new(context, 1);
     let bounds: Vec<ValueId> = [0, 10, 1, 7]
         .iter()
-        .map(|&value| ops::constant(context, value, i32_ty).build().result())
+        .map(|&value| {
+            ops::constant(
+                context,
+                value,
+                i32_ty,
+                Default::default(),
+                tir::InsertionPoint::Root,
+            )
+            .result()
+        })
         .collect();
     let counter = context.create_value(i32_ty, None);
     let carried = context.create_value(i32_ty, None);
-    let compare = CmpIOpBuilder::new(context)
-        .lhs(counter.id())
-        .rhs(bounds[1])
-        .predicate(predicate)
-        .result_type(i1)
-        .build();
-    let advance = AddIOpBuilder::new(context)
-        .lhs(counter.id())
-        .rhs(bounds[2])
-        .result_type(i32_ty)
-        .build();
-    let doubled = ops::addi(context, carried.id(), carried.id(), i32_ty).build();
+    let compare = CmpIOp::new(
+        context,
+        counter.id(),
+        bounds[1],
+        tir::attributes::AttributeValue::Predicate(predicate),
+        i1,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    let advance = AddIOp::new(
+        context,
+        counter.id(),
+        bounds[2],
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    let doubled = ops::addi(
+        context,
+        carried.id(),
+        carried.id(),
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let results = shape(&[
         counter.id(),
         compare.result(),
@@ -184,14 +231,17 @@ fn counted(
         vec![compare.id(), advance.id(), doubled.id()],
         results,
     );
-    tir::scf::ForOpBuilder::new(context)
-        .lb(bounds[0])
-        .inits(vec![bounds[3]])
-        .ub(bounds[1])
-        .step(bounds[2])
-        .body(body.id())
-        .result_types(vec![i32_ty, i32_ty])
-        .build()
+    tir::scf::ForOp::new(
+        context,
+        bounds[0],
+        vec![bounds[3]],
+        bounds[1],
+        bounds[2],
+        vec![i32_ty, i32_ty],
+        Some(body.id()),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    )
 }
 
 #[test]

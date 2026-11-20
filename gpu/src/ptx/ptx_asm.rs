@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
 use tir::backend::asm_syntax::{AsmSyntaxPart, InstrSyntax};
 use tir::backend::{SectionOp, SymbolEndOp, SymbolOp};
-use tir::builtin::{ModuleEndOpBuilder, ModuleOp, ModuleOpBuilder};
+use tir::builtin::{ModuleEndOp, ModuleOp};
 use tir::{Context, NewOp, OpHandle, OpId, Operation};
 
-use super::{LabelOp, LabelOpBuilder};
+use super::LabelOp;
 
 // ---------------------------------------------------------------------------
 // Tokenizer
@@ -538,7 +538,12 @@ fn parse_instruction(
     Err(format!("no matching form for `{line}`"))
 }
 
-fn build_op(context: &Context, name: &'static str, attributes: Vec<NamedAttribute>) -> OpId {
+fn build_op(
+    context: &Context,
+    name: &'static str,
+    attributes: Vec<NamedAttribute>,
+    insertion: tir::InsertionPoint,
+) -> OpId {
     let inst = NewOp::new_dynamic(
         ("ptx", name),
         context.clone(),
@@ -547,7 +552,7 @@ fn build_op(context: &Context, name: &'static str, attributes: Vec<NamedAttribut
         vec![],
         attributes,
     );
-    context.add_operation(inst).id
+    context.add_operation(insertion, inst).id
 }
 
 /// Parse PTX assembly text into a module.
@@ -556,36 +561,51 @@ pub fn parse(context: &Context, text: &str) -> Result<ModuleOp, String> {
     let (preamble, kernels) = split_kernels(&cleaned);
     let index = syntax_index();
 
-    let module = ModuleOpBuilder::new(context).build();
-    let section = module.body().append_op(
-        tir::backend::SectionOpBuilder::new(context)
-            .attr("ptx_preamble", AttributeValue::Str(preamble.into()))
-            .build(),
+    let module = ModuleOp::new(context, None, Default::default(), tir::InsertionPoint::Root);
+    let section = tir::backend::SectionOp::new(
+        context,
+        None,
+        tir::NewOpParts {
+            attributes: vec![
+                context.named_attribute("ptx_preamble", AttributeValue::Str(preamble.into())),
+            ],
+        },
+        module.body().end(),
     );
-    module
-        .body()
-        .append_op(ModuleEndOpBuilder::new(context).build());
+    ModuleEndOp::new(context, Default::default(), module.body().end());
 
     let section_body = section.body();
     for kernel in kernels {
-        let symbol = tir::backend::SymbolOpBuilder::new(context)
-            .attr("name", AttributeValue::Str(kernel.name.into()))
-            .attr("ptx_header", AttributeValue::Str(kernel.header.into()))
-            .attr("ptx_regs", AttributeValue::Str(kernel.regs.into()))
-            .build();
-        section_body.append(symbol.id());
+        let symbol = tir::backend::SymbolOp::new(
+            context,
+            None,
+            tir::NewOpParts {
+                attributes: vec![
+                    context.named_attribute("name", AttributeValue::Str(kernel.name.into())),
+                    (context)
+                        .named_attribute("ptx_header", AttributeValue::Str(kernel.header.into())),
+                    context.named_attribute("ptx_regs", AttributeValue::Str(kernel.regs.into())),
+                ],
+            },
+            section_body.end(),
+        );
         let body = symbol.body();
         for item in body_items(&kernel.body) {
-            let id = match item {
-                BodyItem::Label(name) => LabelOpBuilder::new(context).name(name).build().id(),
+            match item {
+                BodyItem::Label(name) => LabelOp::new(
+                    context,
+                    tir::attributes::AttributeValue::Str((name).into()),
+                    Default::default(),
+                    body.end(),
+                )
+                .id(),
                 BodyItem::Instruction(line) => {
                     let (op_name, attrs) = parse_instruction(context, &index, line.trim())?;
-                    build_op(context, op_name, attrs)
+                    build_op(context, op_name, attrs, body.end())
                 }
             };
-            body.append(id);
         }
-        body.append(tir::backend::SymbolEndOpBuilder::new(context).build().id());
+        tir::backend::SymbolEndOp::new(context, Default::default(), body.end());
     }
 
     Ok(module)

@@ -51,27 +51,36 @@ fn result_of(context: &Context, op: OpId) -> ValueId {
 }
 
 fn def_reg(context: &Context) -> (OpId, ValueId) {
-    let op = DefOpBuilder::new(context)
-        .result_types(vec![RegClassType::new(context, r())])
-        .build()
-        .id();
+    let op = DefOp::new(
+        context,
+        vec![RegClassType::new(context, r())],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    )
+    .id();
     (op, result_of(context, op))
 }
 
 fn flag_def(context: &Context, source: ValueId) -> OpId {
-    SetFlagsOpBuilder::new(context)
-        .rs(source)
-        .result_types(vec![RegClassType::new(context, r())])
-        .build()
-        .id()
+    SetFlagsOp::new(
+        context,
+        source,
+        vec![RegClassType::new(context, r())],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    )
+    .id()
 }
 
 fn flag_use(context: &Context, source: ValueId) -> OpId {
-    ReadFlagsOpBuilder::new(context)
-        .rs(source)
-        .result_types(vec![RegClassType::new(context, r())])
-        .build()
-        .id()
+    ReadFlagsOp::new(
+        context,
+        source,
+        vec![RegClassType::new(context, r())],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    )
+    .id()
 }
 
 fn graph(context: &Context, block: &BlockHandle, assignment: &RegAssignment) -> Dependences {
@@ -239,13 +248,10 @@ proptest::proptest! {
         let block = context.create_block(vec![parameter]);
         let mut updates = Vec::new();
         for _ in 0..count {
-            let update = UpdateParamOpBuilder::new(&context)
-                .rs(value)
-                .result_types(vec![ty])
-                .build()
+            let update = UpdateParamOp::new(&context, value, vec![ty], Default::default(), tir::InsertionPoint::Root)
                 .id();
             context.set_op_result(update, 0, value);
-            block.append(update);
+            context.insert(block.end(), update);
             updates.push(update);
         }
         let dependences = graph(&context, &block, &RegAssignment::default());

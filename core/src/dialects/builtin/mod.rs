@@ -29,7 +29,7 @@ pub mod ops {
     pub use super::global::*;
     pub use super::module::*;
     pub use super::tuple::*;
-    pub use super::type_def::{TypeDefOp, TypeDefOpBuilder, type_def};
+    pub use super::type_def::{TypeDefOp, type_def};
     pub use super::ub::*;
 }
 

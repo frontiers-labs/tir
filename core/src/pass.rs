@@ -341,7 +341,7 @@ impl Context {
         let split = self.create_block(vec![]);
         for op in tail {
             source.remove_op(op);
-            split.append(op);
+            self.insert(split.end(), op);
         }
         split
     }
@@ -378,7 +378,7 @@ impl Context {
         let replaced = match self.parent_nodes_region(target.op.id) {
             Some(region) => {
                 self.remove_from_region(region, target.op.id);
-                self.add(region, new_op.id());
+                self.insert(crate::InsertionPoint::Region(region), new_op.id());
                 true
             }
             None => self.block_of(target)?.replace_op(target.op.id, new_op.id()),
@@ -433,7 +433,7 @@ impl Context {
         let replaced = match self.parent_nodes_region(target.op.id) {
             Some(region) => {
                 self.remove_from_region(region, target.op.id);
-                self.add(region, new_op.id());
+                self.insert(crate::InsertionPoint::Region(region), new_op.id());
                 true
             }
             None => self.block_of(target)?.replace_op(target.op.id, new_op.id()),
@@ -460,33 +460,6 @@ impl Context {
         } else {
             Err(PassError::RewriteFailed(target.op.id))
         }
-    }
-
-    /// Insert `new_op` immediately before `target` in its block. Used when one
-    /// source op lowers to several machine instructions (e.g. a sub-word sign
-    /// extension becoming `slli` then `srai`): the feeding instructions are inserted
-    /// ahead of the op that consumes them. Repeated calls before the same target
-    /// preserve insertion order.
-    pub fn insert_op_before(
-        &self,
-        target: &OperationRef,
-        new_op: &dyn Operation,
-    ) -> Result<(), PassError> {
-        // An unordered region has no before: the op joins it, and what it
-        // reads places it.
-        if let Some(region) = self.parent_nodes_region(target.op.id) {
-            self.add(region, new_op.id());
-            return Ok(());
-        }
-        let block = self.block_of(target)?;
-        let position = self
-            .get_block(block.id())
-            .op_ids()
-            .iter()
-            .position(|id| *id == target.op.id)
-            .ok_or(PassError::RewriteFailed(target.op.id))?;
-        block.insert(position, new_op.id());
-        Ok(())
     }
 }
 

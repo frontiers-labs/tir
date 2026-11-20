@@ -121,8 +121,7 @@ id_newtype!(OpId);
 /// }
 /// ```
 ///
-/// This macro will generate a BarOp structure, as well as BarOpBuilder for constructing
-/// custom operation.
+/// This macro generates a BarOp structure and constructors taking an insertion point.
 ///
 /// Because all operations implement this trait, generic IR passes can inspect,
 /// transform, or analyze any construct in the IR using the same programming model.
@@ -626,16 +625,30 @@ impl OpNameId {
     }
 }
 
-/// What a generated builder accumulates beside its declared ports: the
-/// attributes. One field of one type, so every builder drops exactly one
-/// thing it did not declare.
+/// Additional attributes supplied to an operation constructor.
 #[derive(Default)]
 pub struct NewOpParts {
     pub attributes: Vec<crate::attributes::NamedAttribute>,
 }
 
+/// Where an operation belongs. Graph regions have no execution order; block
+/// positions are indices into the block's current operation sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InsertionPoint {
+    /// An operation with no enclosing block or region, such as a module.
+    Root,
+    /// An operation in an unordered graph region.
+    Region(crate::RegionId),
+    /// An operation immediately before the current position, or at the end
+    /// when `position` equals the block's length.
+    Block {
+        block: crate::BlockId,
+        position: usize,
+    },
+}
+
 /// An operation as it is described before the context stores it: the parts a
-/// builder assembles, handed to [`crate::Context::add_operation`] in one go.
+/// constructor assembles, handed to [`crate::Context::add_operation`] in one go.
 pub struct NewOp {
     pub(crate) name: OpNameId,
     pub(crate) operands: Vec<ValueId>,
@@ -645,7 +658,7 @@ pub struct NewOp {
 }
 
 impl NewOp {
-    /// The op a builder assembled: its ports, and in `parts` the attributes.
+    /// The op a constructor assembled: its ports, and in `parts` the attributes.
     pub fn new<T: Operation>(
         context: Context,
         operands: Vec<ValueId>,
