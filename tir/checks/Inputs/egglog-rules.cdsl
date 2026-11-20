@@ -1,0 +1,20 @@
+pub let Operation: (Int, String, String, Int, Int, Int, Int) -> Prop;
+pub let Attribute: (String, Int, String, Int) -> Prop;
+pub let Marker: Int -> Prop;
+
+pub mod tables {
+    pub let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>;
+}
+
+pub mod success {
+    pub let seed: Marker(1);
+}
+
+pub mod conflict {
+    pub let write<id, place, parent, position, order, location>:
+        Operation(id, "builtin.module", place, parent, position, order, location) ->
+        (Attribute("operation", id, "probe", 1), Attribute("operation", id, "probe", 2));
+}
+
+pub let execute = std::schedule::saturate(success);
+pub let reject = std::schedule::saturate(conflict);

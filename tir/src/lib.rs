@@ -41,7 +41,7 @@ pub fn tools_main() -> Result<(), Box<dyn Error>> {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Run egglog rules on IR, or open an egglog REPL
+    /// Run CDSL rules on IR, or open a CDSL REPL
     Egglog(egglog::ToolArgs),
     /// Compile machine code
     Mc(mc::ToolArgs),

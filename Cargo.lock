@@ -2060,6 +2060,7 @@ dependencies = [
  "clap",
  "tir",
  "tir-arm64",
+ "tir-cdsl",
  "tir-egglog",
  "tir-gpu",
  "tir-llvm",
@@ -2082,7 +2083,6 @@ dependencies = [
 name = "tir-egglog"
 version = "0.1.0"
 dependencies = [
- "chumsky",
  "criterion",
  "fearless_simd",
  "tir-adt",
