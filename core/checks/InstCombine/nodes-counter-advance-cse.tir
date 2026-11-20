@@ -1,12 +1,6 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
 
-// The counted shape says the counter advances by the step. A body that spells
-// the same increment itself — `j + 1` where the step is also 1 — gives the
-// simplifier two congruent adds, and merging them respells the loop's own
-// advance over the body's constant. The recurrence is the one the op declares
-// either way, so the shape still holds and the loop still verifies.
+// Two spellings of the counter's increment agree in the ordered body.
 
 module {
   %fn_f = func.func @f(%n: !i32) -> !i32 {
@@ -15,12 +9,34 @@ module {
     %fin, %sum = scf.ordered_for %i = %zero to %n step %one (%acc = %zero) {
       %c1 = constant {value = 1} : !i32
       %next = addi %i, %c1 : !i32
-      %grown = addi %acc, %next : !i32
+      %same = addi %one, %i : !i32
+      %product = muli %next, %acc : !i32
+      %mixed = xori %same, %product : !i32
+      %grown = addi %acc, %mixed : !i32
       scf.yield %grown
     }
     func.return %sum
   }
+  func.func @overflow_flag(%x: !i8) -> !i8 {
+    %one = constant {value = 1} : !i8
+    %wrapping = addi %x, %one : !i8
+    %flagged = addi %x, %one {nsw = true} : !i8
+    %distinct = xori %wrapping, %flagged : !i8
+    func.return %distinct
+  }
   module_end
 }
 
-// CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}}
+// CHECK-LABEL: func.func @f
+// CHECK: %{{[0-9]+}}, %[[S:[0-9]+]] = scf.ordered_for %[[I:[0-9]+]] = {{.*}} (%[[ACC:[0-9]+]] =
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[I]],
+// CHECK-NEXT: %[[PRODUCT:[0-9]+]] = muli %[[NEXT]], %[[ACC]]
+// CHECK-NEXT: %[[MIXED:[0-9]+]] = xori %[[NEXT]], %[[PRODUCT]]
+// CHECK-NEXT: %[[GROWN:[0-9]+]] = addi %[[ACC]], %[[MIXED]]
+// CHECK-NEXT: scf.yield %[[GROWN]]
+// CHECK: func.return %[[S]]
+// CHECK-LABEL: func.func @overflow_flag
+// CHECK: %[[WRAP:[0-9]+]] = addi
+// CHECK-NEXT: %[[FLAG:[0-9]+]] = addi {{.*}} {nsw = true}
+// CHECK-NEXT: %[[DISTINCT:[0-9]+]] = xori %[[WRAP]], %[[FLAG]]
+// CHECK-NEXT: func.return %[[DISTINCT]]

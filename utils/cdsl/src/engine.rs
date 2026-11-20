@@ -1,4 +1,6 @@
 //! Executable lowering against an explicitly shared engine schema.
+mod operation;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use tir_egglog::{Database, EGraph, Merge, Rules, Schedule, SortId, SortKind, TableKind, ast};
@@ -83,6 +85,18 @@ fn propositions(expr: &Expr) -> Vec<&Expr> {
 }
 
 impl Schema {
+    /// Start with the tables from a compiled catalog.
+    pub fn from_catalog(bytes: &[u8]) -> Result<Self, Error> {
+        let mut engine = EGraph::default();
+        tir_egglog::Program::from_bytes(bytes, engine.database_mut()).map_err(error)?;
+        Ok(Self {
+            engine,
+            names: BTreeMap::new(),
+            functions: BTreeSet::new(),
+            constructors: BTreeSet::new(),
+        })
+    }
+
     /// Install declarations once, using canonical CDSL paths as engine names.
     pub fn new(program: &CheckedProgram) -> Result<Self, Error> {
         Self::with_names(program, BTreeMap::new())
@@ -101,6 +115,15 @@ impl Schema {
         };
         schema.extend(program)?;
         Ok(schema)
+    }
+
+    /// Bind bare checked names to their installed engine names.
+    pub fn bind_names<'a>(&mut self, names: impl IntoIterator<Item = (&'a str, &'a str)>) {
+        self.names.extend(
+            names
+                .into_iter()
+                .map(|(source, host)| (vec![source.into()], host.into())),
+        );
     }
 
     /// The database whose declarations type and bind every compiled program.
@@ -377,7 +400,9 @@ impl Schema {
                         })
                     });
                     if !schema && !primitive {
-                        return Err(Error("unsupported executable axiom declaration".into()));
+                        return Err(Error(format!(
+                            "unsupported executable axiom declaration: {name}"
+                        )));
                     }
                     continue;
                 }

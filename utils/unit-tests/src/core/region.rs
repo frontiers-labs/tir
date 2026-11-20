@@ -9,40 +9,20 @@ use tir::{
 fn quad(context: &Context) -> (OpId, OpId) {
     let i32_ty = builtin::IntegerType::new(context, 32);
     let port = context.create_value(i32_ty, None);
-    let double = ops::addi(
-        context,
-        port.id(),
-        port.id(),
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let quad = ops::addi(
-        context,
-        double.result(),
-        double.result(),
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let double = ops::addi(context, port.id(), port.id(), i32_ty).build();
+    let quad = ops::addi(context, double.result(), double.result(), i32_ty).build();
     let body = context.create_nodes_region(
         vec![port],
         vec![double.id(), quad.id()],
         vec![quad.result()],
     );
-    let function = func::ops::lambda(
-        context,
-        "quad",
-        i32_ty,
-        &body,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let module = builtin::ops::module(context, None, Default::default(), tir::InsertionPoint::Root);
-    (module.body())
-        .context
-        .insert(module.body().end(), function.id());
-    builtin::ModuleEndOp::new(context, Default::default(), module.body().end());
+    let module = builtin::ModuleOpBuilder::new(context).build();
+    let function = func::ops::lambda(context, "quad", i32_ty, &body)
+        .at(module.body().end())
+        .build();
+    builtin::ModuleEndOpBuilder::new(context)
+        .at(module.body().end())
+        .build();
     (module.id(), function.id())
 }
 

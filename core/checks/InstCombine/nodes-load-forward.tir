@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
 
 // A load observing the state a store of the same address left is that store's
 // value: the load goes, and the memory it observed is handed to whatever read
@@ -10,16 +8,23 @@
 module {
   %fn_f = func.func @f(%x: !i32) -> !i32 {
     %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %x, %p
-    %r = ptr.load %p : !i32
+    %entry = state.entry_state : !state<memory>
+    %independent = state.entry_state : !state<memory>
+    %written = ptr.store %x, %p state(%entry)
+    %r, %read = ptr.load %p state(%written) : !i32
     %s = addi %r, %r : !i32
-    func.return %s
+    %left, %right = state.split state(%read)
+    %joined = state.join state(%left, %right, %independent)
+    -> %s, %joined
   }
   module_end
 }
 
 // CHECK: func.func @f(%[[X:[0-9]+]]: !i32)
-// CHECK-NOT: ptr.
+// CHECK: %[[WRITTEN:[0-9]+]] = ptr.store %[[X]], %{{[0-9]+}} state(%{{[0-9]+}})
+// CHECK-NOT: ptr.load
 // CHECK: %[[R:[0-9]+]] = addi %[[X]], %[[X]] : !i32
-// CHECK-NOT: ptr.
-// CHECK: -> %[[R]], %{{[0-9]+}}
+// CHECK-NOT: ptr.load
+// CHECK: %[[LEFT:[0-9]+]], %[[RIGHT:[0-9]+]] = state.split state(%[[WRITTEN]])
+// CHECK-NEXT: %[[JOINED:[0-9]+]] = state.join state(%[[LEFT]], %[[RIGHT]], %{{[0-9]+}})
+// CHECK-NEXT: -> %[[R]], %[[JOINED]]

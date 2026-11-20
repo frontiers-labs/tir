@@ -752,13 +752,14 @@ mod tests {
 
     #[test]
     fn malformed_identical_graph_is_not_proven() {
+        let terms = Terms::new();
         let mut lhs: SemGraph = SemGraph::new();
         sym(&mut lhs, 0);
         let mut rhs: SemGraph = SemGraph::new();
         sym(&mut rhs, 0);
 
         assert!(matches!(
-            SmtOracle.equivalent_typed_outcome(&lhs, &rhs, &[]),
+            SmtOracle.equivalent_typed_outcome(&terms, &lhs, &rhs, &[]),
             ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(_))
         ));
     }
@@ -785,6 +786,7 @@ mod tests {
         let mode = con(&mut rhs, 0, 3);
         op(&mut rhs, SymKind::FSubRound, &[a, b, mode]);
 
+        let terms = Terms::new();
         assert_eq!(find_typed_counterexample(&terms, &lhs, &rhs, &[]), None);
     }
 }

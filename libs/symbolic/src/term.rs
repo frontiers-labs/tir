@@ -950,3 +950,13 @@ fn has_encoding(shape: &Param, domain: &str, accepts: &mut impl FnMut(&Param) ->
         _ => false,
     }
 }
+
+/// Read a single natural argument from a checked integer type's argument row.
+pub fn integer_width(p: &tir_egglog::PrimCtx, encoded: tir_egglog::Value) -> Option<i64> {
+    let raw = u32::try_from(p.base_value::<i64>(encoded)).ok()?;
+    let args = p.base_value::<tables::Arguments>(tir_egglog::Value::new(raw));
+    match args.0.as_ref() {
+        [TypeArg::Nat(width)] if *width > 0 => i64::try_from(*width).ok(),
+        _ => None,
+    }
+}

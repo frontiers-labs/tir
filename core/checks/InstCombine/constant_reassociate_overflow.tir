@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat --verify %s | filecheck %s
 
 module {
   %fa = func.func @add_overflow(%x: !i64) -> !i64 {

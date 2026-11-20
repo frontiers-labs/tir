@@ -30,6 +30,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "./defs/vector_float.tmdl",
             "./defs/syntacore_scr1.tmdl",
         ],
-        |source, package| Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?),
     )
 }

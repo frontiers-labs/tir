@@ -1,0 +1,64 @@
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+module {
+  func.func @graph_congruent(%x: !i8, %m: !i8) -> !i8 {
+    %a = andi %x, %m : !i8
+    %b = andi %m, %x : !i8
+    %out = ori %a, %b : !i8
+    -> %out
+  }
+  func.func @preserves_loop(%lb: !i64, %ub: !i64, %step: !i64, %seed: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %counter, %result = scf.ordered_for %i = %lb to %ub step %step (%port = %seed) {
+      %identity = addi %port, %zero : !i32
+      scf.yield %identity
+    }
+    func.return %result
+  }
+  func.func @changing_loop(%lb: !i64, %ub: !i64, %step: !i64, %seed: !i32) -> !i32 {
+    %one = constant {value = 1} : !i32
+    %counter, %result = scf.ordered_for %i = %lb to %ub step %step (%port = %seed) {
+      %next = addi %port, %one : !i32
+      scf.yield %next
+    }
+    func.return %result
+  }
+  func.func @counted(%lb: !i64, %ub: !i64, %seed: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i64
+    %last, %result = scf.for %i = %lb to %ub step %zero (%carry = %seed) {
+      -> %carry
+    }
+    -> %result
+  }
+  func.func @demanded_divergence() -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %seven = constant {value = 7} : !i32
+    %result = scf.loop (%i = %zero) {
+      %again = cmpi %i, %one {predicate = "slt"} : !i1
+      -> %again, %i, %seven
+    }
+    -> %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @graph_congruent
+// CHECK: %[[AND:[0-9]+]] = andi
+// CHECK-NEXT: -> %[[AND]]
+// CHECK-LABEL: func.func @preserves_loop(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64, %[[SEED:[0-9]+]]: !i32)
+// CHECK: scf.ordered_for
+// CHECK-NOT: addi
+// CHECK: func.return %[[SEED]]
+// CHECK-LABEL: func.func @changing_loop
+// CHECK: %{{[0-9]+}}, %[[ITERATED:[0-9]+]] = scf.ordered_for
+// CHECK: addi
+// CHECK: func.return %[[ITERATED]]
+// CHECK-LABEL: func.func @counted
+// CHECK: %{{[0-9]+}}, %[[PINNED:[0-9]+]] = scf.for
+// CHECK: -> %[[PINNED]]
+// CHECK-LABEL: func.func @demanded_divergence
+// CHECK: %[[LOOP:[0-9]+]] = scf.loop
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[LOOP]]

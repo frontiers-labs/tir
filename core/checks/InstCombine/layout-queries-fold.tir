@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass eqsat %s | filecheck %s
 
 // The scoped layout spec declares the size queried by layout.sizeof.
 

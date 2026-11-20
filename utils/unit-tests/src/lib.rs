@@ -18,13 +18,7 @@ mod fcc {
     mod link_host_compare;
     mod link_mixed_objects;
     mod link_support;
-    // Migration skip: this suite exercises removed selector or allocator infrastructure.
-    #[cfg(any())]
-    mod pbqp_dump;
     mod sema;
-    // Migration skip: the slab storage census API was removed.
-    #[cfg(any())]
-    mod slab;
     mod support;
 }
 
@@ -53,15 +47,6 @@ mod symbolic {
     mod sexpr;
     mod smtlib;
     mod support;
-}
-
-// Migration skip: this suite targets the removed tir-egraph engine.
-#[cfg(any())]
-mod egraph {
-    mod egraph_pattern;
-    mod engine;
-    mod rewrite_runner_extract;
-    mod test_lang;
 }
 
 #[cfg(test)]
@@ -117,9 +102,6 @@ mod tools {
 
 #[cfg(test)]
 mod core {
-    // Migration skip: this suite targets the removed affine analysis and strip-mining implementation.
-    #[cfg(any())]
-    mod affine;
     mod analysis;
     mod arith;
     mod backend;
@@ -128,44 +110,17 @@ mod core {
     mod block_layout;
     mod context;
     mod dependence;
-    // Migration skip: this suite targets the removed control-recovery implementation.
-    #[cfg(any())]
-    mod destructure;
     mod dialects;
     mod edits;
     mod encodings;
-    // Migration skip: the storage commit and revision APIs were removed.
-    #[cfg(any())]
-    mod epochs;
     mod fixtures;
-    // Migration skip: this suite targets the removed guarded-relaxation implementation.
-    #[cfg(any())]
-    mod float_refinement;
     mod idmap;
     mod instcombine;
     mod interfaces;
-    // Migration skip: this suite exercises removed selector or allocator infrastructure.
-    #[cfg(any())]
-    mod isel;
-    // Migration skip: this suite targets the removed relational e-graph implementation.
-    #[cfg(any())]
-    mod isel_automaton;
-    // Migration skip: this suite exercises removed selector or allocator infrastructure.
-    #[cfg(any())]
-    mod isel_rules;
     mod layout;
     mod machine_ir;
-    // Migration skip: this suite targets the removed object analysis implementation.
-    #[cfg(any())]
-    mod objects;
     mod pass;
     mod region;
-    // Migration skip: this suite targets the removed relational e-graph implementation.
-    #[cfg(any())]
-    mod sem;
-    // Migration skip: candidate forks and adoption were removed.
-    #[cfg(any())]
-    mod variants;
 }
 
 #[cfg(test)]

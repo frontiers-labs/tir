@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
 
 // A gate whose decision is a known constant publishes what the arm that constant
 // selects yields. The arm is the one the decision indexes, and a decision past

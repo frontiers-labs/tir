@@ -248,7 +248,7 @@ fn adopted_member_deletion_unites_keyed_groups() {
     let zero = ir.db.base(0i64);
     ir.db.remove_in(c, ir.operands, &[a, zero]);
     ir.db.rebuild().unwrap();
-    ir.db.adopt(c);
+    ir.db.adopt(c).unwrap();
     ir.db.rebuild().unwrap();
     assert!(ir.db.lookup(ir.operands, &[a, zero]).is_none());
     assert_eq!(ir.db.find(a), ir.db.find(b));
@@ -291,7 +291,7 @@ fn empty_keyed_groups_merge_after_last_member_deletion() {
     assert!(db.lookup_in(color, keyed, &[a]).is_some());
     assert!(db.lookup_in(color, keyed, &[b]).is_some());
     assert_eq!(db.find_in(color, a), db.find_in(color, b));
-    db.adopt(color);
+    db.adopt(color).unwrap();
     db.rebuild().unwrap();
     assert_eq!(db.rows(member).count(), 0);
     assert!(db.lookup(keyed, &[a]).is_some());
@@ -337,7 +337,7 @@ fn compiled_member_deletions_close_group_congruence() {
             assert_eq!(db.rows(member).count(), 2);
             assert_eq!(db.rows_in(sibling, member).count(), 2);
             assert_ne!(db.find(a), db.find(b));
-            db.adopt(color);
+            db.adopt(color).unwrap();
             db.rebuild().unwrap();
             assert_eq!(db.find(a), db.find(b));
         }

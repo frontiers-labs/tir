@@ -1,10 +1,8 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
 
 // Arithmetic identities over an unordered body: `x + 0` is `x`, `2 * 3` is 6,
 // and the operations nothing reads afterwards are swept with the values they
-// computed. The chain stays: the store and the load it feeds are demanded.
+// computed. The load forwards and leaves the returned state of the store.
 
 module {
   %fn_f = func.func @f(%x: !i32) -> !i32 {
@@ -15,9 +13,10 @@ module {
     %a = addi %x, %zero : !i32
     %b = muli %two, %three : !i32
     %c = addi %a, %b : !i32
-    ptr.store %c, %p
-    %r = ptr.load %p : !i32
-    func.return %r
+    %entry = state.entry_state : !state<memory>
+    %written = ptr.store %c, %p state(%entry)
+    %r, %observed = ptr.load %p state(%written) : !i32
+    -> %r, %observed
   }
   module_end
 }
@@ -27,4 +26,5 @@ module {
 // CHECK: %[[SIX:[0-9]+]] = constant {value = 6} : !i32
 // CHECK: %[[C:[0-9]+]] = addi %[[X]], %[[SIX]] : !i32
 // CHECK-NOT: addi
-// CHECK: -> %[[C]], %{{[0-9]+}}
+// CHECK: %[[WRITTEN:[0-9]+]] = ptr.store %[[C]],
+// CHECK-NEXT: -> %[[C]], %[[WRITTEN]]

@@ -1,7 +1,5 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass eqsat %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) %s | filecheck %s
 
 // The join is reached from both arms, so it sits outside the gate and no fact
 // about %c holds there. `muli(%c, %y)` must therefore stay — folding it to %y
@@ -23,4 +21,4 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @join(%[[C:[0-9]+]]: !i1, %[[Y:[0-9]+]]: !i1)
 // CHECK: %[[R:[0-9]+]] = muli %[[C]], %[[Y]] : !i1
-// CHECK: -> %[[R]]
+// CHECK: func.return %[[R]]

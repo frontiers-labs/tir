@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
 
 // Two writes of one value to one address. Law S2 equates the memory the second
 // leaves with the memory writing it over the state the first was handed, and
@@ -18,7 +16,6 @@ module {layout.spec = #layout_spec} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @twice
-// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state : !state<memory>
-// CHECK-NEXT: %[[ONLY:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[ENTRY]])
-// CHECK-NEXT: -> %[[ONLY]]
+// CHECK-LABEL: func.func @twice(%[[ADDRESS:[0-9]+]]: !ptr.p, %[[DATA:[0-9]+]]: !i32)
+// CHECK-NEXT: ptr.store %[[DATA]], %[[ADDRESS]]
+// CHECK-NEXT: func.return

@@ -11,7 +11,11 @@ use tir::backend::regalloc::{RegClassId, RegClassInfo};
 use tir::backend::{verify_machine_ir, RegAssignment, RegClassType, SymbolOp};
 use tir::{BlockHandle, Context, OpId, Operation, ValueId};
 
-use super::fixtures::{asm_symbol, machine_op, r, reg_class};
+use super::fixtures::ops::{
+    DefOp, DefOpBuilder, ReadFlagsOp, ReadFlagsOpBuilder, SetFlagsOp, SetFlagsOpBuilder,
+    UpdateParamOp, UpdateParamOpBuilder,
+};
+use super::fixtures::{asm_symbol, instr_info, r, reg_class};
 
 /// The one-register flag file the test opcodes touch implicitly, standing for
 /// x86 `EFLAGS`.
@@ -33,10 +37,10 @@ static READS_FLAGS: [ImplicitReg; 1] = [ImplicitReg {
     role: AttributeRole::Use,
 }];
 
-machine_op!(DefOp, "dep", "def", &[]);
-machine_op!(UpdateParamOp, "dep", "update_param", rs, &[]);
-machine_op!(SetFlagsOp, "dep", "set_flags", rs, &WRITES_FLAGS);
-machine_op!(ReadFlagsOp, "dep", "read_flags", rs, &READS_FLAGS);
+instr_info!(DefOp, "def", &[]);
+instr_info!(UpdateParamOp, "update_param", &[]);
+instr_info!(SetFlagsOp, "set_flags", &WRITES_FLAGS);
+instr_info!(ReadFlagsOp, "read_flags", &READS_FLAGS);
 
 fn context() -> Context {
     let context = Context::with_default_dialects();
@@ -51,36 +55,27 @@ fn result_of(context: &Context, op: OpId) -> ValueId {
 }
 
 fn def_reg(context: &Context) -> (OpId, ValueId) {
-    let op = DefOp::new(
-        context,
-        vec![RegClassType::new(context, r())],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    )
-    .id();
+    let op = DefOpBuilder::new(context)
+        .result_types(vec![RegClassType::new(context, r())])
+        .build()
+        .id();
     (op, result_of(context, op))
 }
 
 fn flag_def(context: &Context, source: ValueId) -> OpId {
-    SetFlagsOp::new(
-        context,
-        source,
-        vec![RegClassType::new(context, r())],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    )
-    .id()
+    SetFlagsOpBuilder::new(context)
+        .rs(source)
+        .result_types(vec![RegClassType::new(context, r())])
+        .build()
+        .id()
 }
 
 fn flag_use(context: &Context, source: ValueId) -> OpId {
-    ReadFlagsOp::new(
-        context,
-        source,
-        vec![RegClassType::new(context, r())],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    )
-    .id()
+    ReadFlagsOpBuilder::new(context)
+        .rs(source)
+        .result_types(vec![RegClassType::new(context, r())])
+        .build()
+        .id()
 }
 
 fn graph(context: &Context, block: &BlockHandle, assignment: &RegAssignment) -> Dependences {
@@ -248,7 +243,10 @@ proptest::proptest! {
         let block = context.create_block(vec![parameter]);
         let mut updates = Vec::new();
         for _ in 0..count {
-            let update = UpdateParamOp::new(&context, value, vec![ty], Default::default(), tir::InsertionPoint::Root)
+            let update = UpdateParamOpBuilder::new(&context)
+                .rs(value)
+                .result_types(vec![ty])
+                .build()
                 .id();
             context.set_op_result(update, 0, value);
             context.insert(block.end(), update);

@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
 
 // Inside `x == 7` the two classes are one, and extraction prefers the literal:
 // every term over %x in that arm is a term over 7 and folds.
@@ -26,5 +24,6 @@ module {
 // CHECK: scf.switch
 // CHECK: }
 // CHECK-NEXT: {
-// CHECK-NEXT: constant {value = 107}
+// CHECK-NEXT: %[[CONST:[0-9]+]] = constant {value = 107}
+// CHECK-NEXT: -> %[[CONST]]
 // CHECK-NOT: addi

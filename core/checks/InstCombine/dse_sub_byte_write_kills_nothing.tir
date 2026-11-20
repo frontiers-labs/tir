@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
 
 // A one-bit write covers part of a byte, and the pass counts bytes: it cannot
 // say what of the byte before it survives, so it neither dies nor kills.
@@ -21,5 +19,10 @@ module {layout.spec = #layout_spec} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[S:[0-9]+]] = ptr.store %1, %0 state(%{{[0-9]+}})
-// CHECK: %{{[0-9]+}} = ptr.store %2, %0 state(%[[S]])
+// CHECK: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: %[[BYTE:[0-9]+]] = constant {value = 77} : !i8
+// CHECK-NEXT: ptr.store %[[BYTE]], %[[P]]
+// CHECK: %[[BIT:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: ptr.store %[[BIT]], %[[P]]
+// CHECK-NEXT: %[[READ:[0-9]+]] = ptr.load %[[P]] : !i8
+// CHECK-NEXT: func.return %[[READ]]

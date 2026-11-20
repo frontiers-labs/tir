@@ -1,0 +1,126 @@
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+module {
+  func.func @branch(%c: !i1, %p: !ptr.p<!i32>, %x: !i32) -> !i32 {
+    %s0 = state.entry_state : !state<memory>
+    %s1 = scf.switch %c args(%s0) (%s_false) {
+      %false_written = ptr.store %x, %p state(%s_false)
+      -> %false_written
+    } (%s_true) {
+      %true_written = ptr.store %x, %p state(%s_true)
+      -> %true_written
+    }
+    %v, %s2 = ptr.load %p state(%s1) : !i32
+    -> %v, %s2
+  }
+  func.func @loop(%p: !ptr.p<!i32>, %x: !i32) -> !i32 {
+    %s0 = state.entry_state : !state<memory>
+    %s1 = ptr.store %x, %p state(%s0)
+    %s2 = scf.loop (%head = %s1) {
+      %exit = constant {value = 0} : !i1
+      -> %exit, %head, %head
+    }
+    %v, %s3 = ptr.load %p state(%s2) : !i32
+    -> %v, %s3
+  }
+  func.func @different_arms(%c: !i1, %p: !ptr.p<!i32>, %x: !i32, %y: !i32) -> !i32 {
+    %s0 = state.entry_state : !state<memory>
+    %s1 = scf.switch %c args(%s0) (%s_false) {
+      %false_written = ptr.store %x, %p state(%s_false)
+      -> %false_written
+    } (%s_true) {
+      %true_written = ptr.store %y, %p state(%s_true)
+      -> %true_written
+    }
+    %v, %s2 = ptr.load %p state(%s1) : !i32
+    -> %v, %s2
+  }
+  func.func @overwrite() -> !i32 {
+    %a = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %b = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %s0 = state.entry_state : !state<memory>
+    %one = constant {value = 1} : !i32
+    %two = constant {value = 2} : !i32
+    %three = constant {value = 3} : !i32
+    %s1 = ptr.store %one, %a state(%s0)
+    %s2 = ptr.store %two, %b state(%s1)
+    %s3 = ptr.store %three, %a state(%s2)
+    %loaded = ptr.load %a state(%s3) : !i32
+    func.return %loaded state(%s3)
+  }
+  func.func @theta_demand(%p: !ptr.p<!i32>, %init: !i32) -> !i32 {
+    %s0 = state.entry_state : !state<memory>
+    %r, %s1 = scf.loop (%carry = %init, %head = %s0) {
+      %false = constant {value = 0} : !i1
+      %seven = constant {value = 7} : !i32
+      %a, %b = state.split state(%head)
+      %s = ptr.store %seven, %p state(%a)
+      %v = ptr.load %p state(%s) : !i32
+      -> %false, %carry, %s, %v, %b
+    }
+    -> %r, %s1
+  }
+  func.func @cfg_match(%c: !i1, %p: !ptr.p<!i32>, %x: !i32) -> !i32 {
+    %s = state.entry_state : !state<memory>
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %a = ptr.store %x, %p state(%s)
+    cfg.br ^bb3(%a : !state<memory>)
+  ^bb2:
+    %b = ptr.store %x, %p state(%s)
+    cfg.br ^bb3(%b : !state<memory>)
+  ^bb3(%state: !state<memory>):
+    %result = ptr.load %p state(%state) : !i32
+    func.return %result state(%state)
+  }
+  func.func @cfg_different(%c: !i1, %p: !ptr.p<!i32>, %x: !i32, %y: !i32) -> !i32 {
+    %s = state.entry_state : !state<memory>
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %a = ptr.store %x, %p state(%s)
+    cfg.br ^bb3(%a : !state<memory>)
+  ^bb2:
+    %b = ptr.store %y, %p state(%s)
+    cfg.br ^bb3(%b : !state<memory>)
+  ^bb3(%state: !state<memory>):
+    %result = ptr.load %p state(%state) : !i32
+    func.return %result state(%state)
+  }
+  func.func @unproven_overwrite(%p: !ptr.p<!i32>, %a: !i32, %b: !i32) {
+    %s0 = state.entry_state : !state<memory>
+    %s1 = ptr.store %a, %p state(%s0)
+    %s2 = ptr.store %b, %p state(%s1)
+    func.return state(%s2)
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @branch(%{{[0-9]+}}: !i1, %{{[0-9]+}}: !ptr.p<!i32>, %[[BRANCH_VAL:[0-9]+]]: !i32)
+// CHECK: %[[BRANCH_STATE:[0-9]+]] = scf.switch
+// CHECK-NOT: ptr.load
+// CHECK: -> %[[BRANCH_VAL]], %[[BRANCH_STATE]]
+// CHECK-LABEL: func.func @loop(%{{[0-9]+}}: !ptr.p<!i32>, %[[LOOP_VAL:[0-9]+]]: !i32)
+// CHECK: %[[LOOP_STATE:[0-9]+]] = scf.loop
+// CHECK-NOT: ptr.load
+// CHECK: -> %[[LOOP_VAL]], %[[LOOP_STATE]]
+// CHECK-LABEL: func.func @different_arms
+// CHECK: %[[LOAD:[0-9]+]], %[[POST:[0-9]+]] = ptr.load
+// CHECK-NEXT: -> %[[LOAD]], %[[POST]]
+// CHECK-LABEL: func.func @overwrite
+// CHECK: %[[THREE:[0-9]+]] = constant {value = 3} : !i32
+// CHECK: %[[LAST:[0-9]+]] = ptr.store %[[THREE]],
+// CHECK-NEXT: func.return %[[THREE]] state(%[[LAST]])
+// CHECK-LABEL: func.func @theta_demand
+// CHECK: %[[WRITTEN:[0-9]+]] = ptr.store
+// CHECK-NEXT: %[[READ_EXIT:[0-9]+]] = ptr.load {{.*}} state(%[[WRITTEN]])
+// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[READ_EXIT]], %[[WRITTEN]], %{{[0-9]+}}
+// CHECK-LABEL: func.func @cfg_match(%{{[0-9]+}}: !i1, %{{[0-9]+}}: !ptr.p<!i32>, %[[ENTRY_VAL:[0-9]+]]: !i32)
+// CHECK: ^bb3(%[[MERGED:[0-9]+]]: !state<memory>):
+// CHECK-NEXT: func.return %[[ENTRY_VAL]] state(%[[MERGED]])
+// CHECK-LABEL: func.func @cfg_different
+// CHECK: %[[UNPROVEN:[0-9]+]] = ptr.load
+// CHECK-NEXT: func.return %[[UNPROVEN]]
+// CHECK-LABEL: func.func @unproven_overwrite
+// CHECK: %[[FIRST:[0-9]+]] = ptr.store
+// CHECK-NEXT: %[[LAST:[0-9]+]] = ptr.store {{.*}} state(%[[FIRST]])
+// CHECK-NEXT: func.return state(%[[LAST]])

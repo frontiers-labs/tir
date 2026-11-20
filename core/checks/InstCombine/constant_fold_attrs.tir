@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass eqsat %s | filecheck %s
 
 // An op whose identity carries attributes (cmpi's predicate) folds over constant
 // operands like any other: the search index must key on the attributes too.

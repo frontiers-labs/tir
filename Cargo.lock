@@ -2011,7 +2011,6 @@ name = "tir-arm64"
 version = "0.1.0"
 dependencies = [
  "tir",
- "tir-cdsl",
  "tmdl",
 ]
 
@@ -2173,7 +2172,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
- "tir-symbolic",
 ]
 
 [[package]]
@@ -2181,7 +2179,6 @@ name = "tir-riscv"
 version = "0.1.0"
 dependencies = [
  "tir",
- "tir-cdsl",
  "tmdl",
 ]
 
@@ -2248,7 +2245,6 @@ name = "tir-x86_64"
 version = "0.1.0"
 dependencies = [
  "tir",
- "tir-cdsl",
  "tmdl",
 ]
 

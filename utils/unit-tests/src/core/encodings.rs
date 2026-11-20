@@ -2,15 +2,15 @@
 
 use tir::attributes::{AttributeValue, RegisterAttr};
 use tir::backend::binary::{
-    decode_with, encode_with, encoded_width, patch_with, CmpOp, DecodeField, DecodeFieldKind,
-    DecodeShape, DecodeSpec, EncodeField, EncodeShape, EncodeSpec, EncodedInst, FieldRun,
-    FixupTarget, Guard, PatchField,
+    decode_with, encode_with, encoded_width, patch_with, BinaryEmitError, CmpOp, DecodeField,
+    DecodeFieldKind, DecodeShape, DecodeSpec, EncodeField, EncodeShape, EncodeSpec, EncodedInst,
+    FieldRun, FixupTarget, Guard, PatchField,
 };
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
-use tir::backend::RegClassType;
-use tir::{Context, NewOp, OpHandle, Operation};
+use tir::backend::{RegAssignment, RegClassType};
+use tir::{Context, InsertionPoint, NewOp, OpHandle};
 
-use super::fixtures::{machine_op, r, reg_class, RD_RS_PORTS};
+use super::fixtures::{r, reg_class};
 
 fn phys(index: u16) -> AttributeValue {
     AttributeValue::Register(RegisterAttr::Physical { class: r(), index })
@@ -64,11 +64,9 @@ const fn decoded(
     DecodeField { attr, kind, runs }
 }
 
-fn enc(op: &OpHandle, spec: &EncodeSpec) -> Option<EncodedInst> {
-    encode_with(op, spec)
+fn enc(op: &OpHandle, spec: &EncodeSpec) -> Result<EncodedInst, BinaryEmitError> {
+    encode_with(op, spec, &RegAssignment::default())
 }
-
-machine_op!(TestInstOp, "test", "inst", &RD_RS_PORTS, &[]);
 
 fn op_with(attrs: Vec<(&str, AttributeValue)>) -> (Context, tir::OpHandle) {
     let context = Context::with_default_dialects();
@@ -81,7 +79,6 @@ fn build(
     attrs: Vec<(&str, AttributeValue)>,
     results: Vec<tir::ValueId>,
 ) -> tir::OpHandle {
-    TestInstOp::register_interfaces(context);
     let attributes = attrs
         .into_iter()
         .map(|(name, value)| context.named_attribute(name, value))
@@ -94,7 +91,7 @@ fn build(
         vec![],
         attributes,
     );
-    context.add_operation(instance)
+    context.add_operation(InsertionPoint::Root, instance)
 }
 
 // `lui rd, imm`: 55 | rd << 7 | (imm & 0xFFFFF) << 12
@@ -126,7 +123,7 @@ fn encode_scatters_register_and_immediate() {
 #[test]
 fn encode_rejects_out_of_range_and_unallocated() {
     let (_context, op) = op_with(vec![("rd", phys(5)), ("imm", AttributeValue::Int(1048576))]);
-    assert!(enc(&op, &LUI).is_none());
+    assert!(enc(&op, &LUI).is_err());
 
     // SSA register results cannot be encoded directly.
     let context = Context::with_default_dialects();
@@ -137,7 +134,7 @@ fn encode_rejects_out_of_range_and_unallocated() {
         vec![("imm", AttributeValue::Int(1))],
         vec![unplaced],
     );
-    assert!(enc(&op, &LUI).is_none());
+    assert!(enc(&op, &LUI).is_err());
 
     let (_context, op) = op_with(vec![("rd", phys(5)), ("imm", AttributeValue::Int(1))]);
     let encoded = enc(&op, &LUI).expect("assembly encodes");
@@ -167,10 +164,10 @@ const ADDI4SPN: EncodeSpec = EncodeSpec {
 #[test]
 fn encode_rejects_values_the_operand_constraints_exclude() {
     let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(6))]);
-    assert!(enc(&op, &ADDI4SPN).is_none());
+    assert!(enc(&op, &ADDI4SPN).is_err());
 
     let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(0))]);
-    assert!(enc(&op, &ADDI4SPN).is_none());
+    assert!(enc(&op, &ADDI4SPN).is_err());
 
     let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(8))]);
     let encoded = enc(&op, &ADDI4SPN).expect("encodes");
@@ -313,10 +310,10 @@ fn encode_gives_a_fixup_the_widest_shape_and_its_patch() {
 #[test]
 fn encoded_width_is_the_selected_shapes_width() {
     let (_context, op) = op_with(vec![("rd", phys(1)), ("rs", phys(2))]);
-    assert_eq!(encoded_width(&op, &MOV_RR), 2);
+    assert_eq!(encoded_width(&op, &MOV_RR, &RegAssignment::default()), 2);
 
     let (_context, op) = op_with(vec![("rd", phys(9)), ("rs", phys(2))]);
-    assert_eq!(encoded_width(&op, &MOV_RR), 3);
+    assert_eq!(encoded_width(&op, &MOV_RR, &RegAssignment::default()), 3);
 }
 
 // `test rd, imm`: the shape is chosen by a test over the immediate's bit
@@ -377,7 +374,7 @@ fn a_guard_over_an_unresolved_operand_selects_no_shape() {
     // The symbol's value decides the shape, and it is not known yet: refusing
     // to encode is the only honest answer.
     let (_context, op) = op_with(vec![("imm", AttributeValue::Str("g".into()))]);
-    assert!(enc(&op, &TEST_IMM).is_none());
+    assert!(enc(&op, &TEST_IMM).is_err());
 }
 
 // `beq rs1, rs2, imm`: 99 | 0 << 12 | rs1 << 15 | rs2 << 20, imm scattered.

@@ -1,0 +1,260 @@
+pub let Control: (Int, Bool, Int, Bool, Int, Int, String) -> Prop;
+pub let Binding: (Int, String, Int, Int) -> Prop;
+pub let EqSatPort: (Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatArmResult: (Int, Int, Int, Int, Bool) -> Prop;
+pub let EqSatArmDisagrees: (Int, Int, Int) -> Prop;
+
+pub mod ports {
+    pub let entry<node, region, mode, slot, entry, port_slot, operand_slot, init, port, ty, declared>:
+        (EqSatLive(node), Region(region, mode, node, slot, entry),
+         Binding(region, "entry", port_slot, operand_slot), Operand(node, operand_slot, init),
+         Value(port, ty, "region", region, port_slot, declared))
+        -> EqSatPort(node, region, port_slot, port, init);
+}
+
+pub let EqSatInvariantPort: (Int, Int, Int, Int, Int) -> Prop;
+pub mod loops {
+    pub let carried<node,selector,body,pred,polarity,slot,port,init,feedback>:
+        (Control(node,false,selector,true,body,pred,polarity), EqSatPort(node,body,slot,port,init),
+         Binding(body,"feedback",slot,feedback), Yield(body,feedback,port))
+        -> EqSatInvariantPort(node,body,slot,port,init);
+    pub let equal_literals<node,selector,body,pred,polarity,slot,port,init,feedback,next,bits>:
+        (Control(node,false,selector,true,body,pred,polarity), EqSatPort(node,body,slot,port,init),
+         Binding(body,"feedback",slot,feedback), Yield(body,feedback,next),
+         EqSatFolded(init,bits), EqSatFolded(next,bits)) -> EqSatInvariantPort(node,body,slot,port,init);
+    pub let invariant<node, body, port_slot, port, init, exit, result_slot,
+                      result, ty, declared, kind, owner, init_slot, init_declared, loop_kind, home, pos, display, loc>:
+        (EqSatInvariantPort(node,body,port_slot,port,init), Operation(node, loop_kind, "block", home, pos, display, loc),
+         Binding(body, "exit", result_slot, exit), Yield(body, exit, port),
+         Value(result, ty, "result", node, result_slot, declared),
+         Value(init, ty, kind, owner, init_slot, init_declared))
+        -> EqSatReplace(node, result, init);
+}
+
+pub mod gamma_witness {
+    pub let forwarded<node, selector, body, pred, polarity, region, port_slot, port, init, result_slot, exit>:
+        (Control(node, true, selector, false, body, pred, polarity),
+         EqSatPort(node, region, port_slot, port, init),
+         Binding(region, "exit", result_slot, exit), Yield(region, exit, port))
+        -> EqSatArmResult(node,region,result_slot,init,true);
+    pub let yielded<node,selector,body,pred,polarity,arm,mode,arm_slot,entry,result_slot,exit,state>:
+        (EqSatLive(node), Control(node,true,selector,false,body,pred,polarity),
+         Region(arm,mode,node,arm_slot,entry), Binding(arm,"exit",result_slot,exit), Yield(arm,exit,state))
+        -> EqSatArmResult(node,arm,result_slot,state,false);
+}
+
+pub mod gamma_missing {
+    pub let missing<node, result_slot, init, witness, region, mode, slot, entry>:
+        (EqSatArmResult(node, witness, result_slot, init, true), Region(region, mode, node, slot, entry),
+         !EqSatArmResult(node, region, result_slot, init, true))
+        -> EqSatArmDisagrees(node, result_slot, init);
+}
+
+pub mod gamma_agrees {
+    pub let agreement<node, result_slot, init, witness, result, ty, declared, kind, owner, slot, init_declared, switch_kind, home, pos, display, loc>:
+        (EqSatArmResult(node, witness, result_slot, init, true), !EqSatArmDisagrees(node, result_slot, init),
+         Operation(node, switch_kind, "block", home, pos, display, loc),
+         Value(result, ty, "result", node, result_slot, declared),
+         Value(init, ty, kind, owner, slot, init_declared))
+        -> EqSatReplace(node, result, init);
+}
+
+pub let Block: (Int, Int, Int) -> Prop;
+pub let eqsat_int_sub: (Int, Int) -> Int;
+pub let EqSatCountedPort: (Int, Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatCountedYield: (Int, Int) -> Prop;
+pub let EqSatCountedSame: (Int, Int) -> Prop;
+pub let EqSatCountedDiffer: Int -> Prop;
+pub let EqSatKnownCountedPort: (Int, Int, BigInt) -> Prop;
+
+pub mod counted_exits {
+    pub let binding<node, home, position, display, location, region, entry, j, i, port, init, result, ty,
+                     pdecl, rdecl, kind, owner, input_slot, idecl>:
+        (EqSatLive(node), Operation(node, "scf.ordered_for", "block", home, position, display, location),
+         Region(region, "cfg", node, 0, entry), Value(port, ty, "block", entry, i, pdecl),
+         less_id(0,i) == true, j == eqsat_int_sub(i,1), Operand(node, i, init),
+         Value(init, ty, kind, owner, input_slot, idecl), Value(result, ty, "result", node, i, rdecl))
+        -> EqSatCountedPort(node, region, j, port, result, init);
+
+    pub let sites<region, block, order, exit, pos, display, loc>:
+        (Block(block, region, order), Operation(exit, "scf.yield", "block", block, pos, display, loc))
+        -> EqSatCountedYield(region, exit);
+
+    pub let same<node, region, j, port, result, init, exit>:
+        (EqSatCountedPort(node, region, j, port, result, init),
+         EqSatCountedYield(region, exit), Operand(exit, j, port))
+        -> EqSatCountedSame(result, exit);
+    pub let equal<node, region, j, port, result, init, exit, output>:
+        (EqSatCountedPort(node, region, j, port, result, init),
+         EqSatCountedYield(region, exit), Operand(exit, j, output), EqSatPath(output, port))
+        -> EqSatCountedSame(result, exit);
+    pub let same_literal<node,region,j,port,result,init,exit,output,bits>:
+        (EqSatCountedPort(node,region,j,port,result,init), EqSatCountedYield(region,exit),
+         Operand(exit,j,output), EqSatFolded(init,bits), EqSatFolded(output,bits))
+        -> EqSatCountedSame(result,exit);
+}
+
+pub mod counted_missing {
+    pub let refuted<node, region, slot, port, result, init, exit>:
+        (EqSatCountedPort(node, region, slot, port, result, init), EqSatCountedYield(region, exit),
+         !EqSatCountedSame(result, exit))
+        -> EqSatCountedDiffer(result);
+}
+
+pub mod counted_agrees {
+    pub let invariant<node, region, slot, port, result, init, exit>:
+        (EqSatCountedPort(node, region, slot, port, result, init), EqSatCountedSame(result, exit),
+         !EqSatCountedDiffer(result))
+        -> EqSatReplace(node, result, init);
+    pub let literal<node,region,slot,port,result,init,exit,bits>:
+        (EqSatCountedPort(node,region,slot,port,result,init), EqSatCountedSame(result,exit),
+         !EqSatCountedDiffer(result), EqSatFolded(init,bits)) -> EqSatKnownCountedPort(region,port,bits);
+}
+
+pub mod counted_reads {
+    pub let folded<user,region,member,port,bits,slot,k,place,home,p,d,l>:
+        (EqSatKnownCountedPort(region,port,bits), ReaderAt(user,region,member), Operand(user,slot,port),
+         Operation(user,k,place,home,p,d,l), EqSatDropKind(k), !EqSatPinnedOp(user))
+        -> EqSatScopedEdit(user,slot,port,bits,false);
+}
+
+pub mod invariant_ports {
+    pub let induction<node, body, port_slot, port, init, ty, decl>:
+        (EqSatInvariantPort(node,body,port_slot,port,init),
+         Value(port, ty, "region", body, port_slot, decl), EqSatInteger(ty))
+        -> EqSatReplace(node, port, init);
+    pub let known<node,body,slot,port,init,bits>:
+        (EqSatInvariantPort(node,body,slot,port,init), EqSatFolded(init,bits)) -> EqSatFolded(port,bits);
+}
+
+pub let EqSatCounted: (Int, Int) -> Prop;
+pub let EqSatPinnedYield: (Int, Int) -> Prop;
+pub let EqSatPinned: Int -> Prop;
+pub let EqSatPinnedOp: Int -> Prop;
+
+pub mod counted_pins {
+    pub let body<node, place, home, pos, display, loc, select, body, pred, polarity>:
+        (Operation(node, "scf.for", place, home, pos, display, loc),
+         Control(node, false, select, true, body, pred, polarity))
+        -> (EqSatCounted(node, body), EqSatPinnedYield(body, pred));
+    pub let advance<node, region, slot>:
+        (EqSatCounted(node,region), Binding(region,"feedback",0,slot)) -> EqSatPinnedYield(region,slot);
+    pub let exit<node, region, index, slot>:
+        (EqSatCounted(node,region), Binding(region,"exit",index,slot)) -> EqSatPinnedYield(region,slot);
+    pub let value<region, slot, value>:
+        (EqSatPinnedYield(region,slot), Yield(region,slot,value)) -> EqSatPinned(value);
+    pub let computation<region, slot, value, ty, node, index, decl>:
+        (EqSatPinnedYield(region,slot), Yield(region,slot,value),
+         Value(value,ty,"result",node,index,decl)) -> EqSatPinnedOp(node);
+    pub let operand<node, slot, value>:
+        (EqSatPinnedOp(node), Operand(node,slot,value)) -> EqSatPinned(value);
+}
+
+pub let EqSatUnprovedControl: Int -> Prop;
+pub let EqSatKnownSelector: (Int, BigInt) -> Prop;
+pub let EqSatHasExplicitArm: Int -> Prop;
+pub let EqSatSelectedArm: (Int, Int) -> Prop;
+pub let EqSatPureSwitch: (Int, Int, Int) -> Prop;
+pub let EqSatSwitchYield: (Int, Int, Int, Int) -> Prop;
+pub let EqSatSwitchDisagrees: (Int, Int) -> Prop;
+pub let eqsat_print_bits: BigInt -> String;
+
+pub let EqSatControlInputSafe: Int -> Prop;
+pub let EqSatCheckControl: String -> Prop;
+pub mod safe_control_inputs {
+    pub let switch: EqSatCheckControl("scf.switch");
+    pub let loop_kind: EqSatCheckControl("scf.loop");
+    pub let defined<value>: EqSatDefined(value) -> EqSatControlInputSafe(value);
+    pub let parameter<value,ty,kind,owner,slot,decl>:
+        (EqSatIncomingParameter(value), Value(value,ty,kind,owner,slot,decl), EqSatInteger(ty))
+        -> EqSatControlInputSafe(value);
+}
+
+pub mod control_effects {
+    pub let input<node,k,place,home,p,d,l,slot,value>:
+        (EqSatCheckControl(k), Operation(node,k,place,home,p,d,l), Operand(node,slot,value), !EqSatControlInputSafe(value))
+        -> EqSatUnprovedControl(node);
+    pub let effect<node,region,mode,slot,entry,child,member,kind,place,home,p,d,l>:
+        (Region(region,mode,node,slot,entry), ReaderAt(child,region,member),
+         Operation(child,kind,place,home,p,d,l), !EqSatDropKind(kind))
+        -> EqSatUnprovedControl(node);
+}
+
+pub mod switch_inputs {
+    pub let incoming<node,region,slot,port,init,selector,body,pred,polarity,bits>:
+        (Control(node,true,selector,false,body,pred,polarity), EqSatPort(node,region,slot,port,init),
+         EqSatFolded(init,bits)) -> EqSatFolded(port,bits);
+}
+
+pub mod switch_cases {
+    pub let control<node,selector,body,pred,polarity,value,bits>:
+        (EqSatLive(node), Control(node,true,selector,false,body,pred,polarity),
+         Operand(node,selector,value), EqSatFolded(value,bits))
+        -> EqSatKnownSelector(node,bits);
+    pub let exact<node,bits,key,region>:
+        (EqSatKnownSelector(node,bits), key == eqsat_print_bits(bits), Arm(node,false,key,region))
+        -> (EqSatHasExplicitArm(node), EqSatSelectedArm(node,region));
+}
+
+pub mod switch_default {
+    pub let chosen<node,bits,region,key>:
+        (EqSatKnownSelector(node,bits), !EqSatHasExplicitArm(node), Arm(node,true,key,region))
+        -> EqSatSelectedArm(node,region);
+}
+
+pub mod pure_switch {
+    pub let safe<node,home,p,d,l,selector,body,pred,polarity,value,result,ty,decl>:
+        (EqSatLive(node), Operation(node,"scf.switch","graph",home,p,d,l),
+         Control(node,true,selector,false,body,pred,polarity), Operand(node,selector,value),
+         EqSatDefined(value), !EqSatUnprovedControl(node), !EqSatExtraResult(node),
+         Value(result,ty,"result",node,0,decl), EqSatInteger(ty), !EqSatPinned(result))
+        -> (EqSatPureSwitch(node,result,ty), EqSatRemovable(node,result), EqSatRemovableNode(node));
+}
+pub mod switch_values {
+    pub let selected_literal<node,result,ty,arm,slot,value,bits>:
+        (EqSatPureSwitch(node,result,ty), EqSatSelectedArm(node,arm),
+         Binding(arm,"exit",0,slot), Yield(arm,slot,value), EqSatFolded(value,bits))
+        -> EqSatPhiLiteral(result,bits);
+    pub let capture<node,result,ty,arm,mode,arm_slot,entry,slot,value,kind,owner,i,decl>:
+        (EqSatPureSwitch(node,result,ty), Region(arm,mode,node,arm_slot,entry),
+         Binding(arm,"exit",0,slot), Yield(arm,slot,value),
+         EqSatVisibleAt(node,value), Value(value,ty,kind,owner,i,decl))
+        -> EqSatSwitchYield(node,result,arm,value);
+    pub let forwarded<node,result,ty,arm,value,kind,owner,slot,decl>:
+        (EqSatPureSwitch(node,result,ty),
+         EqSatArmResult(node,arm,0,value,true), Value(value,ty,kind,owner,slot,decl))
+        -> EqSatSwitchYield(node,result,arm,value);
+}
+pub mod switch_agreement {
+    pub let disagree<node,result,witness,value,arm,mode,slot,entry>:
+        (EqSatSwitchYield(node,result,witness,value), Region(arm,mode,node,slot,entry),
+         !EqSatSwitchYield(node,result,arm,value)) -> EqSatSwitchDisagrees(node,value);
+}
+pub mod switch_aliases {
+    pub let selected<node,result,arm,value>:
+        (EqSatSwitchYield(node,result,arm,value), EqSatSelectedArm(node,arm))
+        -> EqSatReplace(node,result,value);
+    pub let all_arms<node,result,arm,value>:
+        (EqSatSwitchYield(node,result,arm,value), !EqSatSwitchDisagrees(node,value))
+        -> EqSatReplace(node,result,value);
+}
+
+pub let EqSatFiniteLoop: (Int, Int) -> Prop;
+pub mod finite_loops {
+    // A nonnegative counter reaches its signed limit before a unit increment can wrap.
+    pub let finite<node,home,pos,display,loc,selector,body,predicate,condition,ct,cmp,
+                   slot,counter,init,feedback,next,step,add,ty,term,bound_term,bound,start,mask>:
+        (EqSatLive(node), Operation(node,"scf.loop","graph",home,pos,display,loc), !EqSatUnprovedControl(node),
+         Control(node,false,selector,true,body,predicate,"true"), Yield(body,predicate,condition),
+         EqSatPort(node,body,slot,counter,init), Binding(body,"feedback",slot,feedback), Yield(body,feedback,next),
+         EqSatBinary(add,"builtin.addi",next,ty,counter,step,body), EqSatWrappingAdd(add),
+         EqSatFolded(step,eqsat_bigint(1)), EqSatScalar(counter,ty,term), EqSatScalar(condition,ct,cmp),
+         cmp == Scalar::Compare("slt",ct,term,bound_term), bound_term == Scalar::Literal(ty,bound),
+         EqSatFolded(init,start), EqSatAllBits(ty,mask),
+         eqsat_leq_bits(eqsat_sum(start,start),mask) == true, eqsat_leq_bits(eqsat_sum(bound,bound),mask) == true)
+        -> EqSatFiniteLoop(node,body);
+    pub let output<node,body,exits,slot,value,result,ty,decl,bits>:
+        (EqSatFiniteLoop(node,body), Binding(body,"exit",slot,exits), Yield(body,exits,value),
+         EqSatFolded(value,bits), Value(result,ty,"result",node,slot,decl), EqSatInteger(ty), !EqSatPinned(result))
+        -> EqSatPhiLiteral(result,bits);
+}
