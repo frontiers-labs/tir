@@ -1,0 +1,2 @@
+enum Choice { Left, Right }
+let selected = Choice::Left;

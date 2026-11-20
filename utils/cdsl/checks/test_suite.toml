@@ -1,0 +1,8 @@
+[suite]
+name = "CDSL single-file CLI checks"
+glob = ["*.test"]
+
+[suite.tools]
+cdslc = "cdslc"
+not = "not"
+filecheck = "filecheck"

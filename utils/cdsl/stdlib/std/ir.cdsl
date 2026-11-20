@@ -1,0 +1,152 @@
+pub use std::list::List;
+pub let Ty: Type;
+pub let El: Ty -> Type;
+pub let Bits: Nat -> Ty;
+pub let Ptr: Ty -> Ty;
+pub let Tuple: List<Ty> -> Ty;
+pub let Value: Ty -> Type;
+pub let Function: (List<Ty>, List<Ty>, EffectSet) -> Ty;
+pub let EffectSet: Type;
+pub let RegionKind: Type;
+pub let Resource: Type;
+pub use std::option::Option as Optional;
+pub use std::option::Option;
+pub let State: Resource -> Ty;
+pub let Symbol: Ty -> Type;
+pub enum Vec<A: Type, n: Nat> {
+    Nil : Vec<A, 0>,
+    Cons<n: Nat>(A, Vec<A, n>) : Vec<A, n + 1>,
+}
+pub let value_type<T: Ty>: Value<T> -> Ty;
+pub let Cfg: RegionKind;
+pub let Nodes: RegionKind;
+pub let Pure: EffectSet;
+pub use std::option;
+pub let Unit: Type;
+pub enum Default<T: Type, value: T> { Default, Explicit(T), }
+pub let default_value<T: Type, value: T> = fn (field: Default<T, value>) -> T {
+    match field {
+        Default::Default => value,
+        Default::Explicit(actual) => actual,
+    }
+};
+pub use std::schedule::Schedule;
+pub use std::schedule::Database;
+pub use std::schedule::RunLimit;
+pub use std::schedule::RunResult;
+pub use std::schedule::saturate;
+pub use std::schedule::seq;
+pub use std::schedule::run;
+
+use std::equality::Equal;
+use std::equality::Holds;
+
+pub let ExclusiveResource: String -> Resource;
+pub let SharedResource: String -> Resource;
+
+pub enum SymbolBinding<name: String, T: Ty> { Binding, }
+pub enum Absent<name: String, Scope: Type> {
+    Empty<name: String> : Absent<name, ()>,
+    Next<name: String, other: String, T: Ty, Rest: Type>(Holds<name != other>, Absent<name, Rest>) : Absent<name, (SymbolBinding<other, T>, Rest)>,
+}
+pub enum Symbols<Scope: Type> {
+    Empty : Symbols<()>,
+    Bind<name: String, T: Ty, Rest: Type>(Symbols<Rest>, Absent<name, Rest>) : Symbols<(SymbolBinding<name, T>, Rest)>,
+}
+pub enum SymbolRef<Scope: Type, name: String, T: Ty> {
+    Here<name: String, T: Ty, Rest: Type> : SymbolRef<(SymbolBinding<name, T>, Rest), name, T>,
+    There<Head: Type, Scope: Type, name: String, T: Ty>(SymbolRef<Scope, name, T>) : SymbolRef<(Head, Scope), name, T>,
+}
+
+pub enum Shareable<T: Ty> {
+    Bits<w: Nat> : Shareable<Bits<w>>,
+    Ptr<T: Ty> : Shareable<Ptr<T>>,
+    SharedState<name: String> : Shareable<State<SharedResource<name>>>,
+}
+
+pub enum Shape<References: Type, Data: Type> {
+    Scalar<T: Ty> : Shape<Value<T>, El<T>>,
+    Unit : Shape<(), ()>,
+    Pair<A: Type, B: Type, C: Type, D: Type>(Shape<A, C>, Shape<B, D>) : Shape<(A, B), (C, D)>,
+}
+
+pub enum DataShape<P: Type> {
+    Bits<w: Nat> : DataShape<Value<Bits<w>>>,
+    Ptr<T: Ty> : DataShape<Value<Ptr<T>>>,
+    Unit : DataShape<()>,
+    Pair<A: Type, B: Type>(DataShape<A>, DataShape<B>) : DataShape<(A, B)>,
+}
+
+pub enum Effects<P: Type, R: Type, Input: Type> {
+    Pure<P: Type, R: Type, Input: Type>(DataShape<P>, DataShape<R>, Placement<P, Input>) : Effects<P, R, Input>,
+    Read<name: String> : Effects<Value<State<SharedResource<name>>>, Value<State<SharedResource<name>>>, Shared<Value<State<SharedResource<name>>>>>,
+    Write<R: Resource> : Effects<Value<State<R>>, Value<State<R>>, Owned<Value<State<R>>>>,
+    Consume<R: Resource> : Effects<Value<State<R>>, (), Owned<Value<State<R>>>>,
+    Pair<A: Type, B: Type, C: Type, D: Type, X: Type, Y: Type>(Effects<A, C, X>, Effects<B, D, Y>) : Effects<(A, B), (C, D), (X, Y)>,
+}
+
+pub let Op<P: Type, R: Type, A: Type, B: Type, Input: Type> = {
+    signature: Type,
+    agrees: Equal<signature, A -> B>,
+    inputs: Shape<P, A>,
+    outputs: Shape<R, B>,
+    effects: Effects<P, R, Input>,
+    exec: A -> B,
+    poison: A -> Bool,
+    requires: A -> Bool,
+};
+
+pub enum Shared<A: Type> { Slot, }
+pub enum Owned<A: Type> { Slot, }
+pub enum Used { Slot, }
+
+pub enum Ref<Before: Type, After: Type, T: Type, Mode: Type> {
+    Shared<T: Ty>(Shareable<T>) : Ref<Shared<Value<T>>, Shared<Value<T>>, Value<T>, Shared<Value<T>>>,
+    Owned<T: Ty> : Ref<Owned<Value<T>>, Used, Value<T>, Owned<Value<T>>>,
+    Left<Before: Type, After: Type, Other: Type, T: Type, Mode: Type>(Ref<Before, After, T, Mode>) : Ref<(Before, Other), (After, Other), T, Mode>,
+    Right<Before: Type, After: Type, Other: Type, T: Type, Mode: Type>(Ref<Before, After, T, Mode>) : Ref<(Other, Before), (Other, After), T, Mode>,
+}
+
+pub enum Ports<Before: Type, After: Type, P: Type, Mode: Type, Trace: Type> {
+    Empty<C: Type> : Ports<C, C, (), (), ()>,
+    One<Before: Type, After: Type, T: Type, Mode: Type>(Ref<Before, After, T, Mode>) : Ports<Before, After, T, Mode, ()>,
+    Pair<Before: Type, Mid: Type, After: Type, A: Type, B: Type, X: Type, Y: Type, M: Type, N: Type>(Ports<Before, Mid, A, M, X>, Ports<Mid, After, B, N, Y>) : Ports<Before, After, (A, B), (M, N), (Mid, (X, Y))>,
+    Continue<Before: Type, After: Type, P: Type, Mode: Type, Trace: Type>(Ports<Before, After, P, Mode, Trace>) : Ports<Before, After, Outcome<P>, Mode, Trace>,
+    Exit<Before: Type, After: Type, P: Type, Mode: Type, Trace: Type>(Ports<Before, After, P, Mode, Trace>) : Ports<Before, After, Outcome<P>, Mode, Trace>,
+}
+
+pub enum Cleared<C: Type> {
+    Empty : Cleared<()>,
+    Shared<T: Ty>(Shareable<T>) : Cleared<Shared<Value<T>>>,
+    Used : Cleared<Used>,
+    Pair<A: Type, B: Type>(Cleared<A>, Cleared<B>) : Cleared<(A, B)>,
+}
+
+pub enum Placement<R: Type, C: Type> {
+    Shared<T: Ty>(Shareable<T>) : Placement<Value<T>, Shared<Value<T>>>,
+    Owned<T: Ty> : Placement<Value<T>, Owned<Value<T>>>,
+    Unit : Placement<(), ()>,
+    Pair<A: Type, B: Type, C: Type, D: Type>(Placement<A, C>, Placement<B, D>) : Placement<(A, B), (C, D)>,
+}
+
+pub enum Alternatives<K: RegionKind, P: Type, R: Type, Input: Type, Trace: Type> {
+    Two<K: RegionKind, P: Type, R: Type, Input: Type, A: Type, B: Type>(Region<K, P, R, Input, A>, Region<K, P, R, Input, B>) : Alternatives<K, P, R, Input, (A, B)>,
+    More<K: RegionKind, P: Type, R: Type, Input: Type, A: Type, B: Type>(Region<K, P, R, Input, A>, Alternatives<K, P, R, Input, B>) : Alternatives<K, P, R, Input, (A, B)>,
+}
+
+pub enum Node<P: Type, R: Type, Input: Type, Trace: Type> {
+    Primitive<P: Type, R: Type, A: Type, B: Type, Input: Type>(Op<P, R, A, B, Input>) : Node<P, R, Input, (A, B)>,
+    Theta<P: Type, Input: Type, Trace: Type>(Region<Nodes, P, (Value<Bits<1>>, Outcome<P>), Input, Trace>) : Node<P, P, Input, Trace>,
+    Gamma<P: Type, R: Type, Input: Type, Trace: Type>(Alternatives<Nodes, P, R, Input, Trace>) : Node<(Value<Bits<1>>, P), R, (Shared<Value<Bits<1>>>, Input), Trace>,
+}
+
+pub enum Outcome<P: Type> { Continue(P), Exit(P), }
+
+pub enum Region<K: RegionKind, P: Type, R: Type, Input: Type, Trace: Type> {
+    Body<K: RegionKind, P: Type, R: Type, C: Type, Trace: Type>(Placement<P, C>, Graph<C, R, Trace>) : Region<K, P, R, C, Trace>,
+}
+
+pub enum Graph<C: Type, O: Type, Trace: Type> {
+    Yield<C: Type, After: Type, O: Type, Mode: Type, Trace: Type>(Ports<C, After, O, Mode, Trace>, Cleared<After>) : Graph<C, O, (After, (Mode, Trace))>,
+    Apply<C: Type, After: Type, P: Type, R: Type, Input: Type, Results: Type, O: Type, NodeTrace: Type, PortTrace: Type, Rest: Type>(Node<P, R, Input, NodeTrace>, Ports<C, After, P, Input, PortTrace>, Placement<R, Results>, Graph<(Results, After), O, Rest>) : Graph<C, O, (After, (P, (R, (Input, (Results, (NodeTrace, (PortTrace, Rest)))))))>,
+}

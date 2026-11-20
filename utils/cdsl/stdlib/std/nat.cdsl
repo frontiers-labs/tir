@@ -1,0 +1,9 @@
+pub enum Nat { Zero, Succ(Nat), }
+let step = fn (n: Nat) -> Nat { Nat::Succ(n) };
+pub let one: Nat = step(Nat::Zero);
+pub let add = fn (a: Nat, b: Nat) -> Nat decreases a {
+    match a {
+        Nat::Zero => b,
+        Nat::Succ(rest) => Nat::Succ(add(rest, b)),
+    }
+};

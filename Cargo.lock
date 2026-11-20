@@ -2038,6 +2038,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tir-cdsl"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "criterion",
+ "logos",
+ "tir-bench",
+ "tir-cst",
+]
+
+[[package]]
 name = "tir-cli"
 version = "0.1.0"
 dependencies = [
@@ -2052,6 +2063,15 @@ dependencies = [
  "tir-sim",
  "tir-x86_64",
  "tmdl",
+]
+
+[[package]]
+name = "tir-cst"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "tir-adt",
+ "tir-bench",
 ]
 
 [[package]]
