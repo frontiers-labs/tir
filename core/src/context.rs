@@ -143,13 +143,6 @@ impl Context {
         self.engine()
     }
 
-    /// Access the authoritative engine with support for adding egglog rules.
-    /// Compiled structural rules and added user rules share the database.
-    #[cfg(feature = "egglog-rules")]
-    pub fn egraph_with_rules(&self) -> Result<RefMut<'_, EGraph>, tir_egglog::Error> {
-        Ok(self.egraph())
-    }
-
     fn engine(&self) -> RefMut<'_, EGraph> {
         self.0.engine.borrow_mut()
     }
