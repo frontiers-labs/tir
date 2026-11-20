@@ -11,6 +11,7 @@ doctest = false
 [dependencies]
 tir-adt.workspace = true
 tir-egglog.workspace = true
+tir-ir-schema.workspace = true
 smallvec = "1.15.2"
 chumsky.workspace = true
 
@@ -18,9 +19,6 @@ chumsky.workspace = true
 bench = false
 name = "tir-smt"
 path = "src/bin/main.rs"
-
-[build-dependencies]
-tir-egglog = { workspace = true, features = ["parser"] }
 
 [lints]
 workspace = true

@@ -1989,6 +1989,7 @@ dependencies = [
  "tir-adt",
  "tir-bench",
  "tir-egglog",
+ "tir-ir-schema",
  "tir-macros",
  "tir-pdl",
  "tir-symbolic",
@@ -2087,6 +2088,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tir-ir-schema"
+version = "0.1.0"
+dependencies = [
+ "tir-egglog",
+]
+
+[[package]]
 name = "tir-isasim"
 version = "0.1.0"
 dependencies = [
@@ -2180,6 +2188,7 @@ dependencies = [
  "smallvec",
  "tir-adt",
  "tir-egglog",
+ "tir-ir-schema",
 ]
 
 [[package]]

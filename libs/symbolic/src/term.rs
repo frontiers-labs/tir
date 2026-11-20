@@ -283,12 +283,6 @@ impl TypeTerm {
 /// The arguments of one term.
 pub type Args = SmallVec<[TypeArg; 4]>;
 
-/// The normalized structural IR and type schema.
-pub const IR_SCHEMA: &str = include_str!("ir-schema.egg");
-
-/// Build-time compiled rules and declarations of the structural IR.
-pub const IR_PROGRAM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ir-schema.bin"));
-
 /// The integer widths every store interns up front.
 pub const FIXED_INT_WIDTHS: u64 = 128;
 
@@ -365,7 +359,7 @@ impl Terms {
     pub fn new() -> Self {
         let mut engine = EGraph::default();
         engine
-            .load_program(IR_PROGRAM)
+            .load_program(tir_ir_schema::IR_PROGRAM)
             .expect("the compiled structural IR schema loads");
         Self::with_engine(
             Rc::new(RefCell::new(engine)),
