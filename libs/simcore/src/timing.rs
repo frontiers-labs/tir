@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use tir::analysis::defuse::execution_regs;
 use tir::backend::sched::{InstrSchedClass, MachineModel};
-use tir::backend::{ControlFlow, MachineInstruction, RegSlot, reg_slot};
+use tir::backend::{ControlFlow, MachineInstruction};
 use tir::{Context, OpId};
 
 use crate::MemAccess;
@@ -173,10 +173,15 @@ pub fn fusion_operands(
     register_widths: &[(&'static str, u32)],
 ) -> Vec<FusionOperandFact> {
     let mut facts = Vec::new();
-    for port in info.regs {
-        let Some(RegSlot::Phys((class, index))) = reg_slot(op, port.name) else {
+    for attr in op.attributes() {
+        let tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Physical {
+            class,
+            index,
+        }) = attr.value
+        else {
             continue;
         };
+        let name = op.context.resolve(attr.name);
         let file = prf
             .and_then(|p| p.class_to_file.get(class.name()))
             .map(String::as_str)
@@ -209,7 +214,7 @@ pub fn fusion_operands(
                 Some((start, end))
             });
         facts.push(FusionOperandFact {
-            name: port.name.to_string(),
+            name: name.to_string(),
             width_bits: class_width.and_then(|width| u16::try_from(width).ok()),
             value: FusionOperandValue::Register {
                 file,

@@ -133,6 +133,7 @@ pub use dialects::fp;
 pub use dialects::func;
 pub use dialects::ptr;
 pub use dialects::scf;
+pub use dialects::son;
 pub use dialects::state;
 pub use dialects::vector;
 

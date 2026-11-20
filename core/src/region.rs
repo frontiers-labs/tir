@@ -171,7 +171,12 @@ impl RegionHandle {
         let ops = self.op_ids();
         for op in &ops {
             let instance = context.get_op(*op);
-            if instance.clone().as_interface::<dyn Terminator>().is_some() {
+            if instance.clone().as_interface::<dyn Terminator>().is_some()
+                && !instance
+                    .value_operands()
+                    .iter()
+                    .any(|&value| crate::son::CONTROL.is(context, context.get_value(value).ty()))
+            {
                 return Err(crate::Error::VerificationError(format!(
                     "{}.{} is a terminator, which an unordered region has no place for",
                     instance.dialect(),

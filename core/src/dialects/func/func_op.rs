@@ -284,6 +284,7 @@ impl FuncOp {
             .value_results()
             .iter()
             .map(|result| context.get_value(*result).ty())
+            .filter(|&ty| !crate::son::CONTROL.is(context, ty))
             .collect();
         let declared = match self.ret_type() {
             unit if unit == UnitType::new(context) => vec![],

@@ -10,7 +10,7 @@ use tir::backend::regalloc::{RegClassId, RegClassInfo};
 use tir::backend::{RegAssignment, RegClassType};
 use tir::{Context, NewOp, OpHandle, Operation};
 
-use super::fixtures::{machine_op, r, reg_class, RD_RS_PORTS};
+use super::fixtures::{machine_op, r, reg_class};
 
 fn phys(index: u16) -> AttributeValue {
     AttributeValue::Register(RegisterAttr::Physical { class: r(), index })
@@ -64,10 +64,10 @@ const fn decoded(
 }
 
 fn enc(op: &OpHandle, spec: &EncodeSpec) -> Option<EncodedInst> {
-    encode_with(op, spec, &RegAssignment::default())
+    encode_with(op, spec, &RegAssignment::default()).ok()
 }
 
-machine_op!(TestInstOp, "test", "inst", &RD_RS_PORTS, &[]);
+machine_op!(TestInstOp, "test", "inst", &[]);
 
 fn op_with(attrs: Vec<(&str, AttributeValue)>) -> (Context, tir::OpHandle) {
     let context = Context::with_default_dialects();
@@ -120,6 +120,8 @@ fn encode_scatters_register_and_immediate() {
         (55u32 | (5 << 7) | (0x12345 << 12)).to_le_bytes()
     );
     assert!(encoded.fixups.is_empty());
+    _context.create_nodes_region(vec![], vec![op.id], vec![]);
+    assert!(enc(&op, &LUI).is_none());
 }
 
 #[test]
@@ -138,12 +140,6 @@ fn encode_rejects_out_of_range_and_unallocated() {
         vec![unplaced],
     );
     assert!(enc(&op, &LUI).is_none());
-
-    // Placed, it encodes as that register.
-    let mut assignment = RegAssignment::default();
-    assignment.insert(unplaced, (r(), 5));
-    let encoded = encode_with(&op, &LUI, &assignment).expect("encodes once placed");
-    assert_eq!(encoded.bytes, (55u32 | (5 << 7) | (1 << 12)).to_le_bytes());
 }
 
 // `c.addi4spn rd', sp, nzuimm`: the field holds `imm[9:2]`, so the operand is

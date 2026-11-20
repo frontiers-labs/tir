@@ -1,0 +1,14 @@
+// RUN: tir mc --march=riscv64 --stage=isel %s | filecheck %s
+// RUN: tir mc --march=riscv64 --stage=isel %s | tir mc --march=riscv64 --stage=isel - | filecheck %s
+module {
+  %f = func.func @data(%x: !i64, %c: !son.control) -> !i64 {
+    %result = riscv.add %later, %c {operand_segment_sizes = [0, 1, 1, 0]} : !i64
+    %later = riscv.add %x, %x : !i64
+    -> %result
+  }
+  module_end
+}
+// CHECK-LABEL: func.func @data(%[[X:[0-9]+]]: !i64, %[[C:[0-9]+]]: !son.control) -> !i64
+// CHECK: %[[LATER:[0-9]+]] = riscv.add %[[X]], %[[X]] : !i64
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = riscv.add %[[LATER]], %[[C]] {operand_segment_sizes = [0, 1, 1, 0]} : !i64
+// CHECK-NEXT: -> %[[RESULT]]

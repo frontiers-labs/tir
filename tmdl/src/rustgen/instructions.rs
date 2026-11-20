@@ -261,7 +261,7 @@ fn attrs_schema_ts(ops: &[(String, Type)]) -> proc_macro2::TokenStream {
     for (name, ty) in ops {
         let field_ident = format_ident!("{}", name);
         let ty_ts = match ty {
-            Type::Struct(_) => continue,
+            Type::Struct(_) => quote! { "?Register" },
             Type::Integer | Type::Bits(_) => quote! { Integer },
             Type::String => quote! { String },
             _ => unreachable!("HM type vars should not appear as operand types"),
@@ -271,35 +271,22 @@ fn attrs_schema_ts(ops: &[(String, Type)]) -> proc_macro2::TokenStream {
     quote! { #(#items,)* }
 }
 
-fn instruction_ports(
-    tables: &TargetTables,
-    ctx: &InstrEmitCtx<'_>,
-) -> Vec<(String, Option<String>, bool, Option<String>)> {
-    let mut ports: Vec<(String, Option<String>, bool, Option<String>)> = vec![];
+fn instruction_values(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> proc_macro2::TokenStream {
+    let mut ports: Vec<(String, bool)> = vec![];
     for (name, ty) in ctx.ops {
         if !matches!(ty, Type::Struct(_)) {
             continue;
         }
-        let Type::Struct(class_name) = ty else {
-            unreachable!()
-        };
         let defines = ctx.defined_register_operands.contains(name);
-        ports.push((name.clone(), Some(class_name.clone()), defines, None));
+        ports.push((name.clone(), defines));
         if defines && ctx.read_register_operands.contains(name) {
-            ports.push((
-                format!("{name}_tied"),
-                Some(class_name.clone()),
-                false,
-                Some(name.clone()),
-            ));
+            ports.push((name.clone(), false));
         }
     }
-    // A demand slot carries its class at run time (a target pass decides it),
-    // so the port constrains nothing beyond the value's own type.
     for (name, _) in ctx.implicit_reads {
-        ports.push((name.clone(), None, false, None));
+        ports.push((name.clone(), false));
     }
-    for (slot, class_name, is_def) in fixed_register_role_items(
+    for (slot, _, is_def) in fixed_register_role_items(
         ctx.inst,
         ctx.ops,
         &tables.register_index_map,
@@ -307,72 +294,22 @@ fn instruction_ports(
         &tables.effect_classes,
         &tables.pc_classes,
     ) {
-        ports.push((slot, Some(class_name), is_def, None));
+        ports.push((slot, is_def));
     }
 
-    ports
-}
-
-fn reg_port_entries(
-    ports: &[(String, Option<String>, bool, Option<String>)],
-) -> Vec<proc_macro2::TokenStream> {
-    let port_entries: Vec<proc_macro2::TokenStream> = ports
-        .iter()
-        .map(|(name, class_name, is_def, tied_to)| {
-            let name_lit = proc_macro2::Literal::string(name);
-            let class = match class_name {
-                Some(class_name) => {
-                    let id = reg_class_id(class_name);
-                    quote! { Some(#id) }
-                }
-                None => quote! { None },
-            };
-            let tied = match tied_to {
-                Some(destination) => {
-                    let lit = proc_macro2::Literal::string(destination);
-                    quote! { Some(#lit) }
-                }
-                None => quote! { None },
-            };
-            quote! {
-                tir::backend::RegPort {
-                    name: #name_lit,
-                    class: #class,
-                    def: #is_def,
-                    tied_to: #tied,
-                }
-            }
-        })
-        .collect();
-    port_entries
-}
-
-fn ports_schema_ts(
-    ports: &[(String, Option<String>, bool, Option<String>)],
-) -> proc_macro2::TokenStream {
-    let uses: Vec<_> = ports
-        .iter()
-        .filter(|(_, _, is_def, _)| !is_def)
-        .map(|(name, _, _, _)| format_ident!("{}", name))
-        .collect();
-    let defines = ports.iter().any(|(_, _, is_def, _)| *is_def);
-    let slots = vec!["backend.reg<_, _>?"; uses.len()].join(", ");
-    let results = if defines { "backend.reg<_, _>*" } else { "()" };
-    let scheme = format!("({slots}) -> {results}");
-    let operands = if uses.is_empty() {
-        quote! {}
-    } else {
-        quote! { operands: O { #(#uses,)* }, }
+    let fields = |def| {
+        let names: Vec<_> = ports
+            .iter()
+            .filter(|(_, d)| *d == def)
+            .map(|(name, _)| format_ident!("{name}"))
+            .collect();
+        let types = "_?, ".repeat(names.len()) + "son.control?";
+        (names, types)
     };
-    // Results are variadic: an instruction defining several registers (x86
-    // `div`, writing both halves of the quotient/remainder pair) has one
-    // result per def port, and one that defines none has no results.
-    let results = if defines {
-        quote! { results: R { regs }, }
-    } else {
-        quote! {}
-    };
-    quote! { scheme: #scheme, #operands #results }
+    let (uses, slots) = fields(false);
+    let (defs, results) = fields(true);
+    let scheme = format!("({slots}) -> ({results})");
+    quote! { scheme: #scheme, operands: O { #(#uses,)* control }, results: R { #(#defs,)* control }, }
 }
 fn instruction_program_ts(
     inst: &ast::Instruction,
@@ -699,7 +636,6 @@ struct InstrOutputs<'a> {
     instruction_info_idents: &'a mut Vec<proc_macro2::Ident>,
     machine_instruction_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_custom_format_impls: &'a mut Vec<proc_macro2::TokenStream>,
-    instruction_reg_ports: &'a mut Vec<proc_macro2::TokenStream>,
     as_sem_expr_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_encoder_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_decoder_impls: &'a mut Vec<proc_macro2::TokenStream>,
@@ -718,7 +654,6 @@ struct InstrInfoParts<'a> {
     control_flow: &'a proc_macro2::TokenStream,
     implicit_items: &'a [proc_macro2::TokenStream],
     implicit_or_update_items: &'a [proc_macro2::TokenStream],
-    ports_ident: &'a proc_macro2::Ident,
     copy_ports: Option<(String, String)>,
     reads_memory: bool,
     writes_memory: bool,
@@ -742,7 +677,6 @@ fn instr_info_fields(
         control_flow,
         implicit_items,
         implicit_or_update_items,
-        ports_ident,
         copy_ports,
         reads_memory,
         writes_memory,
@@ -768,7 +702,6 @@ fn instr_info_fields(
             implicit_or_updates: &[ #(#implicit_or_update_items),* ]
         });
     }
-    info_fields.push(quote! { regs: &#ports_ident });
     if let Some((src, dst)) = copy_ports
         && !uncond_pc
         && !cond_pc
@@ -893,9 +826,6 @@ fn emit_instruction(
     let operand_constraints = resolve_operand_constraints_for_instruction(inst, item_cache);
     let defined_register_operands = infer_defined_register_operands(&inst.behavior, &ops);
 
-    // Build attributes schema from the operands that are not registers: a
-    // register operand is an SSA port, and the slot's attribute exists only
-    // when it names a physical register (see `tir::backend::RegPort`).
     let attrs_schema = attrs_schema_ts(&ops);
 
     let numeric_params: HashMap<String, i64> = resolve_params_for_instruction(inst, item_cache)
@@ -925,7 +855,6 @@ fn emit_instruction(
     // Symbolic conversion substitutes bindings. Execution preserves single evaluation.
     let selection_behavior = inline_let_bindings(&inst.behavior);
 
-    // Preserve the implicit-register ports supported by the existing semantic conversion.
     let register_reads = if !uses_todo
         && defined_register_operands.len() <= 1
         && !behavior_references_pc(&inst.behavior, &tables.pc_classes)
@@ -970,12 +899,6 @@ fn emit_instruction(
         reads
     };
 
-    // The op's register ports, in the order the emitters bind them: the
-    // declared register operands (a two-address destination followed by the
-    // `_tied` slot its read binds through), the registers the behavior reads
-    // by path, then the fixed-register slots. A register operand is an SSA
-    // operand or result, so this order is also the port order
-    // `tir::backend::reg_slots` walks.
     let read_register_operands = infer_read_register_operands(&inst.behavior, &ops);
     let instr_ctx = InstrEmitCtx {
         inst,
@@ -989,16 +912,8 @@ fn emit_instruction(
         read_register_operands: &read_register_operands,
         implicit_reads: &implicit_reads,
     };
-    let ports = instruction_ports(tables, &instr_ctx);
     let copy_ports = copy_ports(&inst.behavior, &ops, &tables.register_files);
-    let port_entries = reg_port_entries(&ports);
-    let ports_ident = format_ident!("REGS_{}", inst.name.to_uppercase());
-    let port_count = port_entries.len();
-    out.instruction_reg_ports.push(quote! {
-        static #ports_ident: [tir::backend::RegPort; #port_count] = [#(#port_entries),*];
-    });
-
-    let ports_schema = ports_schema_ts(&ports);
+    let ports_schema = instruction_values(tables, &instr_ctx);
 
     // An instruction that writes `PC::pc` transfers control, so it is a
     // terminator: its successors are the blocks its attributes reference
@@ -1062,8 +977,7 @@ fn emit_instruction(
         #terminator_impl
     });
 
-    // One shared printer: what a slot is called, what class it admits and
-    // whether it is a result are fields of the opcode's `InstrInfo`.
+    let ir_info_ident = info_ident(&inst.name);
     out.instruction_custom_format_impls.push(quote! {
         impl #name_ident {
             fn custom_print<'a, 'b: 'a>(
@@ -1075,9 +989,9 @@ fn emit_instruction(
 
             fn custom_parse<'src>(
                 parser: &mut tir::parse::text::Parser<'src>,
-                _context: &tir::Context,
+                context: &tir::Context,
             ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-                Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+                tir::backend::parse_machine_op::<Self>(parser, context, &#ir_info_ident)
             }
         }
     });
@@ -1132,9 +1046,6 @@ fn emit_instruction(
     };
 
     let info_ident = info_ident(&inst.name);
-    // Filled in below when this instruction has an assembly syntax, a binary
-    // encoding, or a patchable immediate; each becomes a field of its
-    // `InstrInfo` rather than an entry in a string-keyed side table.
     let desc_ident = match resolve_effective_asm_for_instruction(inst, item_cache)
         .and_then(resolve_asm_templates)
     {
@@ -1243,7 +1154,6 @@ fn emit_instruction(
             control_flow: &control_flow,
             implicit_items: &implicit_items,
             implicit_or_update_items: &implicit_or_update_items,
-            ports_ident: &ports_ident,
             copy_ports,
             reads_memory,
             writes_memory,
@@ -1412,8 +1322,6 @@ pub(super) fn emit_instructions<'a>(
     let mut instruction_info_idents: Vec<proc_macro2::Ident> = vec![];
     let mut machine_instruction_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_custom_format_impls: Vec<proc_macro2::TokenStream> = vec![];
-    // One `RegPort` table per instruction, referenced by its `InstrInfo`.
-    let mut instruction_reg_ports: Vec<proc_macro2::TokenStream> = vec![];
     let mut as_sem_expr_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_encoder_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_impls: Vec<proc_macro2::TokenStream> = vec![];
@@ -1439,7 +1347,6 @@ pub(super) fn emit_instructions<'a>(
             instruction_info_idents: &mut instruction_info_idents,
             machine_instruction_impls: &mut machine_instruction_impls,
             instruction_custom_format_impls: &mut instruction_custom_format_impls,
-            instruction_reg_ports: &mut instruction_reg_ports,
             as_sem_expr_impls: &mut as_sem_expr_impls,
             instruction_encoder_impls: &mut instruction_encoder_impls,
             instruction_decoder_impls: &mut instruction_decoder_impls,
@@ -1546,7 +1453,6 @@ pub(super) fn emit_instructions<'a>(
 
     Ok(quote! {
         #(#instruction_defs)*
-        #(#instruction_reg_ports)*
         #(#instruction_custom_format_impls)*
         #(#machine_instruction_impls)*
         #(#as_sem_expr_impls)*

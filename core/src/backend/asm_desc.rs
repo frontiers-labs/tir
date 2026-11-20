@@ -15,7 +15,7 @@
 //! descriptor does not describe.
 
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr, find_attribute};
-use tir::backend::{RegAssignment, reg_slot, slot_register};
+use tir::backend::{RegAssignment, register_attr};
 use tir::parse::tokens::Parser;
 use tir::{Context, OpHandle, Operation};
 
@@ -128,7 +128,7 @@ pub fn parse_and_insert<'src, T: Operation, F: FnOnce(Vec<NamedAttribute>) -> T>
         .clone()
         .as_interface::<dyn super::MachineInstruction>()
         && let Some(encoding) = instruction.info().encode
-        && super::binary::encode_with(&handle, encoding, &RegAssignment::default()).is_none()
+        && super::binary::encode_with(&handle, encoding, &RegAssignment::default()).is_err()
     {
         context.remove_operation(op.id());
         return Err(());
@@ -257,7 +257,7 @@ pub fn print(
     desc: &InstrDesc,
     context: &Context,
     op: &OpHandle,
-    assignment: &RegAssignment,
+    _assignment: &RegAssignment,
 ) -> Option<String> {
     let attributes = &op.attributes();
     let mut out = String::new();
@@ -265,8 +265,7 @@ pub fn print(
         match part {
             PrintPart::Text(text) => out.push_str(text),
             PrintPart::Register(name, print) => {
-                let slot = reg_slot(op, name)?;
-                let (_, index) = slot_register(slot, assignment)?;
+                let (_, index) = register_attr(op, name)?;
                 out.push_str(&print(index, false)?)
             }
             PrintPart::Immediate(name) => match &find_attribute(context, attributes, name)?.value {
