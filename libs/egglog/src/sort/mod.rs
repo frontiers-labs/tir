@@ -294,6 +294,8 @@ fn register_i64(db: &mut Database) {
     prim!(db, "min", [i, i] -> i, |a: i64, b: i64| Some(a.min(b)));
     prim!(db, "max", [i, i] -> i, |a: i64, b: i64| Some(a.max(b)));
     prim!(db, "to-string", [i] -> s, |a: i64| Some(a.to_string()));
+    prim!(db, "parse-hex-i64", [s] -> i, |text: String| i64::from_str_radix(&text, 16).ok());
+    prim!(db, "hex-power-of-two", [s] -> b, |text: String| u64::from_str_radix(&text, 16).ok().map(u64::is_power_of_two));
     prim!(db, "count-matches", [s, s] -> i, |a: String, b: String| i64::try_from(a.matches(&b).count()).ok());
 }
 

@@ -2044,8 +2044,12 @@ dependencies = [
  "chumsky",
  "criterion",
  "logos",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
  "tir-bench",
  "tir-cst",
+ "tir-egglog",
 ]
 
 [[package]]
@@ -2056,6 +2060,7 @@ dependencies = [
  "clap",
  "tir",
  "tir-arm64",
+ "tir-cdsl",
  "tir-egglog",
  "tir-gpu",
  "tir-llvm",
@@ -2078,7 +2083,6 @@ dependencies = [
 name = "tir-egglog"
 version = "0.1.0"
 dependencies = [
- "chumsky",
  "criterion",
  "fearless_simd",
  "tir-adt",
@@ -2111,7 +2115,7 @@ dependencies = [
 name = "tir-ir-schema"
 version = "0.1.0"
 dependencies = [
- "tir-egglog",
+ "tir-cdsl",
 ]
 
 [[package]]

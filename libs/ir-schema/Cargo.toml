@@ -9,7 +9,7 @@ test = false
 doctest = false
 
 [build-dependencies]
-tir-egglog = { workspace = true, features = ["parser"] }
+tir-cdsl.workspace = true
 
 [lints]
 workspace = true

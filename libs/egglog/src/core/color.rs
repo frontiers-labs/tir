@@ -473,15 +473,21 @@ impl Database {
     /// Make the base show what `color` shows: its rows and unions go to the
     /// base, and the base rows it hides go, while the ids made in it stay.
     /// Drops `color` and every color below it. Rows become canonical at the
-    /// next [`Database::rebuild`].
+    /// next [`Database::rebuild`]. A secondary key conflict leaves the base
+    /// and color unchanged.
     ///
     /// # Panics
     ///
     /// If `color` is the base.
-    pub fn adopt(&mut self, color: Color) {
+    pub fn adopt(&mut self, color: Color) -> Result<(), Error> {
         assert_ne!(color, Color::BASE, "the base is no color to adopt");
         let c = color.0;
         self.colors.ensure(&self.tables);
+        for t in 0..self.tables.len() {
+            if self.colors.held[t][c as usize] != 0 {
+                self.check_publication(TableId::new(t), color)?;
+            }
+        }
         let entries = Colors::rows_of(&mut self.colors.classes, c, 0);
         let members: Vec<u32> = entries.iter().map(|(entry, _)| entry[1]).collect();
         let mut own = Vec::new();
@@ -500,7 +506,7 @@ impl Database {
             own.push(self.hide_shown(c, t, hidden));
         }
         for (t, rows) in own.into_iter().enumerate() {
-            self.write_own(t, rows);
+            self.write_own(t, rows)?;
         }
         let unions = (entries.iter()).map(|(entry, _)| (entry[1], entry[2]));
         let waiting = (self.colors.unions.iter()).filter(|&&(u, ..)| u == c);
@@ -513,6 +519,7 @@ impl Database {
             below.extend_from_slice(self.colors.parents(color.0));
             self.drop_color(color);
         }
+        Ok(())
     }
 
     /// Make the base show what `color` shows of `tables`: the rows it holds
@@ -521,13 +528,13 @@ impl Database {
     /// it are dropped. Of the ids made since [`Database::mark`] `mark`, the
     /// ones those rows hold stay, numbered from `mark` on in the order they
     /// are first held, and the next fresh ids follow them. The base must
-    /// hold none of them.
+    /// hold none of them. A secondary key conflict leaves the base and color unchanged.
     ///
     /// # Panics
     ///
     /// If `color` is the base, another color holds an id made after `mark`,
     /// or a retained container holds one of those ids.
-    pub fn adopt_rows(&mut self, color: Color, tables: &[TableId], mark: u32) {
+    pub fn adopt_rows(&mut self, color: Color, tables: &[TableId], mark: u32) -> Result<(), Error> {
         assert_ne!(color, Color::BASE, "the base is no color to adopt");
         self.containers.check_truncate(mark, self.uf.len());
 
@@ -556,6 +563,11 @@ impl Database {
             "another color holds an id made after the mark"
         );
         self.colors.ensure(&self.tables);
+        for &table in tables {
+            if self.colors.held[table.index()][color.index()] != 0 {
+                self.check_publication(table, color)?;
+            }
+        }
         let entries = Colors::rows_of(&mut self.colors.classes, color.0, 0);
         let members: Vec<u32> = entries.iter().map(|(entry, _)| entry[1]).collect();
         let mut own: Vec<_> = (tables.iter())
@@ -597,8 +609,9 @@ impl Database {
             }
         }
         for (t, rows) in own {
-            self.write_own(t, rows);
+            self.write_own(t, rows)?;
         }
+        Ok(())
     }
 
     // Takes out of table `t` of the base the rows of `hidden` and those
@@ -627,7 +640,7 @@ impl Database {
 
     // Writes the rows a color held of table `t`, the color first, to the
     // base.
-    fn write_own(&mut self, t: usize, rows: Vec<(Vec<u32>, bool)>) {
+    fn write_own(&mut self, t: usize, rows: Vec<(Vec<u32>, bool)>) -> Result<(), Error> {
         let keys = self.tables[t].schema.keys;
         for (cells, subsumed) in rows {
             let row = &cells[1..];
@@ -636,9 +649,9 @@ impl Database {
             if self.tables[t].find(&row[..keys], hash).is_some() {
                 continue;
             }
-            (self.apply_row(TableId::new(t), row, hash, subsumed, None))
-                .expect("a new key merges with nothing");
+            self.apply_row(TableId::new(t), row, hash, subsumed, None)?;
         }
+        Ok(())
     }
 
     /// The rows of `table` that `color` holds of its own, without the base
@@ -833,7 +846,9 @@ impl Database {
             unchanged &= row[column] == root;
             row[column] = root;
         }
-        for order in self.colors.rows[table.index()].orders(&row) {
+        let orders = self.colors.rows[table.index()].orders(&row);
+        self.check_orders(table, Color(c), &orders)?;
+        for order in orders {
             self.write_one_in(table, order, subsumed, touch && unchanged)?;
         }
         Ok(())

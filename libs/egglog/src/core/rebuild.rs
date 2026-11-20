@@ -188,13 +188,15 @@ impl Database {
         subsumed: bool,
         at: Option<u32>,
     ) -> Result<(), Error> {
-        self.apply_one(t, row, hash, subsumed, at)?;
         let table = &self.tables[t.index()];
         if table.schema.symmetries.is_empty() {
-            return Ok(());
+            return self.apply_one(t, row, hash, subsumed, at);
         }
         let keys = table.schema.keys;
-        for order in table.orders(row).into_iter().skip(1) {
+        let orders = table.orders(row);
+        self.check_orders(t, super::Color::BASE, &orders)?;
+        self.apply_one(t, row, hash, subsumed, at)?;
+        for order in orders.into_iter().skip(1) {
             self.apply_one(t, &order, hash_row(&order[..keys]), subsumed, None)?;
         }
         Ok(())
@@ -216,6 +218,7 @@ impl Database {
         let keys = table.schema.keys;
         let at = at.unwrap_or_else(|| table.find(&row[..keys], hash).unwrap_or(EMPTY));
         if at == EMPTY {
+            table.check_unique_keys(row)?;
             table.push(row, hash, now, subsumed);
             return Ok(());
         }
@@ -287,12 +290,40 @@ impl Database {
         }
     }
 
-    // Adds the symmetry `order` with what it generates together with the
-    // symmetries the table has, and writes the new orders of every row.
-    pub(crate) fn add_symmetry(&mut self, table: TableId, order: &[usize]) -> Result<(), Error> {
-        if !close_group(&mut self.tables[table.index()].schema.symmetries, order) {
+    // Install the entire group from a table declaration before exposing any of its rows.
+    pub(crate) fn add_symmetries(
+        &mut self,
+        table: TableId,
+        orders: &[Vec<usize>],
+    ) -> Result<(), Error> {
+        if self.tables[table.index()].unique_keys.is_empty() {
+            for order in orders {
+                if close_group(&mut self.tables[table.index()].schema.symmetries, order) {
+                    self.write_symmetric_rows(table)?;
+                }
+            }
             return Ok(());
         }
+        let group = &mut self.tables[table.index()].schema.symmetries;
+        let previous = group.len();
+        for order in orders {
+            close_group(group, order);
+        }
+        if group.len() == previous {
+            return Ok(());
+        }
+        // Check the entire closure before writing any order of any row.
+        if let Err(error) = self.check_publication(table, super::Color::BASE) {
+            self.tables[table.index()]
+                .schema
+                .symmetries
+                .truncate(previous);
+            return Err(error);
+        }
+        self.write_symmetric_rows(table)
+    }
+
+    fn write_symmetric_rows(&mut self, table: TableId) -> Result<(), Error> {
         let t = &self.tables[table.index()];
         let rows: Vec<(Vec<u32>, bool)> = (0..t.len() as u32)
             .filter(|&row| t.is_live(row))

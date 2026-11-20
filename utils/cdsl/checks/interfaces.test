@@ -1,0 +1,5 @@
+// RUN: cdslc --input %S/Inputs/interfaces.cdsl --emit typed --output /dev/null
+// RUN: not cdslc --input %S/Inputs/duplicate-interface.cdsl --emit typed --output /dev/null 2>&1 | filecheck %s --check-prefix=DUPLICATE
+// RUN: not cdslc --input %S/Inputs/interface-universe.cdsl --emit typed --output /dev/null 2>&1 | filecheck %s --check-prefix=UNIVERSE
+// DUPLICATE: duplicate attachment of contracts::Tag
+// UNIVERSE: inferred argument for interface Produces has the wrong kind or universe

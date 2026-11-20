@@ -8,6 +8,7 @@ mod types;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
+    CheckedMethods,
     ast::*,
     compiler::Program,
     error::Error,
@@ -92,14 +93,20 @@ pub(crate) fn lower(program: &Program) -> Result<crate::CheckedProgram, Error> {
         .iter()
         .map(|(path, scheme)| (path.clone(), checker.substitution.apply_scheme(scheme)))
         .collect();
-    crate::CheckedProgram::new(program.clone(), types)
+    let mut operations = checker.checked_interfaces;
+    for methods in operations.values_mut().flat_map(BTreeMap::values_mut) {
+        methods.map_types(|ty| checker.substitution.apply(ty));
+    }
+    crate::CheckedProgram::new(program.clone(), types, operations)
 }
 fn elaborate(program: &Program) -> Result<Checker, Error> {
     crate::totality::check(program)?;
     let mut definitions = BTreeMap::new();
     for module in program.all_modules() {
         for declaration in &module.ast.declarations {
-            if let Declaration::Let { binding, .. } = &declaration.value {
+            if let Declaration::Let { binding, .. } | Declaration::Interface { binding, .. } =
+                &declaration.value
+            {
                 let mut path = module.path.clone();
                 path.extend(binding.path.clone());
                 definitions.insert(path, binding);
@@ -113,6 +120,8 @@ fn elaborate(program: &Program) -> Result<Checker, Error> {
         environment: BTreeMap::new(),
         types: BTreeMap::new(),
         constructors: BTreeSet::new(),
+        interfaces: BTreeSet::new(),
+        checked_interfaces: BTreeMap::new(),
         locations: BTreeMap::new(),
         arities: BTreeMap::new(),
         pending: Vec::new(),
@@ -219,6 +228,8 @@ struct Checker {
     environment: Environment,
     types: Types,
     constructors: BTreeSet<Path>,
+    interfaces: BTreeSet<Path>,
+    checked_interfaces: BTreeMap<Path, BTreeMap<Path, CheckedMethods>>,
     locations: BTreeMap<Path, String>,
     arities: BTreeMap<Path, usize>,
     pending: Vec<Path>,
@@ -251,11 +262,14 @@ impl Checker {
         declaration: &Node<Declaration>,
     ) -> Result<(), Error> {
         match &declaration.value {
-            Declaration::Let { binding, .. } => {
+            Declaration::Let { binding, .. } | Declaration::Interface { binding, .. } => {
                 let mut path = module.path.clone();
                 path.extend(binding.path.clone());
                 if self.environment.contains_key(&path) || builtin_path(&path) {
                     return Err(Error("HM: reserved builtin name".into()));
+                }
+                if matches!(declaration.value, Declaration::Interface { .. }) {
+                    self.interfaces.insert(path.clone());
                 }
                 self.locations
                     .insert(path.clone(), declaration_location(module, declaration));
@@ -700,11 +714,15 @@ impl Checker {
         Ok(result)
     }
     fn generalize(&self, environment: &Environment, ty: &Ty) -> Scheme {
+        let ty = self.substitution.apply(ty);
+        if hm::free_variables(&ty).is_empty() {
+            return Scheme::mono(ty);
+        }
         let mut schemes = Vec::new();
         for scheme in environment.values() {
             schemes.push(self.substitution.apply_scheme(scheme));
         }
-        hm::generalize(&schemes, &self.substitution.apply(ty))
+        hm::generalize(&schemes, &ty)
     }
     fn definition(&mut self, definitions: &Definitions<'_>, path: &Path) -> Result<Ty, Error> {
         self.definition_inner(definitions, path)
@@ -748,7 +766,17 @@ impl Checker {
         let implicit_alias = binding.ty.is_none()
             && binding.generics.is_empty()
             && self.syntactic_type(&binding.value, definitions, &types);
-        let ty = if implicit_alias {
+        let ty = if self.interfaces.contains(path) {
+            let (types, generics) = self.generics(definitions, &binding.generics, &types)?;
+            let target = self.annotation(definitions, &binding.value, &types)?;
+            if self.universe_level(&target) != 0 {
+                return Err(Error("interface contract must be a small Type".into()));
+            }
+            if generics.is_empty() {
+                self.types.insert(path.clone(), Some(target));
+            }
+            self.discharge(&con(TYPE), &generics, &environment, Some(path))?
+        } else if implicit_alias {
             let target=self.denotation(definitions,&binding.value,&types)?;
             let sort=self.value_sort(&target);
             self.types.insert(path.clone(),Some(target));
@@ -886,6 +914,9 @@ impl Checker {
         environment: &Environment,
         owner: Option<&Path>,
     ) -> Result<Ty, Error> {
+        if ids.is_empty() {
+            return Ok(self.substitution.apply(ty));
+        }
         let mut outcome = Ok(());
         for (path, scheme) in environment.iter().chain(self.environment.iter()) {
             if owner == Some(path) {
@@ -914,22 +945,24 @@ impl Checker {
             }
         }
         let result = replace_rigid(&self.substitution.apply(ty), &replacements);
-        if !ids.is_empty() {
-            for (_, value) in &mut self.substitution.bindings {
-                *value = replace_rigid(value, &replacements);
+        for (_, value) in &mut self.substitution.bindings {
+            *value = replace_rigid(value, &replacements);
+        }
+        if let Some(path) = owner {
+            if self.explicit.contains_key(path) {
+                return Err(Error(
+                    "HM: combined binding and function universals are unsupported".into(),
+                ));
             }
-            if let Some(path) = owner {
-                if self.explicit.contains_key(path) {
-                    return Err(Error(
-                        "HM: combined binding and function universals are unsupported".into(),
-                    ));
+            if let Some(methods) = self.checked_interfaces.get_mut(path) {
+                for implementation in methods.values_mut() {
+                    implementation.map_types(|ty| replace_rigid(ty, &replacements));
                 }
-                let mut parameters = Vec::new();
-                for (_, ty) in replacements {
-                    parameters.push(ty);
-                }
-                self.explicit.insert(path.clone(), parameters);
             }
+            self.explicit.insert(
+                path.clone(),
+                replacements.into_iter().map(|(_, ty)| ty).collect(),
+            );
         }
         Ok(result)
     }
@@ -992,8 +1025,14 @@ impl Checker {
     ) -> Result<Ty, Error> {
         let expected = self.resolve_computation(definitions, &self.substitution.apply(expected))?;
         if let Expression::Op(fields) = &expr.value {
-            let record = sugar::operation_record(fields, expr.range.clone())?;
-            return self.check_expression(definitions, &record, &expected, environment, types);
+            return self.operation(
+                definitions,
+                expr,
+                fields,
+                Some(&expected),
+                environment,
+                types,
+            );
         }
         if let Expression::Limit(fields) = &expr.value {
             let record = Node {
@@ -1376,9 +1415,9 @@ impl Checker {
                 supplied.extend_from_slice(arguments);
                 self.call(definitions, value, &supplied, environment, types, None)
             }
-            Expression::Op(_) => Err(Error(
-                "operation descriptor requires a source-defined contract annotation".into(),
-            )),
+            Expression::Op(fields) => {
+                self.operation(definitions, expression, fields, None, environment, types)
+            }
             Expression::Ir { bindings, value } => self.block(
                 definitions,
                 &Block {
@@ -1454,9 +1493,9 @@ impl Checker {
                 _ => (None, annotation),
             };
             if let Some(premises) = premises {
-                self.propositions(definitions, premises, &local, &types)?;
+                self.propositions(definitions, premises, &local, &types, true)?;
             }
-            self.propositions(definitions, heads, &local, &types)?;
+            self.propositions(definitions, heads, &local, &types, false)?;
             let binding = if let Some(premises) = premises {
                 Some(premises)
             } else if let Expression::Binary {
@@ -1522,12 +1561,20 @@ impl Checker {
         expression: &Expr,
         local: &Environment,
         types: &Types,
+        premise: bool,
     ) -> Result<(), Error> {
         match &expression.value {
             Expression::Tuple(items) => {
                 for item in items {
-                    self.propositions(definitions, item, local, types)?;
+                    self.propositions(definitions, item, local, types, premise)?;
                 }
+            }
+            Expression::Unary {
+                op: UnaryOp::Not,
+                value,
+            } if premise => {
+                let ty = self.proposition_term(definitions, value, local, types)?;
+                self.unify(&ty, &con(FACT))?;
             }
             Expression::Binary {
                 op: BinaryOp::Equal,
@@ -1981,7 +2028,10 @@ fn clause_annotation(annotation: &Expr) -> bool {
             op: BinaryOp::Equal,
             ..
         }
-        | Expression::Call { .. } => true,
+        | Expression::Call { .. }
+        | Expression::Unary {
+            op: UnaryOp::Not, ..
+        } => true,
         Expression::Tuple(items) => items.iter().any(clause_annotation),
         Expression::Binary {
             op: BinaryOp::Arrow,

@@ -126,7 +126,7 @@ impl<'t> TypeUnifier<'t> {
                 .try_for_each(|(a, b)| self.unify(a, b));
         }
         // A variable in a trailing optional argument also stands for its
-        // absence: `ptr.p<T>` takes `ptr.p` and leaves `T` free.
+        // absence, leaving the corresponding variable free.
         if lhs.ctor() == rhs.ctor() {
             let (short, long) = match lhs.args().len() < rhs.args().len() {
                 true => (&lhs, &rhs),
@@ -134,7 +134,7 @@ impl<'t> TypeUnifier<'t> {
             };
             let optional_tail = matches!(
                 store.ctor_info(lhs.ctor()).params.last(),
-                Some((_, Param::Opt(_)))
+                Some((_, Param::Opt(_) | Param::Optional(_)))
             );
             if optional_tail
                 && long.args().len() == short.args().len() + 1

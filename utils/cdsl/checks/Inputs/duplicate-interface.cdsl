@@ -1,0 +1,11 @@
+pub mod contracts {
+    pub interface Tag {}
+}
+
+use contracts::Tag;
+use contracts::Tag as Alias;
+
+pub let operation = op {
+    signature: () -> Bool,
+    interfaces: { Tag: {}, Alias: {} },
+};

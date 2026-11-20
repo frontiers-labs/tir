@@ -15,7 +15,13 @@ enum Input {
 struct Options {
     input: Input,
     output: String,
-    typed: bool,
+    emit: Emit,
+}
+
+enum Emit {
+    Ast,
+    Typed,
+    Binary,
 }
 
 fn options() -> Result<Options, Error> {
@@ -27,7 +33,7 @@ fn options() -> Result<Options, Error> {
     let mut output = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--cargo" => {
+            "--cargo" | "--crate" => {
                 package = Some(
                     args.next()
                         .ok_or_else(|| Error(format!("{arg} needs a package name")))?,
@@ -59,10 +65,11 @@ fn options() -> Result<Options, Error> {
             _ => return Err(Error(format!("unknown argument {arg}"))),
         }
     }
-    let typed = match emit.as_deref() {
-        Some("ast") => false,
-        Some("typed") => true,
-        _ => return Err(Error("expected --emit ast or typed".into())),
+    let emit = match emit.as_deref() {
+        Some("ast") => Emit::Ast,
+        Some("typed") => Emit::Typed,
+        Some("bin") | Some("binary") => Emit::Binary,
+        _ => return Err(Error("expected --emit ast, typed or bin".into())),
     };
     let output = output.ok_or_else(|| Error("expected --output <file or ->".into()))?;
     let input = match (package, file, selector) {
@@ -95,7 +102,7 @@ fn options() -> Result<Options, Error> {
     Ok(Options {
         input,
         output,
-        typed,
+        emit,
     })
 }
 
@@ -105,17 +112,17 @@ fn run() -> Result<(), Error> {
         Input::Package { name, selector } => resolve_crate(&name)?.select(&selector)?,
         Input::File(file) => compile_file(&file)?,
     };
-    let text = if options.typed {
-        program.lower()?.render()?
-    } else {
-        program.render()
+    let bytes = match options.emit {
+        Emit::Ast => program.render().into_bytes(),
+        Emit::Typed => program.lower()?.render()?.into_bytes(),
+        Emit::Binary => program.lower()?.to_binary()?,
     };
     if options.output == "-" {
         io::stdout()
-            .write_all(text.as_bytes())
+            .write_all(&bytes)
             .map_err(|error| Error(error.to_string()))
     } else {
-        fs::write(&options.output, text)
+        fs::write(&options.output, bytes)
             .map_err(|error| Error(format!("{}: {error}", options.output)))
     }
 }

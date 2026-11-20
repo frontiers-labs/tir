@@ -1,10 +1,28 @@
-use std::{error::Error, path::PathBuf};
+use std::{collections::BTreeMap, error::Error, path::PathBuf};
+use tir_cdsl::{Schema, ast::Declaration};
+
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("cargo:rerun-if-changed=src/ir-schema.egg");
-    let mut engine = tir_egglog::EGraph::default();
-    let commands = engine.parse_program("ir-schema.egg", include_str!("src/ir-schema.egg"))?;
-    engine.run_program(commands)?;
-    let path = PathBuf::from(std::env::var("OUT_DIR")?).join("ir-schema.bin");
-    std::fs::write(path, engine.save_program_with_schema()?)?;
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
+    let source = manifest.join("src/ir.cdsl");
+    println!("cargo:rerun-if-changed={}", source.display());
+    let checked = tir_cdsl::compile_file(&source)?.lower()?;
+    let mut names = BTreeMap::from([
+        (vec!["equal_id".into()], "bool-=".into()),
+        (vec!["less_id".into()], "bool-<".into()),
+        (vec!["index".into()], "ir-index".into()),
+    ]);
+    for module in &checked.artifact().modules {
+        if module.path == ["tables"] {
+            for declaration in &module.ast.declarations {
+                if let Declaration::Axiom { name, .. } = &declaration.value {
+                    names.insert(vec!["tables".into(), name.clone()], name.clone());
+                }
+            }
+        }
+    }
+    let schema = Schema::with_names(&checked, names)?;
+    let output = PathBuf::from(std::env::var("OUT_DIR")?);
+    std::fs::write(output.join("ir-schema.bin"), schema.to_bytes()?)?;
+    std::fs::write(output.join("ir-rules.bin"), schema.compile_bytes(&checked)?)?;
     Ok(())
 }

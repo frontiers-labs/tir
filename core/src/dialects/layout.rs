@@ -88,7 +88,7 @@ static MAX: Ctor = nat("max", BINARY);
 static POW2_CEIL: Ctor = nat("pow2_ceil", &[("a", Param::One(Kind::Nat))]);
 
 /// The size and alignments a spec entry gives the types its key matches.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct TypeEntry {
     /// The type, or a pattern: a variable stands for any width, and an
     /// argument the key leaves out matches anything.

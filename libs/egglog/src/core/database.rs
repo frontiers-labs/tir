@@ -450,6 +450,16 @@ impl Database {
         self.tables.len()
     }
 
+    /// Generation of the live rows of one table, including removals.
+    pub fn table_version(&self, table: TableId) -> u64 {
+        self.tables[table.index()].version()
+    }
+
+    /// Number of live rows, including subsumed rows.
+    pub fn row_count(&self, table: TableId) -> usize {
+        self.tables[table.index()].live_len()
+    }
+
     /// A count that grows with every write to the first `tables` tables, so
     /// equal counts mean none of them changed in between.
     pub fn writes_to_first(&self, tables: usize) -> u64 {

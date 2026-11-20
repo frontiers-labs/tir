@@ -22,6 +22,7 @@ pub(crate) struct Table {
     subsumed: Vec<u64>,
     keys: KeyMap,
     pub(crate) indexes: Vec<Index>,
+    pub(super) unique_keys: Vec<super::unique::UniqueKey>,
     dead: usize,
     // Bumped by every change to the set of live rows; an index built at an
     // older version is stale.
@@ -53,6 +54,7 @@ impl Clone for Table {
                     false => Index::new(index.order.clone(), index.key_len),
                 })
                 .collect(),
+            unique_keys: self.unique_keys.clone(),
             dead: self.dead,
             version: self.version,
             renumbered: 0,
@@ -75,6 +77,7 @@ impl Table {
             subsumed: Vec::new(),
             keys: KeyMap::new(schema.keys, 0),
             indexes: Vec::new(),
+            unique_keys: Vec::new(),
             dead: 0,
             version: 0,
             renumbered: 0,
@@ -87,6 +90,10 @@ impl Table {
 
     pub(crate) fn len(&self) -> usize {
         self.ts.len()
+    }
+
+    pub(crate) fn live_len(&self) -> usize {
+        self.len() - self.dead
     }
 
     pub(crate) fn is_live(&self, row: u32) -> bool {
