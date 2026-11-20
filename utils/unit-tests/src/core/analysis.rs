@@ -4,16 +4,8 @@ use tir::{
     analysis::DefUse,
     builtin::{ops, IntegerType, UnitType},
     func::ops as func_ops,
-    Analysis, AnalysisManager, Context, OpId, Operation,
+    AnalysisManager, Context, Operation,
 };
-
-pub(crate) struct Simple;
-
-impl Analysis for Simple {
-    fn build(_: &AnalysisManager, _: &Context, _: OpId) -> Self {
-        Simple
-    }
-}
 
 #[test]
 fn chains_over_ssa_ops() {
@@ -42,8 +34,7 @@ fn chains_over_ssa_ops() {
         .at(b.end())
         .build();
 
-    let am = AnalysisManager::new();
-    let du = am.get::<DefUse>(&context, func.id());
+    let du = DefUse::new(&context, func.id());
 
     // The block argument is read twice by the add and defined by no op.
     assert_eq!(context.users_of(arg_id), [sum.id(), sum.id()]);
@@ -59,4 +50,64 @@ fn chains_over_ssa_ops() {
 
     assert!(!context.is_used(dead.result()));
     assert_eq!(context.use_count(arg_id), 2);
+}
+
+#[test]
+fn catalog_producers_publish_complete_current_facts() {
+    let context = Context::with_default_dialects();
+    let root =
+        tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(&context, "module { module_end }")
+            .unwrap()
+            .id();
+    let edit = |f: fn(&mut tir_egglog::Database, tir_egglog::TableId)| {
+        let db = &mut *context.egraph();
+        let input = db.database().table("Operand").unwrap();
+        f(db.database_mut(), input);
+    };
+    edit(|db, input| {
+        for (slot, value) in [(0_i64, -2_i64), (1, 9), (2, 9)] {
+            let row = [db.base(0_i64), db.base(slot), db.base(value)];
+            db.insert(input, &row).unwrap();
+        }
+    });
+    AnalysisManager::install(&context, r#"
+        pub let Values: Int -> Prop;
+        pub let Members: (Int, std::table::IntSet) -> Prop;
+        pub let Count: (Int, Int) -> Prop;
+        pub let Conflict: (Int, Int) -> Prop;
+        pub mod tables {
+            pub let Members: std::Table<Int, std::table::IntSet, std::Merge::SetUnion>;
+            pub let Conflict: std::Table<Int, Int, std::Merge::Unique>;
+        }
+        pub mod source {
+            pub let input<root, slot, v>:
+                (ir::AnalysisRoot(root), ir::Operand(0, slot, v), ir::equal_id(slot, slot) == true) -> Values(v);
+        }
+        pub mod bounds {
+            pub let collect<v>: Values(v) -> Members(0, std::table::singleton(v));
+        }
+        pub mod answers {
+            pub let count<vs>: Members(0, vs) -> Count(0, std::table::cardinality(vs));
+            pub let empty: !Values(9) -> Count(0, 0);
+        }
+        pub mod fail {
+            pub let conflict<v>: Values(v) -> Conflict(0, v);
+        }
+    "#).unwrap();
+    let require = |table| AnalysisManager::require(&context, root, table);
+    let read = |table| {
+        let view = require(table).unwrap();
+        let row = view.rows().next().unwrap();
+        (view.base_value::<i64>(row[1]), row.timestamp())
+    };
+    let count = read("Count");
+    assert_eq!(count.0, 2);
+    assert_eq!(read("Count"), count);
+    assert!(require("Conflict").is_err());
+    edit(|db, input| {
+        assert_eq!(db.row_count(db.table("Conflict").unwrap()), 0);
+        db.clear(input);
+    });
+    assert_eq!(read("Count").0, 0);
+    assert_eq!(require("Conflict").unwrap().rows().count(), 0);
 }

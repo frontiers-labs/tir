@@ -13,7 +13,6 @@ use std::collections::HashMap;
 
 use tir_adt::IndexMap;
 
-use crate::analysis::{Analysis, AnalysisManager};
 use crate::attributes::AttributeValue;
 use crate::builtin::{GlobalOp, NamedType, TypeDefOp};
 use crate::ty::TypeArg;
@@ -378,12 +377,6 @@ pub fn format_symbol(context: &Context, name: &str, signature: Option<&[TypeId]>
             let types: Vec<_> = types.iter().map(|ty| context.type_to_string(*ty)).collect();
             format!("@{name}({})", types.join(", "))
         }
-    }
-}
-
-impl Analysis for SymbolTable {
-    fn build(_analyses: &AnalysisManager, context: &Context, op: OpId) -> Self {
-        Self::build(context, op)
     }
 }
 

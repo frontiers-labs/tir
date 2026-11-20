@@ -12,6 +12,7 @@ test = false
 doctest = false
 
 [dependencies]
+tir-cdsl.workspace = true
 tir-macros.workspace = true
 tir-egglog.workspace = true
 tir-ir-schema.workspace = true

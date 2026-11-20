@@ -1,5 +1,7 @@
 //! Typed rules grouped in rulesets, and their compilation into a [`Program`].
 
+use std::collections::BTreeSet;
+
 use crate::ast::{
     Action, Actions, Command, Expr, Fact, Facts, Literal, Rewrite, Rule, RuleEvalMode, RunConfig,
     Schedule,
@@ -45,9 +47,76 @@ pub struct Rules {
     rulesets: Vec<Ruleset>,
 }
 
+/// The table footprint of a checked, restartable ruleset.
+pub struct Producer {
+    pub schedule: Schedule,
+    pub reads: BTreeSet<TableId>,
+    pub writes: BTreeSet<TableId>,
+}
+
 impl Rules {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Compile materializing rulesets and derive their footprints from typed rules.
+    pub fn compile_producers(&self, db: &Database) -> Result<(Program, Vec<Producer>), Error> {
+        let mut producers = Vec::new();
+        for set in &self.rulesets {
+            if set.rules.is_empty() {
+                continue;
+            }
+            let mut reads = BTreeSet::new();
+            let mut writes = BTreeSet::new();
+            let schema = db.schema();
+            let ordinary = |table| schema.table(table).kind() != TableKind::Constructor;
+            let pure = |id| {
+                schema
+                    .primitive_contexts(id)
+                    .contains(&crate::Context::Pure)
+            };
+            for (_, rule) in &set.rules {
+                let tables = |atom: &hir::Atom| match atom.target {
+                    Target::Table(table) => Some(table),
+                    Target::Prim(_) => None,
+                };
+                reads.extend(rule.premise.iter().chain(&rule.absent).filter_map(tables));
+                for action in &rule.actions {
+                    match action {
+                        hir::Act::Insert(table, _)
+                            if ordinary(*table)
+                                && schema.table(*table).merge() != Some(&crate::Merge::Union) =>
+                        {
+                            writes.insert(*table);
+                        }
+                        hir::Act::Lookup(table, _)
+                            if ordinary(*table)
+                                && schema.table(*table).default_value().is_none() =>
+                        {
+                            reads.insert(*table);
+                        }
+                        hir::Act::Prim(id, _) if pure(*id) => {}
+                        _ => return Err(Error::Unsupported("invalid analysis action".into())),
+                    }
+                }
+            }
+            if writes
+                .intersection(&reads)
+                .any(|&id| matches!(schema.table(id).merge(), Some(crate::Merge::Prim(..))))
+            {
+                return Err(Error::Unsupported(
+                    "analysis reads its own unfinished aggregate".into(),
+                ));
+            }
+            producers.push(Producer {
+                schedule: Schedule::saturate(set.name.as_str()),
+                reads,
+                writes,
+            });
+        }
+        let mut program = self.compile(db)?;
+        program.set_naive(true);
+        Ok((program, producers))
     }
 
     /// Declares an empty ruleset; adding a rule declares its ruleset too.
