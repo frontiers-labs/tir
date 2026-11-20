@@ -1,14 +1,15 @@
-// RUN: not tir opt --verify %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
+// CHECK: failed typechecking: signature
 
-// fp.add requires its result to share the operand type; f32 operands with an f64
-// result fails.
+// fp.add must preserve the operand format.
 
 module {
-  %fn_f = func.func @f() -> !f64 {
-    %0 = fp.constant {bits = 1069547520} : !f32
-    %1 = fp.constant {bits = 1075838976} : !f32
-    %2 = fp.add %0, %1 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f64
-    func.return %2
+  %fn_f = func.func @f(%x: !f32, %y: !f32) -> !f64 {
+    %0 = fp.capture %x : !fp.computation<!f32, nearest_even, separate>
+    %1 = fp.capture %y : !fp.computation<!f32, nearest_even, separate>
+    %2 = fp.add %0, %1 : !fp.computation<!f64, nearest_even, separate>
+    %3 = fp.materialize %2 : !f64
+    func.return %3
   }
   module_end
 }

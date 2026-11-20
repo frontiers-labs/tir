@@ -12,8 +12,7 @@
 
 use std::ops::Range;
 
-use crate::attributes::{AttributeValue, Predicate};
-use crate::builtin::{AddIOp, CmpIOp, IntegerType};
+use crate::attributes::AttributeValue;
 use crate::parse::Span;
 use crate::parse::common::Cursor;
 use crate::parse::text::Parser;
@@ -58,10 +57,6 @@ pub fn region_list_len(context: &Context, op: &OpHandle, index: usize, ports: bo
     } else {
         region.results().len()
     }
-}
-
-fn fail(message: String) -> Error {
-    Error::VerificationError(message)
 }
 
 /// The attribute a gamma names its cases in; see [`crate::Gamma::cases`].
@@ -124,94 +119,8 @@ pub fn signed_bits(bits: u64, width: u32) -> i64 {
     ((bits << shift) as i64) >> shift
 }
 
-fn verify_gamma_cases(
-    context: &Context,
-    op: &OpHandle,
-    name: &str,
-    predicate: ValueId,
-    arms: usize,
-) -> Result<(), Error> {
-    let Some(attribute) = op.attr(GAMMA_CASES) else {
-        return Ok(());
-    };
-    let AttributeValue::Array(items) = attribute else {
-        return Err(fail(format!("{name} cases must be an array")));
-    };
-    if items.len() + 1 != arms {
-        return Err(fail(format!(
-            "{name} names {} cases for {arms} arms: every arm but the default has one",
-            items.len()
-        )));
-    }
-    let width = predicate_width(context, predicate);
-    if width == 1 {
-        return Err(fail(format!(
-            "{name} on a one-bit predicate indexes its arms and names no cases"
-        )));
-    }
-    let mut seen = std::collections::HashSet::new();
-    for item in items.iter() {
-        let &AttributeValue::UInt(bits) = item else {
-            return Err(fail(format!("{name} cases must be unsigned bit patterns")));
-        };
-        if truncate_bits(bits as i64, width) != bits {
-            return Err(fail(format!(
-                "{name} case {bits:#x} does not fit its {width}-bit predicate"
-            )));
-        }
-        if !seen.insert(bits) {
-            return Err(fail(format!("{name} names case {bits:#x} twice")));
-        }
-    }
-    Ok(())
-}
-
-fn reach(range: &Range<usize>, len: usize) -> usize {
-    if range.end <= len {
-        range.len()
-    } else {
-        len.saturating_sub(range.start)
-    }
-}
-
-fn check_types(
-    context: &Context,
-    name: &str,
-    expected: &[ValueId],
-    found: &[ValueId],
-    what: &str,
-    against: &str,
-) -> Result<(), Error> {
-    for (index, (&expected, &found)) in expected.iter().zip(found).enumerate() {
-        if context.get_value(expected).ty() != context.get_value(found).ty() {
-            return Err(fail(format!(
-                "{name} {what} {index} must have the type of {against} {index}"
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn slice(values: &[ValueId], range: &Range<usize>) -> Vec<ValueId> {
     values[range.start.min(values.len())..range.end.min(values.len())].to_vec()
-}
-
-fn names_same(context: &Context, found: ValueId, declared: ValueId) -> bool {
-    if found == declared {
-        return true;
-    }
-    let constant = |value: ValueId| {
-        context
-            .get_value(value)
-            .defining_op()
-            .filter(|&op| context.has_operation(op))
-            .and_then(|op| context.get_op(op).as_interface::<dyn crate::ConstantLike>())
-            .map(|op| op.constant_value())
-    };
-    match (constant(found), constant(declared)) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    }
 }
 
 /// The binding a loop or a gate declares: what it carries in, through and out.
@@ -353,184 +262,6 @@ pub fn forwards_state(chain: &StateChain) -> bool {
             .iter()
             .zip(&chain.exits)
             .all(|(port, exit)| port == exit)
-}
-
-/// Checks a theta's declared alignment: five ranges of one length, one type per
-/// offset, and a boolean predicate.
-pub fn verify_theta(
-    context: &Context,
-    op: &OpHandle,
-    name: &str,
-    body: RegionId,
-    binding: &Binding,
-    predicate: usize,
-) -> Result<(), Error> {
-    let region = context.get_region(body);
-    let (ports, results) = (region.ports(), region.results());
-    let ports: Vec<ValueId> = ports.iter().map(crate::Value::id).collect();
-    let (operands, op_results) = (op.operands(), op.results());
-    let n = binding.operands.len();
-
-    let Some(&decides) = results.get(predicate) else {
-        return Err(fail(format!("{name} body must produce a predicate")));
-    };
-    if context.get_value(decides).ty() != IntegerType::new(context, 1) {
-        return Err(fail(format!("{name} predicate must have type i1")));
-    }
-    let counts = [
-        (reach(&binding.ports, ports.len()), "ports"),
-        (reach(&binding.continue_, results.len()), "continue values"),
-        (reach(&binding.exit, results.len()), "exit values"),
-        (reach(&binding.results, op_results.len()), "results"),
-    ];
-    for (found, what) in counts {
-        if found != n {
-            return Err(fail(format!(
-                "{name} carries {n} values but has {found} {what}"
-            )));
-        }
-    }
-    let inits = slice(&operands, &binding.operands);
-    let carried = slice(&ports, &binding.ports);
-    check_types(context, name, &inits, &carried, "port", "init")?;
-    check_types(
-        context,
-        name,
-        &carried,
-        &slice(&results, &binding.continue_),
-        "continue value",
-        "port",
-    )?;
-    check_types(
-        context,
-        name,
-        &carried,
-        &slice(&results, &binding.exit),
-        "exit value",
-        "port",
-    )?;
-    check_types(
-        context,
-        name,
-        &carried,
-        &slice(&op_results, &binding.results),
-        "result",
-        "port",
-    )
-}
-
-/// Checks a gamma's declared alignment on every arm: ports typed like the
-/// forwarded operands, results typed like the op's. An arm's port and result
-/// lists are aligned whole, so each arm is read in full rather than through
-/// the ranges arm 0 gave the binding.
-pub fn verify_gamma(
-    context: &Context,
-    op: &OpHandle,
-    name: &str,
-    predicate: ValueId,
-    arms: &[RegionId],
-    binding: &Binding,
-) -> Result<(), Error> {
-    if arms.is_empty() {
-        return Err(fail(format!("{name} needs at least one arm")));
-    }
-    verify_gamma_cases(context, op, name, predicate, arms.len())?;
-    let inputs = slice(&op.operands(), &binding.operands);
-    let results = slice(&op.results(), &binding.results);
-    for (index, &arm) in arms.iter().enumerate() {
-        let region = context.get_region(arm);
-        let ports: Vec<ValueId> = region.ports().iter().map(crate::Value::id).collect();
-        let produced = region.results();
-        if ports.len() != inputs.len() {
-            return Err(fail(format!(
-                "{name} arm {index} takes {} values but the op forwards {}",
-                ports.len(),
-                inputs.len()
-            )));
-        }
-        if produced.len() != results.len() {
-            return Err(fail(format!(
-                "{name} arm {index} produces {} values but the op produces {}",
-                produced.len(),
-                results.len()
-            )));
-        }
-        let arm_name = format!("{name} arm {index}");
-        check_types(context, &arm_name, &inputs, &ports, "port", "input")?;
-        check_types(context, &arm_name, &results, &produced, "value", "result")?;
-    }
-    let (forwarded, joined) = (
-        context.states_among(&inputs).len(),
-        context.states_among(&results).len(),
-    );
-    if forwarded != joined {
-        return Err(fail(format!(
-            "{name} forwards {forwarded} states but joins {joined}: each chain enters and leaves once"
-        )));
-    }
-    Ok(())
-}
-
-/// Checks the shape `counted:` pins onto a theta: the predicate is
-/// `cmpi slt(counter, ub)`, the counter continues as `addi(counter, step)`, and
-/// every port leaves the loop unchanged.
-#[allow(clippy::too_many_arguments)]
-pub fn verify_counted(
-    context: &Context,
-    name: &str,
-    body: RegionId,
-    binding: &Binding,
-    predicate: usize,
-    induction: usize,
-    upper_bound: ValueId,
-    step: ValueId,
-) -> Result<(), Error> {
-    let region = context.get_region(body);
-    let ports: Vec<ValueId> = region.ports().iter().map(crate::Value::id).collect();
-    let results = region.results();
-    if induction >= binding.ports.len() {
-        return Err(fail(format!(
-            "{name} carries no port {induction} for its counter"
-        )));
-    }
-    let counter = ports[binding.ports.start + induction];
-
-    let predicate = context.get_value(results[predicate]).defining_op();
-    let compares = predicate.is_some_and(|op| {
-        let op = context.get_op(op);
-        op.is::<CmpIOp>()
-            && op.attr("predicate") == Some(AttributeValue::Predicate(Predicate::Slt))
-            && matches!(op.operands().as_slice(),
-                [lhs, rhs] if *lhs == counter && names_same(context, *rhs, upper_bound))
-    });
-    if !compares {
-        return Err(fail(format!(
-            "{name} predicate must be cmpi slt of the counter and the upper bound"
-        )));
-    }
-    let next = results[binding.continue_.start + induction];
-    let advances = context.get_value(next).defining_op().is_some_and(|op| {
-        let op = context.get_op(op);
-        op.is::<AddIOp>()
-            && matches!(op.operands().as_slice(),
-                [lhs, rhs] if (*lhs == counter && names_same(context, *rhs, step))
-                    || (*rhs == counter && names_same(context, *lhs, step)))
-    });
-    if !advances {
-        return Err(fail(format!("{name} must advance the counter by the step")));
-    }
-    for (index, (&exit, &port)) in slice(&results, &binding.exit)
-        .iter()
-        .zip(&slice(&ports, &binding.ports))
-        .enumerate()
-    {
-        if exit != port {
-            return Err(fail(format!(
-                "{name} exit value {index} must be port {index}"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn print_pairs(

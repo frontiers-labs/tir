@@ -7,10 +7,10 @@ use tir::backend::binary::{
     FixupTarget, Guard, PatchField,
 };
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
-use tir::backend::{RegAssignment, RegClassType};
+use tir::backend::RegClassType;
 use tir::{Context, NewOp, OpHandle, Operation};
 
-use super::fixtures::{machine_op, r, reg_class};
+use super::fixtures::{machine_op, r, reg_class, RD_RS_PORTS};
 
 fn phys(index: u16) -> AttributeValue {
     AttributeValue::Register(RegisterAttr::Physical { class: r(), index })
@@ -51,6 +51,7 @@ const fn patch(attr: &'static str, range: (i64, i64), runs: &'static [FieldRun])
         attr,
         range: Some(range),
         dropped_mask: 0,
+        nonzero: false,
         runs,
     }
 }
@@ -64,10 +65,10 @@ const fn decoded(
 }
 
 fn enc(op: &OpHandle, spec: &EncodeSpec) -> Option<EncodedInst> {
-    encode_with(op, spec, &RegAssignment::default()).ok()
+    encode_with(op, spec)
 }
 
-machine_op!(TestInstOp, "test", "inst", &[]);
+machine_op!(TestInstOp, "test", "inst", &RD_RS_PORTS, &[]);
 
 fn op_with(attrs: Vec<(&str, AttributeValue)>) -> (Context, tir::OpHandle) {
     let context = Context::with_default_dialects();
@@ -93,7 +94,7 @@ fn build(
         vec![],
         attributes,
     );
-    context.add_operation(tir::InsertionPoint::Root, instance)
+    context.add_operation(instance)
 }
 
 // `lui rd, imm`: 55 | rd << 7 | (imm & 0xFFFFF) << 12
@@ -120,8 +121,6 @@ fn encode_scatters_register_and_immediate() {
         (55u32 | (5 << 7) | (0x12345 << 12)).to_le_bytes()
     );
     assert!(encoded.fixups.is_empty());
-    _context.create_nodes_region(vec![], vec![op.id], vec![]);
-    assert!(enc(&op, &LUI).is_none());
 }
 
 #[test]
@@ -129,8 +128,7 @@ fn encode_rejects_out_of_range_and_unallocated() {
     let (_context, op) = op_with(vec![("rd", phys(5)), ("imm", AttributeValue::Int(1048576))]);
     assert!(enc(&op, &LUI).is_none());
 
-    // A slot holding a value the assignment does not place has no register to
-    // encode.
+    // SSA register results cannot be encoded directly.
     let context = Context::with_default_dialects();
     let ty = RegClassType::new(&context, r());
     let unplaced = context.create_value(ty, None).id();
@@ -140,6 +138,10 @@ fn encode_rejects_out_of_range_and_unallocated() {
         vec![unplaced],
     );
     assert!(enc(&op, &LUI).is_none());
+
+    let (_context, op) = op_with(vec![("rd", phys(5)), ("imm", AttributeValue::Int(1))]);
+    let encoded = enc(&op, &LUI).expect("assembly encodes");
+    assert_eq!(encoded.bytes, (55u32 | (5 << 7) | (1 << 12)).to_le_bytes());
 }
 
 // `c.addi4spn rd', sp, nzuimm`: the field holds `imm[9:2]`, so the operand is
@@ -311,10 +313,10 @@ fn encode_gives_a_fixup_the_widest_shape_and_its_patch() {
 #[test]
 fn encoded_width_is_the_selected_shapes_width() {
     let (_context, op) = op_with(vec![("rd", phys(1)), ("rs", phys(2))]);
-    assert_eq!(encoded_width(&op, &MOV_RR, &RegAssignment::default()), 2);
+    assert_eq!(encoded_width(&op, &MOV_RR), 2);
 
     let (_context, op) = op_with(vec![("rd", phys(9)), ("rs", phys(2))]);
-    assert_eq!(encoded_width(&op, &MOV_RR, &RegAssignment::default()), 3);
+    assert_eq!(encoded_width(&op, &MOV_RR), 3);
 }
 
 // `test rd, imm`: the shape is chosen by a test over the immediate's bit

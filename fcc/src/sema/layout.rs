@@ -29,7 +29,7 @@ pub struct Layouts {
 
 impl Layouts {
     pub(super) fn new(context: &Context, spec: AttributeValue) -> Self {
-        let module = b::module(context, None, Default::default(), tir::InsertionPoint::Root);
+        let module = b::module(context, None).build();
         Self {
             context: context.clone(),
             module,
@@ -45,13 +45,9 @@ impl Layouts {
             RecordKind::Union => AggregateKind::Union,
         };
         let body = AggregateType::get(&self.context, kind, fields).expect("a record body");
-        type_def(
-            &self.context,
-            name,
-            Some(body),
-            Default::default(),
-            self.module.body().end(),
-        );
+        type_def(&self.context, name, Some(body))
+            .at(self.module.body().end())
+            .build();
         self.defined.insert(name.to_string());
         *self.layout.get_mut() = None;
     }
@@ -70,14 +66,14 @@ impl Layouts {
     // Records still without a definition get an incomplete one.
     pub(super) fn declare_incomplete<'a>(&mut self, names: impl Iterator<Item = &'a str>) {
         for name in names.filter(|name| !self.defined.contains(*name)) {
-            type_def(
-                &self.context,
-                name,
-                None,
-                Default::default(),
-                self.module.body().end(),
-            );
+            type_def(&self.context, name, None)
+                .at(self.module.body().end())
+                .build();
         }
+    }
+
+    pub(super) fn is_defined(&self, name: &str) -> bool {
+        self.defined.contains(name)
     }
 
     // An identifier the IR does not spell a type of its own with.

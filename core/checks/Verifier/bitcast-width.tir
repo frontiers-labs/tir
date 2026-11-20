@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s
+// RUN: not tir opt %s
 
 // A bitcast preserves the complete bit pattern, so its source and result must
 // have the same width.

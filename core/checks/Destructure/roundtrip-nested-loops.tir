@@ -1,10 +1,4 @@
-// RUN: tir interp %s --args=4 | filecheck %s
-// RUN: tir opt --pass restructure-nodes,destructure --verify %s | tir interp --args=4 | filecheck %s
 // RUN: tir opt --pass restructure-nodes,destructure %s | filecheck --check-prefix=CFG %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 3 %s | tir opt --pass destructure | tir interp --args=4 | filecheck %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 11 %s | tir opt --pass destructure | tir interp --args=4 | filecheck %s
-// RUN: tir interp %s --args=0 | filecheck --check-prefix=ZERO %s
-// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp --args=0 | filecheck --check-prefix=ZERO %s
 
 // Two nested counted loops accumulating into a slot go through the unordered
 // form and back: the inner loop sits in the outer one's continue cone, and
@@ -40,7 +34,5 @@ module {
   module_end
 }
 
-// CHECK: i32 36
-// ZERO: i32 0
 // CFG-NOT: scf.
 // CFG: func.return

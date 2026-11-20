@@ -1,10 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass destructure --verify %s | filecheck %s
-// RUN: tir opt --pass destructure %s | tir interp --args=1,5 | filecheck --check-prefix=TAKEN %s
-// RUN: tir opt --pass destructure %s | tir interp --args=0,5 | filecheck --check-prefix=OTHER %s
-// RUN: tir interp %s --args=1,5 | filecheck --check-prefix=TAKEN %s
-// RUN: tir interp %s --args=0,5 | filecheck --check-prefix=OTHER %s
 
 // A two-arm gate on an `i1` branches on the predicate itself: true is arm 1.
 // Each arm is a block entered on its ports, both leaving for the merge block
@@ -43,6 +39,3 @@ module {
 // CHECK-NEXT: %[[T:[0-9]+]] = addi %[[X]], %[[X]] : !i32
 // CHECK-NEXT: %[[TS:[0-9]+]] = ptr.store %[[T]], %[[SLOT]] state(%[[TD]])
 // CHECK-NEXT: cfg.br ^[[MERGE]](%[[T]], %[[TS]] : !i32, !state<memory>)
-
-// TAKEN: i32 20
-// OTHER: i32 10

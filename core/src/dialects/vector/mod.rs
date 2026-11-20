@@ -7,7 +7,7 @@
 use tir_symbolic::term::{no_carrier, valid};
 
 use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
-use crate::{Context, Error, TypeId, dialect, operation};
+use crate::{Context, Error, TypeId, dialect};
 
 use crate as tir;
 
@@ -149,61 +149,17 @@ impl VectorType {
 }
 
 macro_rules! vector_binop {
-    ($op:ident, $name:tt, $sem:tt) => {
-        operation! {
-            $op {
-                name: $name,
-                dialect: "vector",
-                scheme: "forall N: nat, T. (vector.v<N, T>, vector.v<N, T>, index?) -> vector.v<N, T>",
-                verifier: "true",
-                operands: O { lhs, rhs, vl },
-                results: R { result },
-                sem: $sem,
-            }
-        }
-
-        impl tir::Verifiable for $op {
-            fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-                same_vector(context, &self.0)
-            }
-        }
+    ($op:ident, $definition:ident) => {
+        $definition!();
     };
 }
 
 // An elementwise operation works lane by lane: its operands and its result
 // are one vector type.
-fn same_vector(context: &Context, op: &tir::OpHandle) -> Result<(), Error> {
-    let ty = |value: &tir::ValueId| context.get_value(*value).ty();
-    let result = ty(&op.results()[0]);
-    if op
-        .operands()
-        .iter()
-        .take(2)
-        .all(|value| ty(value) == result)
-    {
-        return Ok(());
-    }
-    Err(Error::VerificationError(format!(
-        "vector.{} operands must have the result's vector type",
-        op.name()
-    )))
-}
 
-vector_binop!(
-    AddOp,
-    "add",
-    "(set result (concat (map (zip (split lhs $get_vlen $get_sew) (split rhs $get_vlen $get_sew)) (lambda (a b) (add a b)))))"
-);
-vector_binop!(
-    SubOp,
-    "sub",
-    "(set result (concat (map (zip (split lhs $get_vlen $get_sew) (split rhs $get_vlen $get_sew)) (lambda (a b) (sub a b)))))"
-);
-vector_binop!(
-    MulOp,
-    "mul",
-    "(set result (concat (map (zip (split lhs $get_vlen $get_sew) (split rhs $get_vlen $get_sew)) (lambda (a b) (mul a b)))))"
-);
+vector_binop!(AddOp, __cdsl_vector_AddOp);
+vector_binop!(SubOp, __cdsl_vector_SubOp);
+vector_binop!(MulOp, __cdsl_vector_MulOp);
 
 // `vector_len(avl)` yields the number of lanes the target grants for a request
 // of `avl` — `min(avl, VLMAX)` on RVV, where it selects as `vsetvli rd, avl`.
@@ -212,61 +168,4 @@ vector_binop!(
 // elementwise ops' `vl` operands (EVL-style tail folding, no epilogue loop).
 // The `sew` attribute names the element width the grant is for — how many
 // lanes fit is a function of it (VLMAX = VLEN / SEW · LMUL).
-operation! {
-    VectorLenOp {
-        name: "vector_len",
-        dialect: "vector",
-        scheme: "(index) -> index",
-        operands: O { avl },
-        results: R { result },
-        attributes: A {
-            sew: "Int",
-        },
-    }
-}
-
-fn vlen_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
-    let context = op.context.clone();
-    let ty = context.get_value(op.results()[0]).ty();
-    let length = VectorType::view(&context, ty).and_then(|t| t.length());
-    let Some(length) = length.filter(|_| op.operands().len() <= 2) else {
-        let n = g.add_node(tir::sem::SymKind::Symbol);
-        g.set_leaf_data(n, tir::sem::SymPayload::SymbolId(2));
-        return n;
-    };
-    let n = g.add_node(tir::sem::SymKind::Constant);
-    g.set_leaf_data(
-        n,
-        tir::sem::SymPayload::Int(tir_adt::APInt::new(32, u64::from(length))),
-    );
-    n
-}
-
-fn sew_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
-    let context = op.context.clone();
-    let ty = context.get_value(op.results()[0]).ty();
-    let width = VectorType::view(&context, ty)
-        .and_then(|t| crate::builtin::IntegerType::view(&context, t.element()))
-        .map_or(0, |i| i.width());
-    let n = g.add_node(tir::sem::SymKind::Constant);
-    g.set_leaf_data(n, tir::sem::SymPayload::Int(tir_adt::APInt::new(32, width)));
-    n
-}
-
-macro_rules! impl_vlen_hooks {
-    ($op:ty) => {
-        impl $op {
-            fn get_vlen(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
-                vlen_node(&self.0, g)
-            }
-
-            fn get_sew(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
-                sew_node(&self.0, g)
-            }
-        }
-    };
-}
-
-impl_vlen_hooks!(AddOp);
-impl_vlen_hooks!(SubOp);
-impl_vlen_hooks!(MulOp);
+__cdsl_vector_VectorLenOp!();

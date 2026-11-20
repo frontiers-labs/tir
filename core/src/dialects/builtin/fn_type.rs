@@ -1,10 +1,12 @@
+pub use super::generated::{
+    FnToPtrOp, FnToPtrOpBuilder, PtrToFnOp, PtrToFnOpBuilder, fn_to_ptr, ptr_to_fn,
+};
+
 use tir_symbolic::term::{no_carrier, valid};
 
 use crate::parse::common::Cursor;
 use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
 use crate::{Context, Error, TypeId};
-
-use crate as tir;
 
 static VARARGS: Ctor = Ctor::new(TypeCtor {
     dialect: "builtin",
@@ -146,37 +148,3 @@ impl FnType {
         }
     }
 }
-
-// Takes a function's address as data, for a language that stores function
-// pointers in memory. `!fn` values never live in memory themselves.
-tir::operation! {
-    FnToPtrOp {
-        name: "fn_to_ptr",
-        dialect: "builtin",
-        scheme: "(fn<_, _>) -> ptr.p<_>",
-        operands: O { callee },
-        results: R { result },
-        interfaces: [crate::Pure, crate::Speculatable],
-    }
-}
-
-impl crate::Speculatable for FnToPtrOp {}
-
-impl crate::Pure for FnToPtrOp {}
-
-// Recovers a callable function value from an address, asserting the signature
-// the call site expects. The inverse of `fn_to_ptr`.
-tir::operation! {
-    PtrToFnOp {
-        name: "ptr_to_fn",
-        dialect: "builtin",
-        scheme: "(ptr.p<_>) -> fn<_, _>",
-        operands: O { address },
-        results: R { result },
-        interfaces: [crate::Pure, crate::Speculatable],
-    }
-}
-
-impl crate::Speculatable for PtrToFnOp {}
-
-impl crate::Pure for PtrToFnOp {}

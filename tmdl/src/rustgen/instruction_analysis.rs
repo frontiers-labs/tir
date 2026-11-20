@@ -394,14 +394,3 @@ pub(crate) fn resolve_asm_templates(expr: &ast::Expr) -> Option<Vec<String>> {
         _ => None,
     }
 }
-
-pub(super) fn behavior_updates_fp_environment(expr: &ast::Expr) -> bool {
-    let mut updates = false;
-    crate::utils::visit_exprs(expr, &mut |expr| {
-        updates |= matches!(
-            expr,
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::FPFlags)
-        );
-    });
-    updates
-}

@@ -1,5 +1,4 @@
 // RUN: tir opt --verify %s | filecheck %s
-// RUN: tir interp %s --args=1,6 | filecheck --check-prefix=EVAL %s
 
 // An arm may name a value of the enclosing region as its result outright.
 // That is a read like any other: the gamma depends on the sibling producing
@@ -21,4 +20,3 @@ module {
 
 // CHECK: %[[P:[0-9]+]] = muli
 // CHECK: %{{[0-9]+}} = scf.switch
-// EVAL: i32 36

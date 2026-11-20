@@ -1,13 +1,5 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
-// RUN: tir interp %s -f main --args=0,5 | filecheck --check-prefix=TRUE %s
-// RUN: tir interp %s -f main --args=1,10 | filecheck --check-prefix=TRUE %s
-// RUN: tir interp %s -f main --args=2,11 | filecheck --check-prefix=TRUE %s
-// RUN: tir interp %s -f main --args=9,10 | filecheck --check-prefix=FALSE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=0,5 | filecheck --check-prefix=TRUE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=1,10 | filecheck --check-prefix=TRUE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=2,11 | filecheck --check-prefix=TRUE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=9,10 | filecheck --check-prefix=FALSE %s
 // RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=CFG %s
 // RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=COUNT %s
 
@@ -43,8 +35,6 @@ module {
   module_end
 }
 
-// TRUE: i32 111
-// FALSE: i32 222
 // CFG-NOT: scf.
 // CFG: %{{[0-9]+}} = func.func @main(%[[ARM:[0-9]+]]: !i32,
 // CFG-DAG: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32

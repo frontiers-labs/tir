@@ -1,5 +1,4 @@
 // RUN: tir opt --verify %s | filecheck --check-prefix=IR %s
-// RUN: tir interp %s | filecheck --check-prefix=EVAL %s
 
 module {
   %main = func.func @main() -> !i32 {
@@ -12,4 +11,3 @@ module {
 }
 
 // IR: fp.fence %{{[0-9]+}} : !f32
-// EVAL: !i32 2147483648

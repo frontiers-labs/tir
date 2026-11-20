@@ -4,12 +4,12 @@
 // printed only when it carries attributes.
 
 module {
-  %fn_scoped = func.func @scoped(%0: !f64, %1: !i1) -> !f64 {
+  %fn_scoped = func.func @scoped(%0: !i32, %1: !i1) -> !i32 {
   ^bb0 {tag = "outer"}:
-    %2 = fp.mul %0, %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f64
+    %2 = muli %0, %0 : !i32
     cfg.cond_br %1, ^bb1, ^bb2
   ^bb1 {tag = "inner"}:
-    %3 = fp.add %2, %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f64
+    %3 = addi %2, %0 : !i32
     func.return %3
   ^bb2:
     func.return %2
@@ -18,12 +18,12 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: %{{[0-9]+}} = func.func @scoped(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !i1) -> !f64 {
-// CHECK-NEXT: ^bb0(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !i1) {tag = "outer"}:
-// CHECK-NEXT: %{{[0-9]+}} = fp.mul %{{[0-9]+}}, %{{[0-9]+}} : !f64
+// CHECK-NEXT: %{{[0-9]+}} = func.func @scoped(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i1) -> !i32 {
+// CHECK-NEXT: ^bb0(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i1) {tag = "outer"}:
+// CHECK-NEXT: %{{[0-9]+}} = muli %{{[0-9]+}}, %{{[0-9]+}} : !i32
 // CHECK-NEXT: cfg.cond_br %{{[0-9]+}}, ^bb1, ^bb2
 // CHECK-NEXT: ^bb1 {tag = "inner"}:
-// CHECK-NEXT: %{{[0-9]+}} = fp.add %{{[0-9]+}}, %{{[0-9]+}} : !f64
+// CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
 // CHECK-NEXT: func.return %{{[0-9]+}}
 // CHECK-NEXT: ^bb2:
 // CHECK-NEXT: func.return %{{[0-9]+}}

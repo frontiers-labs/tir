@@ -1,10 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,inline<1000,0>,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,inline<1000,0> %s | tir interp - | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 3 %s | tir opt --pass inline<1000,0> | tir interp - | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 9 %s | tir opt --pass inline<1000,0> | tir interp - | filecheck %s --check-prefix=VALUE
 
 // Splicing an unordered callee keeps the memory order: the states the callee's
 // body was entered on become the states the call observed, and the states it
@@ -45,5 +41,3 @@ module {
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state : !state<memory>
 // CHECK-NEXT: %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[ENTRY]])
 // CHECK-NOT: state.entry_state : !state<memory>
-
-// VALUE: i32 17

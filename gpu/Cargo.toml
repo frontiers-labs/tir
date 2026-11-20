@@ -14,6 +14,7 @@ tir-symbolic.workspace = true
 
 [build-dependencies]
 tmdl.workspace = true
+tir-cdsl.workspace = true
 
 [lints]
 workspace = true

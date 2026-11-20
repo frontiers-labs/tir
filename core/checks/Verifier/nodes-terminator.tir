@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // An unordered region has no control to transfer, so it has no place for a
 // terminator.
@@ -11,4 +11,4 @@ module {
   module_end
 }
 
-// CHECK: func.return is a terminator
+// CHECK: failed typechecking: terminator in unordered region

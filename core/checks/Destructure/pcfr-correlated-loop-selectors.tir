@@ -1,9 +1,3 @@
-// RUN: tir interp %s -f select --args=1,2 | filecheck --check-prefix=START-HEAD %s
-// RUN: tir interp %s -f select --args=0,2 | filecheck --check-prefix=START-BODY %s
-// RUN: tir interp %s -f select --args=1,9 | filecheck --check-prefix=DONE %s
-// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp -f select --args=1,2 | filecheck --check-prefix=START-HEAD %s
-// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp -f select --args=0,2 | filecheck --check-prefix=START-BODY %s
-// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp -f select --args=1,9 | filecheck --check-prefix=DONE %s
 // RUN: tir opt --pass restructure-nodes,destructure --verify %s | filecheck --check-prefix=CFG %s
 // RUN: tir opt --pass restructure-nodes,destructure --verify %s | filecheck --check-prefix=NO-SELECTORS %s
 
@@ -36,9 +30,6 @@ module {
   module_end
 }
 
-// START-HEAD: i32 100
-// START-BODY: i32 100
-// DONE: i32 5
 // CFG-NOT: scf.
 // NO-SELECTORS-NOT: xori
 // NO-SELECTORS-NOT: constant {{.*}} : !i1

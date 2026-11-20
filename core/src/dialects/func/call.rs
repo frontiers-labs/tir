@@ -1,38 +1,21 @@
 use crate::attributes::AttributeValue;
-use crate::builtin::{FnType, StateResource, UnitType};
+use crate::builtin::{StateResource, UnitType};
 use crate::{
     Apply, Context, Error, Operation, ResourceAccess, ResourceEffect, ResourceEffects, ValueId,
-    operation,
 };
 
 use crate as tir;
 
-operation! {
-    CallOp {
-        name: "call",
-        dialect: "func",
-        scheme: "(fn<_, _>, _*) -> _",
-        format: "custom",
-        verifier: "true",
-        operands: O { callee, args },
-        results: R { result },
-        state: "in_out",
-        interfaces: [Apply, ResourceEffects],
-    }
-}
+__cdsl_func_CallOp!();
 
 impl ResourceEffects for CallOp {
     fn resource_effects(&self) -> Vec<ResourceEffect> {
-        self.resources()
-            .unwrap_or_else(|_| vec![StateResource::Memory, StateResource::FpEnv])
-            .into_iter()
-            .map(|resource| ResourceEffect {
-                resource,
-                access: ResourceAccess::Change,
-                observed: self.0.context.states_of(self.0.state_operands(), resource),
-                produced: self.0.context.states_of(self.0.state_results(), resource),
-            })
-            .collect()
+        vec![ResourceEffect {
+            resource: StateResource::Memory,
+            access: ResourceAccess::Change,
+            observed: self.0.state_operands().into_vec(),
+            produced: self.0.state_results().into_vec(),
+        }]
     }
 }
 
@@ -46,73 +29,21 @@ impl Apply for CallOp {
     }
 }
 
-impl tir::Verifiable for CallOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        self.resources()?;
-        let args = self.args();
-        super::verify_argument_alignments(self, args.len(), "call")?;
-        verify_result_address(self, context, &args)?;
-
-        let Some((parameters, ret_type)) = FnType::signature_of(context, self.callee()) else {
-            return Err(Error::VerificationError(
-                "call callee must be a function value".to_string(),
-            ));
-        };
-        let arg_types: Vec<_> = args
-            .iter()
-            .map(|arg| context.get_value(*arg).ty())
-            .collect();
-        if !tir::symbol_table::signature_accepts(context, &parameters, &arg_types) {
-            return Err(Error::VerificationError(format!(
-                "call passes ({}), but the callee takes ({})",
-                type_list(context, &arg_types),
-                type_list(context, &parameters)
-            )));
-        }
-        let result_type = context.get_value(self.result()).ty();
-        if result_type != ret_type {
-            return Err(Error::VerificationError(format!(
-                "call produces {}, but the callee returns {}",
-                context.type_to_string(result_type),
-                context.type_to_string(ret_type)
-            )));
-        }
-        Ok(())
-    }
-}
-
 impl CallOp {
     /// Resources the callee may access. An omitted summary is conservative.
     pub fn resources(&self) -> Result<Vec<StateResource>, Error> {
         let Some(value) = self.attr("resources") else {
-            return Ok(vec![StateResource::Memory, StateResource::FpEnv]);
+            return Ok(vec![StateResource::Memory]);
         };
-        let invalid = || {
-            Error::VerificationError(
-                "call resources must be a non-empty list of distinct resource names".into(),
-            )
-        };
-        let AttributeValue::Array(values) = value else {
-            return Err(invalid());
-        };
-        if values.is_empty() {
-            return Err(invalid());
+        if let AttributeValue::Array(values) = value
+            && let [AttributeValue::Str(name)] = values.as_ref()
+            && name.as_ref() == StateResource::Memory.name()
+        {
+            return Ok(vec![StateResource::Memory]);
         }
-        let mut resources = Vec::new();
-        for value in values {
-            let AttributeValue::Str(name) = value else {
-                return Err(invalid());
-            };
-            let resource = [StateResource::Memory, StateResource::FpEnv]
-                .into_iter()
-                .find(|resource| resource.name() == name.as_ref())
-                .ok_or_else(invalid)?;
-            if resources.contains(&resource) {
-                return Err(invalid());
-            }
-            resources.push(resource);
-        }
-        Ok(resources)
+        Err(Error::VerificationError(
+            "call resources must be a non-empty list of distinct resource names".into(),
+        ))
     }
 
     pub fn callee(&self) -> ValueId {
@@ -228,68 +159,58 @@ impl CallOp {
             super::parse_keyed_array(parser, context, "argument_alignments", "alignment list")?;
 
         let resources = super::parse_keyed_array(parser, context, "resources", "resource list")?;
-        let state = parser.parse_state_operands(context)?;
-        let mut parts = tir::NewOpParts::default();
+        let mut builder = CallOpBuilder::new(context)
+            .callee(callee)
+            .args(args)
+            .result_type(ret_type);
+        builder = builder.state_operands(parser.parse_state_operands(context)?);
         if result_address {
-            parts
-                .attributes
-                .push(context.named_attribute("result_address", AttributeValue::Bool(true)));
+            builder = builder.result_address();
         }
         if let Some(symbol) = callee_symbol {
-            parts
-                .attributes
-                .push(context.named_attribute("callee", AttributeValue::Str(symbol.into())));
+            builder = builder.attr("callee", AttributeValue::Str(symbol.into()));
         }
         if let Some(argument_alignments) = argument_alignments {
-            parts
-                .attributes
-                .push(context.named_attribute("argument_alignments", argument_alignments));
+            builder = builder.attr("argument_alignments", argument_alignments);
         }
         if let Some(resources) = resources {
-            parts
-                .attributes
-                .push(context.named_attribute("resources", resources));
+            builder = builder.attr("resources", resources);
         }
-        Ok(Box::new(CallOp::new(
-            context,
-            callee,
-            args,
-            ret_type,
-            state,
-            vec![],
-            parts,
-            tir::InsertionPoint::Root,
-        )))
+        Ok(Box::new(builder.build()))
     }
 }
 
-fn type_list(context: &Context, types: &[tir::TypeId]) -> String {
-    types
-        .iter()
-        .map(|ty| context.type_to_string(*ty))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
+impl CallOpBuilder {
+    /// Record a known callee's effect contract instead of assuming all resources.
+    pub fn resources(self, resources: &[StateResource]) -> Self {
+        self.attr(
+            "resources",
+            AttributeValue::Array(
+                resources
+                    .iter()
+                    .map(|resource| AttributeValue::from(resource.name()))
+                    .collect(),
+            ),
+        )
+    }
 
-fn verify_result_address(
-    op: &impl Operation,
-    context: &Context,
-    args: &[ValueId],
-) -> Result<(), Error> {
-    if !has_result_address(op) {
-        return Ok(());
+    pub fn result_address(self) -> Self {
+        self.attr("result_address", AttributeValue::Bool(true))
     }
-    let Some(destination) = args.first().copied() else {
-        return Err(Error::VerificationError(
-            "result-address call requires a destination argument".to_string(),
-        ));
-    };
-    if crate::ptr::PtrType::view(context, context.get_value(destination).ty()).is_none() {
-        return Err(Error::VerificationError(
-            "result-address call destination must have pointer type".to_string(),
-        ));
+
+    pub fn argument_alignments(self, alignments: &[u64]) -> Self {
+        self.attr(
+            "argument_alignments",
+            AttributeValue::Array(
+                alignments
+                    .iter()
+                    .copied()
+                    .map(AttributeValue::UInt)
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        )
     }
-    Ok(())
 }
 
 fn parse_arg_list(

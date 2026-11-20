@@ -1,8 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
-// RUN: tir interp %s -f f --args=4 | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=4 | filecheck %s --check-prefix=VALUE
 
 // A counter's next value is the counter at offset one, which is not the
 // counter: the hypothesis that the port holds the zero it was entered on is
@@ -27,5 +25,3 @@ module {
 // CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] = scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}
 // CHECK-NEXT: addi %[[I]], %{{[0-9]+}} : !i32
 // CHECK: -> %[[RESULT]]
-
-// VALUE: i32 4

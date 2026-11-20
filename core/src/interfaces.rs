@@ -1,6 +1,3 @@
-use crate::NodeId;
-use crate::sem::SemGraph;
-use crate::sem::Value;
 use crate::utils::APInt;
 use crate::{BlockId, RegionId, TypeId, ValueId};
 
@@ -47,16 +44,6 @@ pub trait OpCost {
 /// integer, or the bits of a value of another type.
 pub trait ConstantLike {
     fn constant_value(&self) -> APInt;
-}
-
-/// Folds an operation over constant operands. The `operation!` macro derives this
-/// automatically for any op that declares `sem` (evaluating it through the
-/// semantic interpreter); ops that fold but lack a semantic expression implement it
-/// by hand.
-pub trait ConstantFold {
-    /// `operands[i]` is the constant value of operand `i`. Returns the folded
-    /// result, or `None` when this op cannot fold these operands.
-    fn fold(&self, operands: &[Value]) -> Option<Value>;
 }
 
 /// An operation that produces its results and does nothing else: no memory
@@ -148,7 +135,6 @@ pub trait CaseGuard {
 }
 
 /// An operation whose operands and results all carry one type.
-/// Checked by [`verify_opdef_operands`](crate::verify_opdef_operands).
 pub trait SameOperandAndResultType {}
 
 /// Identifies an operation that creates a memory location eligible for local SSA
@@ -181,15 +167,6 @@ pub enum ResourceAccess {
     Change,
 }
 
-impl ResourceAccess {
-    pub fn semantic_code(self) -> u64 {
-        match self {
-            Self::Read => crate::sem::StateAccessKind::Read as u64,
-            Self::Change => crate::sem::StateAccessKind::Change as u64,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourceEffect {
     pub resource: crate::builtin::StateResource,
@@ -201,39 +178,6 @@ pub struct ResourceEffect {
 /// The execution resources an operation reads or changes.
 pub trait ResourceEffects {
     fn resource_effects(&self) -> Vec<ResourceEffect>;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ResourceField {
-    Whole,
-    FpRounding,
-    FpFlags,
-    FpTraps,
-}
-
-impl ResourceField {
-    pub fn semantic_code(self) -> u64 {
-        match self {
-            Self::Whole => crate::sem::StateFieldKind::Whole as u64,
-            Self::FpRounding => crate::sem::StateFieldKind::FpRounding as u64,
-            Self::FpFlags => crate::sem::StateFieldKind::FpFlags as u64,
-            Self::FpTraps => crate::sem::StateFieldKind::FpTraps as u64,
-        }
-    }
-}
-
-pub struct ResourceSemantics {
-    pub graph: SemGraph,
-    pub root: NodeId,
-    /// Flags raised by this operation, before accumulation in the environment.
-    pub raised_flags: Option<NodeId>,
-    pub value_results: Vec<NodeId>,
-    pub state_results: Vec<NodeId>,
-}
-
-/// Exact value and resource-state semantics for an effectful operation.
-pub trait HasResourceSemantics {
-    fn resource_semantics(&self) -> ResourceSemantics;
 }
 
 /// Where the carried values sit on each side of a structured op: index ranges

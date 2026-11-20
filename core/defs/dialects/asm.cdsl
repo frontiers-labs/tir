@@ -1,0 +1,118 @@
+pub let section = {
+    rust_name: "SectionOp",
+    name: "section",
+    dialect: "asm",
+    regions: { body: { kind: "Blocks", variadic: false } },
+    state: "none",
+};
+
+pub let section_end = {
+    rust_name: "SectionEndOp",
+    name: "section_end",
+    dialect: "asm",
+    interfaces: "Terminator",
+    state: "none",
+};
+
+pub let symbol = {
+    rust_name: "SymbolOp",
+    name: "symbol",
+    dialect: "asm",
+    regions: { body: { kind: "Blocks", variadic: false } },
+    state: "none",
+};
+
+pub let symbol_end = {
+    rust_name: "SymbolEndOp",
+    name: "symbol_end",
+    dialect: "asm",
+    interfaces: "Terminator",
+    state: "none",
+};
+
+pub let literal = {
+    rust_name: "LiteralOp",
+    name: "literal",
+    dialect: "asm",
+    attributes: { kind: "Str" },
+    state: "none",
+};
+
+pub let symbol_address = {
+    rust_name: "SymbolAddressOp",
+    name: "symbol_address",
+    dialect: "asm",
+    results: { result: "ptr.p<_>" },
+    attributes: { sym_name: "Str" },
+    interfaces: ("tir::Pure", "tir::Speculatable"),
+    state: "none",
+};
+
+pub let data_reloc = {
+    rust_name: "DataRelocOp",
+    name: "data_reloc",
+    dialect: "asm",
+    attributes: { symbol: "Str", width: "UInt", addend: "Int" },
+    state: "none",
+};
+
+pub let block_end = {
+    rust_name: "BlockEndOp",
+    name: "block_end",
+    dialect: "asm",
+    interfaces: "Terminator",
+    state: "none",
+};
+
+pub let vret = {
+    rust_name: "VirtualReturnOp",
+    name: "vret",
+    dialect: "asm",
+    operands: { values: "*_" },
+    interfaces: ("Terminator", "tir::backend::MachineInstruction"),
+    custom_format: true,
+    state: "none",
+};
+
+pub let vbr = {
+    rust_name: "VirtualBranchOp",
+    name: "vbr",
+    dialect: "asm",
+    operands: { dest_args: "*_" },
+    attributes: { dest: "Block" },
+    interfaces: ("Terminator", "tir::backend::MachineInstruction"),
+    custom_format: true,
+    state: "none",
+};
+
+pub let pcopy = {
+    rust_name: "ParallelCopyOp",
+    name: "pcopy",
+    dialect: "asm",
+    operands: { sources: "*_" },
+    results: { copies: "*_" },
+    interfaces: "tir::backend::MachineInstruction",
+    state: "none",
+};
+
+pub let vcall = {
+    rust_name: "VirtualCallOp",
+    name: "vcall",
+    dialect: "asm",
+    operands: { args: "*_" },
+    results: { results: "*_" },
+    attributes: { callee: "Str", outgoing_stack_size: "UInt" },
+    interfaces: ("tir::backend::MachineInstruction", "ResourceEffects"),
+    state: "in_out",
+};
+
+pub let vcall_indirect = {
+    rust_name: "VirtualIndirectCallOp",
+    name: "vcall_indirect",
+    dialect: "asm",
+    operands: { callee: "backend.reg<_, _>", args: "*_" },
+    results: { results: "*_" },
+    attributes: { outgoing_stack_size: "UInt" },
+    interfaces: ("tir::backend::MachineInstruction", "ResourceEffects"),
+    state: "in_out",
+};

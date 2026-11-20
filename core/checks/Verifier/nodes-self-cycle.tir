@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // An operation reading its own result is the shortest dependency cycle there
 // is, and has no more of an evaluation order than a longer one.
@@ -11,4 +11,4 @@ module {
   module_end
 }
 
-// CHECK: addi closes a dependency cycle
+// CHECK: failed typechecking: unordered dependency cycle

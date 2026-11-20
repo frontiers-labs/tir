@@ -1,0 +1,27 @@
+pub let merge = {
+    rust_name: "MergeOp",
+    name: "merge",
+    dialect: "son",
+    operands: { incoming: "*son.control" },
+    results: { control: "son.control" },
+    state: "none",
+};
+
+pub let edge = {
+    rust_name: "EdgeOp",
+    name: "edge",
+    dialect: "son",
+    operands: { control: "son.control", arguments: "*_" },
+    results: { edge: "son.control" },
+    state: "in",
+};
+
+pub let branch = {
+    rust_name: "BranchOp",
+    name: "branch",
+    dialect: "son",
+    operands: { control: "son.control", predicate: "int<1>" },
+    results: { taken: "son.control", fallthrough: "son.control" },
+    custom_format: true,
+    state: "none",
+};

@@ -1,10 +1,6 @@
 // IR migration: instruction selection and backend lowering are unavailable.
 // XFAIL: *
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
-// RUN: fcc compile --stage ir -o - %s | tir interp -f stop_early --args=6 | filecheck --check-prefix=SIX %s
-// RUN: fcc compile --stage ir -o - %s | tir interp -f stop_early --args=6 | filecheck --check-prefix=SIX %s
-// RUN: fcc compile --stage ir -o - %s | tir interp -f stop_early --args=2 | filecheck --check-prefix=TWO %s
-// RUN: fcc compile --stage ir -o - %s | tir interp -f stop_early --args=2 | filecheck --check-prefix=TWO %s
 
 // `continue` and `break` make the body leave two ways, so the loop expands to
 // blocks and the conversion makes it an `scf.loop`: each way out is a gamma
@@ -27,6 +23,3 @@ int stop_early(int n) {
 // CHECK: scf.switch
 // CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}
 // CHECK-NEXT: }
-
-// SIX: i32 5
-// TWO: i32 2

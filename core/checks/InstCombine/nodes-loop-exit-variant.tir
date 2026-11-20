@@ -1,8 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
-// RUN: tir interp %s -f f --args=1,2 | filecheck --check-prefix=VALUE %s
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=1,2 | filecheck --check-prefix=VALUE %s
 
 module {
   %24 = func.func @f(%0: !i64, %1: !i64) -> !i64 {
@@ -38,5 +36,3 @@ module {
 // CHECK: %{{[0-9]+}}, %{{[0-9]+}}, %[[EXIT:[0-9]+]] = scf.loop
 // CHECK: %[[SUM:[0-9]+]] = addi %[[EXIT]], %[[BASE]]
 // CHECK-NEXT: -> %[[SUM]]
-
-// VALUE: i64 51

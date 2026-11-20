@@ -1,3 +1,9 @@
+#[allow(dead_code, unused_imports)]
+#[macro_use]
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
+}
+
 mod arith;
 mod fn_type;
 mod global;

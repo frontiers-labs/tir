@@ -1,9 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,affine,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,affine %s | tir interp - | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 4 %s | tir opt --pass affine | tir interp - | filecheck %s --check-prefix=VALUE
 
 // The nest of `interchange.tir` in the unordered form: `A[j][i]` walks a row
 // per `j` and a word per `i`, so the loop that should run innermost is `i`.
@@ -64,4 +61,3 @@ module {layout.spec = #layout_spec} {
 // CHECK-DAG: muli %[[WORD]], %{{[0-9]+}}
 
 // A[1][1] = 2, A[1][0] = 1: 2 * 4 + 1.
-// VALUE: i32 9

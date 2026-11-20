@@ -20,6 +20,6 @@ fuzz_target!(|data: &[u8]| {
         let Ok(module) = parser.parse_asm(&context, input) else {
             return;
         };
-        let _ = tir::Operation::verify(&module, &context);
+        let _ = tir::backend::verify_machine_ir(&context, tir::Operation::id(&module));
     }
 });

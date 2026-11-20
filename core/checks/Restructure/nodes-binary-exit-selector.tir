@@ -1,8 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f exit_value --args=2 | filecheck --check-prefix=BREAK %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f exit_value --args=9 | filecheck --check-prefix=DONE %s
 
 module {
   %f = func.func @exit_value(%n: !i64) -> !i64 {
@@ -31,5 +29,3 @@ module {
 // CHECK: %[[INIT:[0-9]+]] = constant {value = 0} : !i1
 // CHECK-NEXT: %{{[0-9]+}}, %[[EXIT:[0-9]+]] = scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, %{{[0-9]+}} = %[[INIT]]) {
 // CHECK: scf.switch %[[EXIT]]
-// BREAK: i64 1
-// DONE: i64 0

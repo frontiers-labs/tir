@@ -1,11 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s -f f --args=1 | filecheck --check-prefix=ONE %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f f --args=1 | filecheck --check-prefix=ONE %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f f --args=0 | filecheck --check-prefix=ZERO %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 5 %s | tir interp -f f --args=1 | filecheck --check-prefix=ONE %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 13 %s | tir interp -f f --args=0 | filecheck --check-prefix=ZERO %s
 
 // One arm writes one slot and the other the other. Both chains cross the gate,
 // so each arm is entered on a dependency port per chain and produces one for
@@ -45,6 +40,3 @@ module {
 // CHECK: (%[[TA:[0-9]+]], %[[TB:[0-9]+]]) {
 // CHECK: %[[SA:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[TA]])
 // CHECK-NEXT: -> %[[SA]], %[[TB]]
-
-// ONE: i32 1
-// ZERO: i32 2

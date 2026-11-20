@@ -1,27 +1,13 @@
 use crate::attributes::AttributeValue;
 use crate::builtin::FnType;
 use crate::symbol_table::visibility_of;
-use crate::{
-    Callable, Context, Error, IRFormatter, Operation, Symbol, TypeId, Visibility, operation,
-};
+use crate::{Callable, Context, Error, IRFormatter, Operation, Symbol, TypeId, Visibility};
 
 use crate as tir;
 
 // Declares a function another module defines: a λ node with no body, producing
 // the same `!fn` value a definition would.
-operation! {
-    DeclareOp {
-        name: "declare",
-        dialect: "func",
-        scheme: "() -> fn<_, _>",
-        format: "custom",
-        interfaces: [Symbol, Callable],
-        attributes: A {
-            sym_name: "Str",
-        },
-        results: R { result },
-    }
-}
+__cdsl_func_DeclareOp!();
 
 impl Symbol for DeclareOp {
     fn symbol_name(&self) -> String {
@@ -129,37 +115,23 @@ impl DeclareOp {
             .parse_type(context)?
             .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
 
-        let attributes = if is_private {
-            vec![context.named_attribute(
+        let mut builder = DeclareOpBuilder::new(context)
+            .attr("sym_name", AttributeValue::Str(sym_name.into()))
+            .result_type(FnType::new(context, &arg_types, ret_type));
+        if is_private {
+            builder = builder.attr(
                 "sym_visibility",
                 AttributeValue::Str("private".to_string().into()),
-            )]
-        } else {
-            vec![]
-        };
-        Ok(Box::new(DeclareOp::new(
-            context,
-            AttributeValue::Str(sym_name.into()),
-            FnType::new(context, &arg_types, ret_type),
-            tir::NewOpParts { attributes },
-            tir::InsertionPoint::Root,
-        )))
+            );
+        }
+
+        Ok(Box::new(builder.build()))
     }
 }
 
-pub fn declare_op(
-    context: &Context,
-    name: &str,
-    ret: TypeId,
-    args: &[TypeId],
-    parts: tir::NewOpParts,
-    insertion: tir::InsertionPoint,
-) -> DeclareOp {
-    DeclareOp::new(
-        context,
-        AttributeValue::Str(name.to_string().into()),
-        FnType::new(context, args, ret),
-        parts,
-        insertion,
-    )
+pub fn declare_op(context: &Context, name: &str, ret: TypeId, args: &[TypeId]) -> DeclareOp {
+    DeclareOpBuilder::new(context)
+        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
+        .result_type(FnType::new(context, args, ret))
+        .build()
 }

@@ -11,7 +11,7 @@ proptest! {
         first_arity in 2usize..6,
         second_arity in 3usize..6,
     ) {
-        let fixture = include_str!("../../../../core/checks/Destructure/pcfr-shared-wider-selector.tir")
+        let fixture = include_str!("../../../../core/checks/Destructure/Inputs/pcfr-shared-wider-selector.tir")
             .replace("func.return %result", "-> %result");
         // Each generated pair also checks an equal-arity control, so loss of
         // Direct eligibility cannot make the mismatch assertion pass vacuously.

@@ -1,12 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
-// RUN: tir interp %s --args=10 | filecheck --check-prefix=TEN %s
-// RUN: tir interp %s --args=-1 | filecheck --check-prefix=MINUS %s
-// RUN: tir interp %s --args=7 | filecheck --check-prefix=DEFAULT %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp --args=10 | filecheck --check-prefix=TEN %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp --args=-1 | filecheck --check-prefix=MINUS %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp --args=7 | filecheck --check-prefix=DEFAULT %s
 
 // A multi-way branch is one gate whatever its case count: each case is an arm
 // labelled with its value, and the default takes every other value.
@@ -43,7 +37,3 @@ module {
 // CHECK-NEXT: -> %[[X]]
 // CHECK-NEXT: }
 // CHECK-NEXT: -> %[[R]]
-
-// TEN: i32 100
-// MINUS: i32 200
-// DEFAULT: i32 7

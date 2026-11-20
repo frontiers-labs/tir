@@ -115,8 +115,6 @@ impl Hash for Bits<'_> {
                     (key, Bits(value)).hash(state);
                 }
             }
-            FpSemantics(v) => v.hash(state),
-            EvaluationContract(v) => v.hash(state),
             Register(v) => v.hash(state),
             Predicate(v) => v.hash(state),
             Value(v) => v.hash(state),

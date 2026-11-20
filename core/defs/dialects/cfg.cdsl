@@ -1,0 +1,31 @@
+pub let br = {
+    rust_name: "BranchOp",
+    name: "br",
+    dialect: "cfg",
+    operands: { dest_args: "*_" },
+    attributes: { dest: "Block" },
+    interfaces: ("Terminator", "BranchTerminator"),
+    custom_format: true,
+    state: "none",
+};
+
+pub let cond_br = {
+    rust_name: "CondBranchOp",
+    name: "cond_br",
+    dialect: "cfg",
+    operands: { condition: "int<1>", true_args: "*_", false_args: "*_" },
+    attributes: { true_dest: "Block", false_dest: "Block" },
+    interfaces: ("Terminator", "BranchTerminator", "BranchGuard"),
+    custom_format: true,
+    state: "none",
+};
+
+pub let r#switch = {
+    rust_name: "SwitchOp",
+    name: "switch",
+    dialect: "cfg",
+    operands: { selector: "int<_>", args: "*_" },
+    interfaces: ("Terminator", "BranchTerminator", "CaseGuard"),
+    custom_format: true,
+    state: "none",
+};

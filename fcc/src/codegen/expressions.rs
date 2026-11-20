@@ -7,7 +7,7 @@ use super::{
 use crate::ast::{AstKind, AstLeaf};
 use crate::diagnostics::Diagnostic;
 use crate::lexer::decode_character_constant;
-use crate::sema::{TypeKind, ValueCategory};
+use crate::sema::{QualType, TypeKind, ValueCategory};
 use tir::NodeId;
 use tir::ValueId;
 use tir::attributes::Predicate;
@@ -94,14 +94,10 @@ impl FnCodegen<'_> {
                                 lower_type(self.context, self.typed, node_type(self.typed, node));
                             let value = n.value.zero_extend(u64::from(width));
                             LoweredExpr::Value(
-                                b::literal(
-                                    self.context,
-                                    &value,
-                                    ty,
-                                    Default::default(),
-                                    self.builder.end(),
-                                )
-                                .result(),
+                                b::literal(self.context, &value, ty)
+                                    .at(self.builder.end())
+                                    .build()
+                                    .result(),
                             )
                         }
                         _ => self.const_of_node(node, n.value.to_i64()),
@@ -229,14 +225,10 @@ impl FnCodegen<'_> {
     fn const_of_node(&mut self, node: NodeId, value: i64) -> LoweredExpr {
         let ty = lower_type(self.context, self.typed, node_type(self.typed, node));
         LoweredExpr::Value(
-            b::constant(
-                self.context,
-                value,
-                ty,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result(),
+            b::constant(self.context, value, ty)
+                .at(self.builder.end())
+                .build()
+                .result(),
         )
     }
 
@@ -258,14 +250,10 @@ impl FnCodegen<'_> {
             let lambda = self.symbols.function(self.context, name, &signature);
             let ptr_ty = PtrType::opaque(self.context);
             return Ok(LoweredExpr::Value(
-                b::fn_to_ptr(
-                    self.context,
-                    lambda,
-                    ptr_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result(),
+                b::fn_to_ptr(self.context, lambda, ptr_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result(),
             ));
         }
         let entity = node_entity(self.typed, node);
@@ -316,15 +304,9 @@ impl FnCodegen<'_> {
         };
         let record_ty = NamedType::new(self.context, &record.name);
         let field = record.fields[field].name.as_str();
-        let member = p::field(
-            self.context,
-            base_ptr,
-            record_ty,
-            field,
-            ptr_ty,
-            Default::default(),
-            self.builder.end(),
-        );
+        let member = p::field(self.context, base_ptr, record_ty, field, ptr_ty)
+            .at(self.builder.end())
+            .build();
         Ok(LoweredExpr::Address {
             ptr: member.result(),
             elem,
@@ -352,25 +334,35 @@ impl FnCodegen<'_> {
             self.typed.types().kind(lhs_ty),
             self.typed.types().kind(rhs_ty),
         ) {
-            (AstKind::Sub, TypeKind::Pointer(_), TypeKind::Pointer(_)) => {
-                self.lower_pointer_difference(l, r, lhs_ty, source_ty)
+            (AstKind::Sub, TypeKind::Pointer(pointee), TypeKind::Pointer(_)) => {
+                let stride = self.pointer_stride(node, *pointee)?;
+                self.lower_pointer_difference(l, r, stride, source_ty)
             }
-            (AstKind::Add | AstKind::Sub, TypeKind::Pointer(_), TypeKind::Integer(_)) => {
-                self.lower_pointer_offset(l, r, rhs_ty, lhs_ty, kind == AstKind::Sub)
+            (AstKind::Add | AstKind::Sub, TypeKind::Pointer(pointee), TypeKind::Integer(_)) => {
+                let stride = self.pointer_stride(node, *pointee)?;
+                self.lower_pointer_offset(l, r, rhs_ty, lhs_ty, kind == AstKind::Sub, stride)
             }
-            (AstKind::Add, TypeKind::Integer(_), TypeKind::Pointer(_)) => {
-                self.lower_pointer_offset(r, l, lhs_ty, rhs_ty, false)
+            (AstKind::Add, TypeKind::Integer(_), TypeKind::Pointer(pointee)) => {
+                let stride = self.pointer_stride(node, *pointee)?;
+                self.lower_pointer_offset(r, l, lhs_ty, rhs_ty, false, stride)
             }
             _ if matches!(
                 self.typed.types().kind(source_ty),
                 TypeKind::Float | TypeKind::Double
             ) =>
             {
-                self.lower_floating_binary(kind, l, r, source_ty)
+                self.emit_fp_binop(kind, l, r)
             }
             _ => self.lower_integer_binary(kind, l, r, source_ty),
         };
         Ok(LoweredExpr::Value(value))
+    }
+
+    fn pointer_stride(&self, node: NodeId, pointee: QualType) -> Result<u64, Diagnostic> {
+        self.typed
+            .type_layout(pointee)
+            .map(|(size, _)| size)
+            .ok_or_else(|| unsupported(self.ast, node, "a type with no declared ABI layout".into()))
     }
 
     fn lower_bitwise(&mut self, node: NodeId, kind: AstKind) -> Result<LoweredExpr, Diagnostic> {
@@ -407,14 +399,12 @@ impl FnCodegen<'_> {
                 let width =
                     (source_type_layout(self.typed, node_type(self.typed, node)).0 * 8) as u32;
                 let integer_ty = IntegerType::new(self.context, u64::from(width));
-                let bits = b::BitcastOp::new(
-                    self.context,
-                    operand,
-                    integer_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result();
+                let bits = b::BitcastOpBuilder::new(self.context)
+                    .input(operand)
+                    .result_type(integer_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result();
                 let sign = b::constant(
                     self.context,
                     if width == 64 {
@@ -423,76 +413,47 @@ impl FnCodegen<'_> {
                         i64::from(i32::MIN)
                     },
                     integer_ty,
-                    Default::default(),
-                    self.builder.end(),
                 )
+                .at(self.builder.end())
+                .build()
                 .result();
-                let negated = b::xori(
-                    self.context,
-                    bits,
-                    sign,
-                    integer_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result();
-                b::BitcastOp::new(
-                    self.context,
-                    negated,
-                    result_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                let negated = b::xori(self.context, bits, sign, integer_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result();
+                b::BitcastOpBuilder::new(self.context)
+                    .input(negated)
+                    .result_type(result_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             }
             AstKind::Neg => {
-                let zero = b::constant(
-                    self.context,
-                    0,
-                    result_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result();
-                b::subi(
-                    self.context,
-                    zero,
-                    operand,
-                    result_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                let zero = b::constant(self.context, 0, result_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result();
+                b::subi(self.context, zero, operand, result_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             }
             AstKind::BitNot => {
-                let ones = b::constant(
-                    self.context,
-                    -1,
-                    result_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result();
-                b::xori(
-                    self.context,
-                    operand,
-                    ones,
-                    result_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                let ones = b::constant(self.context, -1, result_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result();
+                b::xori(self.context, operand, ones, result_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             }
             AstKind::Not => {
                 let comparison = self.compare_against_zero(operand, Predicate::Eq);
-                b::extui(
-                    self.context,
-                    comparison,
-                    result_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                b::extui(self.context, comparison, result_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             }
             _ => unreachable!(),
         };
@@ -509,39 +470,28 @@ impl FnCodegen<'_> {
                 "non-addressable increment operand".to_string(),
             ));
         };
-        let old = p::load(
-            self.context,
-            ptr,
-            elem,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
+        let old = p::load(self.context, ptr, elem)
+            .at(self.builder.end())
+            .build()
+            .result();
         let operand_ty = node_type(self.typed, child);
         let increment = matches!(kind, AstKind::PreInc | AstKind::PostInc);
         let new = if let TypeKind::Pointer(pointee) = self.typed.types().kind(operand_ty) {
             let offset_ty =
                 IntegerType::new(self.context, u64::from(self.typed.target().pointer_width()));
-            let size = source_type_layout(self.typed, *pointee).0 as i64;
+            let size = self.pointer_stride(node, *pointee)? as i64;
             let offset = b::constant(
                 self.context,
                 if increment { size } else { -size },
                 offset_ty,
-                Default::default(),
-                self.builder.end(),
             )
+            .at(self.builder.end())
+            .build()
             .result();
-            p::ptradd(
-                self.context,
-                old,
-                offset,
-                elem,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result()
+            p::ptradd(self.context, old, offset, elem)
+                .at(self.builder.end())
+                .build()
+                .result()
         } else if matches!(
             self.typed.types().kind(operand_ty),
             TypeKind::Float | TypeKind::Double
@@ -555,48 +505,27 @@ impl FnCodegen<'_> {
                 },
                 old,
                 one,
-                elem,
             )
         } else {
-            let one = b::constant(
-                self.context,
-                1,
-                elem,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result();
+            let one = b::constant(self.context, 1, elem)
+                .at(self.builder.end())
+                .build()
+                .result();
             if increment {
-                b::addi(
-                    self.context,
-                    old,
-                    one,
-                    elem,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                b::addi(self.context, old, one, elem)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             } else {
-                b::subi(
-                    self.context,
-                    old,
-                    one,
-                    elem,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                b::subi(self.context, old, one, elem)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             }
         };
-        p::store(
-            self.context,
-            new,
-            ptr,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        p::store(self.context, new, ptr)
+            .at(self.builder.end())
+            .build();
         Ok(LoweredExpr::Value(
             if matches!(kind, AstKind::PostInc | AstKind::PostDec) {
                 old
@@ -643,14 +572,10 @@ impl FnCodegen<'_> {
         if self.context.get_value(value).ty() == target {
             return value;
         }
-        b::extui(
-            self.context,
-            value,
-            target,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        b::extui(self.context, value, target)
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     fn lower_cast(&mut self, node: NodeId) -> Result<LoweredExpr, Diagnostic> {
@@ -666,7 +591,10 @@ impl FnCodegen<'_> {
                 .is_some_and(|semantics| semantics.constant == Some(0))
         {
             let target = lower_type(self.context, self.typed, target);
-            p::null(self.context, target, Default::default(), self.builder.end()).result()
+            p::null(self.context, target)
+                .at(self.builder.end())
+                .build()
+                .result()
         } else {
             self.convert_scalar(value, source, target)
         };
@@ -691,45 +619,33 @@ impl FnCodegen<'_> {
         let rhs_node = children.next().unwrap();
         let rhs = self.materialize(self.values[&rhs_node]);
         let rhs = self.as_value_of_node_type(rhs, rhs_node);
-        let lhs = p::load(
-            self.context,
-            ptr,
-            elem,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
+        let lhs = p::load(self.context, ptr, elem)
+            .at(self.builder.end())
+            .build()
+            .result();
         let source_ty = node_type(self.typed, lhs_node);
-        let value = if let TypeKind::Pointer(_) = self.typed.types().kind(source_ty) {
+        let value = if let TypeKind::Pointer(pointee) = self.typed.types().kind(source_ty) {
+            let stride = self.pointer_stride(node, *pointee)?;
             self.lower_pointer_offset(
                 lhs,
                 rhs,
                 node_type(self.typed, rhs_node),
                 source_ty,
                 kind == AstKind::SubAssign,
+                stride,
             )
         } else {
             let operand_ty = converted_node_type(self.typed, rhs_node);
             let lhs = self.convert_scalar(lhs, source_ty, operand_ty);
             let result = match self.typed.types().kind(operand_ty) {
-                TypeKind::Float | TypeKind::Double => {
-                    self.lower_floating_binary(kind, lhs, rhs, operand_ty)
-                }
+                TypeKind::Float | TypeKind::Double => self.emit_fp_binop(kind, lhs, rhs),
                 _ => self.lower_integer_binary(kind, lhs, rhs, operand_ty),
             };
             self.convert_scalar(result, operand_ty, source_ty)
         };
-        p::store(
-            self.context,
-            value,
-            ptr,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        p::store(self.context, value, ptr)
+            .at(self.builder.end())
+            .build();
         Ok(LoweredExpr::Value(value))
     }
 
@@ -755,16 +671,9 @@ impl FnCodegen<'_> {
                 ));
             };
             let record = NamedType::new(self.context, &self.typed.record(*id).unwrap().name);
-            p::copy(
-                self.context,
-                ptr,
-                source,
-                record,
-                vec![],
-                vec![],
-                Default::default(),
-                self.builder.end(),
-            );
+            p::copy(self.context, ptr, source, record)
+                .at(self.builder.end())
+                .build();
             return Ok(LoweredExpr::Address { ptr, elem });
         }
         let value = self.materialize(rhs);
@@ -788,14 +697,10 @@ impl FnCodegen<'_> {
             .id();
 
         let short_circuit = i64::from(kind == AstKind::LogOr);
-        let short_circuit = b::constant(
-            self.context,
-            short_circuit,
-            result_ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
+        let short_circuit = b::constant(self.context, short_circuit, result_ty)
+            .at(self.builder.end())
+            .build()
+            .result();
         let (if_true, true_args, if_false, false_args) = if kind == AstKind::LogAnd {
             (&rhs_block, vec![], &merge, vec![short_circuit])
         } else {
@@ -808,23 +713,19 @@ impl FnCodegen<'_> {
             false_args,
             if_true.id(),
             if_false.id(),
-            Default::default(),
-            self.builder.end(),
-        );
+        )
+        .at(self.builder.end())
+        .build();
         self.terminated = true;
 
         self.enter_block(rhs_block);
         let rhs = self.lower_expr_node(rhs_node)?;
         let rhs = self.materialize(rhs);
         let rhs = self.truth_value(rhs);
-        let rhs = b::extui(
-            self.context,
-            rhs,
-            result_ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
+        let rhs = b::extui(self.context, rhs, result_ty)
+            .at(self.builder.end())
+            .build()
+            .result();
         self.branch_to(&merge, vec![rhs]);
 
         self.enter_block(merge);

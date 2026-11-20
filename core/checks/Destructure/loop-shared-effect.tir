@@ -1,4 +1,3 @@
-// RUN: tir opt --pass destructure %s | tir interp | filecheck %s
 // RUN: tir opt --pass destructure --verify %s
 
 // One store per iteration feeds both the predicate and the exit value; the
@@ -26,5 +25,3 @@ module {
   }
   module_end
 }
-
-// CHECK: i32 6

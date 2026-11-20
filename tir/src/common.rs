@@ -54,10 +54,9 @@ pub fn parse_module(
     input_path: Option<&OsString>,
     kind: InputKind,
 ) -> Result<(ModuleOp, bool), Box<dyn Error>> {
-    let input = read_input(input_path)?;
-
     match resolve_kind(input_path, kind) {
         InputKind::Assembly => {
+            let input = read_input(input_path)?;
             // A target with its own assembly syntax (e.g. PTX) parses text
             // directly; otherwise fall back to the shared flat assembler.
             if let Some(result) = target.parse_asm_text(context, &input) {
@@ -75,11 +74,13 @@ pub fn parse_module(
             ))
         }
         InputKind::Tir => {
+            let input = read_input(input_path)?;
             let module = parse_tir(context, &input)?;
             attach_data_layout(context, &module, target);
             Ok((module, true))
         }
         InputKind::Llvm => {
+            let input = read_input(input_path)?;
             let module =
                 tir_llvm::import_str(context, &input, target.data_layout(context).as_ref())
                     .map_err(|e| format!("llvm import failed: {e}"))?;
@@ -88,10 +89,7 @@ pub fn parse_module(
                 attributes.push(context.named_attribute(tir::TARGET_ENV, value));
             }
             context.set_op_attributes(module.id(), attributes);
-            Ok((
-                context.get_op(module.id()).as_op::<ModuleOp>().unwrap(),
-                true,
-            ))
+            Ok((module, true))
         }
         InputKind::Auto => unreachable!(),
     }

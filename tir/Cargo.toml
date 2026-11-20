@@ -20,7 +20,8 @@ anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 tmdl.workspace = true
 tir = { workspace = true, features = ["egglog-rules"] }
-tir-egglog = { workspace = true, features = ["parser"] }
+tir-egglog.workspace = true
+tir-cdsl.workspace = true
 tir-riscv.workspace = true
 tir-arm64.workspace = true
 tir-x86_64.workspace = true

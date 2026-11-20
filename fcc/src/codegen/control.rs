@@ -12,7 +12,6 @@ use tir::NodeId;
 use tir::attributes::Predicate;
 use tir::builtin::{FloatType, IntegerType, UnitType, ops as b};
 use tir::cfg::ops as cb;
-use tir::fp::ops as fp;
 use tir::func::ops as func_ops;
 use tir::ptr::{PtrType, ops as p};
 use tir::{Operand, Operation, TypeId, ValueId};
@@ -64,15 +63,13 @@ impl FnCodegen<'_> {
                     .iter()
                     .enumerate()
                     .map(|(index, piece)| {
-                        b::TupleGetOp::new(
-                            self.context,
-                            tuple,
-                            tir::attributes::AttributeValue::UInt(index as u64),
-                            piece.ty,
-                            Default::default(),
-                            self.builder.end(),
-                        )
-                        .result()
+                        b::TupleGetOpBuilder::new(self.context)
+                            .tuple(tuple)
+                            .index(index as u64)
+                            .result_type(piece.ty)
+                            .at(self.builder.end())
+                            .build()
+                            .result()
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -82,15 +79,9 @@ impl FnCodegen<'_> {
             };
             for (piece, value) in abi_param.pieces.iter().zip(values) {
                 let address = self.offset_address(slot.ptr, piece.offset);
-                p::store(
-                    self.context,
-                    value,
-                    address,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                );
+                p::store(self.context, value, address)
+                    .at(self.builder.end())
+                    .build();
             }
             self.locals.insert(node_entity(self.typed, param), slot);
         }
@@ -137,13 +128,9 @@ impl FnCodegen<'_> {
         self.context.get_region(self.region).add_block(exit.id());
         self.enter_block(exit);
         let operand = self.return_operand(result, returns_void);
-        func_ops::r#return(
-            self.context,
-            operand,
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        func_ops::r#return(self.context, operand)
+            .at(self.builder.end())
+            .build();
         self.terminated = true;
         Ok(())
     }
@@ -191,13 +178,9 @@ impl FnCodegen<'_> {
         if self.terminated {
             return;
         }
-        cb::br(
-            self.context,
-            arguments,
-            block.id(),
-            Default::default(),
-            self.builder.end(),
-        );
+        cb::br(self.context, arguments, block.id())
+            .at(self.builder.end())
+            .build();
         self.terminated = true;
     }
 
@@ -214,9 +197,9 @@ impl FnCodegen<'_> {
             vec![],
             if_true.id(),
             if_false.id(),
-            Default::default(),
-            self.builder.end(),
-        );
+        )
+        .at(self.builder.end())
+        .build();
         self.terminated = true;
     }
 
@@ -268,22 +251,18 @@ impl FnCodegen<'_> {
             AstKind::Break => {
                 match self.break_targets.last().cloned().unwrap() {
                     ExitTarget::Block(block) => self.leave_block(&block),
-                    ExitTarget::Loop => self.terminate_with(cir::ops::r#break(
-                        self.context,
-                        Default::default(),
-                        self.terminator_insertion(),
-                    )),
+                    ExitTarget::Loop => self.terminate_with(|context, insertion| {
+                        cir::ops::r#break(context).at(insertion).build()
+                    }),
                 }
                 Ok(())
             }
             AstKind::Continue => {
                 match self.continue_targets.last().cloned().unwrap() {
                     ExitTarget::Block(block) => self.leave_block(&block),
-                    ExitTarget::Loop => self.terminate_with(cir::ops::r#continue(
-                        self.context,
-                        Default::default(),
-                        self.terminator_insertion(),
-                    )),
+                    ExitTarget::Loop => self.terminate_with(|context, insertion| {
+                        cir::ops::r#continue(context).at(insertion).build()
+                    }),
                 }
                 Ok(())
             }
@@ -320,14 +299,11 @@ impl FnCodegen<'_> {
                 }
                 let condition_region = self.lower_condition_region(condition, false)?;
                 let body_region = self.lower_body_region(body)?;
-                cir::WhileOp::new(
-                    self.context,
-                    Some(condition_region),
-                    Some(body_region),
-                    Default::default(),
-                    self.builder.end(),
-                );
-
+                cir::WhileOpBuilder::new(self.context)
+                    .condition_region(condition_region)
+                    .body_region(body_region)
+                    .at(self.builder.end())
+                    .build();
                 Ok(())
             }
             AstKind::DoWhile => {
@@ -339,14 +315,11 @@ impl FnCodegen<'_> {
                 }
                 let body_region = self.lower_body_region(body)?;
                 let condition_region = self.lower_condition_region(condition, false)?;
-                cir::DoOp::new(
-                    self.context,
-                    Some(body_region),
-                    Some(condition_region),
-                    Default::default(),
-                    self.builder.end(),
-                );
-
+                cir::DoOpBuilder::new(self.context)
+                    .body_region(body_region)
+                    .condition_region(condition_region)
+                    .at(self.builder.end())
+                    .build();
                 Ok(())
             }
             AstKind::For => {
@@ -365,22 +338,17 @@ impl FnCodegen<'_> {
                 let body_region = self.lower_body_region(body)?;
                 let step_region = self.lower_region(|cg| {
                     cg.lower_for_step(step)?;
-                    cg.terminate_with(cir::ops::r#yield(
-                        cg.context,
-                        Default::default(),
-                        cg.terminator_insertion(),
-                    ));
+                    cg.terminate_with(|context, insertion| {
+                        cir::ops::r#yield(context).at(insertion).build()
+                    });
                     Ok(())
                 })?;
-                cir::ForOp::new(
-                    self.context,
-                    Some(condition_region),
-                    Some(step_region),
-                    Some(body_region),
-                    Default::default(),
-                    self.builder.end(),
-                );
-
+                cir::ForOpBuilder::new(self.context)
+                    .condition_region(condition_region)
+                    .step_region(step_region)
+                    .body_region(body_region)
+                    .at(self.builder.end())
+                    .build();
                 Ok(())
             }
             AstKind::Switch => self.lower_switch(stmt),
@@ -477,12 +445,9 @@ impl FnCodegen<'_> {
             } else {
                 cg.lower_condition(condition)?
             };
-            cg.terminate_with(cir::ops::condition(
-                cg.context,
-                value,
-                Default::default(),
-                cg.terminator_insertion(),
-            ));
+            cg.terminate_with(|context, insertion| {
+                cir::ops::condition(context, value).at(insertion).build()
+            });
             Ok(())
         })
     }
@@ -495,11 +460,9 @@ impl FnCodegen<'_> {
             cg.continue_targets.pop();
             cg.break_targets.pop();
             lowered?;
-            cg.terminate_with(cir::ops::r#yield(
-                cg.context,
-                Default::default(),
-                cg.terminator_insertion(),
-            ));
+            cg.terminate_with(|context, insertion| {
+                cir::ops::r#yield(context).at(insertion).build()
+            });
             Ok(())
         })
     }
@@ -521,15 +484,14 @@ impl FnCodegen<'_> {
         lowered.map(|()| region.id())
     }
 
-    fn terminator_insertion(&self) -> tir::InsertionPoint {
+    fn terminate_with<T: Operation>(
+        &mut self,
+        build: impl FnOnce(&tir::Context, tir::InsertionPoint) -> T,
+    ) {
         if self.terminated {
-            tir::InsertionPoint::Root
-        } else {
-            self.builder.end()
+            return;
         }
-    }
-
-    fn terminate_with(&mut self, _terminator: impl Operation) {
+        build(self.context, self.builder.end());
         self.terminated = true;
     }
 
@@ -568,14 +530,13 @@ impl FnCodegen<'_> {
             })
             .collect();
         let default = default.as_ref().unwrap_or(&exit).id();
-        self.terminate_with(tir::cfg::SwitchOp::with_successors(
-            self.context,
-            value,
-            cases,
-            (default, vec![]),
-            Default::default(),
-            self.terminator_insertion(),
-        ));
+        self.terminate_with(|context, insertion| {
+            tir::cfg::SwitchOpBuilder::new(context)
+                .selector(value)
+                .successors(cases, (default, vec![]))
+                .at(insertion)
+                .build()
+        });
 
         self.break_targets.push(ExitTarget::Block(exit.clone()));
         let lowered = self.lower_switch_arms(&items, &arms);
@@ -630,23 +591,13 @@ impl FnCodegen<'_> {
         let Some(slot) = self.return_slot else {
             return;
         };
-        let zero = b::constant(
-            self.context,
-            0,
-            slot.elem,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
-        p::store(
-            self.context,
-            zero,
-            slot.ptr,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        let zero = b::constant(self.context, 0, slot.elem)
+            .at(self.builder.end())
+            .build()
+            .result();
+        p::store(self.context, zero, slot.ptr)
+            .at(self.builder.end())
+            .build();
     }
 
     fn return_operand(&mut self, result: QualType, returns_void: bool) -> Operand {
@@ -665,29 +616,21 @@ impl FnCodegen<'_> {
             return Operand::from(self.abi_return_value(slot.ptr, result));
         }
         Operand::from(
-            p::load(
-                self.context,
-                slot.ptr,
-                slot.elem,
-                vec![],
-                vec![],
-                Default::default(),
-                self.builder.end(),
-            )
-            .result(),
+            p::load(self.context, slot.ptr, slot.elem)
+                .at(self.builder.end())
+                .build()
+                .result(),
         )
     }
 
     fn lower_for_condition(&mut self, condition: NodeId) -> Result<ValueId, Diagnostic> {
         if self.ast.get_node(condition).kind == AstKind::Empty {
-            return Ok(b::constant(
-                self.context,
-                1,
-                IntegerType::new(self.context, 1),
-                Default::default(),
-                self.builder.end(),
-            )
-            .result());
+            return Ok(
+                b::constant(self.context, 1, IntegerType::new(self.context, 1))
+                    .at(self.builder.end())
+                    .build()
+                    .result(),
+            );
         }
         self.lower_condition(condition)
     }
@@ -813,14 +756,10 @@ impl FnCodegen<'_> {
         if self.context.get_value(value).ty() != IntegerType::new(self.context, 1) {
             return value;
         }
-        b::extui(
-            self.context,
-            value,
-            target,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        b::extui(self.context, value, target)
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     pub(super) fn store_scalar(
@@ -830,15 +769,9 @@ impl FnCodegen<'_> {
         target: TypeId,
     ) -> ValueId {
         let value = self.promote_boolean_result(value, target);
-        p::store(
-            self.context,
-            value,
-            address,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        p::store(self.context, value, address)
+            .at(self.builder.end())
+            .build();
         value
     }
 
@@ -851,33 +784,17 @@ impl FnCodegen<'_> {
                 Predicate::Ne => Predicate::Une,
                 _ => unreachable!("truth conversion uses equality predicates"),
             };
-            return fp::CmpOp::new(
-                self.context,
-                value,
-                zero,
-                tir::attributes::AttributeValue::Predicate(predicate),
-                tir::attributes::AttributeValue::FpSemantics(self.comparison_semantics()),
-                IntegerType::new(self.context, 1),
-                vec![],
-                vec![],
-                Default::default(),
-                self.builder.end(),
-            )
-            .result();
+            return self.emit_fp_compare(predicate, value, zero);
         }
         let narrow =
             IntegerType::view(&self.context, ty).is_some_and(|integer| integer.width() < 32);
         let (value, ty) = if narrow {
             let i32_ty = IntegerType::new(self.context, 32);
             (
-                b::extui(
-                    self.context,
-                    value,
-                    i32_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result(),
+                b::extui(self.context, value, i32_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result(),
                 i32_ty,
             )
         } else {
@@ -887,17 +804,17 @@ impl FnCodegen<'_> {
             let null = self.null_pointer();
             return self.lower_pointer_compare(predicate, value, null);
         }
-        let zero =
-            b::constant(self.context, 0, ty, Default::default(), self.builder.end()).result();
-        b::CmpIOp::new(
-            self.context,
-            value,
-            zero,
-            tir::attributes::AttributeValue::Predicate(predicate),
-            IntegerType::new(self.context, 1),
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        let zero = b::constant(self.context, 0, ty)
+            .at(self.builder.end())
+            .build()
+            .result();
+        b::CmpIOpBuilder::new(self.context)
+            .lhs(value)
+            .rhs(zero)
+            .predicate(predicate)
+            .result_type(IntegerType::new(self.context, 1))
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 }

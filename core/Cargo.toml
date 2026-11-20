@@ -15,7 +15,6 @@ doctest = false
 tir-macros.workspace = true
 tir-egglog.workspace = true
 tir-ir-schema.workspace = true
-tir-pdl = { workspace = true, default-features = false }
 tir-symbolic.workspace = true
 tir-adt.workspace = true
 linkme.workspace = true
@@ -25,6 +24,9 @@ ariadne.workspace = true
 
 [features]
 egglog-rules = ["tir-egglog/parser"]
+
+[build-dependencies]
+tir-cdsl.workspace = true
 
 [dev-dependencies]
 tir-bench.workspace = true

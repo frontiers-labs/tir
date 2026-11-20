@@ -14,5 +14,6 @@ merge:
 }
 
 ; CHECK-LABEL: func.func @choose
-; CHECK: fp.constant
+; CHECK: %[[BITS:[0-9]+]] = constant {value = -4616189618054758400} : !i64
+; CHECK-NEXT: bitcast %[[BITS]] : !f64
 ; CHECK: func.return

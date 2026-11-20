@@ -1,8 +1,0 @@
-// A `#` term must name a semantic operator, at an arity that operator takes.
-// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
-
-rule unknown: #gamma(c, x, x) => x;
-rule wrong-arity: #add(a, b, c) => a;
-
-// CHECK: unknown semantic operator '#gamma'
-// CHECK: '#add' takes 2 operands

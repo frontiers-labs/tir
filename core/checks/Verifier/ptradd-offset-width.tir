@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 // RUN: not tir mc --march=riscv64 --stage=isel %s 2>&1 | filecheck %s
 
 // A pointer offset is as wide as the pointer the layout declares: a narrower
@@ -14,4 +14,4 @@ module {target_env = {arch = "x86_64"}} {
   module_end
 }
 
-// CHECK: ptr.ptradd offset must be 64 bits wide, the pointer width
+// CHECK: failed typechecking: pointer offset width

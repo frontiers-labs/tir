@@ -1,0 +1,26 @@
+pub let sizeof = {
+    rust_name: "SizeOfOp",
+    name: "sizeof",
+    dialect: "layout",
+    results: { result: "int<_>" },
+    attributes: { ty: "Type" },
+    state: "none",
+};
+
+pub let alignof = {
+    rust_name: "AlignOfOp",
+    name: "alignof",
+    dialect: "layout",
+    results: { result: "int<_>" },
+    attributes: { ty: "Type" },
+    state: "none",
+};
+
+pub let offsetof = {
+    rust_name: "OffsetOfOp",
+    name: "offsetof",
+    dialect: "layout",
+    results: { result: "int<_>" },
+    attributes: { ty: "Type", field: "Str" },
+    state: "none",
+};

@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // The new gamma's arms are unordered regions; a block-structured arm parses
 // but does not verify.
@@ -13,4 +13,4 @@ module {
   module_end
 }
 
-// CHECK: switch declares a Nodes region, but holds blocks
+// CHECK: failed typechecking: region shape

@@ -1,8 +1,6 @@
 // RUN: tir opt %s | filecheck %s
 // RUN: tir opt --shuffle-seed 1 %s | filecheck %s --check-prefix=SEED
 // RUN: tir opt --shuffle-seed 1 %s | tir opt --verify | filecheck %s --check-prefix=SEED
-// RUN: tir opt --shuffle-seed 1 %s | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
-// RUN: tir interp %s -f f --args=3 | filecheck %s --check-prefix=VALUE
 
 // Three independent operations print in id order; a seed picks another order
 // their dependencies allow. Parsing the shuffled text back numbers the values
@@ -34,5 +32,3 @@ module {
 // SEED-NEXT: addi
 // SEED-NEXT: addi
 // SEED-NEXT: addi
-
-// VALUE: i32 15

@@ -1,8 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,affine,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,affine %s | tir interp - | filecheck %s --check-prefix=VALUE
 
 // The nest of `nodes-interchange.tir`, but the function returns the outer
 // loop's final counter. A rebuilt nest counts with fresh loops and leaves no
@@ -51,5 +49,3 @@ module {layout.spec = #layout_spec} {
 // The word index is still the inner counter: nothing was interchanged.
 // CHECK: extsi %[[OUTER]]
 // CHECK: extsi %[[INNER]]
-
-// VALUE: i32 16

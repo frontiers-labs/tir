@@ -429,14 +429,10 @@ impl FnCodegen<'_> {
         let ir_type = lower_type(self.context, self.typed, target);
         let value = match self.typed.types().kind(target) {
             TypeKind::Float | TypeKind::Double => self.float_zero(ir_type),
-            TypeKind::Integer(_) | TypeKind::Enum(_) => b::constant(
-                self.context,
-                0,
-                ir_type,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result(),
+            TypeKind::Integer(_) | TypeKind::Enum(_) => b::constant(self.context, 0, ir_type)
+                .at(self.builder.end())
+                .build()
+                .result(),
             _ => {
                 return Err(unsupported(
                     self.ast,
@@ -445,15 +441,9 @@ impl FnCodegen<'_> {
                 ));
             }
         };
-        p::store(
-            self.context,
-            value,
-            address,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        p::store(self.context, value, address)
+            .at(self.builder.end())
+            .build();
         Ok(())
     }
 }

@@ -16,5 +16,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "defs/perf.tmdl",
             "defs/cpu/intel/tiger_lake.tmdl",
         ],
+        |source, package| Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?),
     )
 }

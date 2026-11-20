@@ -1,7 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass destructure --verify %s | filecheck %s
-// RUN: tir opt --pass destructure %s | tir interp | filecheck --check-prefix=VALUE %s
 
 // The continue edge carries the header's state back while the exit cone
 // stores through it. Each cone block is entered on the states it reads, so
@@ -40,5 +39,3 @@ module {
 // CHECK-NEXT: %[[STORED:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[SLOT]] state(%[[ES]])
 // CHECK-NEXT: %[[FINAL:[0-9]+]] = ptr.load %[[SLOT]] state(%[[STORED]]) : !i32
 // CHECK-NEXT: func.return %[[FINAL]]
-
-// VALUE: i32 42

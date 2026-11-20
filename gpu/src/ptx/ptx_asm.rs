@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
 use tir::backend::asm_syntax::{AsmSyntaxPart, InstrSyntax};
 use tir::backend::{SectionOp, SymbolEndOp, SymbolOp};
-use tir::builtin::{ModuleEndOp, ModuleOp};
-use tir::{Context, NewOp, OpHandle, OpId, Operation};
+use tir::builtin::{ModuleEndOpBuilder, ModuleOp, ModuleOpBuilder};
+use tir::{Context, NewOp, OpHandle, OpId};
 
-use super::LabelOp;
+use super::{LabelOp, LabelOpBuilder};
 
 // ---------------------------------------------------------------------------
 // Tokenizer
@@ -538,74 +538,57 @@ fn parse_instruction(
     Err(format!("no matching form for `{line}`"))
 }
 
-fn build_op(
-    context: &Context,
-    name: &'static str,
-    attributes: Vec<NamedAttribute>,
-    insertion: tir::InsertionPoint,
-) -> OpId {
-    let inst = NewOp::new_dynamic(
-        ("ptx", name),
-        context.clone(),
-        vec![],
-        vec![],
-        vec![],
-        attributes,
-    );
-    context.add_operation(insertion, inst).id
-}
-
 /// Parse PTX assembly text into a module.
 pub fn parse(context: &Context, text: &str) -> Result<ModuleOp, String> {
     let cleaned = strip_comments(text);
     let (preamble, kernels) = split_kernels(&cleaned);
     let index = syntax_index();
 
-    let module = ModuleOp::new(context, None, Default::default(), tir::InsertionPoint::Root);
-    let section = tir::backend::SectionOp::new(
-        context,
-        None,
-        tir::NewOpParts {
-            attributes: vec![
-                context.named_attribute("ptx_preamble", AttributeValue::Str(preamble.into())),
-            ],
-        },
-        module.body().end(),
-    );
-    ModuleEndOp::new(context, Default::default(), module.body().end());
+    let module = ModuleOpBuilder::new(context).build();
+    let module_body = module.body();
+    let section = tir::backend::SectionOpBuilder::new(context)
+        .attr("ptx_preamble", AttributeValue::Str(preamble.into()))
+        .at(module_body.end())
+        .build();
+    ModuleEndOpBuilder::new(context)
+        .at(module_body.end())
+        .build();
 
     let section_body = section.body();
     for kernel in kernels {
-        let symbol = tir::backend::SymbolOp::new(
-            context,
-            None,
-            tir::NewOpParts {
-                attributes: vec![
-                    context.named_attribute("name", AttributeValue::Str(kernel.name.into())),
-                    (context)
-                        .named_attribute("ptx_header", AttributeValue::Str(kernel.header.into())),
-                    context.named_attribute("ptx_regs", AttributeValue::Str(kernel.regs.into())),
-                ],
-            },
-            section_body.end(),
-        );
+        let symbol = tir::backend::SymbolOpBuilder::new(context)
+            .attr("name", AttributeValue::Str(kernel.name.into()))
+            .attr("ptx_header", AttributeValue::Str(kernel.header.into()))
+            .attr("ptx_regs", AttributeValue::Str(kernel.regs.into()))
+            .at(section_body.end())
+            .build();
         let body = symbol.body();
         for item in body_items(&kernel.body) {
             match item {
-                BodyItem::Label(name) => LabelOp::new(
-                    context,
-                    tir::attributes::AttributeValue::Str((name).into()),
-                    Default::default(),
-                    body.end(),
-                )
-                .id(),
+                BodyItem::Label(name) => {
+                    LabelOpBuilder::new(context)
+                        .name(name)
+                        .at(body.end())
+                        .try_build()
+                        .map_err(|error| error.to_string())?;
+                }
                 BodyItem::Instruction(line) => {
                     let (op_name, attrs) = parse_instruction(context, &index, line.trim())?;
-                    build_op(context, op_name, attrs, body.end())
+                    let instance = NewOp::new_dynamic(
+                        ("ptx", op_name),
+                        context.clone(),
+                        vec![],
+                        vec![],
+                        vec![],
+                        attrs,
+                    );
+                    context.add_operation(body.end(), instance);
                 }
-            };
+            }
         }
-        tir::backend::SymbolEndOp::new(context, Default::default(), body.end());
+        tir::backend::SymbolEndOpBuilder::new(context)
+            .at(body.end())
+            .build();
     }
 
     Ok(module)
@@ -627,21 +610,28 @@ fn attr_bool(op: &OpHandle, name: &str) -> bool {
 }
 
 fn render_operand(op: &OpHandle, name: &str) -> Result<String, String> {
-    if let Some((class, index)) = tir::backend::register_attr(op, name) {
-        return Ok(format!("{}{}", class.name().to_lowercase(), index));
-    }
-
     let value = op
         .attr(name)
         .ok_or_else(|| format!("op `{}` missing operand `{name}`", op.name().as_str()))?;
     Ok(match value {
+        AttributeValue::Register(RegisterAttr::Physical { class, index }) => {
+            format!("{}{index}", class.name().to_ascii_lowercase())
+        }
+
         AttributeValue::Str(s) => s.to_string(),
         AttributeValue::Int(i) => i.to_string(),
+        AttributeValue::UInt(i) => i.to_string(),
         other => format!("{other:?}"),
     })
 }
 
 fn print_instruction(op: &OpHandle, syntax: &InstrSyntax, out: &mut String) -> Result<(), String> {
+    if !op.operands().is_empty() || !op.results().is_empty() {
+        return Err(format!(
+            "op `{}` requires assembly form",
+            op.name().as_str()
+        ));
+    }
     out.push('\t');
     if let Some(pred) = attr_str(op, "pred") {
         out.push('@');

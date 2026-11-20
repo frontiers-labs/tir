@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::path::Path;
 
 use tmdl::{Action, Compiler, OutputKind};
 
@@ -39,11 +40,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 builder = builder.split_input(input);
             }
         }
-        builder.build().compile()
+        builder.build().compile_with_rust_writer(|source, package| {
+            Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?)
+        })
     };
 
     compile(Action::EmitRust, "ptx.rs")?;
     compile(Action::EmitOperationList, "ptx_ops.rs")?;
 
+    build_spirv(Path::new(&out_dir))?;
+    Ok(())
+}
+
+fn build_spirv(out_dir: &Path) -> Result<(), Box<dyn Error>> {
+    let source = Path::new("src/spirv");
+    for file in ["lib.cdsl", "manual.cdsl", "generated.cdsl"] {
+        println!("cargo:rerun-if-changed={}", source.join(file).display());
+    }
+    let package = tir_cdsl::CheckedProgram::compile_for_rust(&source.join("lib.cdsl"))?;
+    for module in ["manual", "generated"] {
+        let rust = package.emit_rust_filter("gpu", &format!("gpu::{module}::*"))?;
+        std::fs::write(out_dir.join(format!("spirv_{module}.rs")), rust)?;
+    }
     Ok(())
 }

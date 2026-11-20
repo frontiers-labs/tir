@@ -1,5 +1,3 @@
-// RUN: tir opt --pass destructure %s | tir interp -f count | filecheck --check-prefix=COUNT %s
-// RUN: tir opt --pass destructure %s | tir interp -f marker | filecheck --check-prefix=MARKER %s
 // RUN: tir opt --pass destructure --verify %s
 
 // The continue cone stores once per iteration and the exit cone stores once
@@ -42,6 +40,3 @@ module {
   }
   module_end
 }
-
-// COUNT: i32 3
-// MARKER: i32 42

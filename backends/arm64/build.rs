@@ -13,5 +13,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "./defs/perf.tmdl",
             "./defs/cpu/arm/cortex_a720.tmdl",
         ],
+        |source, package| Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?),
     )
 }

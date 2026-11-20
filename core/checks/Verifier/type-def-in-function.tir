@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // Types belong to the module: a function cannot define one.
 
@@ -10,4 +10,4 @@ module {
   module_end
 }
 
-// CHECK: type definition `!Node` inside function `@f`; move it to module scope
+// CHECK: failed typechecking: type definition outside module scope

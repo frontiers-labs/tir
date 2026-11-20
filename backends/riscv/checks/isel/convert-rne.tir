@@ -1,8 +1,6 @@
 // IR migration: instruction selection and backend lowering are unavailable.
 // XFAIL: *
 // RUN: tir mc --march=rv64ifd --stage=isel %s | filecheck %s --check-prefix=ISEL
-// RUN: tir interp --function=invalid %s | filecheck %s --check-prefix=NANIR
-// RUN: tir interp %s | filecheck %s --check-prefix=INTERP
 // RUN: tir mc --march=rv64ifd --filetype=asm -o /tmp/tir-riscv-convert-rne.s %s
 // RUN: isasim --march=rv64ifd --entry=main --until-pc=0 --trace-registers-end /tmp/tir-riscv-convert-rne.s | filecheck %s --check-prefix=EXEC
 // RUN: isasim --march=rv64ifd --entry=invalid --until-pc=0 --trace-registers-end /tmp/tir-riscv-convert-rne.s | filecheck %s --check-prefix=NANFLAGS
@@ -37,14 +35,12 @@ module {
   module_end
 }
 
-// INTERP: i64 513
 // EXEC: final registers:
 // EXEC-DAG: GPR[10] = 0x201
 // EXEC-DAG: CSR[1] = 0x1
 
 // ISEL-COUNT-2: riscv.fcvt.l.d.rne {{.*}} state(
 
-// NANIR: i64 16
 // NANFLAGS: final registers:
 // NANFLAGS-DAG: GPR[10] = 0x10
 // NANFLAGS-DAG: CSR[1] = 0x10

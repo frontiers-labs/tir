@@ -1,7 +1,5 @@
 // IR migration: instruction selection and backend lowering are unavailable.
 // XFAIL: *
-// RUN: tir interp %s -f advance --args=5 | filecheck --check-prefix=VALUE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f advance --args=5 | filecheck --check-prefix=VALUE %s
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 // RUN: tir mc --march=x86_64 --filetype=obj %s -o /dev/null
 
@@ -20,7 +18,6 @@ module {
   module_end
 }
 
-// VALUE: i64 10
 // CHECK: x86_64.mov_imm {dst = %[[TEN:[0-9]+]]:GPR, imm = 10}
 // CHECK: asm.vbr %{{[0-9]+}} ^[[HEAD:bb[0-9]+]]
 // CHECK: ^[[HEAD]](%[[X:[0-9]+]]: !x86_64.GPR):

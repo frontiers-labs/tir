@@ -7,21 +7,12 @@ use crate::{Context, Error, TypeId};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StateResource {
     Memory,
-    FpEnv,
 }
 
 impl StateResource {
     pub fn name(self) -> &'static str {
         match self {
             Self::Memory => "memory",
-            Self::FpEnv => "fp.env",
-        }
-    }
-
-    pub fn semantic_code(self) -> u64 {
-        match self {
-            Self::Memory => tir_symbolic::lang::StateResourceKind::Memory as u64,
-            Self::FpEnv => tir_symbolic::lang::StateResourceKind::FpEnvironment as u64,
         }
     }
 }
@@ -37,7 +28,6 @@ impl StateType {
     pub fn new(_context: &Context, resource: StateResource) -> TypeId {
         match resource {
             StateResource::Memory => TypeId::STATE,
-            StateResource::FpEnv => TypeId::FP_ENV,
         }
     }
 
@@ -45,21 +35,12 @@ impl StateType {
         Self::new(context, StateResource::Memory)
     }
 
-    pub fn fp_env(context: &Context) -> TypeId {
-        Self::new(context, StateResource::FpEnv)
-    }
-
-    /// The state `ty` is. Every store interns the two resources above first,
-    /// so telling a state from a value compares ids and reads no term.
+    /// The state `ty` is. Every store interns memory state first, so this
+    /// compares ids and reads no term.
     pub fn view(ty: TypeId) -> Option<Self> {
-        let resource = if ty == TypeId::STATE {
-            StateResource::Memory
-        } else if ty == TypeId::FP_ENV {
-            StateResource::FpEnv
-        } else {
-            return None;
-        };
-        Some(Self { resource })
+        (ty == TypeId::STATE).then_some(Self {
+            resource: StateResource::Memory,
+        })
     }
 
     pub fn resource(&self) -> StateResource {
@@ -74,14 +55,13 @@ impl StateType {
                 if !parser.parse_token("<") {
                     return Err((parser.span(), Error::ExpectedToken("<")));
                 }
-                let resource = [StateResource::Memory, StateResource::FpEnv]
-                    .into_iter()
-                    .find(|resource| parser.parse_token(resource.name()))
-                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("state resource")))?;
+                if !parser.parse_token(StateResource::Memory.name()) {
+                    return Err((parser.span(), Error::ExpectedToken("state resource")));
+                }
                 if !parser.parse_token(">") {
                     return Err((parser.span(), Error::ExpectedToken(">")));
                 }
-                Ok(Self::new(context, resource))
+                Ok(Self::memory(context))
             },
             print: |spellings, ty, fmt| match Self::view(ty) {
                 Some(state) => fmt.write(format!("state<{}>", state.resource.name())),

@@ -11,7 +11,6 @@ use tir_x86_64 as _;
 mod common;
 
 pub mod egglog;
-pub mod interp;
 pub mod llvm_import;
 pub mod mc;
 pub mod model_check;
@@ -27,7 +26,6 @@ pub fn tools_main() -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Egglog(args) => egglog::run(args),
         Command::Mc(args) => mc::run(args),
-        Command::Interp(args) => interp::run(args),
         Command::ModelCheck(args) => model_check::run(args),
         Command::Opt(args) => opt::run(args),
         Command::Prove(args) => prove::run(args),
@@ -45,8 +43,6 @@ pub enum Command {
     Egglog(egglog::ToolArgs),
     /// Compile machine code
     Mc(mc::ToolArgs),
-    /// Interpret a function from TIR input
-    Interp(interp::ToolArgs),
     /// Model-check a hardware implementation against TMDL semantics
     ModelCheck(model_check::ToolArgs),
     /// Run optimizations on IR

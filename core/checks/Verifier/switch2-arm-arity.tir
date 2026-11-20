@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 module {
   %fn_main = func.func @main(%0: !i32, %1: !i32) -> !i32 {
@@ -13,4 +13,4 @@ module {
   module_end
 }
 
-// CHECK: scf.switch arm 1 produces 2 values but the op produces 1
+// CHECK: failed typechecking: gamma arm arity

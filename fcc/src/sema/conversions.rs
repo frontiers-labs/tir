@@ -302,6 +302,24 @@ impl Analyzer<'_> {
         self.type_layout(ty).map(|(size, _)| size)
     }
 
+    pub(super) fn is_complete_object_type(&self, mut ty: QualType) -> bool {
+        loop {
+            match self.types.kind(ty) {
+                TypeKind::Array(element, Some(_)) => ty = *element,
+                TypeKind::Record(id) => {
+                    return self
+                        .record_indices
+                        .get(id)
+                        .is_some_and(|&index| self.layouts.is_defined(&self.records[index].name));
+                }
+                TypeKind::Void | TypeKind::Function { .. } | TypeKind::Array(_, None) => {
+                    return false;
+                }
+                _ => return true,
+            }
+        }
+    }
+
     pub(super) fn type_layout(&self, ty: QualType) -> Option<(u64, u64)> {
         self.layouts.size_align(self.layout_type(ty)?)
     }
