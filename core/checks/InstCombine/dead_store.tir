@@ -1,20 +1,20 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
 
-// The second store overwrites the extent the first one wrote and nothing reads
-// the state between them, so the first store leaves memory as it found it.
+// An ordinary write of a defined value can be bypassed when the next write
+// overwrites the exact cell and no other use observes the intermediate state.
 
 module {
   %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) {
+    %defined = freeze %1 : !i32
     %3 = state.entry_state : !state<memory>
-    %4 = ptr.store %1, %0 state(%3)
+    %4 = ptr.store %defined, %0 state(%3)
     %5 = ptr.store %2, %0 state(%4)
     func.return state(%5)
   }
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: {{.*}}, %[[B:[0-9]+]]: {{.*}})
-// CHECK-NOT: ptr.store %[[A]],
-// CHECK: ptr.store %[[B]], %[[P]]
+// CHECK-LABEL: func.func @f(%[[P:[0-9]+]]: !ptr.p<!i32>, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
+// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: %[[FINAL:[0-9]+]] = ptr.store %[[B]], %[[P]] state(%[[ENTRY]])
+// CHECK-NEXT: func.return state(%[[FINAL]])

@@ -3,6 +3,7 @@
 pub mod affine;
 pub mod dce;
 pub mod destructure;
+pub mod eqsat;
 pub mod erase_layout;
 pub mod inline;
 pub mod instcombine;
@@ -17,6 +18,7 @@ pub mod verify_deps;
 pub use affine::AffineSchedulePass;
 pub use dce::DeadCodeEliminationPass;
 pub use destructure::DestructurePass;
+pub use eqsat::EqSatPass;
 pub use erase_layout::EraseLayoutPass;
 pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombineNodesPass;

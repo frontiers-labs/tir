@@ -857,7 +857,7 @@ fn adopt_writes_the_rows_and_unions_of_a_color_into_the_base() {
     db.union_in(color, a, b);
     db.rebuild().unwrap();
 
-    db.adopt(color);
+    db.adopt(color).unwrap();
     db.rebuild().unwrap();
     assert_eq!(db.find(a), db.find(b));
     assert_eq!(db.find(fa), db.find(fb));
@@ -886,7 +886,7 @@ fn a_removal_in_a_color_reaches_the_base_only_through_adopt() {
     assert_eq!(rows_in(&db, other), vec![vec![a], vec![b]]);
     assert_eq!(rows_in(&db, Color::BASE), vec![vec![a], vec![b]]);
 
-    db.adopt(color);
+    db.adopt(color).unwrap();
     db.rebuild().unwrap();
     assert_eq!(rows_in(&db, Color::BASE), vec![vec![b]]);
     assert_eq!(rows_in(&db, other), vec![vec![b]]);
@@ -910,7 +910,7 @@ fn ids_a_color_made_stay_base_ids_after_adopt() {
     program.run(&mut db, &Schedule::saturate(""), &[]).unwrap();
     let made = db.lookup_in(color, f, &[a]).unwrap();
 
-    db.adopt(color);
+    db.adopt(color).unwrap();
     db.rebuild().unwrap();
     assert_eq!(db.lookup(f, &[a]), Some(made));
     assert_eq!(db.lookup(s, &[made]), Some(Value::new(0)));
@@ -935,7 +935,7 @@ fn removed_keys_follow_base_unions_through_adoption() {
     db.union(a, b);
     db.rebuild().unwrap();
     assert_eq!(db.rows_in(c, relation).count(), 0);
-    db.adopt(c);
+    db.adopt(c).unwrap();
     db.rebuild().unwrap();
     assert_eq!(db.rows(relation).count(), 0);
 }

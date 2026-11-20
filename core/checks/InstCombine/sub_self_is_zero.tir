@@ -1,11 +1,12 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass eqsat --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+// Freeze the discarded operand to state the defined-input contract.
 
 module {
   %fn_f = func.func @f(%0: !i32) -> !i32 {
-    %1 = subi %0, %0 : !i32
+    %defined = freeze %0 : !i32
+    %1 = subi %defined, %defined : !i32
     func.return %1
   }
   module_end

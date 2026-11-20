@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
 
 module {
   %fu = func.func @udiv_one(%x: !i32) -> !i32 {
@@ -15,12 +13,14 @@ module {
   }
   %fur = func.func @urem_one(%x: !i32) -> !i32 {
     %one = constant {value = 1} : !i32
-    %r = remui %x, %one : !i32
+    %defined = freeze %x : !i32
+    %r = remui %defined, %one : !i32
     func.return %r
   }
   %fsr = func.func @srem_one(%x: !i32) -> !i32 {
     %one = constant {value = 1} : !i32
-    %r = remsi %x, %one : !i32
+    %defined = freeze %x : !i32
+    %r = remsi %defined, %one : !i32
     func.return %r
   }
   module_end
@@ -28,16 +28,18 @@ module {
 
 // CHECK-LABEL: func.func @udiv_one(%[[UX:[0-9]+]]: !i32)
 // CHECK-NOT: divui
-// CHECK: -> %[[UX]]
+// CHECK: func.return %[[UX]]
 
 // CHECK-LABEL: func.func @sdiv_one(%[[SX:[0-9]+]]: !i32)
 // CHECK-NOT: divsi
-// CHECK: -> %[[SX]]
+// CHECK: func.return %[[SX]]
 
 // CHECK-LABEL: func.func @urem_one
 // CHECK-NOT: remui
-// CHECK: constant {value = 0} : !i32
+// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
+// CHECK-NEXT: func.return %[[ZERO]]
 
 // CHECK-LABEL: func.func @srem_one
 // CHECK-NOT: remsi
-// CHECK: constant {value = 0} : !i32
+// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
+// CHECK-NEXT: func.return %[[ZERO]]

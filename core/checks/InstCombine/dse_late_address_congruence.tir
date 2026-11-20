@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
 
 // The read after the first write names an address the graph cannot yet read
 // back to the slot: its offset is a term that only folds to zero once
@@ -13,11 +11,12 @@
 
 module {layout.spec = #layout_spec} {
   %fn_f = func.func @f(%0: !i64, %1: !i64) -> !i32 {
+    %defined = freeze %0 : !i64
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
-    ptr.store %0, %3
+    ptr.store %defined, %3
     %4 = ptr.load %3 : !i64
-    %5 = subi %4, %0 : !i64
+    %5 = subi %4, %defined : !i64
     %6 = ptr.ptradd %2, %5 : !ptr.p<!i32>
     %7 = ptr.ptradd %2, %1 : !ptr.p<!i32>
     %8 = constant {value = 42} : !i32
@@ -36,7 +35,12 @@ module {layout.spec = #layout_spec} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.store %8, %7
-// CHECK: %[[READ:[0-9]+]], %{{[0-9]+}} = ptr.load %2 state(%{{[0-9]+}}) : !i32
-// CHECK: muli %[[READ]]
+// CHECK-LABEL: func.func @f(%{{[0-9]+}}: !i64, %[[OFFSET:[0-9]+]]: !i64)
+// CHECK-NEXT: %[[BASE:[0-9]+]] = ptr.alloca
+// CHECK-NEXT: %[[SHIFTED:[0-9]+]] = ptr.ptradd %[[BASE]], %[[OFFSET]]
+// CHECK-NEXT: %[[UNKNOWN:[0-9]+]] = constant {value = 42} : !i32
+// CHECK-NEXT: ptr.store %[[UNKNOWN]], %[[SHIFTED]]
+// CHECK-NEXT: %[[READ:[0-9]+]] = ptr.load %[[BASE]] : !i32
+// CHECK: %[[SCALED:[0-9]+]] = muli %[[READ]],
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[SCALED]],
+// CHECK-NEXT: func.return %[[SUM]]

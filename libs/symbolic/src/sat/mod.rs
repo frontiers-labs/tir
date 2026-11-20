@@ -59,7 +59,16 @@ struct Clause {
     lits: Vec<Lit>,
 }
 
+struct ActivityIncrement(f64);
+
+impl Default for ActivityIncrement {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
 /// CDCL SAT solver: build with [`Solver::new_var`]/[`Solver::add_clause`], then [`Solver::solve`].
+#[derive(Default)]
 pub struct Solver {
     clauses: Vec<Clause>,
     /// `watches[l]`: clauses watching literal `l`, processed when `l` becomes false.
@@ -73,7 +82,7 @@ pub struct Solver {
     /// Saved last polarity per variable, for phase saving.
     phase: Vec<bool>,
     activity: Vec<f64>,
-    var_inc: f64,
+    var_inc: ActivityIncrement,
     /// Assignment stack in chronological order.
     trail: Vec<Lit>,
     /// Index into `trail` of the first not-yet-propagated literal.
@@ -92,31 +101,9 @@ pub struct Solver {
     seen: Vec<bool>,
 }
 
-impl Default for Solver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Solver {
     pub fn new() -> Self {
-        Solver {
-            clauses: Vec::new(),
-            watches: Vec::new(),
-            assign: Vec::new(),
-            level: Vec::new(),
-            reason: Vec::new(),
-            phase: Vec::new(),
-            activity: Vec::new(),
-            var_inc: 1.0,
-            trail: Vec::new(),
-            qhead: 0,
-            trail_lim: Vec::new(),
-            unsat: false,
-            order: Vec::new(),
-            order_slot: Vec::new(),
-            seen: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn num_vars(&self) -> usize {
@@ -476,12 +463,12 @@ impl Solver {
 
     fn bump(&mut self, var: Var) {
         let a = &mut self.activity[var.index()];
-        *a += self.var_inc;
+        *a += self.var_inc.0;
         if *a > 1e100 {
             for act in &mut self.activity {
                 *act *= 1e-100;
             }
-            self.var_inc *= 1e-100;
+            self.var_inc.0 *= 1e-100;
             // Scaling can round distinct activities into a tie.
             for slot in (0..self.order.len() / 2).rev() {
                 self.sift_down(slot);
@@ -494,7 +481,7 @@ impl Solver {
     }
 
     fn decay(&mut self) {
-        self.var_inc /= 0.95;
+        self.var_inc.0 /= 0.95;
     }
 }
 

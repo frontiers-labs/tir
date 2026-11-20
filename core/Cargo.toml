@@ -26,6 +26,7 @@ ariadne.workspace = true
 egglog-rules = ["tir-egglog/parser"]
 
 [build-dependencies]
+tir-ir-schema.workspace = true
 tir-cdsl.workspace = true
 
 [dev-dependencies]

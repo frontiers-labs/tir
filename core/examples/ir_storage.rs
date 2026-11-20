@@ -236,7 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .parent_region(module.body().id())
         .ok_or("module body region")?;
     let parameter = block.arguments()[0].id();
-    tir::check_types(&context, &[module.id()])?;
+    tir::check_types(&context)?;
     assert!(context.egraph().database().table_count() <= 20);
     assert_eq!(context.egraph().get_size("Successor"), 1);
     assert_eq!(

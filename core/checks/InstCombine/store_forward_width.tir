@@ -1,4 +1,4 @@
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass eqsat --verify %s | filecheck %s
 
 // The store wrote four bytes and the load reads two of them, so the load is not
 // the stored value.
@@ -13,5 +13,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.load
+// CHECK-LABEL: func.func @f
+// CHECK: %[[STATE:[0-9]+]] = ptr.store
+// CHECK-NEXT: %[[READ:[0-9]+]] = ptr.load {{.*}} state(%[[STATE]])
+// CHECK-NEXT: func.return %[[READ]]

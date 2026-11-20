@@ -1,6 +1,6 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+// The amount is unsigned, including when its printed integer is negative.
 
 module {
   %left = func.func @left(%x: !i64) -> !i64 {
@@ -16,9 +16,11 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @left
-// CHECK-NEXT: %[[ZERO:[0-9]+]] = constant {value = 0} : !i64
-// CHECK-NEXT: -> %[[ZERO]]
-// CHECK-LABEL: func.func @right
-// CHECK-NEXT: %[[ZERO:[0-9]+]] = constant {value = 0} : !i64
-// CHECK-NEXT: -> %[[ZERO]]
+// CHECK-LABEL: func.func @left(%[[ARG:[0-9]+]]: !i64)
+// CHECK: %[[AMOUNT:[0-9]+]] = constant {value = -9223372036854775808} : !i64
+// CHECK-NEXT: %[[VALUE:[0-9]+]] = shli %[[ARG]], %[[AMOUNT]]
+// CHECK-NEXT: func.return %[[VALUE]]
+// CHECK-LABEL: func.func @right(%[[ARG:[0-9]+]]: !i64)
+// CHECK: %[[AMOUNT:[0-9]+]] = constant {value = -1} : !i64
+// CHECK-NEXT: %[[VALUE:[0-9]+]] = shrui %[[ARG]], %[[AMOUNT]]
+// CHECK-NEXT: func.return %[[VALUE]]

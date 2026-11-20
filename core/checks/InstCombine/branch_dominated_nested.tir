@@ -1,11 +1,5 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
-
-// The `c == 1` fact holds throughout the arm the gate guards, however deeply the
-// restructured code nests inside it: the scope is pushed once and the nesting
-// carries it down with no re-assertion, and the redundant compare folds.
+// RUN: tir opt --pass fixpoint<3>(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
 
 module {
   %fn_nested = func.func @nested(%a: !i32, %b: !i32) -> !i1 {
@@ -22,8 +16,15 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @nested
-// CHECK: %[[C:[0-9]+]] = cmpi
+// CHECK-LABEL: func.func @nested
+// CHECK: %[[GUARD:[0-9]+]] = cmpi
+// CHECK-NEXT: cfg.cond_br %[[GUARD]], ^bb1, ^bb2
 // CHECK-NOT: cmpi
-// CHECK-NOT: scf.switch
-// CHECK: -> %[[C]]
+// CHECK: ^bb1:
+// CHECK-NEXT: cfg.br ^bb3
+// CHECK: ^bb2:
+// CHECK-NEXT: %[[FALSE:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT: func.return %[[FALSE]]
+// CHECK: ^bb3:
+// CHECK-NEXT: %[[TRUE:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: func.return %[[TRUE]]

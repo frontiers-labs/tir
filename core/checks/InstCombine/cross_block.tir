@@ -1,7 +1,5 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass eqsat %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) %s | filecheck %s
 
 // A value computed in the entry block feeds an op in a successor. The cross-block
 // value is opaque to the successor's e-graph, so addi(_, 0) still folds without

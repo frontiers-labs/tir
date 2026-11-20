@@ -1,5 +1,7 @@
 use tir::backend::binary::{encode_with, BinaryWriter, EncodedInst, ObjectFile, ObjectFormatInfo};
-use tir::backend::{MachineBlockLayoutPass, MachineInstruction, SectionOp, SymbolOp};
+use tir::backend::{
+    MachineBlockLayoutPass, MachineInstruction, RegAssignment, SectionOp, SymbolOp,
+};
 use tir::builtin::ModuleOp;
 use tir::{AnalysisManager, BlockId, Context, Operation, Pass};
 
@@ -79,7 +81,7 @@ fn encode(assembly: &Assembly, op_id: tir::OpId) -> EncodedInst {
         .as_interface::<dyn MachineInstruction>()
         .expect("machine instruction");
     let spec = instruction.info().encode.expect("encoded instruction");
-    encode_with(&op, spec).expect("instruction encodes")
+    encode_with(&op, spec, &RegAssignment::default()).expect("instruction encodes")
 }
 
 proptest::proptest! {

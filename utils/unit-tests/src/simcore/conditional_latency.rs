@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 use tir::backend::{AsmDialect, MachineContext};
-use tir::helpers::{dialect, operation};
+use tir::helpers::dialect;
 use tir_sim::{Executor, ProgramImage};
 
 include!(concat!(env!("OUT_DIR"), "/latency.rs"));

@@ -1,0 +1,42 @@
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
+
+module {
+  func.func @same(%a: !f32, %b: !f32, %address: !ptr.p<!f32>) -> !f32 {
+    %entry = state.entry_state : !state<memory>
+    %x = fp.capture %a : !fp.computation<!f32, nearest_even, separate>
+    %y = fp.capture %b : !fp.computation<!f32, nearest_even, separate>
+    %sum1 = fp.add %x, %y : !fp.computation<!f32, nearest_even, separate>
+    %written_value = fp.materialize %sum1 : !f32
+    %written = ptr.store %written_value, %address state(%entry)
+    %sum2 = fp.add %x, %y : !fp.computation<!f32, nearest_even, separate>
+    %returned = fp.materialize %sum2 : !f32
+    func.return %returned state(%written)
+  }
+  func.func @different(%a: !f32, %b: !f32, %address: !ptr.p<!f32>) -> !f32 {
+    %entry = state.entry_state : !state<memory>
+    %x = fp.capture %a : !fp.computation<!f32, nearest_even, separate>
+    %y = fp.capture %b : !fp.computation<!f32, nearest_even, separate>
+    %sum1 = fp.add %x, %y : !fp.computation<!f32, nearest_even, separate>
+    %first = fp.materialize %sum1 : !f32
+    %written = ptr.store %first, %address state(%entry)
+    %z = fp.capture %a : !fp.computation<!f32, toward_zero, permitted>
+    %w = fp.capture %b : !fp.computation<!f32, toward_zero, permitted>
+    %sum2 = fp.add %z, %w : !fp.computation<!f32, toward_zero, permitted>
+    %second = fp.materialize %sum2 : !f32
+    func.return %second state(%written)
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @same
+// CHECK: %[[SUM:[0-9]+]] = fp.add
+// CHECK-NEXT: %[[VALUE:[0-9]+]] = fp.materialize %[[SUM]]
+// CHECK-NEXT: %[[STATE:[0-9]+]] = ptr.store %[[VALUE]],
+// CHECK-NEXT: func.return %[[VALUE]] state(%[[STATE]])
+// CHECK-LABEL: func.func @different
+// CHECK: %[[NEAR:[0-9]+]] = fp.add {{.*}} nearest_even, separate>
+// CHECK-NEXT: %[[WRITTEN:[0-9]+]] = fp.materialize %[[NEAR]]
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = ptr.store %[[WRITTEN]],
+// CHECK: %[[ZERO:[0-9]+]] = fp.add {{.*}} toward_zero, permitted>
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = fp.materialize %[[ZERO]]
+// CHECK-NEXT: func.return %[[RESULT]] state(%[[NEXT]])

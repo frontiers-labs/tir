@@ -1,0 +1,57 @@
+pub let def_reg = {
+    rust_name: "DefOp",
+    name: "def",
+    dialect: "dep",
+    results: { regs: "*backend.reg<_, _>" },
+    interfaces: "tir::backend::MachineInstruction",
+    state: "none",
+};
+
+pub let update_param = {
+    rust_name: "UpdateParamOp",
+    name: "update_param",
+    dialect: "dep",
+    operands: { rs: "?backend.reg<_, _>" },
+    results: { regs: "*backend.reg<_, _>" },
+    interfaces: "tir::backend::MachineInstruction",
+    state: "none",
+};
+
+pub let set_flags = {
+    rust_name: "SetFlagsOp",
+    name: "set_flags",
+    dialect: "dep",
+    operands: { rs: "?backend.reg<_, _>" },
+    results: { regs: "*backend.reg<_, _>" },
+    interfaces: "tir::backend::MachineInstruction",
+    state: "none",
+};
+
+pub let read_flags = {
+    rust_name: "ReadFlagsOp",
+    name: "read_flags",
+    dialect: "dep",
+    operands: { rs: "?backend.reg<_, _>" },
+    results: { regs: "*backend.reg<_, _>" },
+    interfaces: "tir::backend::MachineInstruction",
+    state: "none",
+};
+
+pub let add = {
+    rust_name: "AddTestOp",
+    name: "add",
+    dialect: "test",
+    operands: { rs: "backend.reg<_, _>" },
+    results: { rd: "backend.reg<_, _>" },
+    interfaces: "tir::backend::MachineInstruction",
+    state: "none",
+};
+
+pub let exit = {
+    rust_name: "ExitOp",
+    name: "exit",
+    dialect: "test",
+    operands: { values: "*_" },
+    interfaces: ("tir::Terminator", "tir::NonLocalExit"),
+    state: "none",
+};

@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
 
 // The gate's decision is a literal, so the gate publishes what the arm that
 // literal selects yields, however overdefined the other arm is.
@@ -23,5 +21,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NOT: scf.switch
 // CHECK: %[[C:[0-9]+]] = constant {value = 13} : !i32
+// CHECK-NOT: scf.switch
 // CHECK: -> %[[C]]

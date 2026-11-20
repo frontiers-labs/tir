@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat --verify %s | filecheck %s
 
 // A constant added to an operand of an add moves to the result: the value of
 // `(x + 3) + (y + 5)` is `x + y` at offset 8, with no rule reassociating it.
@@ -24,4 +22,4 @@ module {
 // CHECK-DAG: %[[SUM:[0-9]+]] = addi %[[X]], %[[Y]] : !i32
 // CHECK-DAG: %[[EIGHT:[0-9]+]] = constant {value = 8} : !i32
 // CHECK: %[[R:[0-9]+]] = addi %[[SUM]], %[[EIGHT]] : !i32
-// CHECK-NEXT: -> %[[R]]
+// CHECK-NEXT: func.return %[[R]]

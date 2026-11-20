@@ -2,7 +2,7 @@
 //! these modules are invisible to the generic `tir` tool and cannot be LIT
 //! checks.
 
-use tir::{builtin::ModuleOp, check_types, parse::ir::parse_ir, Context};
+use tir::{builtin::ModuleOp, check_types, parse::ir::parse_ir, Context, Operation};
 
 use super::support::{fcc_context, print_ir};
 

@@ -1,14 +1,15 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
 
 // An arm's entry arguments are the inputs the gamma forwards into it, so
 // `addi %3, 0` is the forwarded `%1`. Both arms then yield `%1` and the gamma
 // folds to it.
 
+// The selector is defined, so forwarding a common arm result preserves poison.
+
 module {
   %fn_f = func.func @f(%0: !i1, %1: !i32) -> !i32 {
-    %2 = scf.switch %0 args(%1) (%6) {
+    %defined = freeze %0 : !i1
+    %2 = scf.switch %defined args(%1) (%6) {
       -> %6
     }
     (%3) {

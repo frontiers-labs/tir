@@ -7,7 +7,10 @@ use tir::{
     Context, ExitTarget, NonLocalExit, OpId, Operation, RegionId, Terminator, ValueId,
 };
 
-use super::fixtures::{self, module_ops};
+use super::fixtures::{
+    self, module_ops,
+    ops::{ExitOp, ExitOpBuilder},
+};
 
 fn function(context: &Context, module: &ModuleOp) -> OpId {
     module_ops(context, module.id())[0]
@@ -79,12 +82,9 @@ fn growing_a_loop_state_port_keeps_the_carried_shape() {
     let function = function(&context, &module);
     let body = body_of(&context, function);
     let loop_op = find::<LoopOp>(&context, body);
-    let entry = tir::state::EntryStateOp::new(
-        &context,
-        vec![tir::builtin::StateType::memory(&context)],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let entry = tir::state::EntryStateOpBuilder::new(&context)
+        .state_result(tir::builtin::StateType::memory(&context))
+        .build();
     context.insert(tir::InsertionPoint::Region(body), entry.id());
     let chain = entry.result();
 
@@ -103,6 +103,32 @@ fn growing_a_loop_state_port_keeps_the_carried_shape() {
         "the value ranges are untouched"
     );
     tir::check_types(&context).expect("the grown loop verifies");
+}
+
+proptest::proptest! {
+    #[test]
+    fn growing_loop_value_ports_keeps_state_results_last(count in 1usize..5) {
+        let (context, module) = fixtures::parse(LOOP);
+        let body = body_of(&context, function(&context, &module));
+        let loop_op = find::<LoopOp>(&context, body);
+        let entry = tir::state::EntryStateOpBuilder::new(&context)
+            .state_result(tir::builtin::StateType::memory(&context))
+            .build();
+        context.insert(tir::InsertionPoint::Region(body), entry.id());
+
+        let mut expected = context.get_op(loop_op).results().to_vec();
+        let chain = entry.result();
+        let state_type = context.get_value(chain).ty();
+        let state = context.grow_port(loop_op, state_type, Some(chain), |_, port| port);
+        let init = context.get_region(body).ports()[0].id();
+        let ty = context.get_value(init).ty();
+        for _ in 0..count {
+            expected.push(context.grow_port(loop_op, ty, Some(init), |_, port| port));
+        }
+        expected.push(state);
+
+        proptest::prop_assert_eq!(context.get_op(loop_op).results().to_vec(), expected);
+    }
 }
 
 const SWITCH: &str = r#"module {
@@ -143,36 +169,6 @@ fn growing_a_gamma_port_forwards_to_and_joins_every_arm() {
     tir::check_types(&context).expect("the grown gamma verifies");
 }
 
-tir::helpers::operation! {
-    ExitOp {
-        name: "exit",
-        dialect: "test",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { values },
-        interfaces: [Terminator, NonLocalExit],
-    }
-}
-
-impl ExitOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        fmt.write("test.exit\n")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
-        let _ = parser;
-        Ok(Box::new(ExitOp::new(
-            context,
-            vec![],
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
-    }
-}
-
 impl Terminator for ExitOp {}
 
 impl NonLocalExit for ExitOp {
@@ -192,22 +188,14 @@ fn loop_with_exit() -> (Context, OpId, OpId) {
     let loop_op = find::<LoopOp>(&context, body_of(&context, function));
     let body = context.get_op(loop_op).regions()[0];
     let predicate = context.get_region(body).results()[0];
-    let exit = ExitOp::new(
-        &context,
-        vec![],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let exit = ExitOpBuilder::new(&context).values(vec![]).build();
     let arm = |ops: Vec<OpId>| context.create_nodes_region(vec![], ops, vec![]).id();
-    let conditional = tir::scf::SwitchOp::new(
-        &context,
-        predicate,
-        vec![],
-        vec![],
-        vec![arm(vec![]), arm(vec![exit.id()])],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let conditional = tir::scf::nodes::SwitchOpBuilder::new(&context)
+        .predicate(predicate)
+        .inputs(vec![])
+        .arms(vec![arm(vec![]), arm(vec![exit.id()])])
+        .result_types(vec![])
+        .build();
     context.insert(tir::InsertionPoint::Region(body), conditional.id());
     (context, loop_op, exit.id())
 }
@@ -259,22 +247,8 @@ fn add_auto_places_an_op_where_its_operands_meet() {
     let port = context.get_region(inner).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
-    let mixed = ops::addi(
-        &context,
-        port,
-        argument,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let outside = ops::addi(
-        &context,
-        argument,
-        argument,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let mixed = ops::addi(&context, port, argument, i32_ty).build();
+    let outside = ops::addi(&context, argument, argument, i32_ty).build();
 
     assert_eq!(context.add_auto(mixed.id()), inner);
     assert_eq!(context.add_auto(outside.id()), outer);
@@ -302,23 +276,9 @@ fn add_auto_pins_an_op_to_its_state() {
     let argument = context.get_region(outer).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
-    let pinned_out = ops::addi(
-        &context,
-        argument,
-        argument,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let pinned_out = ops::addi(&context, argument, argument, i32_ty).build();
     context.append_operand(pinned_out.id(), chain);
-    let pinned_in = ops::addi(
-        &context,
-        argument,
-        argument,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let pinned_in = ops::addi(&context, argument, argument, i32_ty).build();
     context.append_operand(pinned_in.id(), inner_chain);
 
     assert_eq!(context.add_auto(pinned_out.id()), outer);

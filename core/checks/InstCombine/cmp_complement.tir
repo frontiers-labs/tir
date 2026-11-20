@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
 
 // A comparison and its complement over the same operands are one fact: knowing
 // `a < b` is knowing `a >= b` is false, in either arm and in either direction.

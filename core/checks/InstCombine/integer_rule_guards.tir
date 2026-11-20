@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat --verify %s | filecheck %s
 
 module {
   %a = func.func @partial_mask(%x: !i8) -> !i8 {
@@ -44,28 +42,28 @@ module {
 // CHECK-LABEL: func.func @partial_mask(%[[X:[0-9]+]]: !i8)
 // CHECK: %[[MASK:[0-9]+]] = constant {value = 127} : !i8
 // CHECK: %[[R:[0-9]+]] = andi %[[X]], %[[MASK]] : !i8
-// CHECK: -> %[[R]]
+// CHECK: func.return %[[R]]
 // CHECK-LABEL: func.func @partial_complement(%[[X:[0-9]+]]: !i8)
 // CHECK: %[[MASK:[0-9]+]] = constant {value = 127} : !i8
 // CHECK: %[[OTHER:[0-9]+]] = xori %[[X]], %[[MASK]] : !i8
 // CHECK: %[[R:[0-9]+]] = andi %[[X]], %[[OTHER]] : !i8
-// CHECK: -> %[[R]]
+// CHECK: func.return %[[R]]
 // CHECK-LABEL: func.func @shift_below_width(%[[X:[0-9]+]]: !i8)
 // CHECK: %[[AMOUNT:[0-9]+]] = constant {value = 7} : !i8
 // CHECK: %[[R:[0-9]+]] = shli %[[X]], %[[AMOUNT]] : !i8
-// CHECK: -> %[[R]]
+// CHECK: func.return %[[R]]
 // CHECK-LABEL: func.func @shift_unknown(%[[X:[0-9]+]]: !i64, %[[AMOUNT:[0-9]+]]: !i64)
 // CHECK: %[[R:[0-9]+]] = shrui %[[X]], %[[AMOUNT]] : !i64
-// CHECK: -> %[[R]]
+// CHECK: func.return %[[R]]
 // CHECK-LABEL: func.func @divide_zero(%[[X:[0-9]+]]: !i32)
 // CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
 // CHECK: %[[R:[0-9]+]] = divui %[[X]], %[[ZERO]] : !i32
-// CHECK: -> %[[R]]
+// CHECK: func.return %[[R]]
 // CHECK-LABEL: func.func @divide_negative_one(%[[X:[0-9]+]]: !i32)
 // CHECK: %[[MINUS_ONE:[0-9]+]] = constant {value = -1} : !i32
 // CHECK: %[[R:[0-9]+]] = divsi %[[X]], %[[MINUS_ONE]] : !i32
-// CHECK: -> %[[R]]
+// CHECK: func.return %[[R]]
 // CHECK-LABEL: func.func @arithmetic_shift_wide(%[[X:[0-9]+]]: !i64)
 // CHECK: %[[AMOUNT:[0-9]+]] = constant {value = 64} : !i64
 // CHECK: %[[R:[0-9]+]] = shrsi %[[X]], %[[AMOUNT]] : !i64
-// CHECK: -> %[[R]]
+// CHECK: func.return %[[R]]

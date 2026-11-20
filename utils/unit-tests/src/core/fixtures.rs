@@ -2,20 +2,22 @@
 
 use tir::attributes::AttributeValue;
 use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterView};
-use tir::backend::SymbolOp;
+use tir::backend::{SymbolOp, SymbolOpBuilder};
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
 use tir::parse::ir::parse_ir;
-// Migration skip: selector-only test support.
-#[cfg(any())]
-use tir::sem::{SemGraph, SymKind, SymPayload};
-// Migration skip: selector-only test support.
-#[cfg(any())]
-use tir::NodeId;
 use tir::{BlockHandle, Context, OpId, Operation, RegionId};
-// Migration skip: selector-only test support.
-#[cfg(any())]
-use tir_adt::APInt;
+#[allow(dead_code)]
+pub mod ops {
+    include!(concat!(env!("OUT_DIR"), "/core_fixtures.rs"));
+
+    __cdsl_dep_DefOp!();
+    __cdsl_dep_UpdateParamOp!();
+    __cdsl_dep_SetFlagsOp!();
+    __cdsl_dep_ReadFlagsOp!();
+    __cdsl_test_AddTestOp!();
+    __cdsl_test_ExitOp!();
+}
 
 /// Parse `source` as a module into a fresh context holding the default dialects.
 pub fn parse(source: &str) -> (Context, ModuleOp) {
@@ -91,100 +93,25 @@ pub const fn r_high() -> RegClassId {
     RegClassId::new(&R_HIGH_CLASS)
 }
 
+/// An `asm.symbol` named `f` whose body is one block holding `ops`, in that
+/// order. Machine instructions have no textual form, so the machine-IR tests
 /// build the function around them rather than parsing one.
 pub fn asm_symbol(context: &Context, ops: &[OpId]) -> (SymbolOp, BlockHandle) {
     let block = context.create_block(vec![]);
     for &op in ops {
-        block.context.insert(block.end(), op);
+        context.insert(block.end(), op);
     }
     let region = context.create_region();
     region.add_block(block.id());
-    let symbol = SymbolOp::new(
-        context,
-        Some(region.id()),
-        tir::NewOpParts {
-            attributes: vec![context.named_attribute("name", AttributeValue::Str("f".into()))],
-        },
-        tir::InsertionPoint::Root,
-    );
+    let symbol = SymbolOpBuilder::new(context)
+        .body(region.id())
+        .attr("name", AttributeValue::Str("f".into()))
+        .build();
     (symbol, block)
 }
 
-/// Isel pattern-graph builders: symbols, constants and operator nodes.
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn symbol(g: &mut SemGraph, id: u32) -> NodeId {
-    let node = g.add_node(SymKind::Symbol);
-    g.set_leaf_data(node, SymPayload::SymbolId(id));
-    node
-}
-
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn constant(g: &mut SemGraph, value: u64, width: u32) -> NodeId {
-    let node = g.add_node(SymKind::Constant);
-    g.set_leaf_data(node, SymPayload::Int(APInt::new(u64::from(width), value)));
-    node
-}
-
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn nary(g: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
-    let node = g.add_node(kind);
-    for &child in children {
-        g.add_edge(node, child);
-    }
-    node
-}
-
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn binary(g: &mut SemGraph, kind: SymKind, lhs: NodeId, rhs: NodeId) -> NodeId {
-    nary(g, kind, &[lhs, rhs])
-}
-
-/// A one-operator pattern over two fresh symbols.
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn atomic_pattern(kind: SymKind) -> SemGraph {
-    let mut g = SemGraph::new();
-    let lhs = symbol(&mut g, 0);
-    let rhs = symbol(&mut g, 1);
-    binary(&mut g, kind, lhs, rhs);
-    g
-}
-
-macro_rules! machine_op {
-    ($op:ident, $dialect:tt, $name:tt, $operand:ident, $implicit:expr) => {
-        tir::helpers::operation! {
-            $op {
-                name: $name,
-                dialect: $dialect,
-                scheme: "(backend.reg<_, _>?) -> backend.reg<_, _>*",
-                operands: O { $operand },
-                results: R { rd },
-                attributes: A { rd: "?Register", $operand: "?Register" },
-                interfaces: [tir::backend::MachineInstruction],
-            }
-        }
-        $crate::core::fixtures::instr_info!($op, $name, $implicit);
-    };
-    ($op:ident, $dialect:tt, $name:tt, $implicit:expr) => {
-        tir::helpers::operation! {
-            $op {
-                name: $name,
-                dialect: $dialect,
-                scheme: "() -> backend.reg<_, _>*",
-                results: R { rd },
-                attributes: A { rd: "?Register" },
-                interfaces: [tir::backend::MachineInstruction],
-            }
-        }
-        $crate::core::fixtures::instr_info!($op, $name, $implicit);
-    };
-}
-pub(crate) use machine_op;
-
+/// The `MachineInstruction` facts a test opcode reports: its mnemonic, the
+/// registers `$implicit` its behavior touches.
 macro_rules! instr_info {
     ($op:ident, $name:tt, $implicit:expr) => {
         impl tir::backend::MachineInstruction for $op {
@@ -200,7 +127,7 @@ macro_rules! instr_info {
             }
 
             fn instance(&self) -> &tir::OpHandle {
-                &self.0
+                tir::Operation::handle(self)
             }
         }
     };

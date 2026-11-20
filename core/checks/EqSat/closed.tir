@@ -1,0 +1,47 @@
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+module {
+  func.func @ordinary() -> !i8 {
+    %a = constant {value = 5} : !i8
+    %b = constant {value = 3} : !i8
+    %sum = addi %a, %b : !i8
+    %four = constant {value = 4} : !i8
+    %quot = divui %sum, %four : !i8
+    func.return %quot
+  }
+  func.func @poison() -> !i8 {
+    %a = constant {value = 127} : !i8
+    %b = constant {value = 1} : !i8
+    %sum = addi %a, %b {nsw = true} : !i8
+    func.return %sum
+  }
+  func.func @undefined() -> !i8 {
+    %a = constant {value = 3} : !i8
+    %b = constant {value = 0} : !i8
+    %quot = divui %a, %b : !i8
+    func.return %quot
+  }
+  func.func @wide() -> !i65 {
+    %a = constant {value = 18446744073709551616} : !i65
+    %b = constant {value = 3} : !i65
+    %sum = addi %a, %b : !i65
+    func.return %sum
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @ordinary
+// CHECK-NOT: addi
+// CHECK-NOT: divui
+// CHECK: %[[QUOT:[0-9]+]] = constant {value = 2} : !i8
+// CHECK-NEXT: func.return %[[QUOT]]
+// CHECK-LABEL: func.func @poison
+// CHECK: %[[POISON:[0-9]+]] = addi {{.*}} {nsw = true} : !i8
+// CHECK-NEXT: func.return %[[POISON]]
+// CHECK-LABEL: func.func @undefined
+// CHECK: %[[UB:[0-9]+]] = divui
+// CHECK-NEXT: func.return %[[UB]]
+// CHECK-LABEL: func.func @wide
+// CHECK-NOT: addi
+// CHECK: %[[WIDE:[0-9]+]] = constant {value = 18446744073709551619} : !i65
+// CHECK-NEXT: func.return %[[WIDE]]

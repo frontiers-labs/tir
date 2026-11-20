@@ -267,14 +267,22 @@ pub enum PassTarget {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct OperationTarget;
+pub struct OperationTarget {
+    dialect: &'static str,
+    name: &'static str,
+    kind: RegionKind,
+}
 
 impl PassTarget {
     pub fn operation<T: Operation>() -> Self {
-        Self::Operation(OperationTarget)
+        Self::operation_on::<T>(RegionKind::Any)
     }
-    pub fn operation_on<T: Operation>(_kind: RegionKind) -> Self {
-        Self::operation::<T>()
+    pub fn operation_on<T: Operation>(kind: RegionKind) -> Self {
+        Self::Operation(OperationTarget {
+            dialect: T::dialect(),
+            name: T::name(),
+            kind,
+        })
     }
 }
 
@@ -463,38 +471,125 @@ impl Context {
     }
 }
 
+enum PipelineStep {
+    Pass(Box<dyn Pass>),
+    Nest(String, PassManager),
+    Repeat(u8, PassManager),
+}
+
 #[derive(Default)]
-pub struct PassManager;
+pub struct PassManager {
+    steps: Vec<PipelineStep>,
+}
 
 impl PassManager {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
+
     pub fn set_workers(&mut self, _workers: usize) {}
-    pub fn add_pass<P: Pass + 'static>(&mut self, _pass: P) -> &mut Self {
+
+    pub fn add_pass<P: Pass + 'static>(&mut self, pass: P) -> &mut Self {
+        self.add_boxed_pass(Box::new(pass))
+    }
+
+    pub fn add_boxed_pass(&mut self, pass: Box<dyn Pass>) -> &mut Self {
+        self.steps.push(PipelineStep::Pass(pass));
         self
     }
-    pub fn add_boxed_pass(&mut self, _pass: Box<dyn Pass>) -> &mut Self {
-        self
-    }
+
     pub fn nest<T: Operation>(&mut self) -> &mut PassManager {
-        self
+        self.nest_parsed(format!("{}.{}", T::dialect(), T::name()))
     }
-    pub fn fixpoint(&mut self, _cap: u8) -> &mut PassManager {
-        self
+
+    pub fn fixpoint(&mut self, cap: u8) -> &mut PassManager {
+        self.steps.push(PipelineStep::Repeat(cap, Self::new()));
+        match self.steps.last_mut() {
+            Some(PipelineStep::Repeat(_, pipeline)) => pipeline,
+            _ => unreachable!(),
+        }
     }
-    fn nest_parsed(&mut self, _op_name: impl Into<String>) -> &mut PassManager {
-        self
+
+    fn nest_parsed(&mut self, name: impl Into<String>) -> &mut PassManager {
+        self.steps
+            .push(PipelineStep::Nest(name.into(), Self::new()));
+        match self.steps.last_mut() {
+            Some(PipelineStep::Nest(_, pipeline)) => pipeline,
+            _ => unreachable!(),
+        }
     }
-    pub fn run(&mut self, _context: &Context, _op: OpId) -> Result<(), PassError> {
+
+    pub fn run(&mut self, context: &Context, op: OpId) -> Result<(), PassError> {
+        self.run_on_op_id(context, op, &AnalysisManager::new())?;
         Ok(())
     }
+
     pub fn run_on_op_id(
         &mut self,
-        _context: &Context,
+        context: &Context,
         root: OpId,
-        _analyses: &AnalysisManager,
+        analyses: &AnalysisManager,
     ) -> Result<OpId, PassError> {
+        for step in &mut self.steps {
+            if !context.has_operation(root) {
+                break;
+            }
+            match step {
+                PipelineStep::Pass(pass) => {
+                    let op = context.get_op(root);
+                    if let PassTarget::Operation(target) = pass.target() {
+                        if op.name().as_str() != target.name
+                            || op.dialect().as_str() != target.dialect
+                        {
+                            continue;
+                        }
+                        if target.kind != RegionKind::Any
+                            && op.regions().iter().any(|&region| {
+                                context.get_region(region).is_nodes()
+                                    != (target.kind == RegionKind::Nodes)
+                            })
+                        {
+                            return Err(PassError::RegionKind {
+                                pass: pass.name(),
+                                op: op.name().to_string(),
+                                expected: target.kind,
+                            });
+                        }
+                    }
+                    pass.run(root, context, analyses)?;
+                }
+                PipelineStep::Nest(name, pipeline) => {
+                    for id in context.subtree_ops(&[root]) {
+                        if id == root || !context.has_operation(id) {
+                            continue;
+                        }
+                        let op = context.get_op(id);
+                        let (dialect, operation) = name
+                            .split_once('.')
+                            .map_or((None, name.as_str()), |(d, n)| (Some(d), n));
+                        if op.name().as_str() == operation
+                            && dialect.is_none_or(|d| op.dialect().as_str() == d)
+                        {
+                            pipeline.run_on_op_id(context, id, analyses)?;
+                        }
+                    }
+                }
+                PipelineStep::Repeat(cap, pipeline) => {
+                    let version = || {
+                        let engine = context.egraph();
+                        let db = engine.database();
+                        (db.table_count(), db.writes_to_first(db.table_count()))
+                    };
+                    for _ in 0..*cap {
+                        let previous = version();
+                        pipeline.run_on_op_id(context, root, analyses)?;
+                        if version() == previous || !context.has_operation(root) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         Ok(root)
     }
 }

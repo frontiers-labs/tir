@@ -1,10 +1,6 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
 
-// The arm is entered only when the condition holds, so the same condition
-// re-tested inside it decides its own gate: the inner gate takes the arm the
-// fact selects and its class is the literal that arm yields.
+// Only the taken edge of the retested condition can supply the merge value.
 
 module {
   %fn_f = func.func @f(%a: !i32, %b: !i32) -> !i32 {
@@ -22,8 +18,9 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[C:[0-9]+]] = constant {value = 1} : !i32
-// CHECK: scf.switch
-// CHECK-NOT: scf.switch
-// CHECK: -> %[[C]]
+// CHECK-LABEL: func.func @f(%[[A:[0-9]+]]: !i32, %{{[0-9]+}}: !i32)
+// CHECK: ^bb2:
+// CHECK-NEXT: func.return %[[A]]
+// CHECK: ^bb3(%{{[0-9]+}}: !i32):
+// CHECK-NEXT: %[[C:[0-9]+]] = constant {value = 1} : !i32
+// CHECK-NEXT: func.return %[[C]]
