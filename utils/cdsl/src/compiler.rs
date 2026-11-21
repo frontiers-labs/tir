@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    ast::{Ast, Declaration, EngineBinding, Node, Path as CdslPath},
+    ast::{Ast, Declaration, Node, Path as CdslPath},
     error::Error,
     lexer::{Span, TokenStream},
     parser,
@@ -667,10 +667,18 @@ fn resolve_lexical_path(path: &[String], scope: &Scope<'_>) -> Option<Vec<String
         scope.root_depth..=scope.module.len()
     };
     for depth in depths.rev() {
-        let mut candidate = scope.module[..depth].to_vec();
+        let enclosing = &scope.module[..depth];
+        let mut candidate = enclosing.to_vec();
         candidate.push(path[0].clone());
         if scope.symbols.contains(&candidate) {
             candidates.push(candidate);
+        } else if !crate::infer::builtin_path(path)
+            && let Some(target) = scope
+                .exports
+                .get(enclosing)
+                .and_then(|names| names.get(&path[0]))
+        {
+            candidates.push(target.clone());
         }
     }
     for mut current in candidates {
@@ -757,12 +765,7 @@ fn resolve_declaration(
             }
             Ok(())
         }
-        Declaration::Axiom {
-            generics,
-            ty,
-            engine,
-            ..
-        } => {
+        Declaration::Axiom { generics, ty, .. } => {
             let mut locals = BTreeSet::new();
             for generic in generics {
                 if let Some(ty) = &mut generic.ty {
@@ -771,10 +774,6 @@ fn resolve_declaration(
                 locals.insert(generic.name.clone());
             }
             resolve_expr(ty, scope, &locals)?;
-            if let Some(EngineBinding::Table(path)) = engine {
-                *path = resolve_path(path, scope)
-                    .ok_or_else(|| format!("unresolved table {}", path.join("::")))?;
-            }
             Ok(())
         }
     }

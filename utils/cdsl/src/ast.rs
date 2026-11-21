@@ -60,16 +60,7 @@ pub enum Declaration {
         name: String,
         generics: Vec<RuleBinder>,
         ty: Expr,
-        engine: Option<EngineBinding>,
     },
-}
-
-/// Engine interoperability declared alongside an axiom's checked type.
-#[derive(Clone, Debug)]
-pub enum EngineBinding {
-    Name(String),
-    Host(String),
-    Table(Path),
 }
 
 #[derive(Clone, Debug)]
