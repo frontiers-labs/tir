@@ -11,7 +11,7 @@ use tir_egglog::{EGraph, Program, TableKind};
 
 #[derive(Args)]
 #[command(
-    after_help = "Declare the script's schema in CDSL and define `let execute = std::schedule::saturate(rules);`. Tables declared in the root `tables` module bind to existing TIR tables with the same name. Enum constructors bind to matching host constructor names. REPL declarations accumulate; each accepted revision runs the selected schedule when it exists."
+    after_help = "Declare the script's schema in CDSL and define `let execute = std::schedule::saturate(rules);`. Root `tables` declarations without an explicit binding use existing TIR tables with the same name. Enum constructors bind to matching host constructor names. REPL declarations accumulate; each accepted revision runs the selected schedule when it exists."
 )]
 pub struct ToolArgs {
     /// Input TIR file
@@ -60,9 +60,9 @@ fn execute(
     for module in &checked.artifact().modules {
         for declaration in &module.ast.declarations {
             match &declaration.value {
-                Declaration::Axiom { name, .. }
-                    if module.path == ["tables"] && host.table_named(name).is_some() =>
-                {
+                Declaration::Axiom {
+                    name, engine: None, ..
+                } if module.path == ["tables"] && host.table_named(name).is_some() => {
                     let mut path = module.path.clone();
                     path.push(name.clone());
                     names.insert(path, name.clone());
@@ -83,7 +83,11 @@ fn execute(
             }
         }
     }
-    let schema = Schema::with_names(&checked, names)?;
+    let schema = Schema::with_engine(
+        &checked,
+        names,
+        EGraph::from_database(egraph.database().clone()),
+    )?;
     let lowered = schema.lower(&checked)?;
     let Some(selected) = lowered.schedules().get(schedule) else {
         if allow_missing_schedule {

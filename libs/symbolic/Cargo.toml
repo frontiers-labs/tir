@@ -10,9 +10,11 @@ doctest = false
 [dependencies]
 tir-adt.workspace = true
 tir-egglog.workspace = true
-tir-ir-schema.workspace = true
 smallvec = "1.15.2"
 chumsky.workspace = true
+
+[build-dependencies]
+tir-cdsl.workspace = true
 
 [[bin]]
 bench = false

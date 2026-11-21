@@ -57,6 +57,8 @@ pub enum Token {
     Use,
     #[token("as")]
     As,
+    #[token("extern")]
+    Extern,
     #[token("fn")]
     Fn,
     #[token("if")]

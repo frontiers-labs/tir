@@ -1,8 +1,15 @@
 mod publish;
 
-use tir_egglog::{Color, Database, Program, Row, Schedule, extract::Extractor, sort::BigInt};
+#[allow(dead_code)] // The generator emits readers for every CDSL export.
+pub(crate) mod generated {
+    include!(concat!(env!("OUT_DIR"), "/eqsat.rs"));
+}
 
-use crate::{AnalysisManager, Context, OpId, Pass, PassError, RegionId, ValueId};
+use tir_egglog::{Color, Database};
+
+use crate::{
+    AnalysisManager, Context, OpId, Pass, PassError, RegionId, ValueId, attributes::AttributeValue,
+};
 
 /// Saturate integer equalities in a private snapshot of the current IR.
 #[derive(Default)]
@@ -37,96 +44,47 @@ impl Pass for EqSatPass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let (mut db, mut program) = snapshot(context, root_id)?;
-        let analysis = Schedule::seq([
-            Schedule::run("eqsat-flag-fields"),
-            Schedule::run("flag_values"),
-            Schedule::repeat(4, "memory_barriers"),
-            Schedule::run("gamma_witness"),
-            Schedule::run("gamma_missing"),
-            Schedule::run("gamma_agrees"),
-            Schedule::repeat(64, "eqsat-global"),
-            Schedule::repeat(4, "incoming"),
-            Schedule::run("phi_candidates"),
-            Schedule::run("phi_disagreement"),
-            Schedule::run("phi_literals"),
-            Schedule::run("memory_cfg"),
-            Schedule::run("memory_cfg_missing"),
-            Schedule::run("memory_cfg_apply"),
-            Schedule::run("memory_join_missing"),
-            Schedule::run("memory_join_apply"),
-            Schedule::repeat(64, "eqsat-global"),
-            Schedule::repeat(4, "removable"),
-            Schedule::repeat(8, "plain_access"),
-            Schedule::run("plain_disjoint"),
-            Schedule::run("private_call"),
-            Schedule::run("plain_clobber"),
-            Schedule::run("safe_control_inputs"),
-            Schedule::run("control_effects"),
-            Schedule::repeat(2, "finite_loops"),
-            Schedule::repeat(4, "switch_cases"),
-            Schedule::run("switch_default"),
-            Schedule::run("pure_switch"),
-            Schedule::run("switch_values"),
-            Schedule::run("switch_agreement"),
-            Schedule::run("switch_aliases"),
-            Schedule::run("plain_forward"),
-            Schedule::run("dead_store_proof"),
-            Schedule::run("dead_store_uses"),
-            Schedule::run("dead_store"),
-            Schedule::repeat(64, "paths"),
-            Schedule::repeat(4, "counted_exits"),
-            Schedule::run("counted_missing"),
-            Schedule::run("counted_agrees"),
-            Schedule::run("counted_reads"),
-            Schedule::repeat(64, "paths"),
-            Schedule::run("used"),
-            Schedule::repeat(4, "edits"),
-            Schedule::run("phi_uses"),
-            Schedule::run("definition_constants"),
-            Schedule::run("definition_expressions"),
-        ]);
-        program.run(&mut db, &analysis, &[]).map_err(rule_error)?;
-        program
-            .run(
-                &mut db,
-                &Schedule::seq([
-                    Schedule::run("incoming"),
-                    Schedule::repeat(64, "assumptions"),
-                ]),
-                &[],
-            )
-            .map_err(rule_error)?;
-        let local = scoped_literals(&mut db, &mut program)?;
-        let table = |name| db.table(name).map_err(rule_error);
-        let forms = table("EqSatDefinition")?;
-        let mut rebuild = Vec::new();
-        if db.row_count(forms) != 0 {
-            let extractor = Extractor::new(&db);
-            for row in db.rows(forms) {
-                let (terms, term) = extractor.best(row[2]).map_err(rule_error)?;
-                rebuild.push((
-                    OpId::from_number(entity(&db, row, 0)?),
-                    ValueId::from_number(entity(&db, row, 1)?),
-                    terms,
-                    term,
-                ));
-            }
-        }
-        let mut edits = Vec::new();
-        for row in db.rows(table("EqSatAliasEdit")?) {
-            let site = use_site(&db, row, db.base_value(row[4]))?;
-            let old = ValueId::from_number(entity(&db, row, 2)?);
-            let new = ValueId::from_number(entity(&db, row, 3)?);
-            edits.push((site, old, new));
-        }
-        let mut redirected = db
-            .rows(table("EqSatRedirect")?)
-            .map(|row| entity(&db, row, 0).map(ValueId::from_number))
+        let mut db = context.eqsat_database().map_err(rule_error)?;
+        let mut program = snapshot(context, root_id, &mut db)?;
+        program.analyze().map_err(rule_error)?;
+        program.seed_assumptions().map_err(rule_error)?;
+        let local = scoped_literals(&mut program)?;
+        let rebuild = program
+            .eq_sat_definition()
+            .map(|row| {
+                let (op, result, form) = row.map_err(rule_error)?;
+                Ok((
+                    OpId::from_number(op.raw()),
+                    ValueId::from_number(result.raw()),
+                    form,
+                ))
+            })
+            .collect::<Result<Vec<_>, PassError>>()?;
+        let edits = program
+            .eq_sat_alias_edit()
+            .map(|row| {
+                let (owner, slot, old, new, is_yield) = row.map_err(rule_error)?;
+                let site = use_site(owner, slot, is_yield)?;
+                Ok((
+                    site,
+                    ValueId::from_number(old.raw()),
+                    ValueId::from_number(new.raw()),
+                ))
+            })
+            .collect::<Result<Vec<_>, PassError>>()?;
+        let mut redirected = program
+            .eq_sat_redirect()
+            .map(|row| {
+                row.map(|(old, _)| ValueId::from_number(old.raw()))
+                    .map_err(rule_error)
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut erase = db
-            .rows(table("EqSatErase")?)
-            .map(|row| entity(&db, row, 0).map(OpId::from_number))
+        let mut erase = program
+            .eq_sat_erase()
+            .map(|row| {
+                row.map(|(id,)| OpId::from_number(id.raw()))
+                    .map_err(rule_error)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         redirected.sort_unstable();
         erase.sort_unstable();
@@ -138,122 +96,76 @@ impl Pass for EqSatPass {
     }
 }
 
-fn snapshot(context: &Context, root: OpId) -> Result<(Database, Program), PassError> {
-    let mut db = context.eqsat_database().map_err(rule_error)?;
-    let mut program = Program::from_bytes(
-        include_bytes!(concat!(env!("OUT_DIR"), "/eqsat-rules.bin")),
-        &mut db,
-    )
-    .map_err(rule_error)?;
-    let table = db.table("EqSatRoot").map_err(rule_error)?;
-    let root = db.base(i64::from(root.raw()));
-    db.insert(table, &[root]).map_err(rule_error)?;
+fn snapshot<'db>(
+    context: &Context,
+    root: OpId,
+    db: &'db mut Database,
+) -> Result<generated::Program<'db>, PassError> {
+    let mut program = generated::Program::load(db).map_err(rule_error)?;
     program
-        .run(
-            &mut db,
-            &Schedule::seq([
-                Schedule::saturate("select"),
-                Schedule::repeat(8, "frame"),
-                Schedule::run("sites"),
-                Schedule::repeat(4, "layout_queries"),
-            ]),
-            &[],
-        )
+        .insert_eq_sat_root((generated::OperationId::from_raw(root.raw()),))
         .map_err(rule_error)?;
-    context.eqsat_layout_values(&mut db).map_err(rule_error)?;
-    Ok((db, program))
+    program.prepare().map_err(rule_error)?;
+    layout_values(context, &mut program)?;
+    Ok(program)
 }
 
 fn sweep(context: &Context, root: OpId) -> Result<(), PassError> {
-    let (mut db, mut program) = snapshot(context, root)?;
-    program
-        .run(
-            &mut db,
-            &Schedule::seq([
-                Schedule::run("congruence"),
-                Schedule::repeat(4, "scalars"),
-                Schedule::repeat(4, "cast_cse"),
-                Schedule::repeat(8, "removable"),
-                Schedule::repeat(2, "integer_inputs"),
-                Schedule::run("eqsat-fold"),
-                Schedule::saturate("address_keys"),
-                Schedule::repeat(8, "plain_access"),
-                Schedule::saturate("storage_defined"),
-                Schedule::run("private_layout"),
-                Schedule::run("private_extent"),
-                Schedule::repeat(8, "private_store"),
-                Schedule::run("private_other"),
-                Schedule::run("private_drop"),
-                Schedule::run("plain_overwrites"),
-                Schedule::run("overwrite_barriers"),
-                Schedule::run("overwrite_plain"),
-                Schedule::run("safe_control_inputs"),
-                Schedule::run("control_effects"),
-                Schedule::run("pure_switch"),
-                Schedule::saturate("demand"),
-                Schedule::run("dead"),
-            ]),
-            &[],
-        )
-        .map_err(rule_error)?;
-    let table = db.table("EqSatDead").map_err(rule_error)?;
-    let removals = db
-        .rows(table)
+    let mut db = context.eqsat_database().map_err(rule_error)?;
+    let mut program = snapshot(context, root, &mut db)?;
+    program.sweep().map_err(rule_error)?;
+    let removals = program
+        .eq_sat_dead()
         .map(|row| {
-            let id = OpId::from_number(entity(&db, row, 0)?);
-            Ok(context.get_op(id))
+            row.map(|(id,)| context.get_op(OpId::from_number(id.raw())))
+                .map_err(rule_error)
         })
-        .collect::<Result<Vec<_>, PassError>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     publish::erase_operations(context, removals)
 }
 
-fn scoped_literals(
-    db: &mut Database,
-    program: &mut Program,
-) -> Result<Vec<publish::Local>, PassError> {
-    let seed = db.table("EqSatColorSeed").map_err(rule_error)?;
-    let site = db.table("EqSatColorSite").map_err(rule_error)?;
-    let subject = db.table("EqSatColorSubject").map_err(rule_error)?;
-    let mut seeds = db
-        .rows(seed)
-        .map(|row| [row[0], row[1], row[2]])
-        .collect::<Vec<_>>();
-    seeds.sort_unstable_by_key(|row| row[0]);
+fn scoped_literals(program: &mut generated::Program<'_>) -> Result<Vec<publish::Local>, PassError> {
+    let mut seeds = program
+        .eq_sat_color_seed_classes(Color::BASE)
+        .map(|row| row.map_err(rule_error))
+        .collect::<Result<Vec<_>, _>>()?;
+    seeds.sort_unstable_by_key(|row| row.0);
     let mut colors = Vec::new();
-    for group in seeds.chunk_by(|a, b| a[0] == b[0]) {
-        let Some(&[scope, _, _]) = group.first() else {
+    for group in seeds.chunk_by(|a, b| a.0 == b.0) {
+        let Some(&(scope, _, _)) = group.first() else {
             continue;
         };
-        let color = db.color(&[Color::BASE]);
+        let color = program.color(&[Color::BASE]);
         colors.push(color);
-        db.insert_in(color, site, &[scope]).map_err(rule_error)?;
-        for &[_, old, literal] in group {
-            db.insert_in(color, subject, &[old]).map_err(rule_error)?;
-            db.union_in(color, old, literal);
+        program
+            .insert_eq_sat_color_site_in(color, (scope,))
+            .map_err(rule_error)?;
+        for &(_, old, literal) in group {
+            program
+                .insert_eq_sat_color_subject_in(color, (old,))
+                .map_err(rule_error)?;
+            program.union_in(color, old, literal).map_err(rule_error)?;
         }
     }
     if !colors.is_empty() {
-        db.rebuild().map_err(rule_error)?;
-        program
-            .run(db, &Schedule::repeat(8, "branch_local"), &[])
-            .map_err(rule_error)?;
+        program.rebuild().map_err(rule_error)?;
+        program.propagate_scoped().map_err(rule_error)?;
     }
     let mut edits = Vec::new();
-    let table = db.table("EqSatScopedEdit").map_err(rule_error)?;
-    for row in std::iter::once(Color::BASE)
-        .chain(colors)
-        .flat_map(|color| db.rows_in(color, table))
-    {
-        let site = use_site(db, row, db.base_value(row[4]))?;
-        let old = ValueId::from_number(entity(db, row, 2)?);
-        edits.push((site, old, db.base_value::<BigInt>(row[3])));
+    for color in std::iter::once(Color::BASE).chain(colors) {
+        for row in program.eq_sat_scoped_edit_in(color) {
+            let (owner, slot, old, bits, is_yield) = row.map_err(rule_error)?;
+            let site = use_site(owner, slot, is_yield)?;
+            let old = ValueId::from_number(u32::try_from(old).map_err(rule_error)?);
+            edits.push((site, old, bits));
+        }
     }
     Ok(edits)
 }
 
-fn use_site(db: &Database, row: Row<'_>, is_yield: bool) -> Result<publish::UseSite, PassError> {
-    let owner = entity(db, row, 0)?;
-    let slot = entity(db, row, 1)? as usize;
+fn use_site(owner: i64, slot: i64, is_yield: bool) -> Result<publish::UseSite, PassError> {
+    let owner = u32::try_from(owner).map_err(rule_error)?;
+    let slot = usize::try_from(slot).map_err(rule_error)?;
     Ok(if is_yield {
         publish::UseSite::Yield(RegionId::from_number(owner), slot)
     } else {
@@ -261,6 +173,67 @@ fn use_site(db: &Database, row: Row<'_>, is_yield: bool) -> Result<publish::UseS
     })
 }
 
-fn entity(db: &Database, row: Row<'_>, slot: usize) -> Result<u32, PassError> {
-    u32::try_from(db.base_value::<i64>(row[slot])).map_err(rule_error)
+fn layout_values(context: &Context, program: &mut generated::Program<'_>) -> Result<(), PassError> {
+    let requests = program
+        .eq_sat_layout_query()
+        .map(|row| row.map_err(rule_error))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (key, kind) in requests {
+        let kind = kind.as_str();
+        let Ok(id) = u32::try_from(key) else {
+            continue;
+        };
+        let id = OpId::from_number(id);
+        let Some(layout) = crate::layout::DataLayout::for_op(context, id) else {
+            continue;
+        };
+        let op = context.get_op(id);
+        if matches!(kind, "ptr.store" | "ptr.load" | "ptr.ptradd") {
+            if let Some(width) = layout.pointer_size().filter(|&width| width != 0) {
+                program
+                    .insert_eq_sat_pointer_size((key, i64::from(width)))
+                    .map_err(rule_error)?;
+            }
+            if kind == "ptr.store"
+                && let Some(data) = op.operands().first()
+                && let Some(access) = layout.layout_of(context.get_value(*data).ty())
+                && let Ok(size) = access.size.to_string().parse::<tir_egglog::sort::BigInt>()
+                && let Ok(align) = access.align.to_string().parse::<tir_egglog::sort::BigInt>()
+            {
+                program
+                    .insert_eq_sat_store_layout((key, size, align))
+                    .map_err(rule_error)?;
+            }
+            if kind == "ptr.ptradd"
+                && let Some(offset) = op.operands().get(1)
+                && let Some(ty) =
+                    crate::builtin::IntegerType::view(context, context.get_value(*offset).ty())
+                && layout.index_width().map(u64::from) == Some(ty.width())
+            {
+                program
+                    .insert_eq_sat_layout_scoped((key,))
+                    .map_err(rule_error)?;
+            }
+            continue;
+        }
+        let Some(AttributeValue::Type(ty)) = op.attr("ty") else {
+            continue;
+        };
+        let answer = match kind {
+            "layout.sizeof" => layout.layout_of(ty).map(|value| value.size),
+            "layout.alignof" => layout.layout_of(ty).map(|value| value.align),
+            "layout.offsetof" => op
+                .attr("field")
+                .and_then(|field| layout.offset_in_bits(ty, field.as_str()?)),
+            _ => None,
+        };
+        if let Some(bits) =
+            answer.and_then(|value| value.to_string().parse::<tir_egglog::sort::BigInt>().ok())
+        {
+            program
+                .insert_eq_sat_layout_value((key, bits))
+                .map_err(rule_error)?;
+        }
+    }
+    Ok(())
 }

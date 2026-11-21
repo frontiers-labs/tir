@@ -1,0 +1,12 @@
+pub mod dialects { pub mod builtin {
+    pub let freeze<T: Type> = op { signature: (input: T) -> T };
+} }
+pub let Operation: { id: Int, kind: String, placement: String, container: Int, position: Int, display: Int, location: Int } -> Prop;
+pub let Operand: (Int, Int, Int) -> Prop;
+pub let Value: (Int, Int, String, Int, Int, Int) -> Prop;
+pub let Found: Int -> Prop;
+pub mod rules {
+    pub let recognize<node, input, result: std::ValueRef<{ data: Bool }>>:
+        dialects::builtin::freeze.matches(node, (input,), (result,)) -> Found(node);
+}
+pub let execute = std::schedule::saturate(rules);
