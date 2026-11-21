@@ -203,7 +203,7 @@ impl Checker {
         Ok(*id)
     }
 
-    fn operation_kind(
+    pub(super) fn operation_kind(
         &mut self,
         definitions: &Definitions<'_>,
         path: &Path,
@@ -212,30 +212,51 @@ impl Checker {
         if let Some(scheme) = self.operation_kinds.get(path).cloned() {
             return self.instantiate(&scheme);
         }
-        let fields = binding.operation_fields().ok_or_else(|| {
-            Error(format!(
-                "{} has no checked operation signature",
-                path.join("::")
-            ))
-        })?;
-        let named_results = fields.iter().any(|field| {
-            matches!(&field.value, OpField::Signature { results, .. } if !results.is_empty())
-        });
-        let record = operation_record(fields, binding.value.range.clone())?;
-        let Expression::Record(fields) = &record.value else {
-            return Err(Error("operation must elaborate to a record".into()));
-        };
-        let signature = fields
-            .iter()
-            .find_map(|(name, field)| (name == "signature").then_some(field))
-            .ok_or_else(|| Error("operation has no signature".into()))?;
         let globals = self.types.clone();
         let (locals, generics) = self.generics(definitions, &binding.generics, &globals)?;
-        let signature = self.operation_signature(definitions, signature, &locals)?;
-        let id = self.operation_type_family(definitions, "OperationKindOf")?;
-        let Ty::Fun(operands, result) = signature else {
-            return Err(Error("operation signature must be a function type".into()));
+        let (operands, outputs) = if let Some(fields) = binding.operation_fields() {
+            let named_results = fields.iter().any(|field| {
+                matches!(&field.value, OpField::Signature { results, .. } if !results.is_empty())
+            });
+            let record = operation_record(fields, binding.value.range.clone())?;
+            let Expression::Record(fields) = &record.value else {
+                return Err(Error("operation must elaborate to a record".into()));
+            };
+            let signature = fields
+                .iter()
+                .find_map(|(name, field)| (name == "signature").then_some(field))
+                .ok_or_else(|| Error("operation has no signature".into()))?;
+            let Ty::Fun(operands, result) =
+                self.operation_signature(definitions, signature, &locals)?
+            else {
+                return Err(Error("operation signature must be a function type".into()));
+            };
+            let outputs = if *result == con(UNIT) {
+                Vec::new()
+            } else if named_results {
+                let Ty::Con(TUPLE, ports) = *result else {
+                    return Err(Error("named results require a result product".into()));
+                };
+                list_values(&ports)
+            } else {
+                vec![*result]
+            };
+            (list_values(&operands), outputs)
+        } else if let Some((operands, outputs)) = binding.native_ports() {
+            let mut read = |ports: Vec<&Expr>| {
+                ports
+                    .into_iter()
+                    .map(|ty| self.annotation(definitions, ty, &locals))
+                    .collect::<Result<Vec<_>, _>>()
+            };
+            (read(operands)?, read(outputs)?)
+        } else {
+            return Err(Error(format!(
+                "{} has no checked fixed-port operation signature",
+                path.join("::")
+            )));
         };
+        let id = self.operation_type_family(definitions, "OperationKindOf")?;
         let reference = self.operation_type_family(definitions, "ValueRef")?;
         let refs = |ports: Vec<Ty>| {
             if ports.is_empty() {
@@ -251,17 +272,8 @@ impl Checker {
                 ),
             )
         };
-        let inputs = refs(list_values(&operands));
-        let outputs = if *result == con(UNIT) {
-            con(UNIT)
-        } else if named_results {
-            let Ty::Con(TUPLE, ports) = *result else {
-                return Err(Error("named results require a result product".into()));
-            };
-            refs(list_values(&ports))
-        } else {
-            refs(vec![*result])
-        };
+        let inputs = refs(operands);
+        let outputs = refs(outputs);
         let kind = Ty::Con(id, type_list(vec![inputs, outputs]));
         let kind = self.discharge(&kind, &generics, &Environment::new(), None)?;
         let scheme = self.generalize(&Environment::new(), &kind);

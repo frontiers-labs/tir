@@ -190,7 +190,7 @@ fn arguments<'a>(
 struct Check<'a> {
     ctx: &'a Context,
     op: OpHandle,
-    kind: &'a str,
+    kind: tir_egglog::NativeIdentity,
     schema: Option<&'static OpSchema>,
     inputs: Groups<'a>,
     outputs: Groups<'a>,
@@ -284,7 +284,7 @@ fn port_types(
 
 /// Check all live operations at a completed edit boundary.
 pub fn check_types(context: &Context) -> Result<(), TypeCheckError> {
-    let operations: Vec<(i64, String, i64)> = {
+    let operations: Vec<(i64, tir_egglog::NativeIdentity, i64)> = {
         let engine = context
             .typing_engine()
             .map_err(TypeCheckError::QueryFailed)?;
@@ -303,7 +303,7 @@ pub fn check_types(context: &Context) -> Result<(), TypeCheckError> {
             .collect()
     };
     let mut diagnostics = Vec::new();
-    for (id, ref kind, location) in operations {
+    for (id, kind, location) in operations {
         let id = OpId::from_number(id as u32);
         let op = context.get_op(id);
         if op.is::<crate::builtin::ModuleOp>()

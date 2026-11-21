@@ -8,9 +8,9 @@ use tir::backend::binary::{
 };
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
 use tir::backend::{RegAssignment, RegClassType};
-use tir::{Context, InsertionPoint, NewOp, OpHandle};
+use tir::{Context, InsertionPoint, NewOp, NewOpParts, OpHandle, Operation};
 
-use super::fixtures::{r, reg_class};
+use super::fixtures::{ops, r, reg_class};
 
 fn phys(index: u16) -> AttributeValue {
     AttributeValue::Register(RegisterAttr::Physical { class: r(), index })
@@ -83,13 +83,12 @@ fn build(
         .into_iter()
         .map(|(name, value)| context.named_attribute(name, value))
         .collect();
-    let instance = NewOp::new_dynamic(
-        ("test", "inst"),
+    let instance = NewOp::new::<ops::AddTestOp>(
         context.clone(),
         vec![],
         results,
         vec![],
-        attributes,
+        NewOpParts { attributes },
     );
     context.add_operation(InsertionPoint::Root, instance)
 }
@@ -414,8 +413,21 @@ fn patch_rejects_unrepresentable_values() {
     assert!(patch_with(&mut bytes[..2], 16, &BEQ_PATCH).is_none());
 }
 
+fn decoded_op<T: Operation>(
+    context: &Context,
+    attributes: Vec<tir::attributes::NamedAttribute>,
+) -> NewOp {
+    NewOp::new::<T>(
+        context.clone(),
+        vec![],
+        vec![],
+        vec![],
+        NewOpParts { attributes },
+    )
+}
+
 const BEQ_DECODE: DecodeSpec = DecodeSpec {
-    op: ("test", "beq"),
+    construct: decoded_op::<ops::BeqDecodeOp>,
     attrs: &["rs1", "imm"],
     shapes: &[DecodeShape {
         fixed_mask: 28799,
@@ -444,7 +456,7 @@ fn decode_matches_and_gathers() {
 // `c.mv rd, rs`: a two-byte shape, matched out of the same 32-bit fetch window
 // as any wider instruction.
 const CMV_DECODE: DecodeSpec = DecodeSpec {
-    op: ("test", "cmv"),
+    construct: decoded_op::<ops::CmvDecodeOp>,
     attrs: &["rd", "rs"],
     shapes: &[DecodeShape {
         fixed_mask: 0xf003,
@@ -482,7 +494,7 @@ static HOLEY: RegClassInfo = reg_class(
 /// A three-bit field of a class spanning `x8..x15`, like RVC `GPRC`, and one
 /// of a class with members on both sides of the field, like x86 `GPRaddrIndex`.
 const NARROW_DECODE: DecodeSpec = DecodeSpec {
-    op: ("test", "narrow"),
+    construct: decoded_op::<ops::NarrowDecodeOp>,
     attrs: &["rc", "rh"],
     shapes: &[DecodeShape {
         fixed_mask: 0,

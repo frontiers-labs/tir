@@ -1,4 +1,4 @@
-pub let Operation: (Int, String, String, Int, Int, Int, Int) -> Prop;
+pub let Operation: (std::ir::OperationId, std::ir::OperationKind, String, Int, Int, Int, Int) -> Prop;
 pub let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>;
 pub let Marker: Int -> Prop;
 
@@ -8,9 +8,9 @@ pub mod success {
 }
 
 pub mod conflict {
-    pub let write<id, place, parent, position, order, location>:
-        Operation(id, "builtin.module", place, parent, position, order, location) ->
-        (Attribute("operation", id, "probe", 1), Attribute("operation", id, "probe", 2));
+    pub let write<id, kind, parent, position, order, location>:
+        Operation(id, kind, "root", parent, position, order, location) ->
+        (Attribute("operation", std::ir::raw_operation_id(id), "probe", 1), Attribute("operation", std::ir::raw_operation_id(id), "probe", 2));
 }
 
 pub let execute = std::schedule::saturate(success);

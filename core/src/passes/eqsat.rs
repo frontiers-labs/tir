@@ -115,6 +115,11 @@ fn snapshot<'db>(
     program
         .insert_eq_sat_root((root.into(),))
         .map_err(rule_error)?;
+    for kind in context.kinds_implementing::<dyn crate::ConstantLike>() {
+        program
+            .insert_eq_sat_constant_implementation((kind.into(),))
+            .map_err(rule_error)?;
+    }
     program.prepare().map_err(rule_error)?;
     layout_values(context, &mut program)?;
     Ok(program)
@@ -190,19 +195,26 @@ fn layout_values(context: &Context, program: &mut generated::Program<'_>) -> Res
         .map(|row| row.map_err(rule_error))
         .collect::<Result<Vec<_>, _>>()?;
     for (key, kind) in requests {
-        let kind = kind.as_str();
         let id = OpId::from(key);
+        if context.operation_kind(id) != Some(kind.declaration()) {
+            return Err(PassError::InvalidRuleSet(
+                "layout query has the wrong operation declaration".into(),
+            ));
+        }
         let Some(layout) = crate::layout::DataLayout::for_op(context, id) else {
             continue;
         };
         let op = context.get_op(id);
-        if matches!(kind, "ptr.store" | "ptr.load" | "ptr.ptradd") {
+        if op.is::<crate::ptr::ops::StoreOp>()
+            || op.is::<crate::ptr::ops::LoadOp>()
+            || op.is::<crate::ptr::ops::PtrAddOp>()
+        {
             if let Some(width) = layout.pointer_size().filter(|&width| width != 0) {
                 program
                     .insert_eq_sat_pointer_size((key, i64::from(width)))
                     .map_err(rule_error)?;
             }
-            if kind == "ptr.store"
+            if op.is::<crate::ptr::ops::StoreOp>()
                 && let Some(data) = op.operands().first()
                 && let Some(access) = layout.layout_of(context.get_value(*data).ty())
                 && let Ok(size) = access.size.to_string().parse::<tir_egglog::sort::BigInt>()
@@ -212,7 +224,7 @@ fn layout_values(context: &Context, program: &mut generated::Program<'_>) -> Res
                     .insert_eq_sat_store_layout((key, size, align))
                     .map_err(rule_error)?;
             }
-            if kind == "ptr.ptradd"
+            if op.is::<crate::ptr::ops::PtrAddOp>()
                 && let Some(offset) = op.operands().get(1)
                 && let Some(ty) =
                     crate::builtin::IntegerType::view(context, context.get_value(*offset).ty())
@@ -227,13 +239,15 @@ fn layout_values(context: &Context, program: &mut generated::Program<'_>) -> Res
         let Some(AttributeValue::Type(ty)) = op.attr("ty") else {
             continue;
         };
-        let answer = match kind {
-            "layout.sizeof" => layout.layout_of(ty).map(|value| value.size),
-            "layout.alignof" => layout.layout_of(ty).map(|value| value.align),
-            "layout.offsetof" => op
-                .attr("field")
-                .and_then(|field| layout.offset_in_bits(ty, field.as_str()?)),
-            _ => None,
+        let answer = if op.is::<crate::layout::ops::SizeOfOp>() {
+            layout.layout_of(ty).map(|value| value.size)
+        } else if op.is::<crate::layout::ops::AlignOfOp>() {
+            layout.layout_of(ty).map(|value| value.align)
+        } else if op.is::<crate::layout::ops::OffsetOfOp>() {
+            op.attr("field")
+                .and_then(|field| layout.offset_in_bits(ty, field.as_str()?))
+        } else {
+            None
         };
         if let Some(bits) =
             answer.and_then(|value| value.to_string().parse::<tir_egglog::sort::BigInt>().ok())

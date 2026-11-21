@@ -1155,8 +1155,7 @@ fn emit_instruction(
         &encoding_shapes,
         &ops_map,
         &resolved_params,
-        options.dialect,
-        op_name,
+        &name_ident,
     ) {
         out.instruction_decoder_impls.push(decoder);
         out.instruction_decoder_dispatch

@@ -32,9 +32,16 @@ pub struct Program {
     support: Vec<CompiledModule>,
     pub(crate) module_exports: BTreeMap<Vec<String>, BTreeMap<String, Vec<String>>>,
     pub(crate) references: BTreeMap<CdslPath, Vec<BTreeSet<CdslPath>>>,
+    declaration_sources: BTreeMap<CdslPath, String>,
 }
 
 impl Program {
+    pub(crate) fn declaration_source(&self, module: &[String]) -> &str {
+        self.declaration_sources
+            .get(module)
+            .map_or("anonymous", String::as_str)
+    }
+
     pub(crate) fn all_modules(&self) -> impl Iterator<Item = &CompiledModule> {
         self.modules.iter().chain(&self.support)
     }
@@ -91,6 +98,7 @@ impl Program {
             support: self.support,
             module_exports: self.module_exports,
             references: self.references,
+            declaration_sources: self.declaration_sources,
         })
     }
 
@@ -124,6 +132,7 @@ fn load_file(file: &Path) -> Result<Program, Error> {
         support: Vec::new(),
         module_exports: BTreeMap::new(),
         references: BTreeMap::new(),
+        declaration_sources: BTreeMap::new(),
     };
     load_module(
         &mut program,
@@ -270,6 +279,7 @@ fn compile_single(ast: Ast, file: &Path) -> Result<Program, Error> {
         support: Vec::new(),
         module_exports: BTreeMap::new(),
         references: BTreeMap::new(),
+        declaration_sources: BTreeMap::new(),
     };
     finish(program)
 }
@@ -288,6 +298,9 @@ fn expand_inline_modules(program: &mut Program) {
             {
                 let mut path = module.path.clone();
                 path.push(name.clone());
+                if let Some(owner) = program.declaration_sources.get(&module.path).cloned() {
+                    program.declaration_sources.insert(path.clone(), owner);
+                }
                 children.push(CompiledModule {
                     package: module.package.clone(),
                     root_depth: module.root_depth,
@@ -396,6 +409,43 @@ fn load_module(
     )
 }
 
+fn declaration_source(file: &Path) -> String {
+    let quoted = |value: &str| {
+        value
+            .trim_start()
+            .strip_prefix('"')?
+            .split_once('"')
+            .map(|(field, _)| field.to_owned())
+    };
+    for root in file.ancestors().skip(1) {
+        let Ok(manifest) = fs::read_to_string(root.join("Cargo.toml")) else {
+            continue;
+        };
+        let Some(name) = manifest_field(&manifest, "package", "name").and_then(quoted) else {
+            continue;
+        };
+        let version = manifest_field(&manifest, "package", "version")
+            .and_then(quoted)
+            .or_else(|| {
+                manifest_field(&manifest, "package", "version.workspace")?
+                    .trim_start()
+                    .starts_with("true")
+                    .then_some(())?;
+                root.ancestors().find_map(|dir| {
+                    let source = fs::read_to_string(dir.join("Cargo.toml")).ok()?;
+                    manifest_field(&source, "workspace.package", "version").and_then(quoted)
+                })
+            })
+            .unwrap_or_else(|| "0.0.0".into());
+        let relative = file.strip_prefix(root).unwrap_or(file);
+        return format!("{name}@{version}:{}", relative.display());
+    }
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hash = DefaultHasher::new();
+    file.hash(&mut hash);
+    format!("standalone:{:016x}", hash.finish())
+}
+
 fn load_source(
     program: &mut Program,
     package: &str,
@@ -408,7 +458,7 @@ fn load_source(
     if seen
         .iter()
         .any(|(loaded, parent)| loaded == &key && path.starts_with(parent))
-        || !seen.insert((key, path.clone()))
+        || !seen.insert((key.clone(), path.clone()))
     {
         return Err(Error(format!(
             "module file loaded twice: {}",
@@ -416,6 +466,9 @@ fn load_source(
         )));
     }
     let ast = parse_source(&text, &file)?;
+    program
+        .declaration_sources
+        .insert(path.clone(), declaration_source(&key));
     let children = ast
         .declarations
         .iter()

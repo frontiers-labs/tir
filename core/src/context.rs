@@ -118,6 +118,7 @@ impl Context {
         .unwrap_or_else(|error| panic!("IR type argument: {error}"));
         ir_program::bind_std_ir_fp_format(engine.database_mut(), tir_symbolic::term::fp_format)
             .unwrap_or_else(|error| panic!("IR floating-point format: {error}"));
+        op_spec::bind_native(&mut engine);
         ir_program::attach(&mut engine).unwrap_or_else(|error| panic!("IR rules: {error}"));
         keys::install(&mut engine).expect("IR entity keys");
         let queries = queries::Queries::new(engine.database());
@@ -314,13 +315,14 @@ impl Context {
         Op: ImplementsOpInterface<I>,
         I: ?Sized + 'static,
     {
-        self.register_op_interface::<I>(Op::dialect(), Op::name(), op_interface_converter::<Op, I>);
+        self.register_operation::<Op>();
+        self.install_op_interface::<I>(Op::native_identity(), op_interface_converter::<Op, I>);
     }
 
     pub(crate) fn get_dyn_op(&self, op: OpHandle) -> Box<dyn Operation> {
-        let dialect_name = self.op_identity(op.id).0;
-        let dialect = self.registry().dialects.get(dialect_name).unwrap().clone();
-        dialect.get_dyn_op(op)
+        let kind = self.operation_kind(op.id).expect("live operation");
+        self.operation_factory(kind)
+            .expect("registered operation constructor")(op)
     }
 
     pub(crate) fn get_op_interface<I: ?Sized + 'static>(&self, op: OpHandle) -> Option<Box<I>> {
@@ -997,10 +999,9 @@ impl Context {
     ) -> OpHandle {
         let id = OpId::new(self.mint());
         self.0.constructing.set(Some(id));
-        let (dialect, name) = op.name;
         OperationRow {
             id: id.raw(),
-            kind: format!("{dialect}.{name}"),
+            kind: op.declaration,
             placement: "root".into(),
             container: -1,
             position: -1,

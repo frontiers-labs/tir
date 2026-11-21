@@ -558,14 +558,15 @@ let integers = std::schedule::integer_rules(dialects::builtin, dialects::builtin
 pub let evaluate = Schedule::Rules(integers.fold);
 pub let discover = Schedule::Rules(integers.flags);
 pub mod input {
+    pub let constant: EqSatConstantImplementation(dialects::builtin::zero.kind);
     pub let results: (
-        EqSatIntegerResult(std::ir::operation_key(1), std::ir::operation_named("builtin.divide"), std::ir::value_key(1), 8),
-        EqSatIntegerResult(std::ir::operation_key(2), std::ir::operation_named("builtin.divide"), std::ir::value_key(2), 8),
-        EqSatIntegerResult(std::ir::operation_key(3), std::ir::operation_named("builtin.divide"), std::ir::value_key(3), 8),
-        EqSatIntegerResult(std::ir::operation_key(4), std::ir::operation_named("builtin.wide_sum"), std::ir::value_key(4), 16),
-        EqSatIntegerResult(std::ir::operation_key(5), std::ir::operation_named("builtin.zero"), std::ir::value_key(5), 16),
-        EqSatIntegerResult(std::ir::operation_key(6), std::ir::operation_named("builtin.unary_zero"), std::ir::value_key(6), 16),
-        EqSatIntegerResult(std::ir::operation_key(7), std::ir::operation_named("builtin.nullary_zero"), std::ir::value_key(7), 16),
+        EqSatIntegerResult(std::ir::operation_key(1), dialects::builtin::r#divide.kind, std::ir::value_key(1), 8),
+        EqSatIntegerResult(std::ir::operation_key(2), dialects::builtin::r#divide.kind, std::ir::value_key(2), 8),
+        EqSatIntegerResult(std::ir::operation_key(3), dialects::builtin::r#divide.kind, std::ir::value_key(3), 8),
+        EqSatIntegerResult(std::ir::operation_key(4), dialects::builtin::r#wide_sum.kind, std::ir::value_key(4), 16),
+        EqSatIntegerResult(std::ir::operation_key(5), dialects::builtin::r#zero.kind, std::ir::value_key(5), 16),
+        EqSatIntegerResult(std::ir::operation_key(6), dialects::builtin::r#unary_zero.kind, std::ir::value_key(6), 16),
+        EqSatIntegerResult(std::ir::operation_key(7), dialects::builtin::r#nullary_zero.kind, std::ir::value_key(7), 16),
     );
 }
 pub let seed = Schedule::Rules(input);
@@ -583,7 +584,7 @@ pub let EqSatConstant: (std::ir::OperationId, std::ir::ValueId, BigInt) -> Prop;
 pub let EqSatFlagField: (String, Bool) -> Prop;
 pub let EqSatFlag: (std::ir::OperationId, String, Bool, Bool) -> Prop;
 pub let EqSatBinaryKind: std::ir::BinaryIntegerOperation -> Prop;
-pub let EqSatConstantImplementation: String -> Prop;
+pub let EqSatConstantImplementation: std::ir::OperationKind -> Prop;
 pub mod analyze { pub let marker: EqSatFlagField("unused", false); }
 pub mod branch_local { pub let marker: EqSatFlagField("unused", false); }
 pub mod dialects {
@@ -690,9 +691,16 @@ use generated::{OperationId, ValueId};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = EGraph::default();
+    let db = engine.database_mut();
+    generated::install_schema(db)?;
+    let binary_kinds = generated::table_eq_sat_binary_kind(db)?;
+    let text = db.base("builtin.divide".to_owned());
+    assert!(matches!(
+        db.insert(binary_kinds, &[text]),
+        Err(tir_egglog::Error::Sort { column: 0, .. })
+    ));
     let mut program = generated::Program::load(engine.database_mut())?;
     program.seed()?;
-    program.insert_eq_sat_constant_implementation(("builtin.zero".into(),))?;
     program.insert_eq_sat_integer_operand((OperationId::from_raw(6), 0, ValueId::from_raw(60), 16))?;
     program.insert_eq_sat_folded((ValueId::from_raw(60), BigInt::new(7)))?;
     for (node, lhs, rhs, rhs_width) in [(1, 84, 20, 8), (2, 84, 0, 8), (3, 20, 20, 8), (4, 7, 160, 16)] {
@@ -718,6 +726,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Result<Vec<_>, _>>()?;
     kinds.sort();
     assert_eq!(kinds, ["builtin.binary_without_fold", "builtin.divide"]);
+    drop(program);
+    let db = engine.database_mut();
+    let results = generated::table_eq_sat_integer_result(db)?;
+    let wrong = db.rows(results)
+        .find(|row| db.base_value::<i64>(row[0]) == 5)
+        .ok_or("missing nullary operation declaration")?[1];
+    db.clear(binary_kinds);
+    db.insert(binary_kinds, &[wrong])?;
+    let program = generated::Program::load(db)?;
+    assert!(program.eq_sat_binary_kind().next().ok_or("missing raw row")?.is_err());
     Ok(())
 }
 "#,
