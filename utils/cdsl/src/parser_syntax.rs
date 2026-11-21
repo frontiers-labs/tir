@@ -85,24 +85,7 @@ pub(crate) enum Declaration {
         name: String,
         generics: Vec<RuleBinder>,
         ty: Expr,
-        engine: Option<EngineBinding>,
     },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum EngineBinding {
-    Name(String),
-    Host(String),
-    Table(Path),
-}
-
-impl Children for EngineBinding {
-    fn children(self, into: &mut Vec<Result<Fragment, BuildError>>) {
-        match self {
-            Self::Name(name) | Self::Host(name) => name.children(into),
-            Self::Table(path) => path.children(into),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -267,13 +250,11 @@ impl Children for Declaration {
                 name,
                 generics,
                 ty,
-                engine,
             } => {
                 public.children(into);
                 name.children(into);
                 generics.children(into);
                 ty.children(into);
-                engine.children(into);
             }
         }
     }
