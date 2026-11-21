@@ -113,17 +113,7 @@ pub enum AggregateKind {
 let ConstantAttributes: Type = { value: Int };
 let constant_rust = { interfaces: { ConstantLike: true } };
 
-let ConstantOperation<w: Nat> = {
-    signature: Type,
-    attributes: Type,
-    exec: (ConstantAttributes) -> El<Bits<w>>,
-    interfaces: {
-        ConstantLike: ConstantLike<w>,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let constant<w: Nat>: ConstantOperation<w> = op {
+pub let constant<w: Nat> = op {
     signature: () -> El<Bits<w>>,
     attributes: ConstantAttributes,
     exec: fn (self: ConstantAttributes) -> El<Bits<w>> { bits::from_int<w>(self.value) },
@@ -136,21 +126,7 @@ pub let constant<w: Nat>: ConstantOperation<w> = op {
 
 let AddiAttributes: Type = { nsw: Optional<Bool>, nuw: Optional<Bool> };
 
-let AddiOperation<w: Nat> = {
-    signature: Type,
-    attributes: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    poison: (AddiAttributes, El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        Additive: Additive,
-        Commutative: Commutative,
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let addi<w: Nat>: AddiOperation<w> = op {
+pub let addi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     attributes: AddiAttributes,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> {
@@ -172,20 +148,7 @@ pub let addi<w: Nat>: AddiOperation<w> = op {
 
 let SubiAttributes: Type = { nsw: Optional<Bool>, nuw: Optional<Bool> };
 
-let SubiOperation<w: Nat> = {
-    signature: Type,
-    attributes: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    poison: (SubiAttributes, El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        Subtractive: Subtractive,
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let subi<w: Nat>: SubiOperation<w> = op {
+pub let subi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     attributes: SubiAttributes,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::sub_wrapping(lhs, rhs) },
@@ -202,21 +165,7 @@ pub let subi<w: Nat>: SubiOperation<w> = op {
     },
 };
 
-let muli_rust = { interfaces: { OpCost: true } };
-
-let MuliOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    interfaces: {
-        Commutative: Commutative,
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-        OpCost: OpCost,
-    },
-};
-
-pub let muli<w: Nat>: MuliOperation<w> = op {
+pub let muli<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::mul_wrapping(lhs, rhs) },
 
@@ -229,17 +178,7 @@ pub let muli<w: Nat>: MuliOperation<w> = op {
     },
 };
 
-let DivsiOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    requires: (El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-    },
-};
-
-pub let divsi<w: Nat>: DivsiOperation<w> = op {
+pub let divsi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::sdiv(lhs, rhs) },
     requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::signed_div_defined(lhs, rhs) },
@@ -250,17 +189,7 @@ pub let divsi<w: Nat>: DivsiOperation<w> = op {
     },
 };
 
-let DivuiOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    requires: (El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-    },
-};
-
-pub let divui<w: Nat>: DivuiOperation<w> = op {
+pub let divui<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::udiv(lhs, rhs) },
     requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::ne(rhs, bits::zero<w>()) },
@@ -271,17 +200,7 @@ pub let divui<w: Nat>: DivuiOperation<w> = op {
     },
 };
 
-let RemsiOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    requires: (El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-    },
-};
-
-pub let remsi<w: Nat>: RemsiOperation<w> = op {
+pub let remsi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::srem(lhs, rhs) },
     requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::signed_div_defined(lhs, rhs) },
@@ -292,17 +211,7 @@ pub let remsi<w: Nat>: RemsiOperation<w> = op {
     },
 };
 
-let RemuiOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    requires: (El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-    },
-};
-
-pub let remui<w: Nat>: RemuiOperation<w> = op {
+pub let remui<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::urem(lhs, rhs) },
     requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::ne(rhs, bits::zero<w>()) },
@@ -313,18 +222,7 @@ pub let remui<w: Nat>: RemuiOperation<w> = op {
     },
 };
 
-let AndiOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    interfaces: {
-        Commutative: Commutative,
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let andi<w: Nat>: AndiOperation<w> = op {
+pub let andi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::and(lhs, rhs) },
 
@@ -336,18 +234,7 @@ pub let andi<w: Nat>: AndiOperation<w> = op {
     },
 };
 
-let OriOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    interfaces: {
-        Commutative: Commutative,
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let ori<w: Nat>: OriOperation<w> = op {
+pub let ori<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::or(lhs, rhs) },
 
@@ -359,18 +246,7 @@ pub let ori<w: Nat>: OriOperation<w> = op {
     },
 };
 
-let XoriOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    interfaces: {
-        Commutative: Commutative,
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let xori<w: Nat>: XoriOperation<w> = op {
+pub let xori<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::xor(lhs, rhs) },
 
@@ -382,18 +258,7 @@ pub let xori<w: Nat>: XoriOperation<w> = op {
     },
 };
 
-let ShliOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    poison: (El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let shli<w: Nat>: ShliOperation<w> = op {
+pub let shli<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::shl(lhs, rhs) },
     poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
@@ -405,18 +270,7 @@ pub let shli<w: Nat>: ShliOperation<w> = op {
     },
 };
 
-let ShruiOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    poison: (El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let shrui<w: Nat>: ShruiOperation<w> = op {
+pub let shrui<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::lshr(lhs, rhs) },
     poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
@@ -428,18 +282,7 @@ pub let shrui<w: Nat>: ShruiOperation<w> = op {
     },
 };
 
-let ShrsiOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>, El<Bits<w>>) -> El<Bits<w>>,
-    poison: (El<Bits<w>>, El<Bits<w>>) -> Bool,
-    interfaces: {
-        SameOperandAndResultType: SameOperandAndResultType,
-        IntegerArithmetic: IntegerArithmetic,
-        Speculatable: Speculatable,
-    },
-};
-
-pub let shrsi<w: Nat>: ShrsiOperation<w> = op {
+pub let shrsi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::ashr(lhs, rhs) },
     poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
@@ -451,15 +294,7 @@ pub let shrsi<w: Nat>: ShrsiOperation<w> = op {
     },
 };
 
-let ExtsiOperation<In: Nat, Out: Nat> = {
-    signature: Type,
-    exec: (El<Bits<In>>) -> El<Bits<Out>>,
-    interfaces: {
-        Speculatable: Speculatable,
-    },
-};
-
-pub let extsi<In: Nat, Out: Nat>: ExtsiOperation<In, Out> = op {
+pub let extsi<In: Nat, Out: Nat> = op {
     signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
     exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::sext<In, Out>(input) },
 
@@ -468,15 +303,7 @@ pub let extsi<In: Nat, Out: Nat>: ExtsiOperation<In, Out> = op {
     },
 };
 
-let ExtuiOperation<In: Nat, Out: Nat> = {
-    signature: Type,
-    exec: (El<Bits<In>>) -> El<Bits<Out>>,
-    interfaces: {
-        Speculatable: Speculatable,
-    },
-};
-
-pub let extui<In: Nat, Out: Nat>: ExtuiOperation<In, Out> = op {
+pub let extui<In: Nat, Out: Nat> = op {
     signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
     exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::zext<In, Out>(input) },
 
@@ -485,15 +312,7 @@ pub let extui<In: Nat, Out: Nat>: ExtuiOperation<In, Out> = op {
     },
 };
 
-let TrunciOperation<In: Nat, Out: Nat> = {
-    signature: Type,
-    exec: (El<Bits<In>>) -> El<Bits<Out>>,
-    interfaces: {
-        Speculatable: Speculatable,
-    },
-};
-
-pub let trunci<In: Nat, Out: Nat>: TrunciOperation<In, Out> = op {
+pub let trunci<In: Nat, Out: Nat> = op {
     signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
     exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::trunc<In, Out>(input) },
 
@@ -504,15 +323,7 @@ pub let trunci<In: Nat, Out: Nat>: TrunciOperation<In, Out> = op {
 
 let bitcast_rust = { widened: true };
 
-let BitcastOperation<w: Nat> = {
-    signature: Type,
-    exec: (El<Bits<w>>) -> El<Bits<w>>,
-    interfaces: {
-        Speculatable: Speculatable,
-    },
-};
-
-pub let bitcast<w: Nat>: BitcastOperation<w> = op {
+pub let bitcast<w: Nat> = op {
     signature: (input: El<Bits<w>>) -> El<Bits<w>>,
     exec: fn (input: El<Bits<w>>) -> El<Bits<w>> { bits::bitcast<w, w>(input) },
     interfaces: {
@@ -520,13 +331,7 @@ pub let bitcast<w: Nat>: BitcastOperation<w> = op {
     },
 };
 
-let AssumeOperation = {
-    signature: Type,
-    exec: (El<Bits<1>>) -> (),
-    requires: (El<Bits<1>>) -> Bool,
-};
-
-pub let assume: AssumeOperation = op {
+pub let assume = op {
     signature: (condition: El<Bits<1>>) -> (),
     exec: fn (condition: El<Bits<1>>) -> () { () },
     requires: fn (condition: El<Bits<1>>) -> Bool { bits::ne(condition, bits::zero<1>()) },
@@ -539,15 +344,7 @@ pub let freeze<T: Type> = op {
     },
 };
 
-let RefineOperation<T: Type> = {
-    signature: Type,
-    exec: (T, El<Bits<1>>) -> T,
-    interfaces: {
-        Congruent: Congruent,
-    },
-};
-
-pub let refine<T: Type>: RefineOperation<T> = op {
+pub let refine<T: Type> = op {
     signature: (input: T, predicate: El<Bits<1>>) -> T,
     exec: fn (input: T, predicate: El<Bits<1>>) -> T { input },
     interfaces: {
@@ -570,16 +367,7 @@ pub enum IntegerPredicate {
 
 let CmpiAttributes: Type = { predicate: IntegerPredicate };
 
-let CmpiOperation<w: Nat> = {
-    signature: Type,
-    attributes: Type,
-    exec: (CmpiAttributes, El<Bits<w>>, El<Bits<w>>) -> El<Bits<1>>,
-    interfaces: {
-        Speculatable: Speculatable,
-    },
-};
-
-pub let cmpi<w: Nat>: CmpiOperation<w> = op {
+pub let cmpi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<1>>,
     attributes: CmpiAttributes,
     exec: fn (self: CmpiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<1>> {

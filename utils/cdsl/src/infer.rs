@@ -45,13 +45,14 @@ impl std::ops::Deref for BoundValue {
 
 // None records a value binder that shadows a type name.
 type Types = BTreeMap<Path, Option<Ty>>;
+type MatchArguments = BTreeMap<usize, [Ty; 2]>;
 
 const TYPE: ConId = ConId(0);
 const NAT: ConId = ConId(1);
 const BOOL: ConId = ConId(2);
 const STRING: ConId = ConId(3);
-const UNIT: ConId = ConId(4);
-const TUPLE: ConId = ConId(5);
+pub(crate) const UNIT: ConId = ConId(4);
+pub(crate) const TUPLE: ConId = ConId(5);
 const VECTOR: ConId = ConId(10);
 const SUM: ConId = ConId(15);
 const PRODUCT: ConId = ConId(16);
@@ -97,7 +98,20 @@ pub(crate) fn lower(program: &Program) -> Result<crate::CheckedProgram, Error> {
     for methods in operations.values_mut().flat_map(BTreeMap::values_mut) {
         methods.map_types(|ty| checker.substitution.apply(ty));
     }
-    crate::CheckedProgram::new(program.clone(), types, operations)
+    crate::CheckedProgram::new(
+        program.clone(),
+        types,
+        operations,
+        checker
+            .types
+            .into_iter()
+            .filter_map(|(path, ty)| match ty {
+                Some(Ty::Con(id, _)) => Some((path, id)),
+                _ => None,
+            })
+            .collect(),
+        checker.operation_matches,
+    )
 }
 fn elaborate(program: &Program) -> Result<Checker, Error> {
     crate::totality::check(program)?;
@@ -122,6 +136,8 @@ fn elaborate(program: &Program) -> Result<Checker, Error> {
         constructors: BTreeSet::new(),
         interfaces: BTreeSet::new(),
         checked_interfaces: BTreeMap::new(),
+        operation_kinds: BTreeMap::new(),
+        operation_matches: BTreeMap::new(),
         locations: BTreeMap::new(),
         arities: BTreeMap::new(),
         pending: Vec::new(),
@@ -230,6 +246,8 @@ struct Checker {
     constructors: BTreeSet<Path>,
     interfaces: BTreeSet<Path>,
     checked_interfaces: BTreeMap<Path, BTreeMap<Path, CheckedMethods>>,
+    operation_kinds: BTreeMap<Path, Scheme>,
+    operation_matches: BTreeMap<Path, BTreeMap<usize, crate::lower::CheckedMatch>>,
     locations: BTreeMap<Path, String>,
     arities: BTreeMap<Path, usize>,
     pending: Vec<Path>,
@@ -1375,6 +1393,11 @@ impl Checker {
                 self.call(definitions, value, arguments, environment, types, None)
             }
             Expression::Member { value, name } => {
+                if let Some(kind) =
+                    self.operation_member(definitions, value, name, environment, types)?
+                {
+                    return Ok(kind);
+                }
                 let ty = self.expression(definitions, value, environment, types)?;
                 let mut found = None;
                 if let Ty::Con(id, args) = self.substitution.apply(&ty) {
@@ -1492,10 +1515,15 @@ impl Checker {
                 } => (Some(&**left), &**right),
                 _ => (None, annotation),
             };
+            let mut matches = MatchArguments::new();
             if let Some(premises) = premises {
-                self.propositions(definitions, premises, &local, &types, true)?;
+                self.propositions(definitions, premises, &local, &types, Some(&mut matches))?;
             }
-            self.propositions(definitions, heads, &local, &types, false)?;
+            self.propositions(definitions, heads, &local, &types, None)?;
+            if !matches.is_empty() {
+                let matches = self.checked_matches(matches)?;
+                self.operation_matches.insert(path.clone(), matches);
+            }
             let binding = if let Some(premises) = premises {
                 Some(premises)
             } else if let Expression::Binary {
@@ -1561,19 +1589,19 @@ impl Checker {
         expression: &Expr,
         local: &Environment,
         types: &Types,
-        premise: bool,
+        mut matches: Option<&mut MatchArguments>,
     ) -> Result<(), Error> {
         match &expression.value {
             Expression::Tuple(items) => {
                 for item in items {
-                    self.propositions(definitions, item, local, types, premise)?;
+                    self.propositions(definitions, item, local, types, matches.as_deref_mut())?;
                 }
             }
             Expression::Unary {
                 op: UnaryOp::Not,
                 value,
-            } if premise => {
-                let ty = self.proposition_term(definitions, value, local, types)?;
+            } if matches.is_some() => {
+                let ty = self.proposition_term(definitions, value, local, types, None)?;
                 self.unify(&ty, &con(FACT))?;
             }
             Expression::Binary {
@@ -1581,12 +1609,12 @@ impl Checker {
                 left,
                 right,
             } => {
-                let left = self.proposition_term(definitions, left, local, types)?;
-                let right = self.proposition_term(definitions, right, local, types)?;
+                let left = self.proposition_term(definitions, left, local, types, None)?;
+                let right = self.proposition_term(definitions, right, local, types, None)?;
                 self.unify(&left, &right)?;
             }
             _ => {
-                let ty = self.proposition_term(definitions, expression, local, types)?;
+                let ty = self.proposition_term(definitions, expression, local, types, matches)?;
                 self.unify(&ty, &con(FACT))?;
             }
         }
@@ -1598,6 +1626,7 @@ impl Checker {
         expression: &Expr,
         local: &Environment,
         types: &Types,
+        matches: Option<&mut MatchArguments>,
     ) -> Result<Ty, Error> {
         if let Expression::Call { value, arguments } = &expression.value {
             let callee = self.expression(definitions, value, local, types)?;
@@ -1610,12 +1639,30 @@ impl Checker {
             if parameters.len() != arguments.len() {
                 return Err(Error("clause application arity mismatch".into()));
             }
-            for (argument, parameter) in arguments.iter().zip(parameters) {
+            for (argument, parameter) in arguments.iter().zip(&parameters) {
                 if matches!(argument.value, Expression::Literal(_)) {
-                    self.check_expression(definitions, argument, &parameter, local, types)?;
+                    self.check_expression(definitions, argument, parameter, local, types)?;
                 } else {
-                    let ty = self.proposition_term(definitions, argument, local, types)?;
-                    self.unify(&ty, &parameter)?;
+                    let ty = self.proposition_term(definitions, argument, local, types, None)?;
+                    self.unify(&ty, parameter)?;
+                }
+            }
+            if let Some(matches) = matches {
+                let groups = match (&value.value, parameters.as_slice()) {
+                    (Expression::Member { name, .. }, [_, operands, results])
+                        if name == "matches" =>
+                    {
+                        Some([operands, results])
+                    }
+                    (Expression::Path(path), [_, _, operands, results])
+                        if path == &["std", "ir", "match_kind"] =>
+                    {
+                        Some([operands, results])
+                    }
+                    _ => None,
+                };
+                if let Some(groups) = groups {
+                    matches.insert(expression.range.start, groups.map(Ty::clone));
                 }
             }
             return Ok(self.substitution.apply(&result));
@@ -2029,6 +2076,7 @@ fn clause_annotation(annotation: &Expr) -> bool {
             ..
         }
         | Expression::Call { .. }
+        | Expression::RecordCall { .. }
         | Expression::Unary {
             op: UnaryOp::Not, ..
         } => true,

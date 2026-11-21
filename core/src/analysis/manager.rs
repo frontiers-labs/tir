@@ -5,6 +5,12 @@ use std::{
 };
 use tir_egglog::{BaseValue, Database, EGraph, Error, Producer, Program, Row, TableId, Value};
 
+const ANALYSIS_INPUTS: &str = concat!(
+    include_str!("../../defs/ir.cdsl"),
+    "\n",
+    include_str!("../../defs/analysis/root.cdsl"),
+);
+
 #[derive(Default)]
 pub struct AnalysisManager(RefCell<Option<Catalog>>);
 
@@ -37,6 +43,7 @@ impl Facts<'_> {
 
 struct Catalog {
     root: TableId,
+    existing_tables: usize,
     program: Program,
     owners: BTreeMap<TableId, AnalysisId>,
     producers: Vec<State>,
@@ -61,6 +68,12 @@ impl AnalysisManager {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Whether a producer catalog is already installed on this context.
+    pub fn is_installed(&self) -> bool {
+        self.0.borrow().is_some()
+    }
+
     /// Install the checked catalog once, before the pipeline requests facts.
     pub fn install(context: &Context, source: &str) -> Result<(), Error> {
         let mut catalog = context.analyses().0.borrow_mut();
@@ -74,14 +87,51 @@ impl AnalysisManager {
         if db.table("AnalysisRoot").is_ok() {
             return Err(Error::Unsupported("reserved analysis root".into()));
         }
+        let existing_tables = db.table_count();
         let root = db.add_relation("AnalysisRoot", &[int]);
         let (engine, program, producers) =
-            tir_cdsl::Schema::compile_producers(snapshot, source, tir_ir_schema::ANALYSIS_INPUTS)
+            tir_cdsl::Schema::compile_producers(snapshot, source, ANALYSIS_INPUTS)
                 .map_err(|e| Error::Unsupported(e.to_string()))?;
+        let installed = Self::build_catalog(root, existing_tables, program, producers)?;
+        *catalog = Some(installed);
+        *live = engine;
+        Ok(())
+    }
+
+    pub(crate) fn install_cfg(context: &Context) -> Result<(), Error> {
+        let mut catalog = context.analyses().0.borrow_mut();
+        if catalog.is_some() {
+            return Err(Error::Unsupported("duplicate analysis catalog".into()));
+        }
+        let mut live = context.egraph();
+        let mut snapshot = live.clone();
+        let db = snapshot.database_mut();
+        if super::cfg::generated::table_analysis_root(db).is_ok() {
+            return Err(Error::Unsupported("reserved analysis root".into()));
+        }
+        let existing_tables = db.table_count();
+        let (program, producers) = super::cfg::generated::load_producers(db)
+            .map_err(|error| Error::Unsupported(error.to_string()))?;
+        let root = super::cfg::generated::table_analysis_root(db)?;
+        let installed = Self::build_catalog(root, existing_tables, program, producers)?;
+        *catalog = Some(installed);
+        *live = snapshot;
+        Ok(())
+    }
+
+    fn build_catalog(
+        root: TableId,
+        existing_tables: usize,
+        program: Program,
+        producers: Vec<Producer>,
+    ) -> Result<Catalog, Error> {
         let mut owners = BTreeMap::new();
         for (id, producer) in producers.iter().enumerate() {
             for &table in &producer.writes {
-                if table.index() <= root.index() || owners.insert(table, AnalysisId(id)).is_some() {
+                if table == root
+                    || table.index() < existing_tables
+                    || owners.insert(table, AnalysisId(id)).is_some()
+                {
                     return Err(Error::Unsupported("invalid output owner".into()));
                 }
             }
@@ -99,25 +149,47 @@ impl AnalysisManager {
             owners,
             producers,
             root,
+            existing_tables,
         };
         for id in 0..installed.producers.len() {
             let mut order = Vec::new();
             installed.order(AnalysisId(id), &mut BTreeSet::new(), &mut order)?;
             installed.producers[id].order = order;
         }
-        *catalog = Some(installed);
-        *live = engine;
-        Ok(())
+        Ok(installed)
     }
 
     /// Refresh the requested table and its prerequisites on the published IR.
     pub fn require<'a>(context: &'a Context, root: OpId, table: &str) -> Result<Facts<'a>, Error> {
+        Self::require_table_with(
+            context,
+            root,
+            |db| db.table(table),
+            || Error::UnknownName(table.into()),
+        )
+    }
+
+    pub(crate) fn require_table(
+        context: &Context,
+        root: OpId,
+        resolve: impl FnOnce(&Database) -> Result<TableId, Error>,
+    ) -> Result<Facts<'_>, Error> {
+        Self::require_table_with(context, root, resolve, || {
+            Error::Unsupported("no producer for requested analysis".into())
+        })
+    }
+
+    fn require_table_with<'a>(
+        context: &'a Context,
+        root: OpId,
+        resolve: impl FnOnce(&Database) -> Result<TableId, Error>,
+        missing: impl Fn() -> Error,
+    ) -> Result<Facts<'a>, Error> {
         let mut state = context.analyses().0.borrow_mut();
-        let missing = || Error::UnknownName(table.into());
-        let catalog = state.as_mut().ok_or_else(missing)?;
+        let catalog = state.as_mut().ok_or_else(&missing)?;
         let mut engine = context.egraph();
         let db = engine.database_mut();
-        let table = db.table(table)?;
+        let table = resolve(db)?;
         let producer = *catalog.owners.get(&table).ok_or_else(missing)?;
         let root = db.base(i64::from(root.raw()));
         let mut roots = db.rows(catalog.root);
@@ -142,7 +214,7 @@ impl AnalysisManager {
         let catalog = self.0.borrow();
         catalog
             .as_ref()
-            .map_or(db.table_count(), |c| c.root.index())
+            .map_or(db.table_count(), |c| c.existing_tables)
     }
 
     pub(crate) fn finish(&self, context: &Context, preserved: Option<Preserved>) {

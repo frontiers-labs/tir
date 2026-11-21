@@ -59,9 +59,9 @@ pub(super) struct Tables {
 
 impl Tables {
     pub fn new(db: &mut Database) -> Self {
-        let term = db.table("TypeTerm").expect("type term table");
-        let ctor = db.table("TypeCtor").expect("type constructor table");
-        let symbol = db.table("Symbol").expect("symbol table");
+        let term = super::ir_catalog::table_type_term(db).expect("type term table");
+        let ctor = super::ir_catalog::table_type_ctor(db).expect("type constructor table");
+        let symbol = super::ir_catalog::table_symbol(db).expect("symbol table");
         for (table, key) in [
             (term, &[0][..]),
             (term, &[2, 1]),

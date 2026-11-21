@@ -29,9 +29,3 @@ pub fn literal(context: &Context, value: &tir::utils::APInt, ty: tir::TypeId) ->
         .attr("value", tir::attributes::AttributeValue::from_int(value))
         .result_type(ty)
 }
-
-impl crate::OpCost for MulIOp {
-    fn cost(&self) -> u32 {
-        4
-    }
-}

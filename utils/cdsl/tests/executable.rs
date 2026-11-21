@@ -1,17 +1,29 @@
 use std::{
-    fs,
+    env, fs,
     path::PathBuf,
-    process::Command,
+    process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
 };
-use tir_cdsl::{Schema, compile_file, compile_source};
+use tir_cdsl::{
+    OutputKind::{OpDef, Program as RustProgram},
+    Schema, compile_file, compile_source,
+};
 use tir_egglog::{EGraph, Program, Schedule};
 
 #[test]
 fn rust_filters_compile_their_module_exports() {
+    if let Ok(batch) = env::var("CDSL_TEST_BUILD_BATCH") {
+        tir_cdsl::compile(batch.lines().map(|request| {
+            let (filter, path) = request.split_once('\t').unwrap();
+            (filter, OpDef(path))
+        }))
+        .unwrap();
+        return;
+    }
+
     let sources = Sources::new();
-    let package = sources.write(
-        "lib.cdsl",
+    sources.write(
+        "defs/lib.cdsl",
         r#"
 mod hidden {
     pub let enabled: Bool = true;
@@ -31,18 +43,22 @@ pub mod second {
 pub use second as external;
 "#,
     );
-    let checked = tir_cdsl::CheckedProgram::compile_for_rust(&package).unwrap();
-    for (module, alias) in [("first", "first"), ("second", "external")] {
-        let rust = checked
-            .emit_rust_filter("fixture", &format!("fixture::{alias}::*"))
-            .unwrap();
-        sources.write(&format!("{module}.rs"), &rust);
-    }
+    let alias = format!("{}::external::*", sources.0.file_name().unwrap().display());
+    let second = sources.0.join("absolute/second.rs");
+    let built = sources.emit(&[
+        ("fixture::first::*", "nested/first.rs"),
+        (&alias, second.to_str().unwrap()),
+    ]);
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
     let probe = sources.write(
         "main.rs",
         r#"
-mod first { include!("first.rs"); }
-mod second { include!("second.rs"); }
+mod first { include!("out/nested/first.rs"); }
+mod second { include!("absolute/second.rs"); }
 const _: () = {
     assert!(first::exported);
     assert!(first::Exported { flag: true }.flag);
@@ -65,7 +81,7 @@ const _: second::Shade = second::Color::Green;
     );
     std::fs::write(
         &probe,
-        "mod first { include!(\"first.rs\"); } const _: bool = first::internal;",
+        "mod first { include!(\"out/nested/first.rs\"); } const _: bool = first::internal;",
     )
     .unwrap();
     let compiler = Command::new("rustc")
@@ -79,26 +95,45 @@ const _: second::Shade = second::Color::Green;
         !compiler.status.success()
             && String::from_utf8_lossy(&compiler.stderr).contains("cannot find value `internal`")
     );
+
+    let existing = sources.write("out/nested/first.rs", "sentinel");
+    for (filter, path, diagnostic) in [
+        (
+            alias.as_str(),
+            "nested/../nested/first.rs",
+            "duplicate Rust output",
+        ),
+        ("fixture::missing::*", "missing.rs", "unknown module"),
+    ] {
+        let built = sources.emit(&[("fixture::first::*", "nested/first.rs"), (filter, path)]);
+        let stderr = String::from_utf8_lossy(&built.stderr);
+        assert!(
+            !built.status.success() && stderr.contains(diagnostic),
+            "{stderr}"
+        );
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "sentinel");
+    }
 }
 
 #[test]
 fn rust_emission_materializes_both_fp_refinement_paths() {
     let sources = Sources::new();
     sources.write(
-        "fp.cdsl",
+        "defs/fp.cdsl",
         include_str!("../../../core/defs/dialects/fp.cdsl"),
     );
-    let package = sources.write("lib.cdsl", "pub mod fp;");
-    let checked = tir_cdsl::CheckedProgram::compile_for_rust(&package).unwrap();
-    let rust = checked
-        .emit_rust_filter("fixture", "fixture::fp::model::*")
-        .unwrap();
-    sources.write("fp.rs", &rust);
+    sources.write("defs/lib.cdsl", "pub mod fp;");
+    let built = sources.emit(&[("fixture::fp::model::*", "fp.rs")]);
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
     let probe = sources.write(
         "main.rs",
         r#"
 #[allow(dead_code, unused_imports)]
-mod fp { include!("fp.rs"); }
+mod fp { include!("out/fp.rs"); }
 use fp::{Computation, Float, Refinement, Rounding, ValueAlgebra, implementation, materialize, reference};
 
 fn bits(input: Float) -> f64 {
@@ -164,6 +199,7 @@ fn main() {
     );
 }
 
+#[derive(Debug)]
 struct Sources(PathBuf);
 impl Sources {
     fn new() -> Self {
@@ -178,8 +214,30 @@ impl Sources {
     }
     fn write(&self, name: &str, source: &str) -> PathBuf {
         let path = self.0.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, source).unwrap();
         path
+    }
+
+    fn emit(&self, outputs: &[(&str, &str)]) -> Output {
+        let batch = outputs
+            .iter()
+            .map(|(filter, path)| format!("{filter}\t{path}\n"))
+            .collect::<String>();
+        self.build("rust_filters_compile_their_module_exports")
+            .env("CDSL_TEST_BUILD_BATCH", batch)
+            .output()
+            .unwrap()
+    }
+
+    fn build(&self, test: &str) -> Command {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(["--exact", test, "--nocapture"])
+            .env("CARGO_MANIFEST_DIR", &self.0)
+            .env("CARGO_PKG_NAME", "fixture")
+            .env("OUT_DIR", self.0.join("out"));
+        command
     }
 }
 impl Drop for Sources {
@@ -222,12 +280,12 @@ let guarded = {
 }
 
 #[test]
-fn inferring_an_interface_operation_does_not_bypass_its_schema() {
+fn inferring_an_interface_operation_checks_exec_against_its_signature() {
     let error = compile_source(
         r#"
 interface Tag {}
 let make = fn () {
-    op { signature: () -> Bool, interfaces: { Tag: {} }, exec: false }
+    op { signature: () -> Bool, interfaces: { Tag: {} }, exec: fn () -> Int { 1 } }
 };
 "#,
     )
@@ -235,7 +293,54 @@ let make = fn () {
     assert!(
         error
             .to_string()
-            .contains("operation descriptor requires a source-defined contract annotation")
+            .contains("operation exec disagrees with signature")
+    );
+}
+
+#[test]
+fn rewrite_matches_use_declared_operand_and_result_types() {
+    let source = r#"
+pub mod dialects {
+    pub mod downstream {
+        pub let compare = op { signature: (lhs: std::Bits<8>, rhs: std::Bits<8>) -> std::Bits<1> };
+        pub let widen = op { signature: (input: std::Bits<1>) -> std::Bits<16> };
+    }
+}
+pub let Replaced: (Int, Int) -> Prop;
+pub let rewrite<first, last, x, y, flag, result>:
+    (dialects::downstream::compare.matches(first, (x, y), (flag,)),
+     dialects::downstream::widen.matches(last, (flag,), (result,)))
+    -> Replaced(first, std::ir::value_id(result));
+"#;
+    compile_source(source).unwrap();
+    for (original, invalid, diagnostic) in [
+        ("compare.matches", "missing.matches", "unresolved name"),
+        ("(x, y)", "(x,)", "rewrite: HM:"),
+        ("(flag,), (result,)", "(x,), (result,)", "rewrite: HM:"),
+    ] {
+        let error = compile_source(&source.replace(original, invalid)).unwrap_err();
+        assert!(error.to_string().contains(diagnostic), "{error}");
+    }
+}
+
+#[test]
+fn a_shared_named_relation_preserves_its_column_order() {
+    let first = compile_source("pub let Edge: { from: Int, to: Int } -> Prop;")
+        .unwrap()
+        .lower()
+        .unwrap();
+    let reversed = compile_source("pub let OtherEdge: { to: Int, from: Int } -> Prop;")
+        .unwrap()
+        .lower()
+        .unwrap();
+    let aliases = std::collections::BTreeMap::from([(vec!["OtherEdge".into()], "Edge".into())]);
+    let mut schema = Schema::with_names(&first, aliases).unwrap();
+    let error = schema.extend(&reversed).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("incompatible named columns for Edge"),
+        "{error}"
     );
 }
 
@@ -429,4 +534,260 @@ fn unsupported_computations_and_incompatible_host_bindings_fail_explicitly() {
     );
     let checked = compile_file(&source).unwrap().lower().unwrap();
     assert!(Schema::new(&checked).is_err());
+}
+
+#[test]
+fn integer_folding_preserves_local_semantics_and_rejects_unsupported_terms() {
+    if env::var_os("CDSL_TEST_BUILD_FOLD").is_some() {
+        tir_cdsl::compile([("fixture::fold::*", RustProgram("fold.rs"))]).unwrap();
+        return;
+    }
+    let compile = |exec: &str, extra: &str| {
+        let source = r#"
+use std::bigint::BigInt;
+use std::schedule::Schedule;
+let integers = std::schedule::integer_rules(dialects::builtin, dialects::builtin::ConstantLike<1>, {
+    binary: EqSatBinaryKind,
+    flag_field: EqSatFlagField,
+    result: EqSatIntegerResult,
+    operand: EqSatIntegerOperand,
+    folded: EqSatFolded,
+    constant_kind: EqSatConstantImplementation,
+    flag_value: EqSatFlag,
+    constant: EqSatConstant,
+    attribute: Attribute,
+    attr_int: attr_int,
+    attr_case: attr_case,
+    pick_case: pick_case,
+    bool_bit: bool_bit,
+    shift_amount: shift_amount,
+});
+pub let evaluate = Schedule::Rules(integers.fold);
+pub let discover = Schedule::Rules(integers.flags);
+pub mod input {
+    pub let results: (
+        EqSatIntegerResult(1, std::ir::operation_named("builtin.divide"), 1, 8),
+        EqSatIntegerResult(2, std::ir::operation_named("builtin.divide"), 2, 8),
+        EqSatIntegerResult(3, std::ir::operation_named("builtin.divide"), 3, 8),
+        EqSatIntegerResult(4, std::ir::operation_named("builtin.wide_sum"), 4, 16),
+        EqSatIntegerResult(5, std::ir::operation_named("builtin.zero"), 5, 16),
+        EqSatIntegerResult(6, std::ir::operation_named("builtin.unary_zero"), 6, 16),
+        EqSatIntegerResult(7, std::ir::operation_named("builtin.nullary_zero"), 7, 16),
+    );
+}
+pub let seed = Schedule::Rules(input);
+
+let Attribute: (String, Int, String, Int) -> Prop;
+let attr_int: Int -> BigInt as extern "attr_int";
+let attr_case: Int -> String as extern "attr_case";
+let pick_case: (String, String, Bool, Bool) -> Bool as extern "pick_case";
+let bool_bit: Bool -> BigInt as extern "bool_bit";
+let shift_amount: BigInt -> Int as extern "shift_amount";
+pub let EqSatIntegerResult: (Int, std::ir::OperationKind, Int, Int) -> Prop;
+pub let EqSatIntegerOperand: (Int, Int, Int, Int) -> Prop;
+pub let EqSatFolded: (Int, BigInt) -> Prop;
+pub let EqSatConstant: (Int, Int, BigInt) -> Prop;
+pub let EqSatFlagField: (String, Bool) -> Prop;
+pub let EqSatFlag: (Int, String, Bool, Bool) -> Prop;
+pub let EqSatBinaryKind: std::ir::BinaryIntegerOperation -> Prop;
+pub let EqSatConstantImplementation: String -> Prop;
+pub mod analyze { pub let marker: EqSatFlagField("unused", false); }
+pub mod branch_local { pub let marker: EqSatFlagField("unused", false); }
+pub mod dialects {
+    pub mod builtin {
+        use std::bits;
+        use std::option;
+        use std::ir::Bits;
+        use std::ir::El;
+        let Guards: Type = { reject_equal: option::Option<Bool> };
+        pub interface ConstantLike<w: Nat> { constant_value: () -> El<Bits<w>> }
+        pub let divide<w: Nat> = op {
+            signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
+            attributes: Guards,
+            exec: fn (rhs: El<Bits<w>>, lhs: El<Bits<w>>) -> El<Bits<w>> { EXEC },
+            requires: fn (numerator: El<Bits<w>>, divisor: El<Bits<w>>) -> Bool {
+                let zero = bits::zero<w>();
+                let nonzero = bits::ne(divisor, zero);
+                nonzero
+            },
+            poison: fn (attrs: Guards, numerator: El<Bits<w>>, divisor: El<Bits<w>>) -> Bool {
+                let guard = attrs;
+                let same = bits::eq(numerator, divisor);
+                option::get_or(guard.reject_equal, false) && same
+            },
+        };
+        pub let wide_sum = op {
+            signature: (x: Bits<8>, y: Bits<16>) -> Bits<16>,
+            exec: fn (x: El<Bits<8>>, y: El<Bits<16>>) -> El<Bits<16>> {
+                let total = bits::add_wrapping(y, y);
+                total
+            },
+        };
+        pub let binary_without_fold<w: Nat> = op {
+            signature: (x: Bits<w>, y: Bits<w>) -> Bits<w>,
+        };
+        pub let compare<w: Nat> = op {
+            signature: (x: Bits<w>, y: Bits<w>) -> Bits<1>,
+        };
+        pub let fixed_width = op {
+            signature: (x: Bits<8>, y: Bits<8>) -> Bits<8>,
+        };
+        pub let ternary<w: Nat> = op {
+            signature: (x: Bits<w>, y: Bits<w>, z: Bits<w>) -> Bits<w>,
+        };
+        pub let zero = op {
+            signature: () -> Bits<16>,
+            interfaces: { ConstantLike: { constant_value: fn () { bits::zero<16>() } } },
+        };
+        pub let unary_zero<w: Nat> = op {
+            signature: (input: Bits<w>) -> Bits<w>,
+            exec: fn (input: El<Bits<w>>) -> El<Bits<w>> {
+                let z = bits::zero();
+                bits::add_wrapping(z, z)
+            },
+        };
+        pub let nullary_zero = op {
+            signature: () -> Bits<16>,
+            exec: fn () -> El<Bits<16>> { bits::add_wrapping(bits::zero(), bits::zero()) },
+        };
+        EXTRA
+    }
+}
+"#
+        .replace("EXEC", exec)
+        .replace("EXTRA", extra);
+        let (rules, dialects) = source.split_once("pub mod dialects").unwrap();
+        let sources = Sources::new();
+        sources.write(
+            "defs/lib.cdsl",
+            &format!("pub mod fold; pub mod dialects{dialects}"),
+        );
+        sources.write("defs/fold.cdsl", rules);
+        let built = sources
+            .build("integer_folding_preserves_local_semantics_and_rejects_unsupported_terms")
+            .env("CDSL_TEST_BUILD_FOLD", "1")
+            .output()
+            .unwrap();
+        if !built.status.success() {
+            return Err(String::from_utf8_lossy(&built.stderr).into_owned());
+        }
+        Ok(sources)
+    };
+    let sources = compile(
+        "let rhs = bits::udiv(rhs, lhs);
+         let twice = { let lhs = bits::add_wrapping(rhs, rhs); lhs };
+         bits::sub_wrapping(twice, rhs)",
+        "",
+    )
+    .unwrap();
+    let engine = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../libs/egglog");
+    sources.write(
+        "Cargo.toml",
+        &format!(
+            "[package]\nname = \"fold-probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[dependencies]\ntir-egglog = {{ path = {engine:?} }}\n"
+        ),
+    );
+    sources.write(
+        "src/main.rs",
+        r#"
+#![allow(dead_code)]
+mod generated { include!("../out/fold.rs"); }
+use tir_egglog::{EGraph, sort::BigInt};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut engine = EGraph::default();
+    let mut program = generated::Program::load(engine.database_mut())?;
+    program.seed()?;
+    program.insert_eq_sat_constant_implementation(("builtin.zero".into(),))?;
+    program.insert_eq_sat_integer_operand((6, 0, 60, 16))?;
+    program.insert_eq_sat_folded((60, BigInt::new(7)))?;
+    for (node, lhs, rhs, rhs_width) in [(1, 84, 20, 8), (2, 84, 0, 8), (3, 20, 20, 8), (4, 7, 160, 16)] {
+        program.insert_eq_sat_flag((node, "reject_equal".into(), false, true))?;
+        for (slot, bits, width) in [(0, lhs, 8), (1, rhs, rhs_width)] {
+            let input = node * 10 + slot;
+            program.insert_eq_sat_integer_operand((node, slot, input, width))?;
+            program.insert_eq_sat_folded((input, BigInt::new(bits)))?;
+        }
+    }
+    program.rebuild()?;
+    program.evaluate()?;
+    let mut rows = program.eq_sat_constant()
+        .map(|row| row.map(|(node, _, bits)| (node, bits)))
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.sort_by_key(|(node, _)| *node);
+    assert_eq!(rows, [(1, 4), (4, 320), (6, 0), (7, 0)].map(|(id, value)| (id, BigInt::new(value))));
+    assert!(program.eq_sat_folded().any(|row| row.is_ok_and(|(id, bits)| id == 5 && bits == BigInt::new(0))));
+
+    program.discover()?;
+    let mut kinds = program.eq_sat_binary_kind()
+        .map(|row| row.map(|(kind,)| kind.as_str().to_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
+    kinds.sort();
+    assert_eq!(kinds, ["builtin.binary_without_fold", "builtin.divide"]);
+    Ok(())
+}
+"#,
+    );
+    let probe = Command::new(env!("CARGO"))
+        .args(["run", "--offline", "--quiet", "--manifest-path"])
+        .arg(sources.0.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", sources.0.join("target"))
+        .output()
+        .unwrap();
+    assert!(
+        probe.status.success(),
+        "{}",
+        String::from_utf8_lossy(&probe.stderr)
+    );
+
+    let error = compile("if bits::eq(lhs, rhs) { lhs } else { rhs }", "").unwrap_err();
+    assert!(error.contains("builtin.divide.exec"), "{error}");
+
+    for (field, operation) in [
+        (
+            "exec",
+            r#"
+pub let refused = op {
+    signature: () -> Bits<16>,
+    exec: fn () -> El<Bits<16>> { if true { bits::zero() } else { bits::zero() } },
+};
+"#,
+        ),
+        (
+            "requires",
+            r#"
+pub let refused = op {
+    signature: () -> Bits<16>,
+    exec: fn () -> El<Bits<16>> { bits::zero() },
+    requires: fn () -> Bool {
+        let z: El<Bits<8>> = bits::zero();
+        bits::slt(z, z)
+    },
+};
+"#,
+        ),
+    ] {
+        let error = compile("bits::udiv(rhs, lhs)", operation).unwrap_err();
+        assert!(
+            error.contains(&format!("builtin.refused.{field}")),
+            "{error}"
+        );
+    }
+
+    let error = compile(
+        "bits::udiv(rhs, lhs)",
+        r#"
+pub let wrong_width = op {
+    signature: () -> Bits<16>,
+    interfaces: {
+        ConstantLike: { constant_value: fn () -> El<Bits<8>> { bits::zero<8>() } },
+    },
+};
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("builtin.wrong_width.ConstantLike.constant_value"),
+        "{error}"
+    );
 }

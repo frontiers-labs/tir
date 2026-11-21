@@ -8,6 +8,7 @@ pub mod ir;
 pub use std::ir::*;
 pub mod bits;
 pub mod bigint;
+pub mod int;
 pub mod option;
 pub mod schedule;
 pub mod table;

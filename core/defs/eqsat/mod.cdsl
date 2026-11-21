@@ -1,0 +1,1658 @@
+use std::bigint::BigInt;
+use std::schedule::Schedule;
+use std::schedule::sequence;
+
+let eqsat_bool_bit: Bool -> BigInt as extern "eqsat-bool-bit";
+let eqsat_pick_case: (String, String, Bool, Bool) -> Bool as extern "eqsat-pick-case";
+use std::ir::type_argument;
+
+
+pub let EqSatFlag: (Int, String, Bool, Bool) -> Prop;
+pub let EqSatFolded: (Int, BigInt) -> Prop;
+pub let EqSatConstant: (Int, Int, BigInt) -> Prop;
+
+pub enum Scalar {
+    Read(Int, Int),
+    Literal(Int, BigInt),
+    Binary(std::ir::BinaryIntegerOperation, Int, Scalar, Scalar),
+    Compare(String, Int, Scalar, Scalar),
+}
+pub let EqSatScalar: (Int, Int, Scalar) -> Prop;
+pub let EqSatBinaryKind: std::ir::BinaryIntegerOperation -> Prop;
+pub let EqSatBinary: (Int, std::ir::BinaryIntegerOperation, std::ir::IntegerRef, Int, std::ir::IntegerRef, std::ir::IntegerRef, Int) -> Prop;
+pub let EqSatInteger: Int -> Prop;
+pub let EqSatNeeded: Int -> Prop;
+pub let eqsat_attr_case: Int -> String as extern "eqsat-attr-case";
+pub let eqsat_same_bits: (BigInt, BigInt) -> Bool as "bool-=";
+pub let eqsat_bit_and: (BigInt, BigInt) -> BigInt as "&";
+pub let eqsat_bigint: Int -> BigInt as "bigint";
+pub let eqsat_not_bits: BigInt -> BigInt as "not-Z";
+pub use std::ir::integer_width as eqsat_width;
+pub let eqsat_shift: (BigInt, Int) -> BigInt as "<<";
+pub let eqsat_sub: (BigInt, BigInt) -> BigInt as "-";
+pub let EqSatAllBits: (Int, BigInt) -> Prop;
+
+pub mod scalars {
+    pub let integer<ty, ctor, args, decl, default>:
+        (ir::TypeTerm(ty, ctor, args), ir::TypeCtor(ctor, "builtin", "i", decl, default)) -> EqSatInteger(ty);
+    pub let binary<node, kind, place, home, pos, disp, loc, out, ty, d, x, y, xd, xo, xi, xt, yd, yo, yi, yt>:
+        (EqSatLive(node), EqSatBinaryKind(kind),
+         std::ir::match_kind(kind, node, (x, y), (out,)),
+         ir::Operation{ id: node, kind: std::ir::operation_kind(kind), placement: place, container: home, position: pos, display: disp, location: loc }(),
+         ir::Value(std::ir::value_id(out), ty, "result", node, 0, d), EqSatInteger(ty),
+         ir::Value(std::ir::value_id(x), ty, xd, xo, xi, xt), ir::Value(std::ir::value_id(y), ty, yd, yo, yi, yt))
+        -> EqSatBinary(node, kind, out, ty, x, y, home);
+    pub let used<node, slot, value>: (EqSatLive(node), ir::Operand(node, slot, value)) -> EqSatNeeded(value);
+    pub let defined<value, ty, node, slot, declared>:
+        (EqSatLive(node), ir::Value(value, ty, "result", node, slot, declared)) -> EqSatNeeded(value);
+    pub let forwarded<node, region, slot, port, init>: EqSatPort(node,region,slot,port,init) -> EqSatNeeded(port);
+    pub let read<value, ty, kind, owner, slot, declared>:
+        (EqSatNeeded(value), ir::Value(value, ty, kind, owner, slot, declared), EqSatInteger(ty))
+        -> EqSatScalar(value, ty, Scalar::Read(ty, value));
+    pub let literal<value, ty, bits, term>: (EqSatScalar(value, ty, term), EqSatFolded(value, bits))
+        -> term == Scalar::Literal(ty, bits);
+    pub let evaluated<value, ty, term, bits>:
+        (EqSatScalar(value, ty, term), term == Scalar::Literal(ty, bits)) -> EqSatFolded(value, bits);
+    pub let mask<ty, ctor, args, w>:
+        (EqSatInteger(ty), ir::TypeTerm(ty, ctor, args), w == std::ir::integer_width(args))
+        -> EqSatAllBits(ty, eqsat_sub(eqsat_shift(eqsat_bigint(1), w), eqsat_bigint(1)));
+}
+
+pub let EqSatPureBinary: std::ir::BinaryIntegerOperation -> Prop;
+pub let EqSatBinaryKey: Int -> Prop;
+pub mod congruence {
+    pub let and_kind: EqSatPureBinary(dialects::builtin::andi.typed_kind);
+    pub let or_kind: EqSatPureBinary(dialects::builtin::ori.typed_kind);
+    pub let xor_kind: EqSatPureBinary(dialects::builtin::xori.typed_kind);
+    pub let mul_kind: EqSatPureBinary(dialects::builtin::muli.typed_kind);
+    pub let shl_kind: EqSatPureBinary(dialects::builtin::shli.typed_kind);
+    pub let lshr_kind: EqSatPureBinary(dialects::builtin::shrui.typed_kind);
+    pub let ashr_kind: EqSatPureBinary(dialects::builtin::shrsi.typed_kind);
+    pub let pure<owner,kind,out,ty,x,y,home>:
+        (EqSatBinary(owner,kind,out,ty,x,y,home), EqSatPureBinary(kind)) -> EqSatBinaryKey(owner);
+    pub let add<owner>: EqSatWrappingAdd(owner) -> EqSatBinaryKey(owner);
+    pub let sub<owner>: EqSatWrappingSub(owner) -> EqSatBinaryKey(owner);
+    pub let node<owner, kind, out, ty, x, y, home, t, a, b>:
+        (EqSatBinary(owner, kind, out, ty, x, y, home), EqSatBinaryKey(owner),
+         EqSatScalar(std::ir::value_id(out), ty, t), EqSatScalar(std::ir::value_id(x), ty, a), EqSatScalar(std::ir::value_id(y), ty, b))
+        -> t == Scalar::Binary(kind, ty, a, b);
+    pub let comparison<node, out: std::ir::ValueRef<std::El<std::Bits<1>>>, ty,
+                       lhs: std::ir::IntegerRef, rhs: std::ir::IntegerRef, width, a, b, result, attr, pred>:
+        (EqSatLive(node), dialects::builtin::cmpi.matches(node, (lhs, rhs), (out,)),
+         EqSatScalar(std::ir::value_id(out), ty, result),
+         EqSatScalar(std::ir::value_id(lhs), width, a), EqSatScalar(std::ir::value_id(rhs), width, b),
+         ir::Attribute("operation", node, "predicate", attr), pred == eqsat_attr_case(attr))
+        -> result == Scalar::Compare(pred, ty, a, b);
+
+}
+
+pub let EqSatZeros: (Scalar, Int, BigInt) -> Prop;
+pub let eqsat_bit_or: (BigInt, BigInt) -> BigInt as "|";
+pub mod known_bits {
+    pub let constant<value, ty, bits, term, width>:
+        (EqSatScalar(value, ty, term), term == Scalar::Literal(ty, bits), EqSatAllBits(ty, width))
+        -> EqSatZeros(term, ty, eqsat_bit_and(eqsat_not_bits(bits), width));
+    pub let and_left<ty, a, b, zeros, expr>:
+        (expr == Scalar::Binary(dialects::builtin::andi.typed_kind, ty, a, b), EqSatZeros(a, ty, zeros))
+        -> EqSatZeros(expr, ty, zeros);
+    pub let and_right<ty, a, b, zeros, expr>:
+        (expr == Scalar::Binary(dialects::builtin::andi.typed_kind, ty, a, b), EqSatZeros(b, ty, zeros))
+        -> EqSatZeros(expr, ty, zeros);
+    pub let or_both<ty, a, b, x, y, expr>:
+        (expr == Scalar::Binary(dialects::builtin::ori.typed_kind, ty, a, b), EqSatZeros(a, ty, x), EqSatZeros(b, ty, y))
+        -> EqSatZeros(expr, ty, eqsat_bit_and(x,y));
+}
+
+pub let EqSatCommutative: std::ir::BinaryIntegerOperation -> Prop;
+pub mod commute {
+    pub let add: EqSatCommutative(dialects::builtin::addi.typed_kind);
+    pub let mul: EqSatCommutative(dialects::builtin::muli.typed_kind);
+    pub let and: EqSatCommutative(dialects::builtin::andi.typed_kind);
+    pub let or: EqSatCommutative(dialects::builtin::ori.typed_kind);
+    pub let xor: EqSatCommutative(dialects::builtin::xori.typed_kind);
+    pub let swap<node, kind, value, ty, x, y, home>:
+        (EqSatBinary(node,kind,value,ty,x,y,home), EqSatCommutative(kind))
+        -> EqSatBinary(node,kind,value,ty,y,x,home);
+}
+
+pub mod shift_bits {
+    pub let left_zeroes<node,value,ty,x,y,home,shift,amount,term,ctor,args,width>:
+        (EqSatBinary(node,dialects::builtin::shli.typed_kind,value,ty,x,y,home), EqSatFolded(std::ir::value_id(y),shift),
+         EqSatScalar(std::ir::value_id(value),ty,term), ir::TypeTerm(ty,ctor,args), width == std::ir::integer_width(args),
+         amount == eqsat_shift_amount(shift), ir::less_id(amount,width) == true)
+        -> EqSatZeros(term,ty,eqsat_sub(eqsat_shift(eqsat_bigint(1),amount),eqsat_bigint(1)));
+}
+
+pub let EqSatIntegerWidth: (Int, Int) -> Prop;
+pub let EqSatIntegerResult: (Int, std::ir::OperationKind, Int, Int) -> Prop;
+pub let EqSatIntegerOperand: (Int, Int, Int, Int) -> Prop;
+pub let EqSatConstantImplementation: String -> Prop;
+pub mod integer_inputs {
+    pub let constant<kind,key,method>: ir::OpSpec(kind,"dyn tir::interfaces::ConstantLike",key,method)
+        -> EqSatConstantImplementation(kind);
+    pub let width<ty,ctor,args,bits>:
+        (EqSatInteger(ty), ir::TypeTerm(ty,ctor,args), bits == std::ir::integer_width(args)) -> EqSatIntegerWidth(ty,bits);
+    pub let result<node,kind,place,home,pos,display,loc,out,ty,decl,bits>:
+        (EqSatLive(node), !EqSatPinnedOp(node), ir::Operation{ id: node, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+         ir::Value(out,ty,"result",node,0,decl), EqSatIntegerWidth(ty,bits))
+        -> EqSatIntegerResult(node,kind,out,bits);
+    pub let operand<node,slot,input,ty,kind,owner,index,decl,bits>:
+        (EqSatLive(node), ir::Operand(node,slot,input), ir::Value(input,ty,kind,owner,index,decl),
+         EqSatIntegerWidth(ty,bits)) -> EqSatIntegerOperand(node,slot,input,bits);
+}
+
+
+pub let EqSatFlagField: (String, Bool) -> Prop;
+pub let eqsat_attr_bool: Int -> Bool as extern "eqsat-attr-bool";
+pub mod flag_values {
+    pub let present<node,name,default,attr,value>:
+        (EqSatLive(node), EqSatFlagField(name,default), ir::Attribute("operation",node,name,attr),
+         value == eqsat_attr_bool(attr)) -> EqSatFlag(node,name,default,value);
+    pub let absent<node,name,default>:
+        (EqSatLive(node), EqSatFlagField(name,default), !EqSatHasAttr(node,name))
+        -> EqSatFlag(node,name,default,default);
+}
+
+pub let EqSatRoot: std::ir::OperationId -> Prop;
+pub let EqSatLive: Int -> Prop;
+
+pub mod select {
+    pub let root<node>: EqSatRoot(node) -> EqSatLive(std::ir::raw_operation_id(node));
+    pub let within<root, region, mode, slot, entry, node, representative>:
+        (EqSatRoot(root), ir::Region(region, mode, std::ir::raw_operation_id(root), slot, entry), ir::ReaderAt(node, region, representative))
+        -> EqSatLive(node);
+}
+
+pub let execute = std::schedule::saturate(select);
+
+pub let EqSatReplace: (std::ir::OperationId, std::ir::ValueId, std::ir::ValueId) -> Prop;
+pub let EqSatErase: std::ir::OperationId -> Prop;
+pub let EqSatPath: (std::ir::ValueId, std::ir::ValueId) -> Prop;
+pub let EqSatRedirect: (std::ir::ValueId, std::ir::ValueId) -> Prop;
+pub let EqSatAliasEdit: (Int, Int, std::ir::ValueId, std::ir::ValueId, Bool) -> Prop;
+
+pub mod paths {
+    pub let direct<owner, old, new>: (EqSatReplace(owner, old, new), !EqSatPinned(std::ir::raw_value_id(old))) -> EqSatPath(old, new);
+    pub let through<old, next, new>: (EqSatPath(old, next), EqSatPath(next, new)) -> EqSatPath(old, new);
+}
+
+pub let outgoing: std::ir::ValueId -> Prop;
+pub mod used {
+    pub let from<old, new>: EqSatPath(old, new) -> outgoing(old);
+}
+
+pub mod edits {
+    pub let terminal<old, new>: (EqSatPath(old, new), !outgoing(new)) -> EqSatRedirect(old, new);
+    pub let operand<user, slot, old, new>: (EqSatRedirect(old, new), ir::Operand(user, slot, std::ir::raw_value_id(old)))
+        -> EqSatAliasEdit(user, slot, old, new, false);
+    pub let yield_value<region, slot, old, new>: (EqSatRedirect(old, new), ir::Yield(region, slot, std::ir::raw_value_id(old)))
+        -> EqSatAliasEdit(region, slot, old, new, true);
+}
+
+pub let EqSatHasAttr: (Int, String) -> Prop;
+pub mod attributes {
+    pub let present<node, name, attr>:
+        (EqSatLive(node), ir::Attribute("operation", node, name, attr)) -> EqSatHasAttr(node, name);
+}
+
+pub let EqSatMultipleEdges: Int -> Prop;
+pub let EqSatEntryBlock: Int -> Prop;
+pub let EqSatEdgeTruth: (Int, Int) -> Prop;
+pub let EqSatAssumption: (Int, Int, Int) -> Prop;
+pub let EqSatColorSeed: (Int, Scalar, Scalar) -> Prop;
+pub let EqSatColorSite: Int -> Prop;
+pub let EqSatColorSubject: Scalar -> Prop;
+pub let EqSatDefinedLiteral: Int -> Prop;
+pub let EqSatScopedEdit: (Int, Int, Int, BigInt, Bool) -> Prop;
+
+pub let EqSatUntaken: (Int, Int) -> Prop;
+pub mod incoming {
+    pub let untaken<node,home,pos,display,loc,pred,edge,target,bit,known>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::cfg::cond_br.kind, placement: "block", container: home, position: pos, display: display, location: loc }(),
+         ir::Operand(node,0,pred), ir::Successor(node,edge,target), EqSatEdgeTruth(edge,bit),
+         EqSatFolded(pred,known), eqsat_same_bits(known,eqsat_bigint(bit)) == false)
+        -> EqSatUntaken(node,edge);
+    pub let sources<a, x, b, y, target>:
+        (ir::Successor(a, x, target), ir::Successor(b, y, target), ir::equal_id(a,b) == false)
+        -> EqSatMultipleEdges(target);
+    pub let slots<a, x, y, target>:
+        (ir::Successor(a, x, target), ir::Successor(a, y, target), ir::equal_id(x,y) == false)
+        -> EqSatMultipleEdges(target);
+    pub let entry<region, mode, node, slot, block>:
+        ir::Region(region, mode, node, slot, block) -> EqSatEntryBlock(block);
+    pub let literal<value, bits>: EqSatFolded(value, bits) -> EqSatDefinedLiteral(value);
+    pub let true_edge: EqSatEdgeTruth(0, 1);
+    pub let false_edge: EqSatEdgeTruth(1, 0);
+}
+
+pub mod assumptions {
+    pub let cfg<node, block, pos, display, loc, selector, edge, target, bit>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::cfg::cond_br.kind, placement: "block", container: block, position: pos, display: display, location: loc }(),
+         ir::Operand(node, 0, selector), ir::Successor(node, edge, target), EqSatEdgeTruth(edge, bit),
+         !EqSatMultipleEdges(target), !EqSatEntryBlock(target), ir::equal_id(block,target) == false)
+        -> EqSatAssumption(target, selector, bit);
+
+    pub let explicit_arm<node, selector_slot, body, pred, polarity, selector, bits, region, bit>:
+        (EqSatLive(node), ir::Control(node, true, selector_slot, false, body, pred, polarity),
+         ir::Operand(node, selector_slot, selector), ir::Arm(node, false, bits, region),
+         EqSatCaseBit(bits, bit)) -> EqSatAssumption(region, selector, bit);
+    pub let literal_false: EqSatCaseBit("0", 0);
+    pub let literal_true: EqSatCaseBit("1", 1);
+
+    pub let boolean_default<node, selector_slot, body, pred, polarity, selector, case_region, region, ty, term>:
+        (EqSatLive(node), ir::Control(node, true, selector_slot, false, body, pred, polarity),
+         ir::Operand(node, selector_slot, selector), EqSatScalar(selector, ty, term),
+         EqSatAllBits(ty, eqsat_bigint(1)), ir::Arm(node, false, "0", case_region),
+         ir::Arm(node, true, "", region)) -> EqSatAssumption(region, selector, 1);
+
+    pub let forwarded<node, region, index, port, selector, bit>:
+        (EqSatAssumption(region, selector, bit), EqSatPort(node, region, index, port, selector))
+        -> EqSatAssumption(region, port, bit);
+
+    pub let low_bit<scope, selector: std::ir::ValueRef<std::El<std::Bits<1>>>, bit, ty, trunc, declared,
+                    masked, mt, result, x, y, home, mask>:
+        (EqSatAssumption(scope, std::ir::value_id(selector), bit),
+         dialects::builtin::trunci.matches(trunc, (masked,), (selector,)),
+         ir::Value(std::ir::value_id(selector), ty, "result", trunc, 0, declared),
+         EqSatAllBits(ty, eqsat_bigint(1)),
+         EqSatBinary(result, dialects::builtin::andi.typed_kind, masked, mt, x, y, home),
+         EqSatScalar(std::ir::value_id(y), mt, mask), mask == Scalar::Literal(mt, eqsat_bigint(1)))
+        -> EqSatAssumption(scope, std::ir::value_id(masked), bit);
+
+    pub let unconditional<scope,value,bit,node,p,d,l,target>:
+        (EqSatAssumption(scope,value,bit), EqSatLive(node), ir::Operation{ id: node, kind: dialects::cfg::br.kind, placement: "block", container: scope, position: p, display: d, location: l }(),
+         ir::Successor(node,0,target), !EqSatMultipleEdges(target), !EqSatEntryBlock(target))
+        -> EqSatAssumption(target,value,bit);
+
+    pub let graph_child<scope,value,bit,node,k,p,d,l,region,mode,slot,entry>:
+        (EqSatAssumption(scope,value,bit), EqSatLive(node), ir::Operation{ id: node, kind: k, placement: "graph", container: scope, position: p, display: d, location: l }(),
+         ir::Region(region,mode,node,slot,entry)) -> EqSatAssumption(region,value,bit);
+
+    pub let predicate_complement<scope,value,bit,other,flipped,ty,term,comparison,k,opposite,a,b>:
+        (EqSatAssumption(scope,value,bit), EqSatScalar(value,ty,term), EqSatScalar(other,ty,comparison),
+         term == Scalar::Compare(k,ty,a,b), comparison == Scalar::Compare(opposite,ty,a,b),
+         EqSatPredicateComplement(k,opposite), EqSatEdgeTruth(bit,flipped))
+        -> EqSatAssumption(scope,other,flipped);
+
+    pub let equal_difference<scope,selector,result,owner,k,ty,bit_ty,term,x,y,lhs,rhs,home,predicate,bit>:
+        (EqSatAssumption(scope,selector,bit), EqSatScalar(selector,bit_ty,term),
+         term == Scalar::Compare(predicate,bit_ty,lhs,rhs), EqSatEqualityCondition(predicate,bit),
+         EqSatBinary(owner,k,result,ty,x,y,home), EqSatEqualDifference(k),
+         EqSatScalar(std::ir::value_id(x),ty,lhs), EqSatScalar(std::ir::value_id(y),ty,rhs))
+        -> EqSatAssumption(scope,std::ir::value_id(result),0);
+    pub let equality_literal<scope,selector,known,ty,bit_ty,term,input,predicate,bit,left,right>:
+        (EqSatAssumption(scope,selector,bit), EqSatScalar(selector,bit_ty,term),
+         EqSatEqualityCondition(predicate,bit), term == Scalar::Compare(predicate,bit_ty,left,right),
+         EqSatScalar(input,ty,left), right == Scalar::Literal(ty,known), !EqSatDefinedLiteral(input))
+        -> EqSatColorSeed(scope,left,Scalar::Literal(ty,known));
+    pub let eq_true: EqSatEqualityCondition("eq",1);
+    pub let ne_false: EqSatEqualityCondition("ne",0);
+    pub let subtract: EqSatEqualDifference(dialects::builtin::subi.typed_kind);
+    pub let exclusive_or: EqSatEqualDifference(dialects::builtin::xori.typed_kind);
+    pub let eq_ne: EqSatPredicateComplement("eq","ne");
+    pub let slt_sge: EqSatPredicateComplement("slt","sge");
+    pub let sgt_sle: EqSatPredicateComplement("sgt","sle");
+    pub let ult_uge: EqSatPredicateComplement("ult","uge");
+    pub let ugt_ule: EqSatPredicateComplement("ugt","ule");
+    pub let inverse<a,b>: EqSatPredicateComplement(a,b) -> EqSatPredicateComplement(b,a);
+
+    pub let seed<scope, value, bit, ty, term>:
+        (EqSatAssumption(scope, value, bit), EqSatScalar(value, ty, term),
+         !EqSatDefinedLiteral(value))
+        -> EqSatColorSeed(scope, term, Scalar::Literal(ty, eqsat_bigint(bit)));
+}
+pub let EqSatEqualityCondition: (String, Int) -> Prop;
+pub let EqSatEqualDifference: std::ir::BinaryIntegerOperation -> Prop;
+pub let EqSatPredicateComplement: (String, String) -> Prop;
+pub let EqSatCaseBit: (String, Int) -> Prop;
+
+pub mod branch_local {
+    pub let rewrite<scope, user, kind, place, pos, display, location, slot, value, ty, term, bits>:
+        (EqSatColorSite(scope), EqSatColorSubject(term), EqSatLive(user),
+         ir::Operation{ id: user, kind: kind, placement: place, container: scope, position: pos, display: display, location: location }(), ir::Operand(user, slot, value),
+         EqSatScalar(value, ty, term), !EqSatDefinedLiteral(value), !EqSatPinned(value), term == Scalar::Literal(ty, bits))
+        -> EqSatScopedEdit(user, slot, value, bits, false);
+    pub let yield_value<scope, slot, value, ty, term, bits>:
+        (EqSatColorSite(scope), EqSatColorSubject(term), ir::Yield(scope, slot, value),
+         EqSatScalar(value, ty, term), !EqSatDefinedLiteral(value), !EqSatPinned(value), term == Scalar::Literal(ty, bits))
+        -> EqSatScopedEdit(scope, slot, value, bits, true);
+
+}
+
+pub let EqSatDropKind: std::ir::OperationKind -> Prop;
+pub let EqSatRemovable: (Int, Int) -> Prop;
+pub let EqSatRemovableNode: Int -> Prop;
+pub let EqSatDemand: Int -> Prop;
+pub let EqSatDead: std::ir::OperationId -> Prop;
+
+pub mod removable {
+    pub let frozen_argument<node,result>:
+        (EqSatArgumentFreeze(node,result), !EqSatPinnedOp(node), !EqSatPinned(result))
+        -> (EqSatRemovable(node,result), EqSatRemovableNode(node));
+    pub let constant: EqSatDropKind(dialects::builtin::constant.kind);
+    pub let add: EqSatDropKind(dialects::builtin::addi.kind);
+    pub let sub: EqSatDropKind(dialects::builtin::subi.kind);
+    pub let comparison: EqSatDropKind(dialects::builtin::cmpi.kind);
+    pub let unary<k>: EqSatUnaryKind(k) -> EqSatDropKind(std::ir::operation_kind(k));
+    pub let binary<k>: EqSatPureBinary(k) -> EqSatDropKind(std::ir::operation_kind(k));
+    pub let candidate<node,k,place,home,pos,display,loc,result,ty,decl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: k, placement: place, container: home, position: pos, display: display, location: loc }(), EqSatDropKind(k),
+         ir::Value(result,ty,"result",node,0,decl), !EqSatPinnedOp(node), !EqSatPinned(result))
+        -> (EqSatRemovable(node,result), EqSatRemovableNode(node));
+}
+pub mod demand {
+    pub let root<user,slot,value>: (ir::Operand(user,slot,value), !EqSatRemovableNode(user), !EqSatDead(std::ir::operation_key(user))) -> EqSatDemand(value);
+    pub let yielded<region,slot,value>: ir::Yield(region,slot,value) -> EqSatDemand(value);
+    pub let input<node,result,slot,value>:
+        (EqSatRemovable(node,result), EqSatDemand(result), ir::Operand(node,slot,value)) -> EqSatDemand(value);
+}
+pub mod dead {
+    pub let unused<node,result>: (EqSatRemovable(node,result), !EqSatDemand(result)) -> EqSatDead(std::ir::operation_key(node));
+}
+
+pub let EqSatEdgeBits: (Int, Int, Int, Int, BigInt) -> Prop;
+pub let EqSatPhiDisagrees: (Int, Int, BigInt) -> Prop;
+pub let EqSatPhiLiteral: (Int, BigInt) -> Prop;
+
+pub mod phi_candidates {
+    pub let edge<node,edge,block,param,slot,value,bits>:
+        (EqSatLive(node), ir::Successor(node,edge,block), ir::SuccessorArgument(node,edge,param,slot),
+         ir::Operand(node,slot,value), EqSatFolded(value,bits), !EqSatEntryBlock(block), !EqSatUntaken(node,edge))
+        -> EqSatEdgeBits(node,edge,block,param,bits);
+}
+pub mod phi_disagreement {
+    pub let missing<block,param,bits,witness,incoming,node,edge>:
+        (EqSatEdgeBits(witness,incoming,block,param,bits), ir::Successor(node,edge,block),
+         !EqSatEdgeBits(node,edge,block,param,bits), !EqSatUntaken(node,edge)) -> EqSatPhiDisagrees(block,param,bits);
+}
+pub mod phi_literals {
+    pub let agreed<block,param,bits,witness,incoming,value,ty,decl>:
+        (EqSatEdgeBits(witness,incoming,block,param,bits), !EqSatPhiDisagrees(block,param,bits),
+         ir::Value(value,ty,"block",block,param,decl), EqSatInteger(ty), !EqSatPinned(value))
+        -> (EqSatPhiLiteral(value,bits), EqSatFolded(value,bits));
+}
+pub mod phi_uses {
+    pub let yielded<region,slot,value,bits,node,mode,region_slot,entry>:
+        (EqSatPhiLiteral(value,bits), ir::Yield(region,slot,value), ir::Region(region,mode,node,region_slot,entry),
+         EqSatLive(node)) -> EqSatScopedEdit(region,slot,value,bits,true);
+    pub let operand<user,slot,value,bits>:
+        (EqSatPhiLiteral(value,bits), EqSatLive(user), ir::Operand(user,slot,value))
+        -> EqSatScopedEdit(user,slot,value,bits,false);
+}
+
+pub let EqSatIdentity: (std::ir::OperationId, std::ir::ValueId, std::ir::ValueId) -> Prop;
+pub let EqSatZeroRhs: std::ir::BinaryIntegerOperation -> Prop;
+pub let EqSatIdempotent: std::ir::BinaryIntegerOperation -> Prop;
+
+pub mod integer {
+    pub let add: EqSatZeroRhs(dialects::builtin::addi.typed_kind);
+    pub let or: EqSatZeroRhs(dialects::builtin::ori.typed_kind);
+    pub let xor: EqSatZeroRhs(dialects::builtin::xori.typed_kind);
+    pub let sub: EqSatZeroRhs(dialects::builtin::subi.typed_kind);
+    pub let shl: EqSatZeroRhs(dialects::builtin::shli.typed_kind);
+    pub let lshr: EqSatZeroRhs(dialects::builtin::shrui.typed_kind);
+    pub let ashr: EqSatZeroRhs(dialects::builtin::shrsi.typed_kind);
+    pub let and_dup: EqSatIdempotent(dialects::builtin::andi.typed_kind);
+    pub let or_dup: EqSatIdempotent(dialects::builtin::ori.typed_kind);
+
+    pub let right_zero<owner, kind, out, ty, x, y, home, b>:
+        (EqSatBinary(owner, kind, out, ty, x, y, home), EqSatZeroRhs(kind),
+         EqSatScalar(std::ir::value_id(y), ty, b), b == Scalar::Literal(ty, eqsat_bigint(0)))
+        -> EqSatIdentity(std::ir::operation_key(owner), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let idempotent<owner, kind, out, ty, x, y, home, t>:
+        (EqSatBinary(owner, kind, out, ty, x, y, home), EqSatIdempotent(kind),
+         EqSatScalar(std::ir::value_id(x), ty, t), EqSatScalar(std::ir::value_id(y), ty, t))
+        -> EqSatIdentity(std::ir::operation_key(owner), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let multiply_one<owner, out, ty, x, y, home, b>:
+        (EqSatBinary(owner, dialects::builtin::muli.typed_kind, out, ty, x, y, home),
+         EqSatScalar(std::ir::value_id(y), ty, b), b == Scalar::Literal(ty, eqsat_bigint(1)))
+        -> EqSatIdentity(std::ir::operation_key(owner), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let and_all<owner, out, ty, x, y, home, b, all>:
+        (EqSatBinary(owner, dialects::builtin::andi.typed_kind, out, ty, x, y, home),
+         EqSatScalar(std::ir::value_id(y), ty, b), EqSatAllBits(ty, all), b == Scalar::Literal(ty, all))
+        -> EqSatIdentity(std::ir::operation_key(owner), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let unsigned_divide_one<owner, out, ty, x, y, home, b>:
+        (EqSatBinary(owner, dialects::builtin::divui.typed_kind, out, ty, x, y, home),
+         EqSatScalar(std::ir::value_id(y), ty, b), b == Scalar::Literal(ty, eqsat_bigint(1)))
+        -> EqSatIdentity(std::ir::operation_key(owner), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let redundant_mask<owner, out, ty, input, mask, home, a, b, kept, zero, all>:
+        (EqSatBinary(owner, dialects::builtin::andi.typed_kind, out, ty, input, mask, home),
+         EqSatScalar(std::ir::value_id(input), ty, a), EqSatScalar(std::ir::value_id(mask), ty, b), b == Scalar::Literal(ty, kept),
+         EqSatZeros(a, ty, zero), EqSatAllBits(ty, all),
+         eqsat_same_bits(eqsat_bit_or(kept, zero), all) == true)
+        -> EqSatIdentity(std::ir::operation_key(owner), std::ir::value_ref_key(out), std::ir::value_ref_key(input));
+
+    pub let congruent_cfg<a, b, ak, bk, block, ap, bp, ad, bd, al, bl, x, y, ty, term, xd, yd>:
+        (ir::Operation{ id: a, kind: ak, placement: "block", container: block, position: ap, display: ad, location: al }(), ir::Operation{ id: b, kind: bk, placement: "block", container: block, position: bp, display: bd, location: bl }(),
+         ir::less_id(ap,bp) == true, EqSatBinaryKey(a), EqSatBinaryKey(b),
+         ir::Value(x, ty, "result", a, 0, xd), ir::Value(y, ty, "result", b, 0, yd),
+         EqSatScalar(x, ty, term), EqSatScalar(y, ty, term))
+        -> EqSatIdentity(std::ir::operation_key(b), std::ir::value_key(y), std::ir::value_key(x));
+
+    pub let congruent_graph<a, b, k, region, ap, bp, ad, bd, al, bl, x, y, ty, left, right>:
+        (ir::Operation{ id: a, kind: std::ir::operation_kind(k), placement: "graph", container: region, position: ap, display: ad, location: al }(), ir::Operation{ id: b, kind: std::ir::operation_kind(k), placement: "graph", container: region, position: bp, display: bd, location: bl }(),
+         ir::less_id(a,b) == true, EqSatBinaryKey(a), EqSatBinaryKey(b),
+         EqSatBinary(a, k, x, ty, left, right, region), EqSatBinary(b, k, y, ty, left, right, region))
+        -> EqSatIdentity(std::ir::operation_key(b), std::ir::value_ref_key(y), std::ir::value_ref_key(x));
+
+    pub let equal<owner, out, input, ty, a, b>:
+        (EqSatIdentity(owner, out, input), EqSatScalar(std::ir::raw_value_id(out), ty, a), EqSatScalar(std::ir::raw_value_id(input), ty, b))
+        -> a == b;
+    pub let candidate<owner, out, input>:
+        EqSatIdentity(owner, out, input) -> (EqSatReplace(owner, out, input), EqSatErase(owner));
+}
+
+pub let EqSatPowerForm: (std::ir::BinaryIntegerOperation, std::ir::BinaryIntegerOperation) -> Prop;
+pub let EqSatPower: (BigInt, BigInt) -> Prop;
+pub enum Form {
+    Read(std::ir::IntegerRef),
+    Bits(BigInt),
+    Bin(std::ir::BinaryIntegerOperation, Form, Form),
+}
+pub let EqSatRebuild: (std::ir::OperationId, std::ir::IntegerRef, Form) -> Prop as forms::EqSatRebuild;
+pub mod forms {
+    pub let EqSatRebuild: std::Table<(std::ir::OperationId, std::ir::IntegerRef), Form, std::Merge::Union>;
+}
+pub let EqSatWrappingAdd: Int -> Prop;
+pub let EqSatWrappingSub: Int -> Prop;
+pub let eqsat_bit_len: BigInt -> BigInt as "bits";
+pub let eqsat_shift_amount: BigInt -> Int as extern "eqsat-amount";
+pub let eqsat_sum: (BigInt, BigInt) -> BigInt as "+";
+
+pub mod strength {
+    pub let multiply: EqSatPowerForm(dialects::builtin::muli.typed_kind, dialects::builtin::shli.typed_kind);
+    pub let divide: EqSatPowerForm(dialects::builtin::divui.typed_kind, dialects::builtin::shrui.typed_kind);
+
+    pub let power<value, bits, log, width>:
+        (EqSatFolded(value, bits), log == eqsat_sub(eqsat_bit_len(bits), eqsat_bigint(1)),
+         width == eqsat_shift_amount(log), ir::less_id(width, 0) == false,
+         eqsat_same_bits(eqsat_shift(eqsat_bigint(1),width),bits) == true)
+        -> EqSatPower(bits,log);
+
+    pub let shift<node, kind, target, result, ty, x, y, home, value, power>:
+        (EqSatBinary(node, kind, result, ty, x, y, home), EqSatPowerForm(kind,target),
+         EqSatFolded(std::ir::value_id(y), value), EqSatPower(value,power), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),result,Form::Bin(target,Form::Read(x),Form::Bits(power)));
+
+    pub let remainder<node, result, ty, x, y, home, value, power>:
+        (EqSatBinary(node, dialects::builtin::remui.typed_kind, result, ty, x, y, home),
+         EqSatFolded(std::ir::value_id(y),value), EqSatPower(value,power), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),result,Form::Bin(dialects::builtin::andi.typed_kind,Form::Read(x),Form::Bits(eqsat_sub(value,eqsat_bigint(1)))));
+
+    pub let wrapping_add<node, result, ty, x, y, home>:
+        (EqSatBinary(node,dialects::builtin::addi.typed_kind,result,ty,x,y,home),
+         !EqSatHasAttr(node,"nsw"), !EqSatHasAttr(node,"nuw")) -> EqSatWrappingAdd(node);
+    pub let wrapping_sub<node, result, ty, x, y, home>:
+        (EqSatBinary(node,dialects::builtin::subi.typed_kind,result,ty,x,y,home),
+         !EqSatHasAttr(node,"nsw"), !EqSatHasAttr(node,"nuw")) -> EqSatWrappingSub(node);
+
+    pub let reassociate<inner, outer, result, middle, ty, x, y, z, home, prior, a, b, mask>:
+        (EqSatBinary(inner,dialects::builtin::addi.typed_kind,middle,ty,x,y,prior), EqSatWrappingAdd(inner),
+         EqSatBinary(outer,dialects::builtin::addi.typed_kind,result,ty,middle,z,home), EqSatWrappingAdd(outer),
+         EqSatFolded(std::ir::value_id(y),a), EqSatFolded(std::ir::value_id(z),b), EqSatAllBits(ty,mask), !EqSatPinnedOp(outer))
+        -> EqSatRebuild(std::ir::operation_key(outer),result,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Bits(eqsat_bit_and(eqsat_sum(a,b),mask))));
+
+    pub let cancel<inner, outer, result, middle, ty, x, y, z, home, prior, a>:
+        (EqSatBinary(inner,dialects::builtin::addi.typed_kind,middle,ty,x,y,prior), EqSatWrappingAdd(inner),
+         EqSatBinary(outer,dialects::builtin::subi.typed_kind,result,ty,middle,z,home), EqSatWrappingSub(outer),
+         EqSatFolded(std::ir::value_id(y),a), EqSatFolded(std::ir::value_id(z),a))
+        -> EqSatIdentity(std::ir::operation_key(outer), std::ir::value_ref_key(result), std::ir::value_ref_key(x));
+}
+
+pub mod casts {
+    pub let extension_kind: EqSatExtends(dialects::builtin::extui.typed_kind);
+    pub let sign_extension: EqSatExtends(dialects::builtin::extsi.typed_kind);
+    pub let round_trip<outer, inner, out, ot, middle, kind, x, xt, xk, xo, xs, xd>:
+        (EqSatLive(outer), dialects::builtin::trunci.matches(outer, (middle,), (out,)),
+         EqSatExtends(kind), std::ir::match_kind(kind, inner, (x,), (middle,)),
+         ir::Value(std::ir::value_id(x), xt, xk, xo, xs, xd),
+         ir::Value(std::ir::value_id(out), xt, "result", outer, 0, ot))
+        -> EqSatIdentity(std::ir::operation_key(outer), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+}
+pub let EqSatExtends<I: Nat, O: Nat>:
+    std::ir::OperationKindOf<(std::ir::ValueRef<std::El<std::Bits<I>>>,), (std::ir::ValueRef<std::El<std::Bits<O>>>,)> -> Prop;
+
+
+pub let EqSatBitPair: (std::ir::BinaryIntegerOperation, std::ir::BinaryIntegerOperation) -> Prop;
+pub mod extraction {
+    pub let union_and: EqSatBitPair(dialects::builtin::ori.typed_kind,dialects::builtin::xori.typed_kind);
+    pub let xor_and: EqSatBitPair(dialects::builtin::xori.typed_kind,dialects::builtin::ori.typed_kind);
+    pub let bit_pair<node,out,ty,u,v,home,a,b,kind,target,ha,hb,x,y>:
+        (EqSatBinary(node,dialects::builtin::xori.typed_kind,out,ty,u,v,home), !EqSatPinnedOp(node),
+         EqSatBinary(a,kind,u,ty,x,y,ha), EqSatBinary(b,dialects::builtin::andi.typed_kind,v,ty,x,y,hb),
+         EqSatBitPair(kind,target))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(target,Form::Read(x),Form::Read(y)));
+
+    pub let offsets<node,out,ty,u,v,home,left,right,lh,rh,x,y,c,d,a,b,mask>:
+        (EqSatBinary(node,dialects::builtin::addi.typed_kind,out,ty,u,v,home), EqSatWrappingAdd(node), !EqSatPinnedOp(node),
+         EqSatBinary(left,dialects::builtin::addi.typed_kind,u,ty,x,c,lh), EqSatWrappingAdd(left),
+         EqSatBinary(right,dialects::builtin::addi.typed_kind,v,ty,y,d,rh), EqSatWrappingAdd(right),
+         EqSatFolded(std::ir::value_id(c),a), EqSatFolded(std::ir::value_id(d),b), EqSatAllBits(ty,mask), ir::less_id(std::ir::value_id(y),std::ir::value_id(x)) == false)
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::addi.typed_kind,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Read(y)),
+                                                Form::Bits(eqsat_bit_and(eqsat_sum(a,b),mask))));
+}
+
+pub let eqsat_product: (BigInt, BigInt) -> BigInt as "*";
+pub mod modular {
+
+    pub let subtract<inner,outer,result,middle,ty,x,y,z,home,prior,a,b,mask>:
+        (EqSatBinary(inner,dialects::builtin::addi.typed_kind,middle,ty,x,y,prior), EqSatWrappingAdd(inner),
+         EqSatBinary(outer,dialects::builtin::subi.typed_kind,result,ty,middle,z,home), EqSatWrappingSub(outer),
+         EqSatFolded(std::ir::value_id(y),a), EqSatFolded(std::ir::value_id(z),b), EqSatAllBits(ty,mask), !EqSatPinnedOp(outer))
+        -> EqSatRebuild(std::ir::operation_key(outer),result,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Bits(eqsat_bit_and(eqsat_sub(a,b),mask))));
+    pub let multiply<inner,outer,result,middle,ty,x,y,z,home,prior,a,b,mask>:
+        (EqSatBinary(inner,dialects::builtin::muli.typed_kind,middle,ty,x,y,prior),
+         EqSatBinary(outer,dialects::builtin::muli.typed_kind,result,ty,middle,z,home),
+         EqSatFolded(std::ir::value_id(y),a), EqSatFolded(std::ir::value_id(z),b), EqSatAllBits(ty,mask), !EqSatPinnedOp(outer))
+        -> EqSatRebuild(std::ir::operation_key(outer),result,Form::Bin(dialects::builtin::muli.typed_kind,Form::Read(x),Form::Bits(eqsat_bit_and(eqsat_product(a,b),mask))));
+}
+
+pub let EqSatCast: (Int, std::ir::OperationKind, std::ir::ValueId, std::ir::ValueId, Int) -> Prop;
+pub let EqSatUnaryKind<I: Nat, O: Nat>:
+    std::ir::OperationKindOf<(std::ir::ValueRef<std::El<std::Bits<I>>>,), (std::ir::ValueRef<std::El<std::Bits<O>>>,)> -> Prop;
+pub mod cast_cse {
+    pub let introduce<node,k,input,result,ty,decl>:
+        (EqSatLive(node), EqSatUnaryKind(k), std::ir::match_kind(k, node, (input,), (result,)),
+         ir::Value(std::ir::value_id(result),ty,"result",node,0,decl))
+        -> EqSatCast(node,std::ir::operation_kind(k),std::ir::value_ref_key(input),std::ir::value_ref_key(result),ty);
+    pub let existing<first,last,k,input,a,b,ty,place,home,p,q,ad,bd,al,bl>:
+        (EqSatCast(first,k,input,a,ty), EqSatCast(last,k,input,b,ty),
+         ir::Operation{ id: first, kind: k, placement: place, container: home, position: p, display: ad, location: al }(), ir::Operation{ id: last, kind: k, placement: place, container: home, position: q, display: bd, location: bl }(),
+         ir::less_id(p,q) == true)
+        -> EqSatIdentity(std::ir::operation_key(last), b, a);
+    pub let extend<k>: EqSatExtends(k) -> EqSatUnaryKind(k);
+    pub let truncate: EqSatUnaryKind(dialects::builtin::trunci.typed_kind);
+}
+
+pub mod integer_shapes {
+    pub let signed_divide_one<node,out,ty,x,y,home,all>:
+        (EqSatBinary(node,dialects::builtin::divsi.typed_kind,out,ty,x,y,home), EqSatFolded(std::ir::value_id(y),eqsat_bigint(1)),
+         EqSatAllBits(ty,all), eqsat_same_bits(all,eqsat_bigint(1)) == false)
+        -> EqSatIdentity(std::ir::operation_key(node), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let signed_remainder_one<node,out,ty,x,y,home,all>:
+        (EqSatBinary(node,dialects::builtin::remsi.typed_kind,out,ty,x,y,home), EqSatFolded(std::ir::value_id(y),eqsat_bigint(1)),
+         EqSatAllBits(ty,all), eqsat_same_bits(all,eqsat_bigint(1)) == false, !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::andi.typed_kind,Form::Read(x),Form::Bits(eqsat_bigint(0))));
+
+    pub let factor<node,out,ty,u,v,home,left,right,lh,rh,x,y,factor>:
+        (EqSatBinary(node,dialects::builtin::addi.typed_kind,out,ty,u,v,home), EqSatWrappingAdd(node),
+         EqSatBinary(left,dialects::builtin::muli.typed_kind,u,ty,x,factor,lh),
+         EqSatBinary(right,dialects::builtin::muli.typed_kind,v,ty,y,factor,rh), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::muli.typed_kind,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Read(y)),Form::Read(factor)));
+
+    pub let double_negation<node,out,ty,zero,value,home,inner,input,prior,other_zero>:
+        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,zero,value,home), EqSatWrappingSub(node), EqSatFolded(std::ir::value_id(zero),eqsat_bigint(0)),
+         EqSatBinary(inner,dialects::builtin::subi.typed_kind,value,ty,other_zero,input,prior), EqSatWrappingSub(inner),
+         EqSatFolded(std::ir::value_id(other_zero),eqsat_bigint(0))) -> EqSatIdentity(std::ir::operation_key(node), std::ir::value_ref_key(out), std::ir::value_ref_key(input));
+}
+
+pub let EqSatDefined: Int -> Prop;
+pub let EqSatIncomingParameter: Int -> Prop;
+pub let EqSatAnnihilator: std::ir::BinaryIntegerOperation -> Prop;
+pub let EqSatCancelSelf: std::ir::BinaryIntegerOperation -> Prop;
+pub let EqSatDefinedFold: (Int, Int, BigInt) -> Prop;
+pub let EqSatArgumentFreeze: (Int, Int) -> Prop;
+pub mod arguments {
+    pub let cfg_parameter<func,k,h,p,d,l,region,slot,entry,value,ty,i,decl>:
+        (ir::Operation{ id: func, kind: dialects::func::func.kind, placement: k, container: h, position: p, display: d, location: l }(), ir::Region(region,"cfg",func,slot,entry),
+         ir::Value(value,ty,"block",entry,i,decl)) -> EqSatIncomingParameter(value);
+    pub let graph_parameter<func,k,h,p,d,l,region,slot,entry,value,ty,i,decl>:
+        (ir::Operation{ id: func, kind: dialects::func::func.kind, placement: k, container: h, position: p, display: d, location: l }(), ir::Region(region,"graph",func,slot,entry),
+         ir::Value(value,ty,"region",region,i,decl)) -> EqSatIncomingParameter(value);
+    // Freezing an already supplied argument cannot hide an undefined computation.
+    pub let freeze<node, input, out>:
+        (EqSatLive(node), dialects::builtin::freeze.matches(node, (input,), (out,)),
+         EqSatIncomingParameter(std::ir::value_id(input)))
+        -> EqSatArgumentFreeze(node, std::ir::value_id(out));
+
+}
+pub mod defined_integer {
+    pub let known<value,bits>: EqSatFolded(value,bits) -> EqSatDefined(value);
+    pub let frozen<node,value>: EqSatArgumentFreeze(node,value) -> EqSatDefined(value);
+
+    pub let and_zero: EqSatAnnihilator(dialects::builtin::andi.typed_kind);
+    pub let multiply_zero: EqSatAnnihilator(dialects::builtin::muli.typed_kind);
+    pub let xor_self: EqSatCancelSelf(dialects::builtin::xori.typed_kind);
+    pub let sub_self: EqSatCancelSelf(dialects::builtin::subi.typed_kind);
+    pub let zero<node,k,out,ty,x,y,home>:
+        (EqSatBinary(node,k,out,ty,x,y,home), EqSatAnnihilator(k), EqSatDefined(std::ir::value_id(x)),
+         EqSatFolded(std::ir::value_id(y),eqsat_bigint(0))) -> EqSatDefinedFold(node,std::ir::value_id(out),eqsat_bigint(0));
+    pub let self_cancel<node,k,out,ty,x,y,home,term>:
+        (EqSatBinary(node,k,out,ty,x,y,home), EqSatCancelSelf(k), EqSatDefined(std::ir::value_id(x)),
+         EqSatScalar(std::ir::value_id(x),ty,term), EqSatScalar(std::ir::value_id(y),ty,term)) -> EqSatDefinedFold(node,std::ir::value_id(out),eqsat_bigint(0));
+    pub let ones<node,out,ty,x,y,home,all>:
+        (EqSatBinary(node,dialects::builtin::ori.typed_kind,out,ty,x,y,home), EqSatDefined(std::ir::value_id(x)),
+         EqSatFolded(std::ir::value_id(y),all), EqSatAllBits(ty,all)) -> EqSatDefinedFold(node,std::ir::value_id(out),all);
+    pub let fold<node,out,bits>:
+        (EqSatDefinedFold(node,out,bits), !EqSatPinnedOp(node))
+        -> (EqSatFolded(out,bits), EqSatConstant(node,out,bits));
+}
+
+pub let EqSatAbsorbs: (std::ir::BinaryIntegerOperation, std::ir::BinaryIntegerOperation) -> Prop;
+pub mod guarded_cancel {
+    pub let intersection: EqSatAbsorbs(dialects::builtin::andi.typed_kind,dialects::builtin::ori.typed_kind);
+    pub let union: EqSatAbsorbs(dialects::builtin::ori.typed_kind,dialects::builtin::andi.typed_kind);
+    pub let absorb<outer,inner,out,ty,x,y,mid,k,other,home,prior>:
+        (EqSatBinary(outer,k,out,ty,x,mid,home), EqSatAbsorbs(k,other),
+         EqSatBinary(inner,other,mid,ty,x,y,prior), EqSatDefined(std::ir::value_id(y)))
+        -> EqSatIdentity(std::ir::operation_key(outer), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let exclusive_or<outer,inner,out,ty,x,y,mid,home,prior>:
+        (EqSatBinary(outer,dialects::builtin::xori.typed_kind,out,ty,mid,y,home),
+         EqSatBinary(inner,dialects::builtin::xori.typed_kind,mid,ty,x,y,prior), EqSatDefined(std::ir::value_id(y)))
+        -> EqSatIdentity(std::ir::operation_key(outer), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+
+    pub let undo_add<outer,inner,out,ty,x,y,mid,home,prior>:
+        (EqSatBinary(outer,dialects::builtin::subi.typed_kind,out,ty,mid,y,home), EqSatWrappingSub(outer),
+         EqSatBinary(inner,dialects::builtin::addi.typed_kind,mid,ty,x,y,prior), EqSatWrappingAdd(inner), EqSatDefined(std::ir::value_id(y)))
+        -> EqSatIdentity(std::ir::operation_key(outer), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let undo_subtract<outer,inner,out,ty,x,y,mid,home,prior>:
+        (EqSatBinary(outer,dialects::builtin::addi.typed_kind,out,ty,mid,y,home), EqSatWrappingAdd(outer),
+         EqSatBinary(inner,dialects::builtin::subi.typed_kind,mid,ty,x,y,prior), EqSatWrappingSub(inner), EqSatDefined(std::ir::value_id(y)))
+        -> EqSatIdentity(std::ir::operation_key(outer), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+    pub let subtract_difference<outer,inner,out,ty,x,y,mid,home,prior>:
+        (EqSatBinary(outer,dialects::builtin::subi.typed_kind,out,ty,y,mid,home), EqSatWrappingSub(outer),
+         EqSatBinary(inner,dialects::builtin::subi.typed_kind,mid,ty,y,x,prior), EqSatWrappingSub(inner), EqSatDefined(std::ir::value_id(y)))
+        -> EqSatIdentity(std::ir::operation_key(outer), std::ir::value_ref_key(out), std::ir::value_ref_key(x));
+}
+
+
+pub let EqSatDefinition: (std::ir::OperationId, std::ir::ValueId, Form) -> Prop;
+pub let EqSatConstantNode: Int -> Prop;
+pub mod definition_constants {
+    pub let selected<node,result,bits>: EqSatConstant(node,result,bits)
+        -> (EqSatDefinition(std::ir::operation_key(node),std::ir::value_key(result),Form::Bits(bits)), EqSatConstantNode(node));
+}
+pub mod definition_expressions {
+    pub let selected<node,result,form>:
+        (EqSatRebuild(node,result,form), !EqSatConstantNode(std::ir::raw_operation_id(node)))
+        -> EqSatDefinition(node,std::ir::value_ref_key(result),form);
+}
+
+pub let frame = Schedule::Repeat(8, (allocation, attributes, allocation_shape, ports, counted_pins, arguments));
+pub let sites = std::schedule::Schedule::Rules((escape, memory_sites));
+
+
+pub let EqSatComplement: (Int, Int, Int, BigInt) -> Prop;
+pub mod complements {
+    pub let neg_one<node,out,ty,x,y,home,all>:
+        (EqSatBinary(node,dialects::builtin::muli.typed_kind,out,ty,x,y,home), EqSatFolded(std::ir::value_id(y),all),
+         EqSatAllBits(ty,all), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Bits(eqsat_bigint(0)),Form::Read(x)));
+
+    pub let common_addend<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
+        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,a,b,home), EqSatWrappingSub(node),
+         EqSatBinary(left,dialects::builtin::addi.typed_kind,a,ty,x,y,lh), EqSatWrappingAdd(left),
+         EqSatBinary(right,dialects::builtin::addi.typed_kind,b,ty,x,z,rh), EqSatWrappingAdd(right),
+         EqSatDefined(std::ir::value_id(x)), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Read(y),Form::Read(z)));
+    pub let common_minuend<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
+        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,a,b,home), EqSatWrappingSub(node),
+         EqSatBinary(left,dialects::builtin::subi.typed_kind,a,ty,x,y,lh), EqSatWrappingSub(left),
+         EqSatBinary(right,dialects::builtin::subi.typed_kind,b,ty,x,z,rh), EqSatWrappingSub(right),
+         EqSatDefined(std::ir::value_id(x)), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Read(z),Form::Read(y)));
+    pub let common_subtrahend<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
+        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,a,b,home), EqSatWrappingSub(node),
+         EqSatBinary(left,dialects::builtin::subi.typed_kind,a,ty,x,y,lh), EqSatWrappingSub(left),
+         EqSatBinary(right,dialects::builtin::subi.typed_kind,b,ty,z,y,rh), EqSatWrappingSub(right),
+         EqSatDefined(std::ir::value_id(y)), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Read(x),Form::Read(z)));
+
+    pub let negate_addend<node,out,ty,x,b,home,right,y,rh>:
+        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,x,b,home), EqSatWrappingSub(node),
+         EqSatBinary(right,dialects::builtin::addi.typed_kind,b,ty,x,y,rh), EqSatWrappingAdd(right),
+         EqSatDefined(std::ir::value_id(x)), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Bits(eqsat_bigint(0)),Form::Read(y)));
+    pub let negate_subtrahend<node,out,ty,a,x,home,left,y,lh>:
+        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,a,x,home), EqSatWrappingSub(node),
+         EqSatBinary(left,dialects::builtin::subi.typed_kind,a,ty,x,y,lh), EqSatWrappingSub(left),
+         EqSatDefined(std::ir::value_id(x)), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Bits(eqsat_bigint(0)),Form::Read(y)));
+
+    pub let complement<node,out,ty,x,mask,home,all>:
+        (EqSatBinary(node,dialects::builtin::xori.typed_kind,out,ty,x,mask,home),
+         EqSatFolded(std::ir::value_id(mask),all), EqSatAllBits(ty,all), EqSatDefined(std::ir::value_id(x)))
+        -> EqSatComplement(std::ir::value_id(out),std::ir::value_id(x),ty,all);
+    pub let intersection<node,out,ty,x,inverse,home,all>:
+        (EqSatBinary(node,dialects::builtin::andi.typed_kind,out,ty,x,inverse,home), EqSatComplement(std::ir::value_id(inverse),std::ir::value_id(x),ty,all))
+        -> EqSatDefinedFold(node,std::ir::value_id(out),eqsat_bigint(0));
+    pub let union<node,out,ty,x,inverse,home,all>:
+        (EqSatBinary(node,dialects::builtin::ori.typed_kind,out,ty,x,inverse,home), EqSatComplement(std::ir::value_id(inverse),std::ir::value_id(x),ty,all))
+        -> EqSatDefinedFold(node,std::ir::value_id(out),all);
+    pub let cancel_pair<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
+        (EqSatBinary(node,dialects::builtin::addi.typed_kind,out,ty,a,b,home), EqSatWrappingAdd(node),
+         EqSatBinary(left,dialects::builtin::addi.typed_kind,a,ty,x,y,lh), EqSatWrappingAdd(left),
+         EqSatBinary(right,dialects::builtin::subi.typed_kind,b,ty,z,y,rh), EqSatWrappingSub(right),
+         EqSatDefined(std::ir::value_id(y)), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Read(z)));
+    pub let telescope<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
+        (EqSatBinary(node,dialects::builtin::addi.typed_kind,out,ty,a,b,home), EqSatWrappingAdd(node),
+         EqSatBinary(left,dialects::builtin::subi.typed_kind,a,ty,x,y,lh), EqSatWrappingSub(left),
+         EqSatBinary(right,dialects::builtin::subi.typed_kind,b,ty,y,z,rh), EqSatWrappingSub(right),
+         EqSatDefined(std::ir::value_id(y)), !EqSatPinnedOp(node))
+        -> EqSatRebuild(std::ir::operation_key(node),out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Read(x),Form::Read(z)));
+}
+
+// A store establishes a cell only for its own state result and exact address.
+pub let EqSatWrite: (Int, Int, Int, Int, Int, String, Int, Int, Int) -> Prop;
+pub let EqSatStoreSite: (Int, Int, Int, Int, Int, String, Int, Int, Int) -> Prop;
+pub let EqSatLoadSite: (Int, Int, Int, Int, Int, String, Int) -> Prop;
+pub let EqSatAdjacentWrite: (Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatStored: (Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatFunctionGraph: Int -> Prop;
+pub let EqSatRequiredGraphValue: (Int, Int) -> Prop;
+pub let EqSatMemoryOrdered: (Int, Int) -> Prop;
+pub let EqSatLoad: (Int, Int, Int, Int) -> Prop;
+
+pub mod memory {
+    pub let store<node,address,ty,value,state,place,home,pos,st>:
+        (EqSatStoreSite(node,address,ty,value,state,place,home,pos,st),
+         EqSatOrdinaryAccess(node), EqSatInteger(ty))
+        -> (EqSatWrite(state,address,ty,value,node,place,home,pos,st), EqSatStored(state,address,ty,value,node));
+    pub let pointer_store<node,address,ty,value,state,place,home,pos,st,width,alignment>:
+        (EqSatStoreSite(node,address,ty,value,state,place,home,pos,st), EqSatOrdinaryAccess(node),
+         EqSatPointerType(ty), EqSatStoreLayout(node,width,alignment))
+        -> EqSatWrite(state,address,ty,value,node,place,home,pos,st);
+
+    pub let adjacent<first,second,state,next,addr,ty,data,other,block,p,q,st,nt>:
+        (EqSatWrite(state,addr,ty,data,first,"block",block,p,st),
+         EqSatWrite(next,addr,ty,other,second,"block",block,q,nt),
+         q == eqsat_int_add(p,1), ir::Operand(second,2,state))
+        -> EqSatAdjacentWrite(first,second,state,next,addr,data,other,st,nt);
+
+    pub let ordered<read,write,kind,block,origin,region,order,prior,q,e,loc,state,ty,slot,decl,addr,out,ot>:
+        (EqSatLoadSite(read,addr,ot,out,state,"block",block), EqSatLive(write),
+         ir::Operation{ id: write, kind: kind, placement: "block", container: origin, position: q, display: e, location: loc }(), ir::Block(block,region,order), ir::Block(origin,region,prior),
+         !EqSatMixedRegion(region), ir::Value(state,ty,"result",write,slot,decl))
+        -> EqSatMemoryOrdered(read,state);
+    pub let block_state<read,block,state,ty,slot,decl,region,order,addr,out,ot>:
+        (EqSatLoadSite(read,addr,ot,out,state,"block",block), ir::Value(state,ty,"block",block,slot,decl),
+         ir::Block(block,region,order), !EqSatMixedRegion(region))
+        -> EqSatMemoryOrdered(read,state);
+    // A function exports all its results together. Theta feedback and exit do not.
+    pub let function_graph<node, place, home, pos, display, loc, region, slot, entry>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::func::func.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+         ir::Region(region, "graph", node, slot, entry)) -> EqSatFunctionGraph(region);
+    pub let returned<region,slot,value>:
+        (EqSatFunctionGraph(region), ir::Yield(region,slot,value)) -> EqSatRequiredGraphValue(region,value);
+    pub let joined<region,out,ty,node,slot,decl,p,d,l,input,i>:
+        (EqSatRequiredGraphValue(region,out), ir::Value(out,ty,"result",node,slot,decl),
+         ir::Operation{ id: node, kind: dialects::state::join.kind, placement: "graph", container: region, position: p, display: d, location: l }(), ir::Operand(node,i,input))
+        -> EqSatRequiredGraphValue(region,input);
+    pub let split<region,out,ty,node,slot,decl,p,d,l,input>:
+        (EqSatRequiredGraphValue(region,out), ir::Value(out,ty,"result",node,slot,decl),
+         ir::Operation{ id: node, kind: dialects::state::split.kind, placement: "graph", container: region, position: p, display: d, location: l }(), ir::Operand(node,0,input))
+        -> EqSatRequiredGraphValue(region,input);
+    pub let written<region,out,node,addr,ty,data,pos,st,input>:
+        (EqSatRequiredGraphValue(region,out), EqSatStoreSite(node,addr,ty,data,out,"graph",region,pos,st),
+         ir::Operand(node,2,input)) -> EqSatRequiredGraphValue(region,input);
+    pub let returned_state<read, write, kind, region, q, e, loc, state, next, addr, out, ot,
+                           ty, decl, nd, source_slot>:
+        (EqSatLoadSite(read,addr,ot,out,state,"graph",region), EqSatLive(write), EqSatFunctionGraph(region),
+         ir::Operation{ id: write, kind: kind, placement: "graph", container: region, position: q, display: e, location: loc }(), ir::Value(state,ty,"result",write,source_slot,decl),
+         ir::Value(next, ty, "result", read, 1, nd), EqSatRequiredGraphValue(region,next))
+        -> EqSatMemoryOrdered(read, state);
+    pub let returned_input<read, write, kind, region, q, e, loc, state, addr, out, ot,
+                           ty, decl, source_slot>:
+        (EqSatLoadSite(read,addr,ot,out,state,"graph",region), EqSatLive(write), EqSatFunctionGraph(region),
+         ir::Operation{ id: write, kind: kind, placement: "graph", container: region, position: q, display: e, location: loc }(), ir::Value(state,ty,"result",write,source_slot,decl),
+         EqSatRequiredGraphValue(region,state))
+        -> EqSatMemoryOrdered(read, state);
+
+    pub let forward<node,place,home,address,state,result,ty,value,producer>:
+        (EqSatLoadSite(node,address,ty,result,state,place,home), EqSatStored(state,address,ty,value,producer),
+         EqSatMemoryOrdered(node,state), EqSatOrdinaryAccess(node))
+        -> EqSatLoad(node,state,result,value);
+    pub let repeated_read<first,second,address,ty,value,result,state,region>:
+        (EqSatLoadSite(first,address,ty,value,state,"graph",region),
+         EqSatLoadSite(second,address,ty,result,state,"graph",region), ir::less_id(first,second) == true,
+         EqSatOrdinaryAccess(first), EqSatOrdinaryAccess(second), EqSatMemoryOrdered(second,state))
+        -> EqSatLoad(second,state,result,value);
+
+    pub let disjoint_write<first,second,state,next,a,b,ty,bt,v,w,place,home,pos,st>:
+        (EqSatStored(state,a,ty,v,first), EqSatWrite(next,b,bt,w,second,place,home,pos,st), ir::Operand(second,2,state),
+         EqSatAllocation(a), EqSatAllocation(b), ir::equal_id(a,b) == false)
+        -> EqSatStored(next,a,ty,v,second);
+
+    pub let forward_value<node, state, result, value>:
+        EqSatLoad(node, state, result, value) -> (EqSatReplace(std::ir::operation_key(node), std::ir::value_key(result), std::ir::value_key(value)), EqSatErase(std::ir::operation_key(node)));
+    pub let forward_state<node, state, result, value, next, ty, declared, kind, owner, slot, input_declared>:
+        (EqSatLoad(node, state, result, value), ir::Value(next, ty, "result", node, 1, declared),
+         ir::Value(state, ty, kind, owner, slot, input_declared))
+        -> EqSatReplace(std::ir::operation_key(node), std::ir::value_key(next), std::ir::value_key(state));
+}
+
+pub let eqsat_int_add: (Int, Int) -> Int as "+";
+pub let EqSatAllocation: Int -> Prop;
+pub let EqSatAddressSlot: (std::ir::OperationKind, Int) -> Prop;
+pub let EqSatEscapes: Int -> Prop;
+pub let EqSatOverwrite: (Int, Int, Int, Int) -> Prop;
+pub let EqSatStateOtherUse: Int -> Prop;
+
+pub mod allocation {
+    pub let alloc<node, place, home, pos, display, loc, address, ty, decl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::alloca.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+         ir::Value(address, ty, "result", node, 0, decl)) -> EqSatAllocation(address);
+    pub let load: EqSatAddressSlot(dialects::ptr::load.kind, 0);
+    pub let store: EqSatAddressSlot(dialects::ptr::store.kind, 1);
+}
+
+pub mod escape {
+    pub let escape_use<address, user, slot, kind, place, home, pos, display, loc>:
+        (EqSatAllocation(address), ir::Operand(user, slot, address),
+         ir::Operation{ id: user, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }(), !EqSatAddressSlot(kind, slot))
+        -> EqSatEscapes(address);
+    pub let escape_result<address, region, slot>:
+        (EqSatAllocation(address), ir::Yield(region, slot, address)) -> EqSatEscapes(address);
+}
+
+pub mod dead_store_proof {
+    pub let adjacent<first,second,state,incoming,next,addr,data,other,st,nt,kind,owner,slot,decl>:
+        (EqSatAdjacentWrite(first,second,state,next,addr,data,other,st,nt),
+         EqSatDefined(data),
+         ir::Operand(first,2,incoming), ir::Value(incoming,st,kind,owner,slot,decl))
+        -> EqSatOverwrite(first,second,state,incoming);
+    pub let same_value<first,second,state,incoming,next,addr,data,st,nt,kind,owner,slot,decl>:
+        (EqSatAdjacentWrite(first,second,state,next,addr,data,data,st,nt),
+         ir::Operand(first,2,incoming), ir::Value(incoming,st,kind,owner,slot,decl))
+        -> EqSatOverwrite(first,second,state,incoming);
+}
+
+pub mod dead_store_uses {
+    pub let another<first, second, state, in_state, other, slot>:
+        (EqSatOverwrite(first, second, state, in_state), ir::Operand(other, slot, state),
+         ir::equal_id(other,second) == false) -> EqSatStateOtherUse(state);
+    pub let yielded<first, second, state, in_state, region, slot>:
+        (EqSatOverwrite(first, second, state, in_state), ir::Yield(region, slot, state))
+        -> EqSatStateOtherUse(state);
+}
+
+pub mod dead_store {
+    pub let overwrite<first, second, state, incoming>:
+        (EqSatOverwrite(first, second, state, incoming), !EqSatStateOtherUse(state))
+        -> (EqSatReplace(std::ir::operation_key(first), std::ir::value_key(state), std::ir::value_key(incoming)), EqSatErase(std::ir::operation_key(first)));
+}
+
+pub let EqSatVisibleAt: (Int, Int) -> Prop;
+pub let EqSatBranchCell: (Int, Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatBranchDisagrees: (Int, Int, Int, Int, Int) -> Prop;
+
+pub mod memory_join {
+    pub let enclosing_port<node, kind, region, pos, display, loc, data, ty, slot, decl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: kind, placement: "graph", container: region, position: pos, display: display, location: loc }(),
+         ir::Value(data, ty, "region", region, slot, decl)) -> EqSatVisibleAt(node, data);
+
+    pub let captured_literal<node,k,region,p,d,l,data,source,source_kind,q,sd,sl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: k, placement: "graph", container: region, position: p, display: d, location: l }(),
+         dialects::builtin::constant.matches(source, (), (data,)),
+         ir::Operation{ id: source, kind: source_kind, placement: "graph", container: region, position: q, display: sd, location: sl }())
+        -> EqSatVisibleAt(node,std::ir::value_id(data));
+    pub let branch<node,arm,result_slot,arm_state,forwarded,addr,ty,data,producer>:
+        (EqSatArmResult(node,arm,result_slot,arm_state,forwarded),
+         EqSatStored(arm_state,addr,ty,data,producer), EqSatVisibleAt(node,data))
+        -> EqSatBranchCell(node,arm,result_slot,addr,ty,data);
+
+    pub let loop_cell<node, body, port_slot, port, init, exit,
+                      result_slot, result, st, decl, addr, ty, data, producer>:
+        (EqSatInvariantPort(node,body,port_slot,port,init),
+         ir::Binding(body, "exit", result_slot, exit), ir::Yield(body, exit, port),
+         EqSatStored(init, addr, ty, data, producer),
+         ir::Value(result, st, "result", node, result_slot, decl), EqSatVisibleAt(node, data))
+        -> EqSatStored(result, addr, ty, data, node);
+}
+
+pub mod memory_join_missing {
+    pub let missing<node, result_slot, addr, ty, data, witness, arm, mode, slot, entry>:
+        (EqSatBranchCell(node, witness, result_slot, addr, ty, data),
+         ir::Region(arm, mode, node, slot, entry), !EqSatBranchCell(node, arm, result_slot, addr, ty, data))
+        -> EqSatBranchDisagrees(node, result_slot, addr, ty, data);
+}
+
+pub mod memory_join_apply {
+    pub let agreed<node, result_slot, addr, ty, data, witness, state, st, decl>:
+        (EqSatBranchCell(node, witness, result_slot, addr, ty, data),
+         !EqSatBranchDisagrees(node, result_slot, addr, ty, data),
+         ir::Value(state, st, "result", node, result_slot, decl))
+        -> EqSatStored(state, addr, ty, data, node);
+}
+
+pub mod memory_siblings {
+    pub let existing_result<node,arm,state_slot,state,addr,ty,data,producer,data_slot,data_exit,value,decl>:
+        (EqSatArmResult(node,arm,state_slot,state,false), EqSatStored(state,addr,ty,data,producer),
+         ir::Binding(arm,"exit",data_slot,data_exit), ir::Yield(arm,data_exit,data),
+         ir::Value(value,ty,"result",node,data_slot,decl))
+        -> EqSatBranchCell(node,arm,state_slot,addr,ty,value);
+}
+
+pub let EqSatCfgCell: (Int, Int, Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatCfgDisagrees: (Int, Int, Int, Int, Int) -> Prop;
+
+pub mod memory_cfg {
+    pub let edge<node, edge, target, param, operand, state, addr, ty, data, producer,
+                 region, order, mode, function, region_slot, entry, data_slot, decl>:
+        (EqSatLive(node), ir::Successor(node,edge,target), ir::SuccessorArgument(node,edge,param,operand),
+         ir::Operand(node,operand,state), EqSatStored(state,addr,ty,data,producer),
+         ir::Block(target,region,order), ir::Region(region,mode,function,region_slot,entry),
+         ir::equal_id(target,entry) == false, ir::Value(data,ty,"block",entry,data_slot,decl))
+        -> EqSatCfgCell(target,param,node,edge,addr,ty,data);
+}
+
+pub mod memory_cfg_missing {
+    pub let missing<target, param, addr, ty, data, witness, incoming, node, edge>:
+        (EqSatCfgCell(target,param,witness,incoming,addr,ty,data), ir::Successor(node,edge,target),
+         !EqSatCfgCell(target,param,node,edge,addr,ty,data))
+        -> EqSatCfgDisagrees(target,param,addr,ty,data);
+}
+
+pub mod memory_cfg_apply {
+    pub let agreed<target, param, addr, ty, data, witness, incoming, state, state_ty, decl>:
+        (EqSatCfgCell(target,param,witness,incoming,addr,ty,data), !EqSatCfgDisagrees(target,param,addr,ty,data),
+         ir::Value(state,state_ty,"block",target,param,decl))
+        -> EqSatStored(state,addr,ty,data,state);
+}
+
+// Unthreaded accesses use the verified order of their CFG block.
+pub let EqSatOrdinaryAccess: Int -> Prop;
+pub let EqSatOperandSlot: (Int, Int) -> Prop;
+pub let EqSatPlainStore: (Int, Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatPlainLoad: (Int, Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatWindow: (Int, Int, Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatTransparent: std::ir::OperationKind -> Prop;
+pub let EqSatClobber: (Int, Int) -> Prop;
+pub let EqSatBlockedSlot: Int -> Prop;
+pub let EqSatPrivateWrite: (Int, Int) -> Prop;
+pub let EqSatLocalPointerUse: (Int, Int) -> Prop;
+pub let eqsat_attr_int: Int -> BigInt as extern "eqsat-attr-int";
+pub let eqsat_mod: (BigInt, BigInt) -> BigInt as "%";
+pub let eqsat_leq_bits: (BigInt, BigInt) -> Bool as "bool-<=";
+
+pub mod memory_sites {
+    pub let operand<node,slot,value>: ir::Operand(node,slot,value) -> EqSatOperandSlot(node,slot);
+    pub let ordinary<node,kind,place,home,pos,display,loc,slot>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }(), EqSatAddressSlot(kind,slot),
+         !EqSatHasAttr(node,"volatile"), !EqSatHasAttr(node,"atomic"),
+         !EqSatHasAttr(node,"align"), !EqSatHasAttr(node,"alignment"))
+        -> EqSatOrdinaryAccess(node);
+    pub let store<node,place,home,pos,display,loc,address,ty,data,state,st,sd,kind,owner,slot,decl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::store.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+         ir::Operand(node,0,data), ir::Operand(node,1,address), ir::Value(data,ty,kind,owner,slot,decl),
+         ir::Value(state,st,"result",node,0,sd)) -> EqSatStoreSite(node,address,ty,data,state,place,home,pos,st);
+    pub let load<node,place,home,pos,display,loc,address,ty,result,state,decl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::load.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+         ir::Operand(node,0,address), ir::Operand(node,1,state), ir::Value(result,ty,"result",node,0,decl))
+        -> EqSatLoadSite(node,address,ty,result,state,place,home);
+}
+
+pub mod plain_access {
+    pub let harmless<k>: EqSatDropKind(k) -> EqSatTransparent(k);
+    pub let alloca: EqSatTransparent(dialects::ptr::alloca.kind);
+    pub let plain_store<node,block,pos,display,loc,data,addr,ty,kind,owner,slot,decl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::store.kind, placement: "block", container: block, position: pos, display: display, location: loc }(),
+         ir::Operand(node,0,data), ir::Operand(node,1,addr), !EqSatOperandSlot(node,2),
+         ir::Value(data,ty,kind,owner,slot,decl), EqSatInteger(ty), EqSatOrdinaryAccess(node))
+        -> EqSatPlainStore(node,block,pos,addr,ty,data);
+    pub let plain_load<node,block,pos,display,loc,data,addr,ty,decl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::load.kind, placement: "block", container: block, position: pos, display: display, location: loc }(),
+         ir::Operand(node,0,addr), !EqSatOperandSlot(node,1),
+         ir::Value(data,ty,"result",node,0,decl), EqSatInteger(ty), EqSatOrdinaryAccess(node))
+        -> EqSatPlainLoad(node,block,pos,addr,ty,data);
+    pub let exact<write,block,pos,addr,ty,data>:
+        EqSatPlainStore(write,block,pos,addr,ty,data) -> EqSatAddressEquals(addr,addr);
+    pub let pair<read,write,block,p,q,a,b,ty,value,data>:
+        (EqSatPlainLoad(read,block,q,a,ty,value), EqSatPlainStore(write,block,p,b,ty,data),
+         EqSatAddressEquals(b,a),
+         ir::less_id(p,q) == true) -> EqSatWindow(read,write,block,p,q,value,data);
+}
+
+pub mod plain_clobber {
+    pub let alias<read,write,block,p,q,value,data,node,k,pos,display,loc>:
+        (EqSatWindow(read,write,block,p,q,value,data), ir::Operation{ id: node, kind: k, placement: "block", container: block, position: pos, display: display, location: loc }(),
+         ir::less_id(p,pos) == true, ir::less_id(pos,q) == true, !EqSatTransparent(k),
+         !EqSatPreservesCell(write,node))
+        -> EqSatClobber(read,write);
+}
+pub let EqSatPreservesCell: (Int, Int) -> Prop;
+pub mod plain_disjoint {
+    pub let read_only<first,read,block,p,addr,ty,value,q,d,l>:
+        (EqSatPlainStore(first,block,p,addr,ty,value), ir::Operation{ id: read, kind: dialects::ptr::load.kind, placement: "block", container: block, position: q, display: d, location: l }(),
+         EqSatOrdinaryAccess(read)) -> EqSatPreservesCell(first,read);
+    pub let different<first,second,block,p,q,a,b,at,bt,x,y>:
+        (EqSatPlainStore(first,block,p,a,at,x), EqSatPlainStore(second,block,q,b,bt,y),
+         EqSatAllocation(a), EqSatAllocation(b), ir::equal_id(a,b) == false)
+        -> EqSatPreservesCell(first,second);
+}
+
+pub mod plain_forward {
+    pub let load<read,write,block,p,q,value,data>:
+        (EqSatWindow(read,write,block,p,q,value,data), !EqSatClobber(read,write))
+        -> (EqSatReplace(std::ir::operation_key(read), std::ir::value_key(value), std::ir::value_key(data)), EqSatErase(std::ir::operation_key(read)));
+}
+
+pub let EqSatStoreLayout: (Int, BigInt, BigInt) -> Prop;
+pub let EqSatHasStoreLayout: Int -> Prop;
+pub let EqSatPrivateExtent: (Int, BigInt, BigInt) -> Prop;
+pub mod private_layout {
+    pub let layout<write,width,align>: EqSatStoreLayout(write,width,align)
+        -> (EqSatHasStoreLayout(write), EqSatPrivateExtent(write,width,align));
+}
+pub mod private_extent {
+    pub let native_integer<write,block,p,addr,ty,data,ctor,args,width>:
+        (EqSatPlainStore(write,block,p,addr,ty,data), !EqSatHasStoreLayout(write),
+         EqSatAllocation(addr), ir::TypeTerm(ty,ctor,args), width == std::ir::integer_width(args))
+        -> EqSatPrivateExtent(write,eqsat_bigint(width),eqsat_bigint(1));
+}
+
+pub mod private_store {
+    pub let bounded_defined<write,block,position,addr,base,offset,ty,data,alloc,st,decl,p,d,l,handle,bytes,alignment,align,width,end,start,required>:
+        (EqSatPlainStore(write,block,position,addr,ty,data), EqSatLocalAddress(addr,base,offset),
+         ir::Value(base,st,"result",alloc,0,decl),
+         ir::Operation{ id: alloc, kind: dialects::ptr::alloca.kind, placement: "block", container: block, position: p, display: d, location: l }(),
+         ir::Attribute("operation",alloc,"size",handle), bytes == eqsat_attr_int(handle),
+         ir::Attribute("operation",alloc,"align",alignment), align == eqsat_attr_int(alignment),
+         EqSatPrivateExtent(write,width,required), start == eqsat_product(offset,eqsat_bigint(8)),
+         eqsat_leq_bits(eqsat_bigint(1),align) == true, eqsat_leq_bits(eqsat_bigint(1),width) == true,
+         eqsat_mod(start,required) == eqsat_bigint(0),
+         eqsat_mod(eqsat_product(align,eqsat_bigint(8)),required) == eqsat_bigint(0),
+         end == eqsat_sum(start,width),
+         eqsat_leq_bits(end,eqsat_product(bytes,eqsat_bigint(8))) == true,
+         EqSatDefined(data))
+        -> EqSatPrivateWrite(base,write);
+    pub let derivation<addr,base,offset,result,off,node,ty,decl,p,d,l,b,i,w,m,dist>:
+        (EqSatLocalAddress(addr,base,offset), EqSatLocalAddress(result,base,off),
+         EqSatOffsetStep(result,addr,ty,i,w,dist,m), ir::Value(result,ty,"result",node,0,decl),
+         ir::Operation{ id: node, kind: dialects::ptr::ptradd.kind, placement: "block", container: b, position: p, display: d, location: l }(), !EqSatPinned(result))
+        -> (EqSatLocalPointerUse(addr,node), EqSatRemovable(node,result), EqSatRemovableNode(node));
+}
+
+pub mod private_other {
+    pub let other<addr,base,offset,node,slot>:
+        (EqSatLocalAddress(addr,base,offset), ir::Operand(node,slot,addr),
+         !EqSatPrivateWrite(base,node), !EqSatLocalPointerUse(addr,node))
+        -> EqSatBlockedSlot(base);
+    pub let yielded<addr,base,offset,region,slot>:
+        (EqSatLocalAddress(addr,base,offset), ir::Yield(region,slot,addr)) -> EqSatBlockedSlot(base);
+}
+
+pub mod private_drop {
+    pub let write<addr,node>: (EqSatPrivateWrite(addr,node), !EqSatBlockedSlot(addr)) -> EqSatDead(std::ir::operation_key(node));
+    pub let alloca<addr,node,ty,decl,h,p,d,l>:
+        (EqSatAllocation(addr), !EqSatBlockedSlot(addr), !EqSatPinned(addr),
+         ir::Value(addr,ty,"result",node,0,decl), ir::Operation{ id: node, kind: dialects::ptr::alloca.kind, placement: "block", container: h, position: p, display: d, location: l }(),
+         !EqSatExtraResult(node)) -> EqSatDead(std::ir::operation_key(node));
+}
+pub let EqSatExtraResult: Int -> Prop;
+pub mod allocation_shape {
+    pub let multiple<node,value,ty,slot,decl>:
+        (ir::Value(value,ty,"result",node,slot,decl), ir::less_id(0,slot) == true)
+        -> EqSatExtraResult(node);
+}
+
+pub let EqSatPointerSize: (Int, Int) -> Prop;
+pub let EqSatPointerType: Int -> Prop;
+pub let EqSatPointerCell: (Int, Int, Int, Int, Int) -> Prop;
+pub mod pointer_cells {
+    pub let pointer<ty,ctor,args,decl,default>:
+        (ir::TypeTerm(ty,ctor,args), ir::TypeCtor(ctor,"ptr","p",decl,default)) -> EqSatPointerType(ty);
+    pub let write<node,place,home,pos,state,st,address,value,ty,width>:
+        (EqSatStoreSite(node,address,ty,value,state,place,home,pos,st),
+         EqSatPointerSize(node,width), EqSatPointerType(ty), EqSatOrdinaryAccess(node))
+        -> EqSatPointerCell(state,address,ty,width,value);
+    pub let read<node,place,home,address,state,result,ty,width,value>:
+        (EqSatLoadSite(node,address,ty,result,state,place,home), EqSatPointerSize(node,width),
+         EqSatPointerCell(state,address,ty,width,value), EqSatMemoryOrdered(node,state), EqSatOrdinaryAccess(node))
+        -> EqSatLoad(node,state,result,value);
+}
+
+pub let EqSatPlainOverwrite: (Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatOverwriteBarrier: (Int, Int) -> Prop;
+pub mod plain_overwrites {
+    pub let repeated<first,second,block,p,q,addr,ty,value>:
+        (EqSatPlainStore(first,block,p,addr,ty,value),
+         EqSatPlainStore(second,block,q,addr,ty,value), q == eqsat_int_add(p,1))
+        -> EqSatDead(std::ir::operation_key(first));
+    pub let candidate<first,second,block,p,q,addr,ty,x,y>:
+        (EqSatPlainStore(first,block,p,addr,ty,x), EqSatPlainStore(second,block,q,addr,ty,y),
+         ir::less_id(p,q) == true, EqSatDefined(x)) -> EqSatPlainOverwrite(first,second,block,p,q);
+}
+pub mod overwrite_barriers {
+    pub let intervening<first,second,block,p,q,node,k,pos,d,l>:
+        (EqSatPlainOverwrite(first,second,block,p,q), ir::Operation{ id: node, kind: k, placement: "block", container: block, position: pos, display: d, location: l }(),
+         ir::less_id(p,pos) == true, ir::less_id(pos,q) == true, !EqSatDropKind(k))
+        -> EqSatOverwriteBarrier(first,second);
+}
+pub mod overwrite_plain {
+    pub let unobserved<first,second,block,p,q>:
+        (EqSatPlainOverwrite(first,second,block,p,q), !EqSatOverwriteBarrier(first,second))
+        -> EqSatDead(std::ir::operation_key(first));
+}
+
+pub mod read_state {
+    pub let retain_cell<node,block,addr,before,after,ty,value,producer,st,decl,result>:
+        (EqSatLoadSite(node,addr,ty,result,before,"block",block), ir::Value(after,st,"result",node,1,decl),
+         EqSatStored(before,addr,ty,value,producer), EqSatOrdinaryAccess(node))
+        -> EqSatStored(after,addr,ty,value,node);
+}
+
+pub mod private_call {
+    pub let inaccessible<write,block,p,addr,ty,value,call,q,d,l>:
+        (EqSatPlainStore(write,block,p,addr,ty,value), EqSatAllocation(addr),
+         !EqSatEscapes(addr), ir::Operation{ id: call, kind: dialects::func::call.kind, placement: "block", container: block, position: q, display: d, location: l }())
+        -> EqSatPreservesCell(write,call);
+}
+
+pub let EqSatMixedRegion: Int -> Prop;
+pub let EqSatOpaqueMemory: std::ir::OperationKind -> Prop;
+pub mod memory_barriers {
+    pub let call: EqSatOpaqueMemory(dialects::func::call.kind);
+    pub let copy: EqSatOpaqueMemory(dialects::ptr::memcpy.kind);
+    pub let fill: EqSatOpaqueMemory(dialects::ptr::memset.kind);
+    pub let typed_copy: EqSatOpaqueMemory(dialects::ptr::copy.kind);
+    pub let unthreaded<node,k,block,p,d,l,region,order,address,token>:
+        (ir::Operation{ id: node, kind: k, placement: "block", container: block, position: p, display: d, location: l }(), ir::Block(block,region,order), EqSatAddressSlot(k,address),
+         token == eqsat_int_add(address,1), !EqSatOperandSlot(node,token))
+        -> EqSatMixedRegion(region);
+    pub let flagged<node,k,block,p,d,l,region,order,address>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: k, placement: "block", container: block, position: p, display: d, location: l }(), ir::Block(block,region,order),
+         EqSatAddressSlot(k,address), !EqSatOrdinaryAccess(node))
+        -> EqSatMixedRegion(region);
+    pub let opaque<node,k,block,p,d,l,region,order>:
+        (ir::Operation{ id: node, kind: k, placement: "block", container: block, position: p, display: d, location: l }(), ir::Block(block,region,order), EqSatOpaqueMemory(k))
+        -> EqSatMixedRegion(region);
+}
+
+
+pub mod storage_defined {
+    pub let literal<node,out,ty,decl>:
+        (EqSatLive(node), dialects::builtin::constant.matches(node, (), (out,)),
+         ir::Value(std::ir::value_id(out),ty,"result",node,0,decl), EqSatInteger(ty))
+        -> EqSatDefined(std::ir::value_id(out));
+    pub let argument<node,out>: EqSatArgumentFreeze(node,out) -> EqSatDefined(out);
+    pub let product<node,out,ty,x,y,home>:
+        (EqSatBinary(node,dialects::builtin::muli.typed_kind,out,ty,x,y,home), EqSatDefined(std::ir::value_id(x)), EqSatDefined(std::ir::value_id(y)))
+        -> EqSatDefined(std::ir::value_id(out));
+}
+
+pub let EqSatPort: (Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatArmResult: (Int, Int, Int, Int, Bool) -> Prop;
+pub let EqSatArmDisagrees: (Int, Int, Int) -> Prop;
+
+pub mod ports {
+    pub let entry<node, region, mode, slot, entry, port_slot, operand_slot, init, port, ty, declared>:
+        (EqSatLive(node), ir::Region(region, mode, node, slot, entry),
+         ir::Binding(region, "entry", port_slot, operand_slot), ir::Operand(node, operand_slot, init),
+         ir::Value(port, ty, "region", region, port_slot, declared))
+        -> EqSatPort(node, region, port_slot, port, init);
+}
+
+pub let EqSatInvariantPort: (Int, Int, Int, Int, Int) -> Prop;
+pub mod loops {
+    pub let carried<node,selector,body,pred,polarity,slot,port,init,feedback>:
+        (ir::Control(node,false,selector,true,body,pred,polarity), EqSatPort(node,body,slot,port,init),
+         ir::Binding(body,"feedback",slot,feedback), ir::Yield(body,feedback,port))
+        -> EqSatInvariantPort(node,body,slot,port,init);
+    pub let equal_literals<node,selector,body,pred,polarity,slot,port,init,feedback,next,bits>:
+        (ir::Control(node,false,selector,true,body,pred,polarity), EqSatPort(node,body,slot,port,init),
+         ir::Binding(body,"feedback",slot,feedback), ir::Yield(body,feedback,next),
+         EqSatFolded(init,bits), EqSatFolded(next,bits)) -> EqSatInvariantPort(node,body,slot,port,init);
+    pub let invariant<node, body, port_slot, port, init, exit, result_slot,
+                      result, ty, declared, kind, owner, init_slot, init_declared, loop_kind, home, pos, display, loc>:
+        (EqSatInvariantPort(node,body,port_slot,port,init), ir::Operation{ id: node, kind: loop_kind, placement: "block", container: home, position: pos, display: display, location: loc }(),
+         ir::Binding(body, "exit", result_slot, exit), ir::Yield(body, exit, port),
+         ir::Value(result, ty, "result", node, result_slot, declared),
+         ir::Value(init, ty, kind, owner, init_slot, init_declared))
+        -> EqSatReplace(std::ir::operation_key(node), std::ir::value_key(result), std::ir::value_key(init));
+}
+
+pub mod gamma_witness {
+    pub let forwarded<node, selector, body, pred, polarity, region, port_slot, port, init, result_slot, exit>:
+        (ir::Control(node, true, selector, false, body, pred, polarity),
+         EqSatPort(node, region, port_slot, port, init),
+         ir::Binding(region, "exit", result_slot, exit), ir::Yield(region, exit, port))
+        -> EqSatArmResult(node,region,result_slot,init,true);
+    pub let yielded<node,selector,body,pred,polarity,arm,mode,arm_slot,entry,result_slot,exit,state>:
+        (EqSatLive(node), ir::Control(node,true,selector,false,body,pred,polarity),
+         ir::Region(arm,mode,node,arm_slot,entry), ir::Binding(arm,"exit",result_slot,exit), ir::Yield(arm,exit,state))
+        -> EqSatArmResult(node,arm,result_slot,state,false);
+}
+
+pub mod gamma_missing {
+    pub let missing<node, result_slot, init, witness, region, mode, slot, entry>:
+        (EqSatArmResult(node, witness, result_slot, init, true), ir::Region(region, mode, node, slot, entry),
+         !EqSatArmResult(node, region, result_slot, init, true))
+        -> EqSatArmDisagrees(node, result_slot, init);
+}
+
+pub mod gamma_agrees {
+    pub let agreement<node, result_slot, init, witness, result, ty, declared, kind, owner, slot, init_declared, switch_kind, home, pos, display, loc>:
+        (EqSatArmResult(node, witness, result_slot, init, true), !EqSatArmDisagrees(node, result_slot, init),
+         ir::Operation{ id: node, kind: switch_kind, placement: "block", container: home, position: pos, display: display, location: loc }(),
+         ir::Value(result, ty, "result", node, result_slot, declared),
+         ir::Value(init, ty, kind, owner, slot, init_declared))
+        -> EqSatReplace(std::ir::operation_key(node), std::ir::value_key(result), std::ir::value_key(init));
+}
+
+pub let eqsat_int_sub: (Int, Int) -> Int as "-";
+pub let EqSatCountedPort: (Int, Int, Int, Int, Int, Int) -> Prop;
+pub let EqSatCountedYield: (Int, Int) -> Prop;
+pub let EqSatCountedSame: (Int, Int) -> Prop;
+pub let EqSatCountedDiffer: Int -> Prop;
+pub let EqSatKnownCountedPort: (Int, Int, BigInt) -> Prop;
+
+pub mod counted_exits {
+    pub let binding<node, home, position, display, location, region, entry, j, i, port, init, result, ty,
+                     pdecl, rdecl, kind, owner, input_slot, idecl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::scf::ordered_for.kind, placement: "block", container: home, position: position, display: display, location: location }(),
+         ir::Region(region, "cfg", node, 0, entry), ir::Value(port, ty, "block", entry, i, pdecl),
+         ir::less_id(0,i) == true, j == eqsat_int_sub(i,1), ir::Operand(node, i, init),
+         ir::Value(init, ty, kind, owner, input_slot, idecl), ir::Value(result, ty, "result", node, i, rdecl))
+        -> EqSatCountedPort(node, region, j, port, result, init);
+
+    pub let sites<region, block, order, exit, pos, display, loc>:
+        (ir::Block(block, region, order), ir::Operation{ id: exit, kind: dialects::scf::r#yield.kind, placement: "block", container: block, position: pos, display: display, location: loc }())
+        -> EqSatCountedYield(region, exit);
+
+    pub let same<node, region, j, port, result, init, exit>:
+        (EqSatCountedPort(node, region, j, port, result, init),
+         EqSatCountedYield(region, exit), ir::Operand(exit, j, port))
+        -> EqSatCountedSame(result, exit);
+    pub let equal<node, region, j, port, result, init, exit, output>:
+        (EqSatCountedPort(node, region, j, port, result, init),
+         EqSatCountedYield(region, exit), ir::Operand(exit, j, output), EqSatPath(std::ir::value_key(output), std::ir::value_key(port)))
+        -> EqSatCountedSame(result, exit);
+    pub let same_literal<node,region,j,port,result,init,exit,output,bits>:
+        (EqSatCountedPort(node,region,j,port,result,init), EqSatCountedYield(region,exit),
+         ir::Operand(exit,j,output), EqSatFolded(init,bits), EqSatFolded(output,bits))
+        -> EqSatCountedSame(result,exit);
+}
+
+pub mod counted_missing {
+    pub let refuted<node, region, slot, port, result, init, exit>:
+        (EqSatCountedPort(node, region, slot, port, result, init), EqSatCountedYield(region, exit),
+         !EqSatCountedSame(result, exit))
+        -> EqSatCountedDiffer(result);
+}
+
+pub mod counted_agrees {
+    pub let invariant<node, region, slot, port, result, init, exit>:
+        (EqSatCountedPort(node, region, slot, port, result, init), EqSatCountedSame(result, exit),
+         !EqSatCountedDiffer(result))
+        -> EqSatReplace(std::ir::operation_key(node), std::ir::value_key(result), std::ir::value_key(init));
+    pub let literal<node,region,slot,port,result,init,exit,bits>:
+        (EqSatCountedPort(node,region,slot,port,result,init), EqSatCountedSame(result,exit),
+         !EqSatCountedDiffer(result), EqSatFolded(init,bits)) -> EqSatKnownCountedPort(region,port,bits);
+}
+
+pub mod counted_reads {
+    pub let folded<user,region,member,port,bits,slot,k,place,home,p,d,l>:
+        (EqSatKnownCountedPort(region,port,bits), ir::ReaderAt(user,region,member), ir::Operand(user,slot,port),
+         ir::Operation{ id: user, kind: k, placement: place, container: home, position: p, display: d, location: l }(), EqSatDropKind(k), !EqSatPinnedOp(user))
+        -> EqSatScopedEdit(user,slot,port,bits,false);
+}
+
+pub mod invariant_ports {
+    pub let induction<node, body, port_slot, port, init, ty, decl>:
+        (EqSatInvariantPort(node,body,port_slot,port,init),
+         ir::Value(port, ty, "region", body, port_slot, decl), EqSatInteger(ty))
+        -> EqSatReplace(std::ir::operation_key(node), std::ir::value_key(port), std::ir::value_key(init));
+    pub let known<node,body,slot,port,init,bits>:
+        (EqSatInvariantPort(node,body,slot,port,init), EqSatFolded(init,bits)) -> EqSatFolded(port,bits);
+}
+
+pub let EqSatCounted: (Int, Int) -> Prop;
+pub let EqSatPinnedYield: (Int, Int) -> Prop;
+pub let EqSatPinned: Int -> Prop;
+pub let EqSatPinnedOp: Int -> Prop;
+
+pub mod counted_pins {
+    pub let body<node, place, home, pos, display, loc, select, body, pred, polarity>:
+        (ir::Operation{ id: node, kind: dialects::scf::r#for.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+         ir::Control(node, false, select, true, body, pred, polarity))
+        -> (EqSatCounted(node, body), EqSatPinnedYield(body, pred));
+    pub let advance<node, region, slot>:
+        (EqSatCounted(node,region), ir::Binding(region,"feedback",0,slot)) -> EqSatPinnedYield(region,slot);
+    pub let exit<node, region, index, slot>:
+        (EqSatCounted(node,region), ir::Binding(region,"exit",index,slot)) -> EqSatPinnedYield(region,slot);
+    pub let value<region, slot, value>:
+        (EqSatPinnedYield(region,slot), ir::Yield(region,slot,value)) -> EqSatPinned(value);
+    pub let computation<region, slot, value, ty, node, index, decl>:
+        (EqSatPinnedYield(region,slot), ir::Yield(region,slot,value),
+         ir::Value(value,ty,"result",node,index,decl)) -> EqSatPinnedOp(node);
+    pub let operand<node, slot, value>:
+        (EqSatPinnedOp(node), ir::Operand(node,slot,value)) -> EqSatPinned(value);
+}
+
+pub let EqSatUnprovedControl: Int -> Prop;
+pub let EqSatKnownSelector: (Int, BigInt) -> Prop;
+pub let EqSatHasExplicitArm: Int -> Prop;
+pub let EqSatSelectedArm: (Int, Int) -> Prop;
+pub let EqSatPureSwitch: (Int, Int, Int) -> Prop;
+pub let EqSatSwitchYield: (Int, Int, Int, Int) -> Prop;
+pub let EqSatSwitchDisagrees: (Int, Int) -> Prop;
+pub let eqsat_print_bits: BigInt -> String as "to-string";
+
+pub let EqSatControlInputSafe: Int -> Prop;
+pub let EqSatCheckControl: std::ir::OperationKind -> Prop;
+pub mod safe_control_inputs {
+    pub let switch: EqSatCheckControl(dialects::scf::r#switch.kind);
+    pub let loop_kind: EqSatCheckControl(dialects::scf::r#loop.kind);
+    pub let defined<value>: EqSatDefined(value) -> EqSatControlInputSafe(value);
+    pub let parameter<value,ty,kind,owner,slot,decl>:
+        (EqSatIncomingParameter(value), ir::Value(value,ty,kind,owner,slot,decl), EqSatInteger(ty))
+        -> EqSatControlInputSafe(value);
+}
+
+pub mod control_effects {
+    pub let input<node,k,place,home,p,d,l,slot,value>:
+        (EqSatCheckControl(k), ir::Operation{ id: node, kind: k, placement: place, container: home, position: p, display: d, location: l }(), ir::Operand(node,slot,value), !EqSatControlInputSafe(value))
+        -> EqSatUnprovedControl(node);
+    pub let effect<node,region,mode,slot,entry,child,member,kind,place,home,p,d,l>:
+        (ir::Region(region,mode,node,slot,entry), ir::ReaderAt(child,region,member),
+         ir::Operation{ id: child, kind: kind, placement: place, container: home, position: p, display: d, location: l }(), !EqSatDropKind(kind))
+        -> EqSatUnprovedControl(node);
+}
+
+pub mod switch_inputs {
+    pub let incoming<node,region,slot,port,init,selector,body,pred,polarity,bits>:
+        (ir::Control(node,true,selector,false,body,pred,polarity), EqSatPort(node,region,slot,port,init),
+         EqSatFolded(init,bits)) -> EqSatFolded(port,bits);
+}
+
+pub mod switch_cases {
+    pub let control<node,selector,body,pred,polarity,value,bits>:
+        (EqSatLive(node), ir::Control(node,true,selector,false,body,pred,polarity),
+         ir::Operand(node,selector,value), EqSatFolded(value,bits))
+        -> EqSatKnownSelector(node,bits);
+    pub let exact<node,bits,key,region>:
+        (EqSatKnownSelector(node,bits), key == eqsat_print_bits(bits), ir::Arm(node,false,key,region))
+        -> (EqSatHasExplicitArm(node), EqSatSelectedArm(node,region));
+}
+
+pub mod switch_default {
+    pub let chosen<node,bits,region,key>:
+        (EqSatKnownSelector(node,bits), !EqSatHasExplicitArm(node), ir::Arm(node,true,key,region))
+        -> EqSatSelectedArm(node,region);
+}
+
+pub mod pure_switch {
+    pub let safe<node,home,p,d,l,selector,body,pred,polarity,value,result,ty,decl>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::scf::r#switch.kind, placement: "graph", container: home, position: p, display: d, location: l }(),
+         ir::Control(node,true,selector,false,body,pred,polarity), ir::Operand(node,selector,value),
+         EqSatDefined(value), !EqSatUnprovedControl(node), !EqSatExtraResult(node),
+         ir::Value(result,ty,"result",node,0,decl), EqSatInteger(ty), !EqSatPinned(result))
+        -> (EqSatPureSwitch(node,result,ty), EqSatRemovable(node,result), EqSatRemovableNode(node));
+}
+pub mod switch_values {
+    pub let selected_literal<node,result,ty,arm,slot,value,bits>:
+        (EqSatPureSwitch(node,result,ty), EqSatSelectedArm(node,arm),
+         ir::Binding(arm,"exit",0,slot), ir::Yield(arm,slot,value), EqSatFolded(value,bits))
+        -> EqSatPhiLiteral(result,bits);
+    pub let capture<node,result,ty,arm,mode,arm_slot,entry,slot,value,kind,owner,i,decl>:
+        (EqSatPureSwitch(node,result,ty), ir::Region(arm,mode,node,arm_slot,entry),
+         ir::Binding(arm,"exit",0,slot), ir::Yield(arm,slot,value),
+         EqSatVisibleAt(node,value), ir::Value(value,ty,kind,owner,i,decl))
+        -> EqSatSwitchYield(node,result,arm,value);
+    pub let forwarded<node,result,ty,arm,value,kind,owner,slot,decl>:
+        (EqSatPureSwitch(node,result,ty),
+         EqSatArmResult(node,arm,0,value,true), ir::Value(value,ty,kind,owner,slot,decl))
+        -> EqSatSwitchYield(node,result,arm,value);
+}
+pub mod switch_agreement {
+    pub let disagree<node,result,witness,value,arm,mode,slot,entry>:
+        (EqSatSwitchYield(node,result,witness,value), ir::Region(arm,mode,node,slot,entry),
+         !EqSatSwitchYield(node,result,arm,value)) -> EqSatSwitchDisagrees(node,value);
+}
+pub mod switch_aliases {
+    pub let selected<node,result,arm,value>:
+        (EqSatSwitchYield(node,result,arm,value), EqSatSelectedArm(node,arm))
+        -> EqSatReplace(std::ir::operation_key(node), std::ir::value_key(result), std::ir::value_key(value));
+    pub let all_arms<node,result,arm,value>:
+        (EqSatSwitchYield(node,result,arm,value), !EqSatSwitchDisagrees(node,value))
+        -> EqSatReplace(std::ir::operation_key(node), std::ir::value_key(result), std::ir::value_key(value));
+}
+
+pub let EqSatFiniteLoop: (Int, Int) -> Prop;
+pub mod finite_loops {
+    // A nonnegative counter reaches its signed limit before a unit increment can wrap.
+    pub let finite<node,home,pos,display,loc,selector,body,predicate,condition,ct,cmp,
+                   slot,counter,init,feedback,next,step,add,ty,term,bound_term,bound,start,mask>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::scf::r#loop.kind, placement: "graph", container: home, position: pos, display: display, location: loc }(), !EqSatUnprovedControl(node),
+         ir::Control(node,false,selector,true,body,predicate,"true"), ir::Yield(body,predicate,condition),
+         EqSatPort(node,body,slot,std::ir::value_id(counter),init), ir::Binding(body,"feedback",slot,feedback), ir::Yield(body,feedback,std::ir::value_id(next)),
+         EqSatBinary(add,dialects::builtin::addi.typed_kind,next,ty,counter,step,body), EqSatWrappingAdd(add),
+         EqSatFolded(std::ir::value_id(step),eqsat_bigint(1)), EqSatScalar(std::ir::value_id(counter),ty,term), EqSatScalar(condition,ct,cmp),
+         cmp == Scalar::Compare("slt",ct,term,bound_term), bound_term == Scalar::Literal(ty,bound),
+         EqSatFolded(init,start), EqSatAllBits(ty,mask),
+         eqsat_leq_bits(eqsat_sum(start,start),mask) == true, eqsat_leq_bits(eqsat_sum(bound,bound),mask) == true)
+        -> EqSatFiniteLoop(node,body);
+    pub let output<node,body,exits,slot,value,result,ty,decl,bits>:
+        (EqSatFiniteLoop(node,body), ir::Binding(body,"exit",slot,exits), ir::Yield(body,exits,value),
+         EqSatFolded(value,bits), ir::Value(result,ty,"result",node,slot,decl), EqSatInteger(ty), !EqSatPinned(result))
+        -> EqSatPhiLiteral(result,bits);
+}
+
+pub mod floating_point {
+    pub let capture_round_trip<node, capture, computation, x, kind, owner, slot, xdecl, result, ty, declared>:
+        (EqSatLive(node), dialects::fp::materialize.matches(node, (computation,), (result,)),
+         dialects::fp::capture.matches(capture, (x,), (computation,)),
+         ir::Value(std::ir::value_id(x), ty, kind, owner, slot, xdecl),
+         ir::Value(std::ir::value_id(result), ty, "result", node, 0, declared),
+         !EqSatHasAttr(node, "semantics"))
+        -> (EqSatReplace(std::ir::operation_key(node), std::ir::value_ref_key(result), std::ir::value_ref_key(x)), EqSatErase(std::ir::operation_key(node)));
+}
+
+// Computation type identity includes format, rounding and contraction.
+pub let EqSatFpBinary<T: Type>: std::ir::OperationKindOf<(std::ir::ValueRef<T>, std::ir::ValueRef<T>), (std::ir::ValueRef<T>,)> -> Prop;
+pub let EqSatFpUnary<I: Type, O: Type>: std::ir::OperationKindOf<(std::ir::ValueRef<I>,), (std::ir::ValueRef<O>,)> -> Prop;
+pub let EqSatFpKey: (Int, std::ir::OperationKind, Int, Int, Int, Int) -> Prop;
+pub mod fp_keys {
+    pub let capture: EqSatFpUnary(dialects::fp::capture.typed_kind);
+    pub let materialize: EqSatFpUnary(dialects::fp::materialize.typed_kind);
+    pub let add: EqSatFpBinary(dialects::fp::add.typed_kind);
+    pub let sub: EqSatFpBinary(dialects::fp::sub.typed_kind);
+    pub let mul: EqSatFpBinary(dialects::fp::mul.typed_kind);
+    pub let div: EqSatFpBinary(dialects::fp::div.typed_kind);
+    pub let unary<node,k,x,result,ty,decl>:
+        (EqSatLive(node), EqSatFpUnary(k), std::ir::match_kind(k, node, (x,), (result,)),
+         ir::Value(std::ir::value_id(result),ty,"result",node,0,decl), !EqSatHasAttr(node,"semantics"),
+         !EqSatOperandSlot(node,1), !EqSatExtraResult(node))
+        -> EqSatFpKey(node,std::ir::operation_kind(k),std::ir::value_id(result),ty,std::ir::value_id(x),0);
+    pub let binary<node,k,x,y,result,ty,decl>:
+        (EqSatLive(node), EqSatFpBinary(k), std::ir::match_kind(k, node, (x, y), (result,)),
+         ir::Value(std::ir::value_id(result),ty,"result",node,0,decl),
+         !EqSatHasAttr(node,"semantics"), !EqSatOperandSlot(node,2), !EqSatExtraResult(node))
+        -> EqSatFpKey(node,std::ir::operation_kind(k),std::ir::value_id(result),ty,std::ir::value_id(x),std::ir::value_id(y));
+}
+pub mod fp_congruence {
+    pub let ordered<a,b,k,x,y,ty,lhs,rhs,block,p,q,ad,bd,al,bl>:
+        (EqSatFpKey(a,k,x,ty,lhs,rhs), EqSatFpKey(b,k,y,ty,lhs,rhs),
+         ir::Operation{ id: a, kind: k, placement: "block", container: block, position: p, display: ad, location: al }(), ir::Operation{ id: b, kind: k, placement: "block", container: block, position: q, display: bd, location: bl }(),
+         ir::less_id(p,q) == true)
+        -> (EqSatReplace(std::ir::operation_key(b), std::ir::value_key(y), std::ir::value_key(x)), EqSatErase(std::ir::operation_key(b)));
+    pub let graph<a,b,k,x,y,ty,lhs,rhs,region,p,q,ad,bd,al,bl>:
+        (EqSatFpKey(a,k,x,ty,lhs,rhs), EqSatFpKey(b,k,y,ty,lhs,rhs),
+         ir::Operation{ id: a, kind: k, placement: "graph", container: region, position: p, display: ad, location: al }(), ir::Operation{ id: b, kind: k, placement: "graph", container: region, position: q, display: bd, location: bl }(),
+         ir::less_id(a,b) == true)
+        -> (EqSatReplace(std::ir::operation_key(b), std::ir::value_key(y), std::ir::value_key(x)), EqSatErase(std::ir::operation_key(b)));
+}
+
+pub let EqSatLayoutKind: std::ir::OperationKind -> Prop;
+pub let EqSatLayoutQuery: (Int, std::ir::OperationKind) -> Prop;
+pub let EqSatLayoutValue: (Int, BigInt) -> Prop;
+
+pub mod layout_queries {
+    pub let size: EqSatLayoutKind(dialects::layout::sizeof.kind);
+    pub let alignment: EqSatLayoutKind(dialects::layout::alignof.kind);
+    pub let offset: EqSatLayoutKind(dialects::layout::offsetof.kind);
+    pub let pointer: EqSatLayoutKind(dialects::ptr::ptradd.kind);
+    pub let write: EqSatLayoutKind(dialects::ptr::store.kind);
+    pub let read: EqSatLayoutKind(dialects::ptr::load.kind);
+    pub let query<node, kind, place, home, pos, display, loc>:
+        (EqSatLive(node), EqSatLayoutKind(kind), ir::Operation{ id: node, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }())
+        -> EqSatLayoutQuery(node, kind);
+}
+
+pub mod layout_values {
+    pub let fold<node, value, result, ty, declared, mask, bits>:
+        (EqSatLayoutValue(node, value), ir::Value(result, ty, "result", node, 0, declared),
+         EqSatAllBits(ty, mask), bits == eqsat_bit_and(value, mask))
+        -> (EqSatFolded(result, bits), EqSatConstant(node, result, bits));
+}
+
+pub let EqSatLayoutScoped: Int -> Prop;
+pub mod layout_pointer {
+    pub let identity<node, place, home, pos, display, loc, ptr, offset, result, ty, pk, po, ps, pd, rd>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::ptradd.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+         EqSatLayoutScoped(node), ir::Operand(node, 0, ptr), ir::Operand(node, 1, offset),
+         EqSatFolded(offset, eqsat_bigint(0)),
+         ir::Value(ptr, ty, pk, po, ps, pd), ir::Value(result, ty, "result", node, 0, rd))
+        -> (EqSatReplace(std::ir::operation_key(node), std::ir::value_key(result), std::ir::value_key(ptr)), EqSatErase(std::ir::operation_key(node)));
+}
+
+pub let EqSatOffsetStep: (Int, Int, Int, Int, Int, BigInt, BigInt) -> Prop;
+pub let EqSatAddress: (Int, Int, Int, Int, Int, BigInt) -> Prop;
+pub let EqSatAddressEquals: (Int, Int) -> Prop;
+pub let EqSatLocalAddress: (Int, Int, BigInt) -> Prop;
+pub mod address_keys {
+    pub let step<node,place,home,p,d,l,base,disp,address,ty,decl,index,kind,owner,slot,id,
+                 width,offset,mask>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::ptradd.kind, placement: place, container: home, position: p, display: d, location: l }(),
+         EqSatLayoutScoped(node), EqSatPointerSize(node,width),
+         ir::Operand(node,0,base), ir::Operand(node,1,disp), ir::Value(address,ty,"result",node,0,decl),
+         ir::Value(disp,index,kind,owner,slot,id), EqSatFolded(disp,offset), EqSatAllBits(index,mask),
+         eqsat_leq_bits(eqsat_sum(offset,offset),mask) == true,
+         !EqSatHasAttr(node,"inbounds"), !EqSatHasAttr(node,"nuw"), !EqSatHasAttr(node,"nsw"))
+        -> EqSatOffsetStep(address,base,ty,index,width,offset,mask);
+    pub let direct<address,base,ty,index,width,offset,mask>:
+        EqSatOffsetStep(address,base,ty,index,width,offset,mask)
+        -> EqSatAddress(address,base,ty,index,width,offset);
+    pub let add<address,parent,base,ty,index,width,offset,prior,total,mask>:
+        (EqSatOffsetStep(address,parent,ty,index,width,offset,mask),
+         EqSatAddress(parent,base,ty,index,width,prior), total == eqsat_sum(offset,prior),
+         eqsat_leq_bits(eqsat_sum(total,total),mask) == true)
+        -> EqSatAddress(address,base,ty,index,width,total);
+
+    pub let twins<a,b,base,ty,index,width,offset>:
+        (EqSatAddress(a,base,ty,index,width,offset), EqSatAddress(b,base,ty,index,width,offset))
+        -> EqSatAddressEquals(a,b);
+    pub let same_cell<a,b,state,ty,data,producer>:
+        (EqSatAddressEquals(a,b), EqSatStored(state,a,ty,data,producer))
+        -> EqSatStored(state,b,ty,data,producer);
+    pub let root<base>: EqSatAllocation(base) -> EqSatLocalAddress(base,base,eqsat_bigint(0));
+    pub let local<address,base,ty,index,width,offset>:
+        (EqSatAddress(address,base,ty,index,width,offset), EqSatAllocation(base))
+        -> EqSatLocalAddress(address,base,offset);
+}
+
+let integers = std::schedule::integer_rules(dialects::builtin, dialects::builtin::ConstantLike<1>, {
+    binary: EqSatBinaryKind,
+    flag_field: EqSatFlagField,
+    result: EqSatIntegerResult,
+    operand: EqSatIntegerOperand,
+    folded: EqSatFolded,
+    constant_kind: EqSatConstantImplementation,
+    flag_value: EqSatFlag,
+    constant: EqSatConstant,
+    attribute: ir::Attribute,
+    attr_int: eqsat_attr_int,
+    attr_case: eqsat_attr_case,
+    pick_case: eqsat_pick_case,
+    bool_bit: eqsat_bool_bit,
+    shift_amount: eqsat_shift_amount,
+});
+
+let global = Schedule::Repeat(64, (
+    scalars, integer_inputs, commute, congruence, known_bits,
+    shift_bits, integer, strength, casts, cast_cse,
+    extraction, modular, integer_shapes, defined_integer, guarded_cancel,
+    complements, memory, read_state, pointer_cells, memory_join,
+    memory_siblings, switch_inputs, loops, invariant_ports, floating_point,
+    fp_keys, fp_congruence, layout_values, layout_pointer, address_keys,
+    integers.fold,
+));
+
+pub let analyze = sequence((
+    Schedule::Rules(flag_values),
+    Schedule::Repeat(4, memory_barriers),
+    Schedule::Rules(gamma_witness),
+    Schedule::Rules(gamma_missing),
+    Schedule::Rules(gamma_agrees),
+    global,
+    Schedule::Repeat(4, incoming),
+    Schedule::Rules(phi_candidates),
+    Schedule::Rules(phi_disagreement),
+    Schedule::Rules(phi_literals),
+    Schedule::Rules(memory_cfg),
+    Schedule::Rules(memory_cfg_missing),
+    Schedule::Rules(memory_cfg_apply),
+    Schedule::Rules(memory_join_missing),
+    Schedule::Rules(memory_join_apply),
+    global,
+    Schedule::Repeat(4, removable),
+    Schedule::Repeat(8, plain_access),
+    Schedule::Rules(plain_disjoint),
+    Schedule::Rules(private_call),
+    Schedule::Rules(plain_clobber),
+    Schedule::Rules(safe_control_inputs),
+    Schedule::Rules(control_effects),
+    Schedule::Repeat(2, finite_loops),
+    Schedule::Repeat(4, switch_cases),
+    Schedule::Rules(switch_default),
+    Schedule::Rules(pure_switch),
+    Schedule::Rules(switch_values),
+    Schedule::Rules(switch_agreement),
+    Schedule::Rules(switch_aliases),
+    Schedule::Rules(plain_forward),
+    Schedule::Rules(dead_store_proof),
+    Schedule::Rules(dead_store_uses),
+    Schedule::Rules(dead_store),
+    Schedule::Repeat(64, paths),
+    Schedule::Repeat(4, counted_exits),
+    Schedule::Rules(counted_missing),
+    Schedule::Rules(counted_agrees),
+    Schedule::Rules(counted_reads),
+    Schedule::Repeat(64, paths),
+    Schedule::Rules(used),
+    Schedule::Repeat(4, edits),
+    Schedule::Rules(phi_uses),
+    Schedule::Rules(definition_constants),
+    Schedule::Rules(definition_expressions),
+));
+
+pub let prepare = sequence((
+    Schedule::Saturate(select),
+    Schedule::Rules(integers.flags),
+    frame,
+    sites,
+    Schedule::Repeat(4, layout_queries),
+));
+
+pub let sweep = sequence((
+    Schedule::Rules(congruence),
+    Schedule::Repeat(4, scalars),
+    Schedule::Repeat(4, cast_cse),
+    Schedule::Repeat(8, removable),
+    Schedule::Repeat(2, integer_inputs),
+    Schedule::Rules(integers.fold),
+    Schedule::Saturate(address_keys),
+    Schedule::Repeat(8, plain_access),
+    Schedule::Saturate(storage_defined),
+    Schedule::Rules(private_layout),
+    Schedule::Rules(private_extent),
+    Schedule::Repeat(8, private_store),
+    Schedule::Rules(private_other),
+    Schedule::Rules(private_drop),
+    Schedule::Rules(plain_overwrites),
+    Schedule::Rules(overwrite_barriers),
+    Schedule::Rules(overwrite_plain),
+    Schedule::Rules(safe_control_inputs),
+    Schedule::Rules(control_effects),
+    Schedule::Rules(pure_switch),
+    Schedule::Saturate(demand),
+    Schedule::Rules(dead),
+));
+
+pub let seed_assumptions = sequence((
+    Schedule::Rules(incoming),
+    Schedule::Repeat(64, assumptions),
+));
+pub let propagate_scoped = std::schedule::repeat_colored(8, branch_local);

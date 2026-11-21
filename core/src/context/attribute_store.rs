@@ -138,92 +138,44 @@ impl PartialEq for Stored {
 
 impl Eq for Stored {}
 
-fn bind_unary<I: BaseValue, O: BaseValue>(
-    db: &mut tir_egglog::Database,
-    name: &str,
-    input: tir_egglog::SortId,
-    output: tir_egglog::SortId,
-    project: impl Fn(&tir_egglog::PrimCtx, I) -> Option<O> + Send + Sync + 'static,
-) {
-    db.add_primitive(
-        name,
-        tir_egglog::Signature {
-            inputs: vec![input],
-            output,
-        },
-        move |p, args| {
-            let [value] = args else { return None };
-            Some(p.base(project(p, p.base_value::<I>(*value))?))
-        },
-    );
-}
-
 pub(super) fn bind_integer_attributes(
     db: &mut tir_egglog::Database,
 ) -> Result<(), tir_egglog::Error> {
-    use tir_egglog::{PrimCtx, Signature, sort::BigInt};
-    let int = db.sort("i64")?;
-    let boolean = db.sort("bool")?;
-    let bigint = db.sort("BigInt")?;
-    let text = db.sort("String")?;
+    use crate::passes::eqsat::generated;
+    use tir_egglog::{PrimCtx, sort::BigInt};
     let read = |p: &PrimCtx, handle: i64| {
         let raw = u32::try_from(handle).ok()?;
         Some(p.base_value::<Stored>(Value::new(raw)).0)
     };
-    bind_unary(db, "eqsat-attr-bool", int, boolean, move |p, handle| {
+    generated::bind_eqsat_attr_bool(db, move |p, handle| {
         let AttributeValue::Bool(value) = *read(p, handle)? else {
             return None;
         };
         Some(value)
-    });
-    bind_unary(
-        db,
-        "eqsat-attr-int",
-        int,
-        bigint,
-        move |p, handle| match read(p, handle)?.as_ref() {
-            AttributeValue::Int(value) => Some(BigInt::new(*value)),
-            AttributeValue::UInt(value) => value.to_string().parse().ok(),
-            AttributeValue::Wide(words) => crate::utils::APInt::from_limbs(
-                u64::try_from(words.len()).ok()?.checked_mul(64)?,
-                words,
-            )
-            .to_string()
-            .parse()
-            .ok(),
-            _ => None,
-        },
-    );
-    bind_unary(db, "eqsat-attr-case", int, text, move |p, handle| {
+    })?;
+    generated::bind_eqsat_attr_int(db, move |p, handle| match read(p, handle)?.as_ref() {
+        AttributeValue::Int(value) => Some(BigInt::new(*value)),
+        AttributeValue::UInt(value) => value.to_string().parse().ok(),
+        AttributeValue::Wide(words) => crate::utils::APInt::from_limbs(
+            u64::try_from(words.len()).ok()?.checked_mul(64)?,
+            words,
+        )
+        .to_string()
+        .parse()
+        .ok(),
+        _ => None,
+    })?;
+    generated::bind_eqsat_attr_case(db, move |p, handle| {
         let AttributeValue::Predicate(value) = *read(p, handle)? else {
             return None;
         };
         Some(value.name().to_owned())
-    });
-    bind_unary(db, "eqsat-amount", bigint, int, |_, value: BigInt| {
+    })?;
+    generated::bind_eqsat_shift_amount(db, |_, value: BigInt| {
         value.to_string().parse::<i64>().ok()
-    });
-    bind_unary(db, "eqsat-bool-bit", boolean, bigint, |_, value: bool| {
-        Some(BigInt::new(i64::from(value)))
-    });
-    db.add_primitive(
-        "eqsat-pick-case",
-        Signature {
-            inputs: vec![text, text, boolean, boolean],
-            output: boolean,
-        },
-        |p, args| {
-            let [key, label, yes, no] = args else {
-                return None;
-            };
-            Some(
-                if p.base_value::<String>(*key) == p.base_value::<String>(*label) {
-                    *yes
-                } else {
-                    *no
-                },
-            )
-        },
-    );
-    Ok(())
+    })?;
+    generated::bind_eqsat_bool_bit(db, |_, value: bool| Some(BigInt::new(i64::from(value))))?;
+    generated::bind_eqsat_pick_case(db, |_, key, label, yes, no| {
+        Some(if key == label { yes } else { no })
+    })
 }

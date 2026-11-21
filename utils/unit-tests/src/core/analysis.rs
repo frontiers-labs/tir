@@ -72,12 +72,12 @@ fn catalog_producers_publish_complete_current_facts() {
     });
     AnalysisManager::install(&context, r#"
         pub let Values: Int -> Prop;
-        pub let Members: (Int, std::table::IntSet) -> Prop;
+        pub let Members: (Int, std::table::IntSet) -> Prop as tables::Members;
         pub let Count: (Int, Int) -> Prop;
-        pub let Conflict: (Int, Int) -> Prop;
+        pub let Conflict: (Int, Int) -> Prop as tables::Conflict;
         pub mod tables {
-            pub let Members: std::Table<Int, std::table::IntSet, std::Merge::SetUnion>;
-            pub let Conflict: std::Table<Int, Int, std::Merge::Unique>;
+            pub let Members: std::Table<Int, std::table::IntSet, std::Merge::SetUnion> as "Members";
+            pub let Conflict: std::Table<Int, Int, std::Merge::Unique> as "Conflict";
         }
         pub mod source {
             pub let input<root, slot, v>:
@@ -110,4 +110,104 @@ fn catalog_producers_publish_complete_current_facts() {
     });
     assert_eq!(read("Count").0, 0);
     assert_eq!(require("Conflict").unwrap().rows().count(), 0);
+}
+
+#[test]
+fn cfg_analysis_identifies_loops_branches_and_memory_chains() {
+    let context = Context::with_default_dialects();
+    let module = tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(
+        &context,
+        r#"module {
+  %f = func.func @irr(%0: !i1, %1: !i32) -> !i32 {
+    cfg.cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    %2 = addi %1, %1 : !i32
+    cfg.br ^bb2
+  ^bb2:
+    %3 = subi %1, %1 : !i32
+    cfg.cond_br %0, ^bb1, ^bb3
+  ^bb3:
+    func.return %1
+  }
+  %g = func.func @gis(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+    %3 = constant {value = 1} : !i32
+    cfg.cond_br %0, ^bb3, ^bb1
+  ^bb1:
+    %4 = cmpi %1, %3 {predicate = "eq"} : !i1
+    cfg.cond_br %4, ^bb2, ^bb3
+  ^bb2:
+    %5 = addi %2, %2 : !i32
+    cfg.br ^bb4(%5 : !i32)
+  ^bb3:
+    %6 = subi %2, %3 : !i32
+    cfg.br ^bb4(%6 : !i32)
+  ^bb4(%7: !i32):
+    func.return %7
+  }
+  %h = func.func @mem(%c: !i1, %v: !i32) -> !i32 {
+    %a = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %b = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %v, %a
+    ptr.store %v, %b
+    cfg.cond_br %c, ^t, ^e
+  ^t:
+    ptr.store %v, %a
+    cfg.br ^j
+  ^e:
+    ptr.store %v, %b
+    cfg.br ^j
+  ^j:
+    %x = ptr.load %a : !i32
+    %y = ptr.load %b : !i32
+    %s = addi %x, %y : !i32
+    func.return %s
+  }
+  module_end
+}"#,
+    )
+    .unwrap();
+    tir::analysis::cfg::ensure_installed(&context).unwrap();
+    let funcs: Vec<_> = module
+        .body()
+        .op_ids()
+        .into_iter()
+        .filter_map(|id| context.get_op(id).as_op::<tir::func::FuncOp>())
+        .collect();
+    let [irr, gis, mem] = funcs.as_slice() else {
+        panic!("expected three functions");
+    };
+    let count_for = |root: tir::OpId, table: &str| -> usize {
+        let facts = AnalysisManager::require(&context, root, table).unwrap();
+        facts.rows().count()
+    };
+
+    // Irreducible loop: one 2-block irreducible SCC with 1 exit and no tail-loop witness.
+    assert_eq!(count_for(irr.id(), "IrredLoop"), 1);
+    assert_eq!(count_for(irr.id(), "IrredScc"), 2);
+    assert_eq!(count_for(irr.id(), "LoopExit"), 1);
+    assert_eq!(count_for(irr.id(), "TailLoop"), 0);
+
+    // Goto-into-switch: top-level branch is classified as an unstructured topological hammock.
+    let top_h = {
+        let facts = AnalysisManager::require(&context, gis.id(), "TopHammock").unwrap();
+        let rows: Vec<i64> = facts
+            .rows()
+            .map(|row| facts.base_value::<i64>(row[2]))
+            .collect();
+        assert_eq!(rows.len(), 1);
+        rows[0]
+    };
+    {
+        let facts = AnalysisManager::require(&context, gis.id(), "HammockMember").unwrap();
+        let members = facts
+            .rows()
+            .filter(|row| facts.base_value::<i64>(row[2]) == top_h)
+            .count();
+        assert_eq!(members, 3);
+    }
+
+    // Memory chains: two disjoint private allocas, both demanded across the SESE branch.
+    assert_eq!(count_for(mem.id(), "RegionChain"), 2);
+    assert_eq!(count_for(mem.id(), "SeseBranch"), 1);
+    assert_eq!(count_for(mem.id(), "BranchOutput"), 2);
 }
