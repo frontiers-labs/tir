@@ -61,6 +61,12 @@ impl AnalysisManager {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Whether a producer catalog is already installed on this context.
+    pub fn is_installed(&self) -> bool {
+        self.0.borrow().is_some()
+    }
+
     /// Install the checked catalog once, before the pipeline requests facts.
     pub fn install(context: &Context, source: &str) -> Result<(), Error> {
         let mut catalog = context.analyses().0.borrow_mut();
@@ -78,6 +84,61 @@ impl AnalysisManager {
         let (engine, program, producers) =
             tir_cdsl::Schema::compile_producers(snapshot, source, tir_ir_schema::ANALYSIS_INPUTS)
                 .map_err(|e| Error::Unsupported(e.to_string()))?;
+        let installed = Self::build_catalog(root, program, producers)?;
+        *catalog = Some(installed);
+        *live = engine;
+        Ok(())
+    }
+
+    /// Install a precompiled producer catalog once, before the pipeline requests facts.
+    pub fn install_precompiled(
+        context: &Context,
+        schema_bytes: &[u8],
+        program_bytes: &[u8],
+        specs: &[(&str, &[&str], &[&str])],
+    ) -> Result<(), Error> {
+        let mut catalog = context.analyses().0.borrow_mut();
+        if catalog.is_some() {
+            return Err(Error::Unsupported("duplicate analysis catalog".into()));
+        }
+        let mut live = context.egraph();
+        let mut snapshot = live.clone();
+        let db = snapshot.database_mut();
+        if db.table("AnalysisRoot").is_ok() {
+            return Err(Error::Unsupported("reserved analysis root".into()));
+        }
+        Program::from_bytes(schema_bytes, db).map_err(|e| Error::Unsupported(e.to_string()))?;
+        let root = db.table("AnalysisRoot")?;
+        let mut program = Program::from_bytes(program_bytes, db)
+            .map_err(|e| Error::Unsupported(e.to_string()))?;
+        program.set_naive(true);
+        let mut producers = Vec::with_capacity(specs.len());
+        for &(ruleset, reads, writes) in specs {
+            let mut read_ids = BTreeSet::new();
+            for &name in reads {
+                read_ids.insert(db.table(name)?);
+            }
+            let mut write_ids = BTreeSet::new();
+            for &name in writes {
+                write_ids.insert(db.table(name)?);
+            }
+            producers.push(Producer {
+                schedule: tir_egglog::Schedule::saturate(ruleset),
+                reads: read_ids,
+                writes: write_ids,
+            });
+        }
+        let installed = Self::build_catalog(root, program, producers)?;
+        *catalog = Some(installed);
+        *live = snapshot;
+        Ok(())
+    }
+
+    fn build_catalog(
+        root: TableId,
+        program: Program,
+        producers: Vec<Producer>,
+    ) -> Result<Catalog, Error> {
         let mut owners = BTreeMap::new();
         for (id, producer) in producers.iter().enumerate() {
             for &table in &producer.writes {
@@ -105,9 +166,7 @@ impl AnalysisManager {
             installed.order(AnalysisId(id), &mut BTreeSet::new(), &mut order)?;
             installed.producers[id].order = order;
         }
-        *catalog = Some(installed);
-        *live = engine;
-        Ok(())
+        Ok(installed)
     }
 
     /// Refresh the requested table and its prerequisites on the published IR.

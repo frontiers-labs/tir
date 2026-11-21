@@ -1,5 +1,3 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A head-controlled counted loop accumulating into a slot. The loop becomes an
@@ -33,9 +31,7 @@ module {
 // CHECK: %{{[0-9]+}} = func.func @sum
 // CHECK: %[[I:[0-9]+]], %[[M:[0-9]+]] = scf.loop (%[[IP:[0-9]+]] = %{{[0-9]+}}, %[[D:[0-9]+]] = %{{[0-9]+}}) {
 // CHECK-NEXT: %[[MORE:[0-9]+]] = cmpi %[[IP]], %{{[0-9]+}} {predicate = "slt"} : !i1
-// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
 // CHECK-NEXT: %[[NI:[0-9]+]], %[[ND:[0-9]+]] = scf.switch %[[MORE]] args(%[[D]]) (%[[E:[0-9]+]]) {
-// CHECK-NEXT: %[[STOP:[0-9]+]] = constant {value = 0} : !i1
 // CHECK-NEXT: -> %[[IP]], %[[E]]
 // CHECK-NEXT: }
 // CHECK-NEXT: (%[[B:[0-9]+]]) {

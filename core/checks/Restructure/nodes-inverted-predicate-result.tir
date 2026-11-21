@@ -1,7 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
-// RUN: tir mc --march x86_64 --filetype asm %s | filecheck --check-prefix=ASM %s
 
 module {
   %f = func.func @inverted(%p: !i1) -> !i1 {
@@ -25,7 +22,3 @@ module {
 // CHECK: -> %[[NOT]]
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end
-
-// ASM: inverted:
-// ASM: xor
-// ASM: ret

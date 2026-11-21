@@ -1,5 +1,3 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A loop with two exits, each storing a different marker after it. Which
@@ -39,14 +37,15 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @brk
+// CHECK: %[[HUNDRED:[0-9]+]] = constant {value = 100} : !i32
 // CHECK: %[[I:[0-9]+]], %[[SEL:[0-9]+]] = scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}}) {
 // CHECK: scf.switch
 // CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}
 // CHECK-NEXT: }
 // CHECK-NEXT: %[[R:[0-9]+]], %[[RD:[0-9]+]] = scf.switch %[[SEL]] args(%{{[0-9]+}}) (%[[A:[0-9]+]]) {
-// CHECK-NEXT: %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[A]])
+// CHECK-NEXT: %[[S1:[0-9]+]] = ptr.store %[[I]], %{{[0-9]+}} state(%[[A]])
 // CHECK: }
 // CHECK-NEXT: (%[[B:[0-9]+]]) {
-// CHECK-NEXT: %[[S2:[0-9]+]] = ptr.store %[[I]], %{{[0-9]+}} state(%[[B]])
+// CHECK-NEXT: %[[S2:[0-9]+]] = ptr.store %[[HUNDRED]], %{{[0-9]+}} state(%[[B]])
 // CHECK: }
 // CHECK-NEXT: -> %[[R]], %[[RD]]

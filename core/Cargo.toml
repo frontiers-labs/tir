@@ -26,6 +26,7 @@ ariadne.workspace = true
 [build-dependencies]
 tir-ir-schema.workspace = true
 tir-cdsl.workspace = true
+tir-egglog.workspace = true
 
 [dev-dependencies]
 tir-bench.workspace = true
