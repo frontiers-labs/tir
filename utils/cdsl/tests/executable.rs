@@ -219,11 +219,11 @@ pub mod dialects {
         pub let widen = op { signature: (input: std::Bits<1>) -> std::Bits<16> };
     }
 }
-pub let Replaced: (Int, Int) -> Prop;
+pub let Replaced: (std::ir::OperationId, std::ir::ValueId) -> Prop;
 pub let rewrite<first, last, x, y, flag, result>:
     (dialects::downstream::compare.matches(first, (x, y), (flag,)),
      dialects::downstream::widen.matches(last, (flag,), (result,)))
-    -> Replaced(first, std::ir::value_id(result));
+    -> Replaced(first, result);
 "#;
     compile_source(source).unwrap();
     for (original, invalid, diagnostic) in [
@@ -242,12 +242,11 @@ fn a_shared_named_relation_preserves_its_column_order() {
         .unwrap()
         .lower()
         .unwrap();
-    let reversed = compile_source("pub let OtherEdge: { to: Int, from: Int } -> Prop;")
+    let reversed = compile_source("pub let Edge: { to: Int, from: Int } -> Prop;")
         .unwrap()
         .lower()
         .unwrap();
-    let aliases = std::collections::BTreeMap::from([(vec!["OtherEdge".into()], "Edge".into())]);
-    let mut schema = Schema::with_names(&first, aliases).unwrap();
+    let mut schema = Schema::new(&first).unwrap();
     let error = schema.extend(&reversed).unwrap_err();
     assert!(
         error
@@ -288,13 +287,13 @@ fn separately_compiled_programs_share_populated_tables_and_keep_incremental_stat
     let mut engine = EGraph::default();
     let db = engine.database_mut();
     Program::from_bytes(&schema.to_bytes().unwrap(), db).unwrap();
-    let input = db.table("schema::Input").unwrap();
-    let middle = db.table("schema::Middle").unwrap();
+    let input = db.table("Input").unwrap();
+    let middle = db.table("Middle").unwrap();
     db.insert(input, &[db.base(0_i64)]).unwrap();
     let mut first = Program::from_bytes(&first_bytes, db).unwrap();
     let mut second = Program::from_bytes(&second_bytes, db).unwrap();
-    assert_eq!(db.table("schema::Input").unwrap(), input);
-    assert_eq!(db.table("schema::Middle").unwrap(), middle);
+    assert_eq!(db.table("Input").unwrap(), input);
+    assert_eq!(db.table("Middle").unwrap(), middle);
     first.run(db, first_schedule, &[]).unwrap();
     second.run(db, second_schedule, &[]).unwrap();
     first.run(db, first_schedule, &[]).unwrap();
@@ -311,7 +310,7 @@ fn separately_compiled_programs_share_populated_tables_and_keep_incremental_stat
     second.run(db, second_schedule, &[]).unwrap();
     assert_eq!(values(db, input), [0, 2, 4]);
     assert_eq!(db.table_count(), 3);
-    assert_eq!(db.rows(db.table("schema::Sentinel").unwrap()).count(), 0);
+    assert_eq!(db.rows(db.table("Sentinel").unwrap()).count(), 0);
 }
 
 #[test]
@@ -390,15 +389,14 @@ fn cli_emits_the_executable_library_program_to_file_and_stdout() {
 }
 
 #[test]
-fn host_names_do_not_capture_local_rule_variables() {
+fn declaration_names_do_not_capture_local_rule_variables() {
     let sources = Sources::new();
     let source = sources.write(
         "locals.cdsl",
         "pub let x: Int -> Prop; pub let Input: (Int, Int) -> Prop; pub let Output: (Int, Int) -> Prop; pub mod rules { pub let copy<x, y>: Input(x, y) -> Output(x, y); }",
     );
     let checked = compile_file(&source).unwrap().lower().unwrap();
-    let names = std::collections::BTreeMap::from([(vec!["x".into()], "y".into())]);
-    let schema = Schema::with_names(&checked, names).unwrap();
+    let schema = Schema::new(&checked).unwrap();
     let bytes = schema
         .lower(&checked)
         .unwrap()
@@ -421,7 +419,7 @@ fn host_names_do_not_capture_local_rule_variables() {
 }
 
 #[test]
-fn unsupported_computations_and_incompatible_host_bindings_fail_explicitly() {
+fn unsupported_executable_computations_and_invalid_merges_fail() {
     let sources = Sources::new();
     let source = sources.write(
         "function.cdsl",
@@ -435,11 +433,6 @@ fn unsupported_computations_and_incompatible_host_bindings_fail_explicitly() {
             .to_string()
             .contains("unsupported executable")
     );
-
-    let source = sources.write("enum.cdsl", "pub enum Term { Leaf }");
-    let checked = compile_file(&source).unwrap().lower().unwrap();
-    let names = std::collections::BTreeMap::from([(vec!["Term".into()], "i64".into())]);
-    assert!(Schema::with_names(&checked, names).is_err());
 
     let source = sources.write(
         "bad_merge.cdsl",

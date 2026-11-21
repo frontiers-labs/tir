@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -6,12 +5,12 @@ use std::time::Instant;
 
 use clap::Args;
 use tir::Context;
-use tir_cdsl::{Schema, ast::Declaration, lexer::TokenStream};
-use tir_egglog::{EGraph, Program, TableKind};
+use tir_cdsl::{Schema, lexer::TokenStream};
+use tir_egglog::{EGraph, Program};
 
 #[derive(Args)]
 #[command(
-    after_help = "Declare the script's schema in CDSL and define `let execute = std::schedule::saturate(rules);`. Root `tables` declarations without an explicit binding use existing TIR tables with the same name. Enum constructors bind to matching host constructor names. REPL declarations accumulate; each accepted revision runs the selected schedule when it exists."
+    after_help = "Declare the script's schema in CDSL and define `let execute = std::schedule::saturate(rules);`. Relations and tables use their declared names. REPL declarations accumulate; each accepted revision runs the selected schedule when it exists."
 )]
 pub struct ToolArgs {
     /// Input TIR file
@@ -55,39 +54,7 @@ fn execute(
 ) -> Result<(), Box<dyn Error>> {
     let start = Instant::now();
     let checked = source.lower()?;
-    let mut names = BTreeMap::new();
-    let host = egraph.database().schema();
-    for module in &checked.artifact().modules {
-        for declaration in &module.ast.declarations {
-            match &declaration.value {
-                Declaration::Axiom {
-                    name, engine: None, ..
-                } if module.path == ["tables"] && host.table_named(name).is_some() => {
-                    let mut path = module.path.clone();
-                    path.push(name.clone());
-                    names.insert(path, name.clone());
-                }
-                Declaration::Enum { name, variants, .. } => {
-                    for variant in variants {
-                        if host
-                            .table_named(&variant.name)
-                            .is_some_and(|table| host.table(table).kind() == TableKind::Constructor)
-                        {
-                            let mut path = module.path.clone();
-                            path.extend([name.clone(), variant.name.clone()]);
-                            names.insert(path, variant.name.clone());
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    let schema = Schema::with_engine(
-        &checked,
-        names,
-        EGraph::from_database(egraph.database().clone()),
-    )?;
+    let schema = Schema::with_engine(&checked, EGraph::from_database(egraph.database().clone()))?;
     let lowered = schema.lower(&checked)?;
     let Some(selected) = lowered.schedules().get(schedule) else {
         if allow_missing_schedule {

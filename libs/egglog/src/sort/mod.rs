@@ -286,8 +286,8 @@ fn register_i64(db: &mut Database) {
     prim!(db, ">", [i, i] -> u, |a: i64, b: i64| (a > b).then_some(()));
     prim!(db, "<=", [i, i] -> u, |a: i64, b: i64| (a <= b).then_some(()));
     prim!(db, ">=", [i, i] -> u, |a: i64, b: i64| (a >= b).then_some(()));
-    prim!(db, "bool-=", [i, i] -> b, |x: i64, y: i64| Some(x == y));
-    prim!(db, "bool-<", [i, i] -> b, |x: i64, y: i64| Some(x < y));
+    prim!(db, "equal", [i, i] -> b, |x: i64, y: i64| Some(x == y));
+    prim!(db, "less", [i, i] -> b, |x: i64, y: i64| Some(x < y));
     prim!(db, "bool->", [i, i] -> b, |x: i64, y: i64| Some(x > y));
     prim!(db, "bool-<=", [i, i] -> b, |x: i64, y: i64| Some(x <= y));
     prim!(db, "bool->=", [i, i] -> b, |x: i64, y: i64| Some(x >= y));

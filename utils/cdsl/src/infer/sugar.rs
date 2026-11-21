@@ -54,7 +54,7 @@ impl Checker {
         let Ty::Con(_, groups) = kind else {
             return Err(Error("missing operation ports".into()));
         };
-        let mut parameters = vec![con(INT)];
+        let mut parameters = vec![con(self.operation_type_family(definitions, "OperationId")?)];
         parameters.extend(list_values(&groups));
         Ok(Some(Ty::Fun(type_list(parameters), Box::new(con(FACT)))))
     }
@@ -97,7 +97,7 @@ impl Checker {
             .collect()
     }
 
-    fn port_family(&self, id: ConId, path: &[&str]) -> bool {
+    pub(super) fn port_family(&self, id: ConId, path: &[&str]) -> bool {
         matches!(
             self.types.get(&path.iter().map(|s| (*s).to_owned()).collect::<Path>()),
             Some(Some(Ty::Con(candidate, _))) if *candidate == id

@@ -4,7 +4,6 @@ mod dependencies;
 mod rust;
 
 pub(super) use dependencies::{Dependencies, Selection};
-pub(super) use rust::relation_columns;
 
 impl CheckedProgram {
     /// Emit a Rust module with typed access to the selected executable CDSL exports.
@@ -28,20 +27,15 @@ impl CheckedProgram {
             Selection::Program
         };
         let dependencies = Dependencies::collect(self, selected, mode);
-        schema.install(self, &dependencies)?;
+        schema.install(&dependencies, !catalog_only)?;
         if catalog_only {
             return rust::emit(self, selected, &schema, &BTreeMap::new(), None, &[]);
         }
-        let hosts = dependencies
-            .needed
+        let hosts = schema
+            .hosts
             .iter()
             .filter_map(|path| {
-                let Declaration::Axiom {
-                    ty,
-                    engine: Some(EngineBinding::Host(_)),
-                    ..
-                } = dependencies.declarations[path]
-                else {
+                let Declaration::Axiom { ty, .. } = dependencies.declarations[path] else {
                     return None;
                 };
                 let (inputs, output) = arrow(ty)?;
