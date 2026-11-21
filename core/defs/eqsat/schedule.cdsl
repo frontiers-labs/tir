@@ -1,0 +1,127 @@
+use std::schedule::Schedule;
+use std::schedule::sequence;
+
+use bits::*;
+use context::*;
+use integer::*;
+use memory::*;
+use loops::*;
+use fp::*;
+use layout::*;
+
+pub let frame = Schedule::Repeat(8, (allocation, attributes, allocation_shape, ports, counted_pins, arguments));
+pub let sites = std::schedule::Schedule::Rules((escape, memory_sites));
+
+let integers = std::schedule::integer_rules(dialects::builtin, dialects::builtin::ConstantLike<1>, {
+    binary: EqSatBinaryKind,
+    flag_field: EqSatFlagField,
+    result: EqSatIntegerResult,
+    operand: EqSatIntegerOperand,
+    folded: EqSatFolded,
+    constant_kind: EqSatConstantImplementation,
+    flag_value: EqSatFlag,
+    constant: EqSatConstant,
+    attribute: ir::Attribute,
+    attr_int: eqsat_attr_int,
+    attr_case: eqsat_attr_case,
+    pick_case: eqsat_pick_case,
+    bool_bit: eqsat_bool_bit,
+    shift_amount: eqsat_shift_amount,
+});
+
+let global = Schedule::Repeat(64, (
+    scalars, integer_inputs, commute, congruence, known_bits,
+    shift_bits, integer_facts, strength, casts, cast_cse,
+    extraction, modular, integer_shapes, defined_integer, guarded_cancel,
+    complements, memory_facts, read_state, pointer_cells, memory_join,
+    memory_siblings, switch_inputs, loop_facts, invariant_ports, floating_point,
+    fp_keys, fp_congruence, layout_values, layout_pointer, address_keys,
+    integers.fold,
+));
+
+pub let analyze = sequence((
+    Schedule::Rules(flag_values),
+    Schedule::Repeat(4, memory_barriers),
+    Schedule::Rules(gamma_witness),
+    Schedule::Rules(gamma_missing),
+    Schedule::Rules(gamma_agrees),
+    global,
+    Schedule::Repeat(4, incoming),
+    Schedule::Rules(phi_candidates),
+    Schedule::Rules(phi_disagreement),
+    Schedule::Rules(phi_literals),
+    Schedule::Rules(memory_cfg),
+    Schedule::Rules(memory_cfg_missing),
+    Schedule::Rules(memory_cfg_apply),
+    Schedule::Rules(memory_join_missing),
+    Schedule::Rules(memory_join_apply),
+    global,
+    Schedule::Repeat(4, removable),
+    Schedule::Repeat(8, plain_access),
+    Schedule::Rules(plain_disjoint),
+    Schedule::Rules(private_call),
+    Schedule::Rules(plain_clobber),
+    Schedule::Rules(safe_control_inputs),
+    Schedule::Rules(control_effects),
+    Schedule::Repeat(2, finite_loops),
+    Schedule::Repeat(4, switch_cases),
+    Schedule::Rules(switch_default),
+    Schedule::Rules(pure_switch),
+    Schedule::Rules(switch_values),
+    Schedule::Rules(switch_agreement),
+    Schedule::Rules(switch_aliases),
+    Schedule::Rules(plain_forward),
+    Schedule::Rules(dead_store_proof),
+    Schedule::Rules(dead_store_uses),
+    Schedule::Rules(dead_store),
+    Schedule::Repeat(64, paths),
+    Schedule::Repeat(4, counted_exits),
+    Schedule::Rules(counted_missing),
+    Schedule::Rules(counted_agrees),
+    Schedule::Rules(counted_reads),
+    Schedule::Repeat(64, paths),
+    Schedule::Rules(used),
+    Schedule::Repeat(4, edits),
+    Schedule::Rules(phi_uses),
+    Schedule::Rules(definition_constants),
+    Schedule::Rules(definition_expressions),
+));
+
+pub let prepare = sequence((
+    Schedule::Saturate(select),
+    Schedule::Rules(integers.flags),
+    frame,
+    sites,
+    Schedule::Repeat(4, layout_queries),
+));
+
+pub let sweep = sequence((
+    Schedule::Rules(congruence),
+    Schedule::Repeat(4, scalars),
+    Schedule::Repeat(4, cast_cse),
+    Schedule::Repeat(8, removable),
+    Schedule::Repeat(2, integer_inputs),
+    Schedule::Rules(integers.fold),
+    Schedule::Saturate(address_keys),
+    Schedule::Repeat(8, plain_access),
+    Schedule::Saturate(storage_defined),
+    Schedule::Rules(private_layout),
+    Schedule::Rules(private_extent),
+    Schedule::Repeat(8, private_store),
+    Schedule::Rules(private_other),
+    Schedule::Rules(private_drop),
+    Schedule::Rules(plain_overwrites),
+    Schedule::Rules(overwrite_barriers),
+    Schedule::Rules(overwrite_plain),
+    Schedule::Rules(safe_control_inputs),
+    Schedule::Rules(control_effects),
+    Schedule::Rules(pure_switch),
+    Schedule::Saturate(demand),
+    Schedule::Rules(dead),
+));
+
+pub let seed_assumptions = sequence((
+    Schedule::Rules(incoming),
+    Schedule::Repeat(64, assumptions),
+));
+pub let propagate_scoped = std::schedule::repeat_colored(8, branch_local);

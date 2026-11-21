@@ -44,6 +44,12 @@ impl Checker {
                     self.check_expression(definitions, right, &con(INT), environment, types)?;
                     return Ok(con(INT));
                 }
+                if self.bigint(&self.substitution.apply(&a))
+                    || self.bigint(&self.substitution.apply(&b))
+                {
+                    self.unify(&a, &b)?;
+                    return Ok(self.substitution.apply(&a));
+                }
                 self.check_expression(definitions, left, &con(NAT), environment, types)?;
                 self.check_expression(definitions, right, &con(NAT), environment, types)?;
                 Ok(con(NAT))
