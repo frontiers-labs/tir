@@ -65,23 +65,20 @@ fn catalog_producers_publish_complete_current_facts() {
         f(db.database_mut(), input);
     };
     edit(|db, input| {
-        for (slot, value) in [(0_i64, -2_i64), (1, 9), (2, 9)] {
-            let row = [db.base(0_i64), db.base(slot), db.base(value)];
+        for (owner, slot) in [(0_i64, 2_i64), (0, 9), (1, 9)] {
+            let row = [db.base(owner), db.base(slot), db.base(1_i64)];
             db.insert(input, &row).unwrap();
         }
     });
     AnalysisManager::install(&context, r#"
         pub let Values: Int -> Prop;
-        pub let Members: (Int, std::table::IntSet) -> Prop as tables::Members;
+        pub let Members: std::Table<Int, std::table::IntSet, std::Merge::SetUnion>;
         pub let Count: (Int, Int) -> Prop;
-        pub let Conflict: (Int, Int) -> Prop as tables::Conflict;
-        pub mod tables {
-            pub let Members: std::Table<Int, std::table::IntSet, std::Merge::SetUnion> as "Members";
-            pub let Conflict: std::Table<Int, Int, std::Merge::Unique> as "Conflict";
-        }
+        pub let Conflict: std::Table<Int, Int, std::Merge::Unique>;
+
         pub mod source {
-            pub let input<root, slot, v>:
-                (ir::AnalysisRoot(root), ir::Operand(0, slot, v), ir::equal_id(slot, slot) == true) -> Values(v);
+            pub let input<root, owner, slot, value>:
+                (ir::AnalysisRoot(root), ir::Operand(owner, slot, value), std::int::equal(slot, slot) == true) -> Values(slot);
         }
         pub mod bounds {
             pub let collect<v>: Values(v) -> Members(0, std::table::singleton(v));

@@ -114,15 +114,11 @@ impl<'a> Dependencies<'a> {
                         match_dependencies(ty, &mut names, &mut projections);
                     }
                     pending.extend(projections.into_iter().map(ir_host_path));
-                    pending.extend(declarations.iter().filter_map(
-                        |(declaration, node)| match node {
-                            Declaration::Axiom {
-                                engine: Some(EngineBinding::Name(name)),
-                                ..
-                            } if names.contains(&name.as_str()) => Some(declaration.clone()),
-                            _ => None,
-                        },
-                    ));
+                    pending.extend(declarations.iter().filter_map(|(path, declaration)| {
+                        storage_name(declaration)
+                            .filter(|name| names.contains(name))
+                            .map(|_| path.clone())
+                    }));
                 }
             }
         }

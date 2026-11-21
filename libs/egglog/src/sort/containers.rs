@@ -397,6 +397,7 @@ fn register_vec(sort: &Collection<VecKind>, db: &mut Database) {
 fn register_set(sort: &Collection<SetKind>, db: &mut Database) {
     let Sorts { c, k: e, i, u, ids, .. } = Sorts::of(sort, db);
     variadic(db, "set-of", |n| vec![e; n], c, move |ctx, xs| put::<SetKind>(ctx, xs.to_vec(), ids));
+    prim!(db, "singleton", [e] -> c, |ctx; item: Value| put::<SetKind>(ctx, vec![item], ids));
     prim!(db, "set-empty", [] -> c, |ctx;| put::<SetKind>(ctx, Vec::new(), ids));
     prim!(db, "set-get", [c, i] -> e, |ctx; xs: Value, at: i64| get::<SetKind>(ctx, xs)?.data.get(usize::try_from(at).ok()?).copied());
     prim!(db, "set-insert", [c, e] -> c, |ctx; xs: Value, x: Value| {
@@ -408,7 +409,9 @@ fn register_set(sort: &Collection<SetKind>, db: &mut Database) {
         data.retain(|&y| y != x);
         put::<SetKind>(ctx, data, ids)
     });
-    prim!(db, "set-length", [c] -> i, |ctx; xs: Value| i64::try_from(get::<SetKind>(ctx, xs)?.data.len()).ok());
+    for name in ["set-length", "cardinality"] {
+        prim!(db, name, [c] -> i, |ctx; xs: Value| i64::try_from(get::<SetKind>(ctx, xs)?.data.len()).ok());
+    }
     prim!(db, "set-contains", [c, e] -> u, |ctx; xs: Value, x: Value| get::<SetKind>(ctx, xs)?.data.binary_search(&x).ok().map(|_| ()));
     prim!(db, "set-not-contains", [c, e] -> u, |ctx; xs: Value, x: Value| get::<SetKind>(ctx, xs)?.data.binary_search(&x).err().map(|_| ()));
     prim!(db, "set-union", [c, c] -> c, |ctx; xs: Value, ys: Value| {

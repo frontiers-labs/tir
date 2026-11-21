@@ -74,6 +74,17 @@ fn lookup_type(local: &Types, global: &Types, path: &Path) -> Option<Option<Ty>>
     }
 }
 
+fn arithmetic(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Add
+            | BinaryOp::Subtract
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Remainder
+    )
+}
+
 fn con(id: ConId) -> Ty {
     Ty::Con(id, Box::new(TyList::Nil))
 }
@@ -1033,6 +1044,10 @@ impl Checker {
         }
         self.discharge(&ty, &ids, environment, owner)
     }
+    fn bigint(&self, ty: &Ty) -> bool {
+        matches!(ty, Ty::Con(id, _) if self.port_family(*id, &["std", "bigint", "BigInt"]))
+    }
+
     fn check_expression(
         &mut self,
         definitions: &Definitions<'_>,
@@ -1142,6 +1157,14 @@ impl Checker {
                 Error("universe mismatch: expected a value of the small Type universe".into())
             })?;
             return Ok(con(TYPE));
+        }
+        if let Expression::Binary { op, left, right } = &expr.value
+            && arithmetic(*op)
+            && (expected == con(INT) || self.bigint(&expected))
+        {
+            self.check_expression(definitions, left, &expected, environment, types)?;
+            self.check_expression(definitions, right, &expected, environment, types)?;
+            return Ok(expected);
         }
         match (&expr.value, &expected) {
             (Expression::Literal(Literal::Natural(_)), Ty::Con(INT, _)) => return Ok(expected),
@@ -1502,7 +1525,28 @@ impl Checker {
             } => matches!(&right.value, Expression::Path(name) if name == &vec!["Prop".to_owned()]),
             _ => false,
         };
-        let ty = if relation {
+        let table = matches!(&annotation.value, Expression::Generic { value, .. }
+            if matches!(&value.value, Expression::Path(path) if path == &["std", "table", "Table"]));
+        let ty = if table {
+            let descriptor = self.annotation(definitions, annotation, &types)?;
+            let (Expression::Generic { arguments, .. }, Ty::Con(_, parameters)) =
+                (&annotation.value, descriptor)
+            else {
+                return Err(Error("invalid Table declaration".into()));
+            };
+            let parameters = list_values(&parameters);
+            let (Some(keys), [key, output, _]) = (arguments.first(), parameters.as_slice()) else {
+                return Err(Error("Table requires key, value and merge".into()));
+            };
+            let mut columns = match (&keys.value, key) {
+                (Expression::Unit, _) => Vec::new(),
+                (Expression::Tuple(_), Ty::Con(_, columns)) => list_values(columns),
+                _ => vec![key.clone()],
+            };
+            columns.push(output.clone());
+            self.relations.insert(path.clone());
+            Ty::Fun(type_list(columns), Box::new(con(FACT)))
+        } else if relation {
             let ty = self.annotation(definitions, annotation, &types)?;
             self.relations.insert(path.clone());
             ty
@@ -1516,10 +1560,20 @@ impl Checker {
                 _ => (None, annotation),
             };
             let mut matches = MatchArguments::new();
+            let mut value_ids = Vec::new();
             if let Some(premises) = premises {
-                self.propositions(definitions, premises, &local, &types, Some(&mut matches))?;
+                self.propositions(
+                    definitions,
+                    premises,
+                    &local,
+                    &types,
+                    Some(&mut matches),
+                    &mut value_ids,
+                )?;
+                self.check_value_ids(&mut value_ids)?;
             }
-            self.propositions(definitions, heads, &local, &types, None)?;
+            self.propositions(definitions, heads, &local, &types, None, &mut value_ids)?;
+            self.check_value_ids(&mut value_ids)?;
             if !matches.is_empty() {
                 let matches = self.checked_matches(matches)?;
                 self.operation_matches.insert(path.clone(), matches);
@@ -1554,7 +1608,7 @@ impl Checker {
             self.annotation(definitions, annotation, &types)?
         };
         let ty = self.substitution.apply(&ty);
-        if !relation && !clause_annotation(annotation) {
+        if !relation && !table && !clause_annotation(annotation) {
             let (mut domains, result) = match &ty {
                 Ty::Fun(parameters, result) => (list_values(parameters), (**result).clone()),
                 _ => (Vec::new(), ty.clone()),
@@ -1583,6 +1637,18 @@ impl Checker {
         self.checking_axioms.remove(path);
         Ok(())
     }
+    // Positive premises can establish a port refinement in any order. Resolve the
+    // unrefined ID columns after checking those premises, before checking their head.
+    fn check_value_ids(&mut self, ids: &mut Vec<(Ty, Ty)>) -> Result<(), Error> {
+        for (actual, expected) in ids.drain(..) {
+            if matches!(self.substitution.apply(&actual), Ty::Con(id, _) if self.port_family(id, &["std", "ir", "ValueRef"]))
+            {
+                continue;
+            }
+            self.unify(&actual, &expected)?;
+        }
+        Ok(())
+    }
     fn propositions(
         &mut self,
         definitions: &Definitions<'_>,
@@ -1590,31 +1656,62 @@ impl Checker {
         local: &Environment,
         types: &Types,
         mut matches: Option<&mut MatchArguments>,
+        value_ids: &mut Vec<(Ty, Ty)>,
     ) -> Result<(), Error> {
         match &expression.value {
             Expression::Tuple(items) => {
                 for item in items {
-                    self.propositions(definitions, item, local, types, matches.as_deref_mut())?;
+                    self.propositions(
+                        definitions,
+                        item,
+                        local,
+                        types,
+                        matches.as_deref_mut(),
+                        value_ids,
+                    )?;
                 }
             }
             Expression::Unary {
                 op: UnaryOp::Not,
                 value,
             } if matches.is_some() => {
-                let ty = self.proposition_term(definitions, value, local, types, None)?;
+                let ty =
+                    self.proposition_term(definitions, value, local, types, None, value_ids)?;
                 self.unify(&ty, &con(FACT))?;
             }
             Expression::Binary {
-                op: BinaryOp::Equal,
+                op: op @ (BinaryOp::Equal | BinaryOp::NotEqual),
                 left,
                 right,
-            } => {
-                let left = self.proposition_term(definitions, left, local, types, None)?;
-                let right = self.proposition_term(definitions, right, local, types, None)?;
-                self.unify(&left, &right)?;
+            } if matches.is_some() || matches!(op, BinaryOp::Equal) => {
+                let contextual = |expr: &Expr| {
+                    matches!(expr.value, Expression::Literal(_))
+                        || matches!(expr.value, Expression::Binary { op, .. } if arithmetic(op))
+                };
+                let (value, other) = if contextual(left) && !contextual(right) {
+                    (right, left)
+                } else {
+                    (left, right)
+                };
+                let ty =
+                    self.proposition_term(definitions, value, local, types, None, value_ids)?;
+                if contextual(other) {
+                    self.check_expression(definitions, other, &ty, local, types)?;
+                } else {
+                    let other =
+                        self.proposition_term(definitions, other, local, types, None, value_ids)?;
+                    self.unify(&ty, &other)?;
+                }
             }
             _ => {
-                let ty = self.proposition_term(definitions, expression, local, types, matches)?;
+                let ty = self.proposition_term(
+                    definitions,
+                    expression,
+                    local,
+                    types,
+                    matches,
+                    value_ids,
+                )?;
                 self.unify(&ty, &con(FACT))?;
             }
         }
@@ -1627,6 +1724,7 @@ impl Checker {
         local: &Environment,
         types: &Types,
         matches: Option<&mut MatchArguments>,
+        value_ids: &mut Vec<(Ty, Ty)>,
     ) -> Result<Ty, Error> {
         if let Expression::Call { value, arguments } = &expression.value {
             let callee = self.expression(definitions, value, local, types)?;
@@ -1640,11 +1738,27 @@ impl Checker {
                 return Err(Error("clause application arity mismatch".into()));
             }
             for (argument, parameter) in arguments.iter().zip(&parameters) {
-                if matches!(argument.value, Expression::Literal(_)) {
+                let expected = self.substitution.apply(parameter);
+                if matches!(argument.value, Expression::Literal(_))
+                    || (matches!(argument.value, Expression::Binary { op, .. } if arithmetic(op))
+                        && (expected == con(INT) || self.bigint(&expected)))
+                {
                     self.check_expression(definitions, argument, parameter, local, types)?;
                 } else {
-                    let ty = self.proposition_term(definitions, argument, local, types, None)?;
-                    self.unify(&ty, parameter)?;
+                    let ty = self.proposition_term(
+                        definitions,
+                        argument,
+                        local,
+                        types,
+                        None,
+                        value_ids,
+                    )?;
+                    if matches!(self.substitution.apply(parameter), Ty::Con(id, _) if self.port_family(id, &["std", "ir", "ValueId"]))
+                    {
+                        value_ids.push((ty, parameter.clone()));
+                    } else {
+                        self.unify(&ty, parameter)?;
+                    }
                 }
             }
             if let Some(matches) = matches {
@@ -2072,7 +2186,7 @@ fn any_rigid(ty: &Ty) -> bool {
 fn clause_annotation(annotation: &Expr) -> bool {
     match &annotation.value {
         Expression::Binary {
-            op: BinaryOp::Equal,
+            op: BinaryOp::Equal | BinaryOp::NotEqual,
             ..
         }
         | Expression::Call { .. }

@@ -1,1 +1,1 @@
-pub let AnalysisRoot: Int -> Prop as "AnalysisRoot";
+pub let AnalysisRoot: Int -> Prop;

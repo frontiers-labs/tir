@@ -233,20 +233,7 @@ pub(in crate::engine) fn relation_columns<'a>(source: &Expr, checked: &'a Ty) ->
             }
             args
         }
-        (None, Ty::Con(_, arguments)) => {
-            let table = type_parts(arguments);
-            if let [keys, output, _] = table.as_slice()
-                && let Expression::Generic { arguments, .. } = &source.value
-            {
-                let keys = match (&arguments[0].value, keys) {
-                    (Expression::Unit, _) => Vec::new(),
-                    (Expression::Tuple(_), Ty::Con(_, columns)) => type_parts(columns),
-                    _ => vec![*keys],
-                };
-                return keys.into_iter().chain([*output]).collect();
-            }
-            Vec::new()
-        }
+        (None, Ty::Fun(args, _)) if table_type(source).is_some() => type_parts(args),
         _ => Vec::new(),
     }
 }
