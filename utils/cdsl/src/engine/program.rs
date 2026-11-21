@@ -37,6 +37,7 @@ impl CheckedProgram {
         };
         let dependencies = Dependencies::collect(self, selected, mode);
         schema.install(&dependencies, !catalog_only)?;
+        schema.bind_operation_imports(dependencies.operation_imports(self))?;
         if catalog_only {
             return rust::emit(self, selected, &schema, &BTreeMap::new(), None, &[], None);
         }

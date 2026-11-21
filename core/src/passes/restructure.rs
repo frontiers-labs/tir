@@ -63,6 +63,7 @@ type Reg = Class<generated::Reg>;
 type Sw = Class<generated::Sw>;
 type Ty = Class<generated::Ty>;
 type Val = Class<generated::Val>;
+type IntPredicate = Class<generated::dialects_builtin_IntegerPredicate>;
 type Slots<K, V> = Index<K, (K, i64, V)>;
 type Results<K> = Index<K, (K, i64, Ty, Val)>;
 
@@ -82,6 +83,13 @@ struct Indexes {
     sw_by_reg: Index<Reg, generated::OutSwitchClassRow>,
     for_by_reg: Index<Reg, generated::OutForClassRow>,
     synth_by_reg: Index<Reg, generated::OutSynthClassRow>,
+    int_constants: Index<Val, (Reg, i64, i64, Val)>,
+    zeros: Index<Val, (Reg, Ty, Val)>,
+    inversions: Index<Val, (Reg, Val, Val)>,
+    subtractions: Index<Val, (Reg, Val, Val, Val)>,
+    comparisons: Index<Val, (Reg, IntPredicate, Val, Val, Val)>,
+    cmp_equal: Option<IntPredicate>,
+    cmp_signed_less: Option<IntPredicate>,
     rw_op: Slots<i64, Val>,
     app_st: Index<i64, generated::OutAppendStateClassRow>,
     loop_init: Slots<Reg, Val>,
@@ -112,6 +120,13 @@ impl Indexes {
             sw_by_reg: program.index_out_switch_by_region(),
             for_by_reg: program.index_out_for_by_region(),
             synth_by_reg: program.index_out_synth_by_region(),
+            int_constants: program.index_val_int_const_by_result()?,
+            zeros: program.index_val_zero_by_result()?,
+            inversions: program.index_val_not_by_result()?,
+            subtractions: program.index_val_sub_by_result()?,
+            comparisons: program.index_val_cmp_by_result()?,
+            cmp_equal: program.lookup_dialects_builtin_integer_predicate_eq()?,
+            cmp_signed_less: program.lookup_dialects_builtin_integer_predicate_slt()?,
             rw_op: program.index_out_rewrite_operand_by_operation(),
             app_st: program.index_out_append_state_by_operation(),
             loop_init: program.index_out_loop_init_by_body(),
@@ -131,7 +146,7 @@ enum OpItem {
     Loop(Reg),
     Switch(Sw, i64, Val),
     For(i64, i64, Val, Val, Val),
-    Synth(Val, String, i64, i64, Ty, Val, Val),
+    Synth(Val, Reg),
 }
 
 fn commit(ctx: &Context, program: &mut Program<'_>) -> Result<(), PassError> {
@@ -262,13 +277,8 @@ fn populate_region(
     }
 
     let mut reg_items: Vec<(i64, OpItem)> = Vec::new();
-    for (out, _, order, kind, width, literal, ty, lhs, rhs) in
-        indexed(program, &ix.synth_by_reg, rk)
-    {
-        reg_items.push((
-            order,
-            OpItem::Synth(out, kind, width, literal, ty, lhs, rhs),
-        ));
+    for (value, region, order) in indexed(program, &ix.synth_by_reg, rk) {
+        reg_items.push((order, OpItem::Synth(value, region)));
     }
     for (id, _, order) in indexed(program, &ix.moved_by_reg, rk) {
         reg_items.push((order, OpItem::Moved(OpId::from_number(id as u32))));
@@ -332,6 +342,74 @@ fn populate_region(
     (ops, yields)
 }
 
+fn emit_synthetic(
+    ctx: &Context,
+    program: &Program<'_>,
+    ix: &Indexes,
+    vals: &[(Val, ValueId)],
+    ops: &mut Vec<OpId>,
+    value: Val,
+    region: Reg,
+) -> ValueId {
+    if let Some((_, width, literal, _)) =
+        indexed(program, &ix.int_constants, value).find(|row| row.0 == region)
+    {
+        let op = b::constant(ctx, literal, IntegerType::new(ctx, width as u64)).build();
+        ops.push(op.id());
+        return op.result();
+    }
+    if let Some((_, ty, _)) = indexed(program, &ix.zeros, value).find(|row| row.0 == region) {
+        return make_zero(ctx, ops, decode_ty(ctx, program, ix, ty));
+    }
+    if let Some((_, input, _)) = indexed(program, &ix.inversions, value).find(|row| row.0 == region)
+    {
+        let i1 = IntegerType::new(ctx, 1);
+        let one = b::constant(ctx, 1, i1).build();
+        let op = b::xori(
+            ctx,
+            get(vals, input).expect("inversion input"),
+            one.result(),
+            i1,
+        )
+        .build();
+        ops.extend([one.id(), op.id()]);
+        return op.result();
+    }
+    if let Some((_, lhs, rhs, _)) =
+        indexed(program, &ix.subtractions, value).find(|row| row.0 == region)
+    {
+        let op = b::subi(
+            ctx,
+            get(vals, lhs).expect("subtraction lhs"),
+            get(vals, rhs).expect("subtraction rhs"),
+            IntegerType::new(ctx, 32),
+        )
+        .build();
+        ops.push(op.id());
+        return op.result();
+    }
+    let (_, predicate, lhs, rhs, _) = indexed(program, &ix.comparisons, value)
+        .find(|row| row.0 == region)
+        .expect("synthetic value has a constructor in its region");
+    let predicate = if Some(predicate) == ix.cmp_equal {
+        Predicate::Eq
+    } else {
+        assert!(
+            Some(predicate) == ix.cmp_signed_less,
+            "unexpected synthetic comparison"
+        );
+        Predicate::Slt
+    };
+    let op = b::CmpIOpBuilder::new(ctx)
+        .lhs(get(vals, lhs).expect("comparison lhs"))
+        .rhs(get(vals, rhs).expect("comparison rhs"))
+        .predicate(predicate)
+        .result_type(IntegerType::new(ctx, 1))
+        .build();
+    ops.push(op.id());
+    op.result()
+}
+
 fn emit_item(
     ctx: &Context,
     program: &Program<'_>,
@@ -342,54 +420,11 @@ fn emit_item(
     item: OpItem,
 ) {
     match item {
-        OpItem::Synth(out_k, kind_k, a, b_val, ty_k, lhs_k, rhs_k) => {
-            if get(vals, out_k).is_some() {
-                return;
+        OpItem::Synth(value, region) => {
+            if get(vals, value).is_none() {
+                let result = emit_synthetic(ctx, program, ix, vals, ops, value, region);
+                set(vals, value, result);
             }
-            let v = match kind_k.as_str() {
-                "const" => {
-                    let op = b::constant(ctx, b_val, IntegerType::new(ctx, a as u64)).build();
-                    ops.push(op.id());
-                    op.result()
-                }
-                "zero" => make_zero(ctx, ops, decode_ty(ctx, program, ix, ty_k)),
-                "not" => {
-                    let i1 = IntegerType::new(ctx, 1);
-                    let one = b::constant(ctx, 1, i1).build();
-                    let inv =
-                        b::xori(ctx, get(vals, lhs_k).expect("not"), one.result(), i1).build();
-                    ops.push(one.id());
-                    ops.push(inv.id());
-                    inv.result()
-                }
-                "sub" => {
-                    let op = b::subi(
-                        ctx,
-                        get(vals, lhs_k).expect("sub l"),
-                        get(vals, rhs_k).expect("sub r"),
-                        IntegerType::new(ctx, 32),
-                    )
-                    .build();
-                    ops.push(op.id());
-                    op.result()
-                }
-                pred_s => {
-                    let pred = if pred_s == "eq" {
-                        Predicate::Eq
-                    } else {
-                        Predicate::Slt
-                    };
-                    let op = b::CmpIOpBuilder::new(ctx)
-                        .lhs(get(vals, lhs_k).expect("cmp l"))
-                        .rhs(get(vals, rhs_k).expect("cmp r"))
-                        .predicate(pred)
-                        .result_type(IntegerType::new(ctx, 1))
-                        .build();
-                    ops.push(op.id());
-                    op.result()
-                }
-            };
-            set(vals, out_k, v);
         }
         OpItem::Moved(op_id) => {
             let key = i64::from(op_id.raw());

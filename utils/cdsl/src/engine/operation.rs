@@ -11,7 +11,7 @@ use super::{Schema, error, path};
 use crate::{
     CheckedProgram, Error,
     ast::{
-        BinaryOp, Block, Declaration, Expr as Source, Expression, Literal, OpField, Path,
+        BinaryOp, Binding, Block, Declaration, Expr as Source, Expression, Literal, OpField, Path,
         PatternKind,
     },
     normalize::substitute,
@@ -448,6 +448,96 @@ struct IntegerBindings {
     shift_amount: String,
 }
 
+pub(super) fn integer_rule_arguments(binding: &Binding) -> Option<&[Source]> {
+    match &binding.value.value {
+        Expression::Call { value, arguments }
+            if path(value).is_ok_and(|path| path == &["std", "schedule", "integer_rules"]) =>
+        {
+            Some(arguments)
+        }
+        _ => None,
+    }
+}
+
+pub(super) struct IntegerOperation<'a> {
+    pub binding: &'a Binding,
+    widths: Vec<Expr>,
+    output: Expr,
+    binary: bool,
+    method: Option<(&'a str, &'a Source)>,
+    exec: Option<&'a Source>,
+}
+
+pub(super) fn integer_operations<'a>(
+    program: &'a CheckedProgram,
+    arguments: &'a [Source],
+) -> Result<
+    (
+        &'a [String],
+        impl Iterator<Item = IntegerOperation<'a>>,
+        &'a Source,
+    ),
+    Error,
+> {
+    let [operations, interface, bindings] = arguments else {
+        return Err(Error(
+            "integer_rules requires an operation module, interface and bindings".into(),
+        ));
+    };
+    let operations = path(operations)?;
+    let interface = match &interface.value {
+        Expression::Generic { value, .. } => path(value)?,
+        _ => path(interface)?,
+    };
+    let module = program
+        .artifact()
+        .all_modules()
+        .find(|module| module.path == *operations)
+        .ok_or_else(|| {
+            Error(format!(
+                "missing checked operation module {}",
+                operations.join("::")
+            ))
+        })?;
+    let operations = module.ast.declarations.iter().filter_map(move |declaration| {
+        let Declaration::Let { binding, .. } = &declaration.value else {
+            return None;
+        };
+        let fields = binding.operation_fields()?;
+        let (parameters, output) = fields.iter().find_map(|field| match &field.value {
+            OpField::Signature { parameters, result, .. } => Some((parameters, integer_type(result)?)),
+            _ => None,
+        })?;
+        let widths = parameters.iter().map(|p| integer_type(&p.ty)).collect::<Option<Vec<_>>>()?;
+        let binary = matches!(widths.as_slice(), [left, right] if left == &output && right == &output)
+            && binding.generics.iter().any(|generic| width_variable(&generic.name) == output);
+        let method = fields.iter().find_map(|field| {
+            let OpField::Interfaces { receiver, entries } = &field.value else {
+                return None;
+            };
+            entries
+                .iter()
+                .find_map(|(_, path, method)| (path == interface).then_some(method))
+                .map(|method| (receiver.as_str(), method))
+        });
+        let exec = operation_field(binding, "exec");
+        (binary || method.is_some() || exec.is_some()).then_some(IntegerOperation {
+            binding, widths, output, binary, method, exec,
+        })
+    });
+    Ok((&module.path, operations, bindings))
+}
+
+fn operation_field<'a>(binding: &'a Binding, label: &str) -> Option<&'a Source> {
+    binding
+        .operation_fields()?
+        .iter()
+        .find_map(|field| match &field.value {
+            OpField::Field { name, value } if name == label => Some(value),
+            _ => None,
+        })
+}
+
 impl Schema {
     pub(super) fn add_integer_operations(
         &self,
@@ -457,16 +547,7 @@ impl Schema {
         flag_fields: &str,
         fold: &str,
     ) -> Result<(), Error> {
-        let [operations, interface, bindings] = arguments else {
-            return Err(Error(
-                "integer_rules requires an operation module, interface and bindings".into(),
-            ));
-        };
-        let operations = path(operations)?;
-        let interface = match &interface.value {
-            Expression::Generic { value, .. } => path(value)?,
-            _ => path(interface)?,
-        };
+        let (module, operations, bindings) = integer_operations(rule_source, arguments)?;
         let Expression::Record(fields) = &bindings.value else {
             return Err(Error("integer_rules requires literal bindings".into()));
         };
@@ -498,72 +579,31 @@ impl Schema {
             rules.add_ruleset(set);
         }
         let mut flags = BTreeSet::new();
-        let module = rule_source
-            .artifact()
-            .all_modules()
-            .find(|module| module.path == *operations)
-            .ok_or_else(|| {
-                Error(format!(
-                    "missing checked operation module {}",
-                    operations.join("::")
-                ))
-            })?;
-        for declaration in &module.ast.declarations {
-            let Declaration::Let { binding, .. } = &declaration.value else {
-                continue;
-            };
-            let Some(fields) = binding.operation_fields() else {
-                continue;
-            };
-            let Some((parameters, output)) = fields.iter().find_map(|field| match &field.value {
-                OpField::Signature {
-                    parameters, result, ..
-                } => Some((parameters, integer_type(result)?)),
-                _ => None,
-            }) else {
-                continue;
-            };
-            let Some(widths) = parameters
-                .iter()
-                .map(|p| integer_type(&p.ty))
-                .collect::<Option<Vec<_>>>()
-            else {
-                continue;
-            };
-            let kind = binding
-                .operation_name(&module.path)
-                .ok_or_else(|| Error(format!("unnamed operation in {}", operations.join("::"))))?;
-            if let [left, right] = widths.as_slice()
-                && left == &output
-                && right == &output
-                && binding
-                    .generics
-                    .iter()
-                    .any(|generic| width_variable(&generic.name) == output)
-            {
+        for IntegerOperation {
+            binding,
+            widths,
+            output,
+            binary,
+            method,
+            exec,
+        } in operations
+        {
+            let import = binding
+                .operation_import(module, rule_source.artifact().declaration_source(module))
+                .ok_or_else(|| Error(format!("unnamed operation in {}", module.join("::"))))?;
+            let kind = import.name;
+            let declaration = || apply(&import.symbol, []);
+
+            if binary {
                 add(
                     rules,
                     db,
                     flag_fields,
                     Vec::new(),
-                    vec![apply(&bindings.binary, [string(&kind)])],
+                    vec![apply(&bindings.binary, [declaration()])],
                 )?;
             }
-            let method = fields.iter().find_map(|field| {
-                let OpField::Interfaces { receiver, entries } = &field.value else {
-                    return None;
-                };
-                entries
-                    .iter()
-                    .find_map(|(_, path, method)| (path == interface).then_some(method))
-                    .map(|method| (receiver.as_str(), method))
-            });
-            let field = |label| {
-                fields.iter().find_map(|field| match &field.value {
-                    OpField::Field { name, value } if name == label => Some(value),
-                    _ => None,
-                })
-            };
+            let field = |label| operation_field(binding, label);
             let receiver = if field("attributes").is_some() {
                 Receiver::AttributeParameter
             } else {
@@ -580,7 +620,7 @@ impl Schema {
                 }
                 .ok_or_else(|| unsupported(&kind, label))?;
                 (label, body, Receiver::Implicit(receiver))
-            } else if let Some(body) = field("exec") {
+            } else if let Some(body) = exec {
                 ("exec", body, receiver)
             } else {
                 continue;
@@ -621,7 +661,7 @@ impl Schema {
                 .collect::<Result<Vec<_>, Error>>()?;
             let mut query = vec![row(
                 &bindings.result,
-                [var("__op"), string(&kind), var("__value"), output],
+                [var("__op"), declaration(), var("__value"), output],
             )];
             for (i, width) in widths.iter().enumerate() {
                 let operand = var(&format!("__operand_{i}"));
@@ -634,7 +674,7 @@ impl Schema {
                 ]);
             }
             if method.is_some() {
-                query.push(row(&bindings.constant_kind, [string(&kind)]));
+                query.push(row(&bindings.constant_kind, [declaration()]));
             }
             for (field, primitive) in attrs.projected {
                 let handle = var(&format!("__handle_{field}"));

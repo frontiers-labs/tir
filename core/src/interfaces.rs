@@ -49,7 +49,7 @@ pub trait ConstantLike {
 /// An operation that produces its results and does nothing else: no memory
 /// effect, no control flow, no machine state. Dead code elimination may erase
 /// one whose results go unread, whether or not it declares semantics.
-pub trait Pure {}
+pub use crate::builtin::generated::PureInterface as Pure;
 
 pub trait Commutative {
     fn is_commutative(&self) -> bool {
@@ -62,16 +62,16 @@ pub trait Commutative {
 /// returns the other wherever that one has the result's type. A definition the
 /// e-graph builds value identity from (`docs/design/instcombine.md`), declared
 /// rather than proved, and read off the operation's name alone.
-pub trait Additive {}
+pub use crate::builtin::generated::Additive;
 
 /// An operation computing `lhs - rhs` modulo 2^W, W the result's width: a
 /// constant added to `lhs` moves to the result, one added to `rhs` moves to it
 /// negated, and a zero `rhs` returns `lhs` wherever `lhs` has the result's
 /// type. Read the way [`Additive`] is.
-pub trait Subtractive {}
+pub use crate::builtin::generated::Subtractive;
 
 /// An arithmetic operation over integer values.
-pub trait IntegerArithmetic {}
+pub use crate::builtin::generated::IntegerArithmetic;
 
 pub trait Terminator {
     fn successors(&self) -> Vec<BlockId> {
@@ -135,7 +135,7 @@ pub trait CaseGuard {
 }
 
 /// An operation whose operands and results all carry one type.
-pub trait SameOperandAndResultType {}
+pub use crate::builtin::generated::SameOperandAndResultType;
 
 /// Identifies an operation that creates a memory location eligible for local SSA
 /// promotion. Implementations describe the location generically rather than tying
@@ -278,7 +278,7 @@ pub trait Global {
 /// function of its operands, attributes and the states it takes, though no
 /// semantics says which: two over equal inputs are one, so a rewrite may match
 /// it and replace it as a term.
-pub trait Congruent {}
+pub use crate::builtin::generated::Congruent;
 
 /// An operation that cannot trap, so it may run whether or not control would
 /// have reached it: a loop cone may hoist it, and a lowering may evaluate it on

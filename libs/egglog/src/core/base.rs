@@ -4,7 +4,7 @@
 
 use std::any::{Any, TypeId};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
@@ -123,6 +123,7 @@ impl Ord for F64 {
 
 impl BaseValue for F64 {}
 
+const NATIVE_TAG: u32 = 0xf000_0000;
 const TOP_BIT: u32 = 1 << 31;
 
 #[derive(Clone)]
@@ -157,6 +158,7 @@ impl<P: BaseValue> Interned for InternTable<P> {
 #[derive(Default)]
 pub struct BaseValues {
     types: Mutex<HashMap<TypeId, Box<dyn Interned>, FxBuildHasher>>,
+    pub(crate) admissions: HashSet<(TypeId, super::NativeIdentity), FxBuildHasher>,
 }
 
 impl Clone for BaseValues {
@@ -165,6 +167,7 @@ impl Clone for BaseValues {
         let types = types.iter().map(|(&ty, table)| (ty, table.clone_box()));
         Self {
             types: Mutex::new(types.collect()),
+            admissions: self.admissions.clone(),
         }
     }
 }
@@ -194,16 +197,39 @@ impl BaseValues {
             table.values.push(p.clone());
             next
         });
-        let offset = if P::MAY_UNBOX { TOP_BIT } else { 0 };
+        let offset = if TypeId::of::<P>() == TypeId::of::<super::NativeIdentity>() {
+            assert!(id < !NATIVE_TAG, "native identity capacity");
+            return Value::new(NATIVE_TAG | id);
+        } else if P::MAY_UNBOX {
+            TOP_BIT
+        } else {
+            0
+        };
         Value::new(
             id.checked_add(offset)
-                .expect("interned values fit below the top bit"),
+                .filter(|&id| id < NATIVE_TAG)
+                .expect("scalar values cannot overlap native identities"),
         )
+    }
+
+    pub(crate) fn native<P: BaseValue>(&self, value: Value) -> Option<P> {
+        let id = value.raw().checked_sub(NATIVE_TAG)?;
+        let types = self.types.lock().expect("an intern lock");
+        types
+            .get(&TypeId::of::<P>())?
+            .as_any()
+            .downcast_ref::<InternTable<P>>()?
+            .values
+            .get(id as usize)
+            .cloned()
     }
 
     /// The `P` that `value` stands for; `value` must come from
     /// [`BaseValues::get`] with a `P`.
     pub fn unwrap<P: BaseValue>(&self, value: Value) -> P {
+        if TypeId::of::<P>() == TypeId::of::<super::NativeIdentity>() {
+            return self.native(value).expect("a native declaration cell");
+        }
         if P::MAY_UNBOX
             && let Some(p) = P::try_unbox(value)
         {

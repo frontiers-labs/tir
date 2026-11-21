@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{borrow::Cow, fmt::Write};
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -17,7 +17,7 @@ use properties::{Attribute, Region};
 
 struct Slot<'a> {
     name: &'a str,
-    ty: &'a str,
+    ty: Cow<'a, str>,
 }
 
 impl Slot<'_> {
@@ -31,6 +31,7 @@ impl Slot<'_> {
 
     fn schema(&self) -> TokenStream {
         let Self { name, ty } = self;
+        let ty = ty.as_ref();
         let variadic = self.variadic();
         quote! { tir::FieldSchema { name: #name, ty: #ty, variadic: #variadic } }
     }
@@ -38,10 +39,12 @@ impl Slot<'_> {
 
 const STATE: Slot<'static> = Slot {
     name: "state",
-    ty: "*state<_>",
+    ty: Cow::Borrowed("*state<_>"),
 };
 
 struct Operation<'a> {
+    import: String,
+    checked_ports: Option<(usize, usize)>,
     rust_name: Ident,
     constructor: Ident,
     name: &'a str,
@@ -62,7 +65,12 @@ struct AssemblyLayout<'a> {
     attributes: Vec<Attribute<'a>>,
 }
 
-pub(super) fn emit(output: &mut String, declaration: &Declaration) -> Result<bool, Error> {
+pub(super) fn emit(
+    output: &mut String,
+    module: &[String],
+    source: &str,
+    declaration: &Declaration,
+) -> Result<bool, Error> {
     let Declaration::Let { binding, .. } = declaration else {
         return Ok(false);
     };
@@ -72,7 +80,12 @@ pub(super) fn emit(output: &mut String, declaration: &Declaration) -> Result<boo
     if !record.iter().any(|(name, _)| name == "rust_name") {
         return Ok(false);
     }
-    let operation = Operation::parse(record)?;
+    let mut operation = Operation::parse(record)?;
+    let import = binding
+        .operation_import(module, source)
+        .ok_or_else(|| Error("missing native operation declaration".into()))?;
+    operation.import = import.symbol;
+    operation.checked_ports = import.ports;
     let binding = |name| find_field(record, name).map(string).transpose();
     let binds = Bindings::parse(
         binding("binds")?.unwrap_or_default(),
@@ -157,7 +170,14 @@ fn slots<'a>(record: &'a [(String, Expr)], key: &str) -> Result<Vec<Slot<'a>>, E
         .map(|(name, ty)| {
             Ok(Slot {
                 name,
-                ty: string(ty)?,
+                ty: if let Expression::Literal(Literal::String(legacy)) = &ty.value {
+                    Cow::Borrowed(legacy)
+                } else {
+                    Cow::Owned(
+                        super::operation::slot_type(ty, &Default::default())
+                            .map_err(|error| Error(error.into()))?,
+                    )
+                },
             })
         })
         .collect()
@@ -268,6 +288,8 @@ impl<'a> Operation<'a> {
             .collect::<Result<Vec<_>, _>>()?;
         let custom_format = flag("custom_format")?.unwrap_or_default();
         Self {
+            import: String::new(),
+            checked_ports: None,
             rust_name,
             constructor,
             name,
@@ -325,6 +347,11 @@ impl<'a> Operation<'a> {
         };
         let macro_name = format_ident!("__cdsl_{dialect}_{op}");
         let schema = format_ident!("__TIR_OP_SCHEMA_{op}");
+        let import = &self.import;
+        let checked_ports = self.checked_ports.map_or_else(
+            || quote!(None),
+            |(inputs, outputs)| quote!(Some((#inputs, #outputs))),
+        );
         let build = self.builder(&builder, &schema, &spelled);
         let immediate_code = self.immediates(&spelled);
         let assembly = self.assembly.as_ref().map_or_else(
@@ -392,6 +419,9 @@ impl<'a> Operation<'a> {
                     static #schema: tir::OpSchema = tir::OpSchema {
                         dialect: #dialect,
                         name: #name,
+                        declaration: tir::NativeIdentity::of::<#op>,
+                        bind: tir::bind_native_operation::<#op>,
+                        construct: <#op as tir::Operation>::from_op_instance_dyn,
                         operands: &[#(#operand_schema),*],
                         results: &[#(#result_schema),*],
                         attributes: &[#(#attr_schema),*],
@@ -406,7 +436,14 @@ impl<'a> Operation<'a> {
 
                     pub struct #op(tir::OpHandle);
 
+                    impl tir::NativeDeclaration for #op {
+                        const NAME: &'static str = concat!(#dialect, ".", #name);
+                        const SYMBOL: &'static str = #import;
+                        const PORTS: Option<(usize, usize)> = #checked_ports;
+                    }
+
                     impl tir::Operation for #op {
+                        fn native_identity() -> tir::NativeIdentity { tir::NativeIdentity::of::<Self>() }
                         fn name() -> &'static str { #name }
                         fn dialect() -> &'static str { #dialect }
                         fn handle(&self) -> &tir::OpHandle { &self.0 }
@@ -501,7 +538,7 @@ impl<'a> Operation<'a> {
                 .iter()
                 .map(|slot| match slot.ty.as_bytes().first() {
                     Some(b'*' | b'?') => format!("{}{}", &slot.ty[1..], &slot.ty[..1]),
-                    _ => slot.ty.to_owned(),
+                    _ => slot.ty.to_string(),
                 })
                 .collect::<Vec<_>>()
                 .join(", ")

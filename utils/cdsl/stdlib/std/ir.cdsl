@@ -6,9 +6,7 @@ pub let Ptr: Ty -> Ty;
 pub let Tuple: List<Ty> -> Ty;
 pub let Value: Ty -> Type;
 pub let OperationKind: Type;
-pub let operation_named: String -> OperationKind;
 pub let OperationKindOf<Inputs: Type, Outputs: Type>: Type;
-pub let operation_name<Inputs: Type, Outputs: Type>: OperationKindOf<Inputs, Outputs> -> String;
 pub let operation_kind<Inputs: Type, Outputs: Type>: OperationKindOf<Inputs, Outputs> -> OperationKind;
 pub let match_kind<Inputs: Type, Outputs: Type>:
     (OperationKindOf<Inputs, Outputs>, OperationId, Inputs, Outputs) -> Prop;

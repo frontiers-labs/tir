@@ -136,14 +136,12 @@ fn clone_op_into(context: &Context, op: OpId, mapping: &mut Mapping) -> OpId {
         })
         .collect();
 
-    let instance = NewOp::new_dynamic(
-        (source.dialect().as_str(), source.name().as_str()),
-        context.clone(),
-        operands,
-        results,
-        regions,
-        attributes,
-    );
+    let source_context = &source.context;
+    let kind = source_context
+        .operation_kind(source.id)
+        .expect("live source operation");
+    context.import_declaration(source_context, kind);
+    let instance = NewOp::from_declaration(kind, operands, results, regions, attributes);
     // A copy is located where its source is.
     let origin = context.op_location(op);
     let outer = origin.map(|origin| context.set_origin(Some(origin)));

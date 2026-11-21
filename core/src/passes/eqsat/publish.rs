@@ -225,7 +225,7 @@ fn decode(
         }
         Form::Bits(bits) => Some(Expression::Bits(literal(context, expected, bits).ok()?)),
         Form::Bin(kind, left, right) => Some(Expression::Binary(
-            context.schema_for_kind(kind.as_str())?,
+            context.schema_for_kind(kind.declaration())?,
             Box::new([
                 decode(context, expected, *left, redirected)?,
                 decode(context, expected, *right, redirected)?,
@@ -245,7 +245,7 @@ fn materialize(
         Expression::Read(value) if root_result.is_none() => return Ok(value),
         Expression::Read(_) => return Err(PassError::RewriteFailed(anchor.op().id)),
         Expression::Bits(bits) => (
-            ("builtin", "constant"),
+            ops::ConstantOp::native_identity(),
             Vec::new(),
             vec![NamedAttribute::new(context.intern("value"), bits)],
         ),
@@ -254,7 +254,7 @@ fn materialize(
             for child in *children {
                 operands.push(materialize(context, anchor, expected, child, None)?);
             }
-            ((schema.dialect, schema.name), operands, Vec::new())
+            ((schema.declaration)(), operands, Vec::new())
         }
     };
     let result = root_result.unwrap_or_else(|| {
@@ -264,14 +264,7 @@ fn materialize(
     });
     let op = context.add_operation(
         crate::InsertionPoint::Root,
-        NewOp::new_dynamic(
-            identity,
-            context.clone(),
-            operands,
-            vec![result],
-            Vec::new(),
-            attributes,
-        ),
+        NewOp::from_declaration(identity, operands, vec![result], Vec::new(), attributes),
     );
     let op = op.as_dyn_op();
     if root_result.is_some() {

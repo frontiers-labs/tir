@@ -1,6 +1,6 @@
 #[allow(dead_code, unused_imports)]
 #[macro_use]
-mod generated {
+pub(crate) mod generated {
     include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
 }
 

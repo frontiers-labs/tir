@@ -99,7 +99,24 @@ pub fn check(program: &Program) -> Result<BTreeMap<Path, Scheme>, Error> {
         .collect())
 }
 pub(crate) fn lower(program: &Program) -> Result<crate::CheckedProgram, Error> {
-    let checker = elaborate(program)?;
+    let mut checker = elaborate(program)?;
+    let definitions = program
+        .all_modules()
+        .flat_map(|module| {
+            module.ast.declarations.iter().filter_map(|declaration| {
+                let Declaration::Let { binding, .. } = &declaration.value else {
+                    return None;
+                };
+                let path = [module.path.as_slice(), &binding.path].concat();
+                Some((path, binding))
+            })
+        })
+        .collect::<Definitions<'_>>();
+    for (path, binding) in &definitions {
+        if binding.operation_fields().is_some() || binding.native_ports().is_some() {
+            checker.operation_kind(&definitions, path, binding)?;
+        }
+    }
     let types = checker
         .environment
         .iter()
@@ -122,6 +139,7 @@ pub(crate) fn lower(program: &Program) -> Result<crate::CheckedProgram, Error> {
             })
             .collect(),
         checker.operation_matches,
+        (checker.next, checker.operation_kinds),
     )
 }
 fn elaborate(program: &Program) -> Result<Checker, Error> {

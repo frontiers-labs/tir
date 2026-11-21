@@ -9,11 +9,11 @@ pub let OrderedForInRegion: (Int, Int, Int) -> Prop; // outer region, op, body r
 
 pub let CfgEdge: (Int, Int, Int, Int) -> Prop; // region, src, edge slot, dst
 pub let CfgEdgeTarget: (Int, Int, Int) -> Prop;
-pub let CfgExitKind: String -> Prop;
-pub let CfgExitBlock: (Int, Int, Int, String) -> Prop;
+pub let CfgExitKind: std::ir::OperationKind -> Prop;
+pub let CfgExitBlock: (Int, Int, Int, std::ir::OperationKind) -> Prop;
 pub let CfgReachable: (Int, Int) -> Prop;
 pub let CfgPath: (Int, Int, Int) -> Prop;
-pub let CfgReachableExit: (Int, Int, Int, String) -> Prop;
+pub let CfgReachableExit: (Int, Int, Int, std::ir::OperationKind) -> Prop;
 pub let CfgBranchBlock: (Int, Int) -> Prop;
 
 pub let CfgNotDom: (Int, Int, Int) -> Prop;
@@ -46,8 +46,8 @@ pub let IrredScc: std::Table<(Int, Int, Int), Int, std::Merge::Min>;
 pub let IrredLoop: (Int, Int, Int) -> Prop;
 
 pub let StateTypeId: Int -> Prop;
-pub let MemOpKind: String -> Prop;
-pub let DirectMemSlot: (String, Int) -> Prop;
+pub let MemOpKind: std::ir::OperationKind -> Prop;
+pub let DirectMemSlot: (std::ir::OperationKind, Int) -> Prop;
 pub let LocalAlloc: Int -> Prop;
 pub let AllocOp: (Int, Int) -> Prop;
 pub let HasStateOperand: Int -> Prop;
@@ -63,7 +63,7 @@ pub mod cfg_scope {
         (analysis::root::AnalysisRoot(root), ir::Region(region, mode, std::ir::operation_key(root), slot, entry), ir::ReaderAt(std::ir::operation_key(node), region, std::ir::operation_key(rep)))
         -> ScopeOp(node);
     pub let module_op<node, place, home, pos, disp, loc>:
-        ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("builtin.module"), placement: place, container: home, position: pos, display: disp, location: loc }() -> ModuleOp(node);
+        ir::Operation{ id: std::ir::operation_key(node), kind: dialects::builtin::r#module.kind, placement: place, container: home, position: pos, display: disp, location: loc }() -> ModuleOp(node);
 }
 
 pub mod cfg_regions {
@@ -71,14 +71,14 @@ pub mod cfg_regions {
         (ScopeOp(owner), !ModuleOp(owner), ir::Region(r, "cfg", std::ir::operation_key(owner), slot, entry), std::int::less(entry, 0) == false)
         -> CfgRegion(r, owner, entry);
     pub let ordered_for<outer, block, layout, node, pos, disp, loc, body, entry>:
-        (ScopeOp(node), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("scf.ordered_for"), placement: "block", container: block, position: pos, display: disp, location: loc }(),
+        (ScopeOp(node), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::scf::r#ordered_for.kind, placement: "block", container: block, position: pos, display: disp, location: loc }(),
          ir::Block(block, outer, layout), ir::Region(body, "cfg", std::ir::operation_key(node), 0, entry), std::int::less(entry, 0) == false)
         -> OrderedForInRegion(outer, node, body);
 }
 
 pub mod cfg_func_owner {
     pub let direct<r, owner, entry, place, home, pos, disp, loc>:
-        (CfgRegion(r, owner, entry), ir::Operation{ id: std::ir::operation_key(owner), kind: std::ir::operation_named("func.func"), placement: place, container: home, position: pos, display: disp, location: loc }())
+        (CfgRegion(r, owner, entry), ir::Operation{ id: std::ir::operation_key(owner), kind: dialects::func::r#func.kind, placement: place, container: home, position: pos, display: disp, location: loc }())
         -> FuncOfRegion(r, owner);
     pub let nested_for<outer, for_op, body, func_op>:
         (OrderedForInRegion(outer, for_op, body), FuncOfRegion(outer, func_op))
@@ -86,14 +86,14 @@ pub mod cfg_func_owner {
 }
 
 pub mod cfg_graph {
-    pub let ret_exit: CfgExitKind("func.return");
-    pub let yield_exit: CfgExitKind("scf.yield");
+    pub let ret_exit: CfgExitKind(dialects::func::r#return.kind);
+    pub let yield_exit: CfgExitKind(dialects::scf::r#yield.kind);
     pub let edge<r, owner, entry, src, l1, term, kind, pos, disp, loc, slot, dst, l2>:
-        (CfgRegion(r, owner, entry), ir::Block(src, r, l1), ir::Operation{ id: std::ir::operation_key(term), kind: std::ir::operation_named(kind), placement: "block", container: src, position: pos, display: disp, location: loc }(),
+        (CfgRegion(r, owner, entry), ir::Block(src, r, l1), ir::Operation{ id: std::ir::operation_key(term), kind: kind, placement: "block", container: src, position: pos, display: disp, location: loc }(),
          ir::Successor(std::ir::operation_key(term), slot, dst), ir::Block(dst, r, l2))
         -> (CfgEdge(r, src, slot, dst), CfgEdgeTarget(r, src, dst));
     pub let exit_block<r, owner, entry, block, layout, term, kind, pos, disp, loc>:
-        (CfgRegion(r, owner, entry), ir::Block(block, r, layout), ir::Operation{ id: std::ir::operation_key(term), kind: std::ir::operation_named(kind), placement: "block", container: block, position: pos, display: disp, location: loc }(), CfgExitKind(kind))
+        (CfgRegion(r, owner, entry), ir::Block(block, r, layout), ir::Operation{ id: std::ir::operation_key(term), kind: kind, placement: "block", container: block, position: pos, display: disp, location: loc }(), CfgExitKind(kind))
         -> CfgExitBlock(r, block, term, kind);
 }
 
@@ -195,15 +195,14 @@ pub mod cfg_irred_loops {
 
 pub mod cfg_mem_types {
     pub let state_ty<ctor, decl, def, ty, args>: (ir::TypeCtor(ctor, "builtin", "state", decl, def), ir::TypeTerm(ty, ctor, args)) -> StateTypeId(ty);
-    pub let k_memcpy: MemOpKind("ptr.memcpy");
-    pub let k_memset: MemOpKind("ptr.memset");
-    pub let k_copy: MemOpKind("ptr.copy");
-    pub let k_call: MemOpKind("func.call");
-    pub let k_call_ind: MemOpKind("func.call_indirect");
-    pub let slot_load: DirectMemSlot("ptr.load", 0);
-    pub let slot_store: DirectMemSlot("ptr.store", 1);
+    pub let k_memcpy: MemOpKind(dialects::ptr::r#memcpy.kind);
+    pub let k_memset: MemOpKind(dialects::ptr::r#memset.kind);
+    pub let k_copy: MemOpKind(dialects::ptr::r#copy.kind);
+    pub let k_call: MemOpKind(dialects::func::r#call.kind);
+    pub let slot_load: DirectMemSlot(dialects::ptr::r#load.kind, 0);
+    pub let slot_store: DirectMemSlot(dialects::ptr::r#store.kind, 1);
     pub let alloc<node, place, home, pos, disp, loc, addr, ty, decl>:
-        (ScopeOp(node), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("ptr.alloca"), placement: place, container: home, position: pos, display: disp, location: loc }(), ir::Value(std::ir::value_key(addr), ty, "result", node, 0, decl))
+        (ScopeOp(node), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::ptr::r#alloca.kind, placement: place, container: home, position: pos, display: disp, location: loc }(), ir::Value(std::ir::value_key(addr), ty, "result", node, 0, decl))
         -> (LocalAlloc(addr), AllocOp(addr, node));
 }
 
@@ -211,7 +210,7 @@ pub mod cfg_mem_state {
     pub let threaded<node, slot, v, ty, dk, owner, vslot, decl>:
         (ir::Operand(std::ir::operation_key(node), slot, std::ir::value_key(v)), ir::Value(std::ir::value_key(v), ty, dk, owner, vslot, decl), StateTypeId(ty)) -> HasStateOperand(node);
     pub let escape_op<addr, user, slot, kind, place, home, pos, disp, loc>:
-        (LocalAlloc(addr), ir::Operand(std::ir::operation_key(user), slot, std::ir::value_key(addr)), ir::Operation{ id: std::ir::operation_key(user), kind: std::ir::operation_named(kind), placement: place, container: home, position: pos, display: disp, location: loc }(), !DirectMemSlot(kind, slot))
+        (LocalAlloc(addr), ir::Operand(std::ir::operation_key(user), slot, std::ir::value_key(addr)), ir::Operation{ id: std::ir::operation_key(user), kind: kind, placement: place, container: home, position: pos, display: disp, location: loc }(), !DirectMemSlot(kind, slot))
         -> AllocEscapes(addr);
     pub let escape_yield<addr, reg, slot>: (LocalAlloc(addr), ir::Yield(reg, slot, std::ir::value_key(addr))) -> AllocEscapes(addr);
 }
@@ -222,28 +221,28 @@ pub mod cfg_mem_private {
 
 pub mod cfg_mem_ops {
     pub let load_priv<r, b, node, pos, disp, loc, addr, chain>:
-        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("ptr.load"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 0, std::ir::value_key(addr)), PrivateAlloc(addr, chain))
+        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::ptr::r#load.kind, placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 0, std::ir::value_key(addr)), PrivateAlloc(addr, chain))
         -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain));
     pub let load_world<fn_id, r, b, node, pos, disp, loc, addr>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("ptr.load"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 0, std::ir::value_key(addr)), !LocalAlloc(addr))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::ptr::r#load.kind, placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 0, std::ir::value_key(addr)), !LocalAlloc(addr))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let load_escaped<fn_id, r, b, node, pos, disp, loc, addr>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("ptr.load"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 0, std::ir::value_key(addr)), AllocEscapes(addr))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::ptr::r#load.kind, placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 0, std::ir::value_key(addr)), AllocEscapes(addr))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let store_priv<r, b, node, pos, disp, loc, addr, chain>:
-        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("ptr.store"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 1, std::ir::value_key(addr)), PrivateAlloc(addr, chain))
+        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::ptr::r#store.kind, placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 1, std::ir::value_key(addr)), PrivateAlloc(addr, chain))
         -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain));
     pub let store_world<fn_id, r, b, node, pos, disp, loc, addr>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("ptr.store"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 1, std::ir::value_key(addr)), !LocalAlloc(addr))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::ptr::r#store.kind, placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 1, std::ir::value_key(addr)), !LocalAlloc(addr))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let store_escaped<fn_id, r, b, node, pos, disp, loc, addr>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("ptr.store"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 1, std::ir::value_key(addr)), AllocEscapes(addr))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::ptr::r#store.kind, placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(std::ir::operation_key(node), 1, std::ir::value_key(addr)), AllocEscapes(addr))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let world_op<fn_id, r, b, node, kind, pos, disp, loc>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named(kind), placement: "block", container: b, position: pos, display: disp, location: loc }(), MemOpKind(kind), !HasStateOperand(node))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: kind, placement: "block", container: b, position: pos, display: disp, location: loc }(), MemOpKind(kind), !HasStateOperand(node))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let ordered_for_chain<r, b, node, pos, disp, loc, sub, entry, sb, sop, chain>:
-        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named("scf.ordered_for"), placement: "block", container: b, position: pos, display: disp, location: loc }(), ir::Region(sub, "cfg", std::ir::operation_key(node), 0, entry), UnthreadedMemOp(sub, sb, sop, chain))
+        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::scf::r#ordered_for.kind, placement: "block", container: b, position: pos, display: disp, location: loc }(), ir::Region(sub, "cfg", std::ir::operation_key(node), 0, entry), UnthreadedMemOp(sub, sb, sop, chain))
         -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain));
 }
 
@@ -393,7 +392,7 @@ pub mod loop_tail {
     pub let tail<r, h, latch, exit, be, ee, term, pos, disp, loc>:
         (NatLoopHeader(r, h), !LoopMultiExit(r, h), !NatMultiBack(r, h), !NatMultiExitEdge(r, h),
          NatBackedge(r, h, latch, be), NatExitEdge(r, h, latch, ee, exit),
-         ir::Operation{ id: std::ir::operation_key(term), kind: std::ir::operation_named("cfg.cond_br"), placement: "block", container: latch, position: pos, display: disp, location: loc }())
+         ir::Operation{ id: std::ir::operation_key(term), kind: dialects::cfg::r#cond_br.kind, placement: "block", container: latch, position: pos, display: disp, location: loc }())
         -> TailLoop(r, h, latch, exit, be, ee);
 }
 
@@ -464,18 +463,18 @@ pub mod ssa_defs {
     pub let block_arg<r, owner, entry, b, l, v, ty, slot, decl>:
         (CfgRegion(r, owner, entry), ir::Block(b, r, l), ir::Value(std::ir::value_key(v), ty, "block", b, slot, decl)) -> ValueDefBlock(r, b, v);
     pub let op_res<r, owner, entry, b, l, node, k, p, d, loc, v, ty, slot, decl>:
-        (CfgRegion(r, owner, entry), ir::Block(b, r, l), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named(k), placement: "block", container: b, position: p, display: d, location: loc }(), ir::Value(std::ir::value_key(v), ty, "result", node, slot, decl))
+        (CfgRegion(r, owner, entry), ir::Block(b, r, l), ir::Operation{ id: std::ir::operation_key(node), kind: k, placement: "block", container: b, position: p, display: d, location: loc }(), ir::Value(std::ir::value_key(v), ty, "result", node, slot, decl))
         -> ValueDefBlock(r, b, v);
     pub let use_direct<r, b, node, k, p, d, loc, slot, v>:
-        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named(k), placement: "block", container: b, position: p, display: d, location: loc }(), ir::Operand(std::ir::operation_key(node), slot, std::ir::value_key(v))) -> OpUseInBlock(r, b, v);
+        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: k, placement: "block", container: b, position: p, display: d, location: loc }(), ir::Operand(std::ir::operation_key(node), slot, std::ir::value_key(v))) -> OpUseInBlock(r, b, v);
     pub let use_nested<r, b, outer, k, p, d, loc, sub, m, rs, en, inner, rep, slot, v>:
-        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(outer), kind: std::ir::operation_named(k), placement: "block", container: b, position: p, display: d, location: loc }(), ir::Region(sub, m, std::ir::operation_key(outer), rs, en), ir::ReaderAt(std::ir::operation_key(inner), sub, std::ir::operation_key(rep)), ir::Operand(std::ir::operation_key(inner), slot, std::ir::value_key(v)))
+        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(outer), kind: k, placement: "block", container: b, position: p, display: d, location: loc }(), ir::Region(sub, m, std::ir::operation_key(outer), rs, en), ir::ReaderAt(std::ir::operation_key(inner), sub, std::ir::operation_key(rep)), ir::Operand(std::ir::operation_key(inner), slot, std::ir::value_key(v)))
         -> (OpUseInBlock(r, b, v), NestedUse(r, b, v));
     pub let use_yield<r, b, outer, k, p, d, loc, sub, m, rs, en, slot, v>:
-        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(outer), kind: std::ir::operation_named(k), placement: "block", container: b, position: p, display: d, location: loc }(), ir::Region(sub, m, std::ir::operation_key(outer), rs, en), ir::Yield(sub, slot, std::ir::value_key(v)))
+        (CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(outer), kind: k, placement: "block", container: b, position: p, display: d, location: loc }(), ir::Region(sub, m, std::ir::operation_key(outer), rs, en), ir::Yield(sub, slot, std::ir::value_key(v)))
         -> (OpUseInBlock(r, b, v), NestedUse(r, b, v));
     pub let edge_assign<r, src, term, k, p, d, loc, edge, dst, pslot, oslot, arg, param, ty, decl>:
-        (CfgReachable(r, src), ir::Operation{ id: std::ir::operation_key(term), kind: std::ir::operation_named(k), placement: "block", container: src, position: p, display: d, location: loc }(), ir::Successor(std::ir::operation_key(term), edge, dst),
+        (CfgReachable(r, src), ir::Operation{ id: std::ir::operation_key(term), kind: k, placement: "block", container: src, position: p, display: d, location: loc }(), ir::Successor(std::ir::operation_key(term), edge, dst),
          ir::SuccessorArgument(std::ir::operation_key(term), edge, pslot, oslot), ir::Operand(std::ir::operation_key(term), oslot, std::ir::value_key(arg)), ir::Value(std::ir::value_key(param), ty, "block", dst, pslot, decl))
         -> EdgeAssign(r, src, edge, param, arg);
 }
@@ -499,7 +498,7 @@ pub mod ssa_dead_edge_uses {
 pub mod demand_block {
     pub let cross_res_direct<r, def_b, v, use_b, node, k, p, d, loc, slot>:
         (ValueDefBlock(r, def_b, v), CfgReachable(r, use_b), def_b != use_b,
-         ir::Operation{ id: std::ir::operation_key(node), kind: std::ir::operation_named(k), placement: "block", container: use_b, position: p, display: d, location: loc }(), ir::Operand(std::ir::operation_key(node), slot, std::ir::value_key(v)), !DeadEdgeUse(r, node, slot))
+         ir::Operation{ id: std::ir::operation_key(node), kind: k, placement: "block", container: use_b, position: p, display: d, location: loc }(), ir::Operand(std::ir::operation_key(node), slot, std::ir::value_key(v)), !DeadEdgeUse(r, node, slot))
         -> (BlockVarWrite(r, def_b, v), BlockVarRead(r, use_b, v));
     pub let cross_res_nested<r, def_b, v, use_b>:
         (ValueDefBlock(r, def_b, v), NestedUse(r, use_b, v), def_b != use_b)
@@ -510,7 +509,7 @@ pub mod demand_block {
     pub let mem_op<r, b, node, chain>: UnthreadedMemOp(r, b, node, chain) -> (BlockVarWrite(r, b, chain), BlockVarRead(r, b, chain));
     pub let mem_exit<r, b, term, kind, chain>: (CfgReachableExit(r, b, term, kind), RegionChain(r, chain)) -> BlockVarRead(r, b, chain);
     pub let ret_val<r, owner, entry, b, term, val>:
-        (CfgRegion(r, owner, entry), CfgReachableExit(r, b, term, "func.return"), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(val))) -> BlockVarWrite(r, b, r);
+        (CfgRegion(r, owner, entry), CfgReachableExit(r, b, term, dialects::func::r#return.kind), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(val))) -> BlockVarWrite(r, b, r);
 }
 
 pub mod demand_liveness {
@@ -524,7 +523,7 @@ pub mod demand_loops {
     pub let read<r, l, b, v>: (LoopMember(r, l, b), BlockVarRead(r, b, v)) -> LoopReads(r, l, v);
     pub let demand_out<r, l, x, v>: (LoopExit(r, l, x), BlockLiveIn(r, x, v)) -> LoopDemandOut(r, l, v);
     pub let demand_ret<r, owner, entry, l, b, term, val>:
-        (CfgRegion(r, owner, entry), LoopMember(r, l, b), CfgReachableExit(r, b, term, "func.return"), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(val)))
+        (CfgRegion(r, owner, entry), LoopMember(r, l, b), CfgReachableExit(r, b, term, dialects::func::r#return.kind), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(val)))
         -> LoopDemandOut(r, l, r);
     pub let demand_mem_ret<r, l, b, term, kind, c>:
         (LoopMember(r, l, b), CfgReachableExit(r, b, term, kind), RegionChain(r, c)) -> LoopDemandOut(r, l, c);

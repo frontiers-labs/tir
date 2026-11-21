@@ -17,6 +17,9 @@ pub mod ops {
     __cdsl_dep_ReadFlagsOp!();
     __cdsl_test_AddTestOp!();
     __cdsl_test_ExitOp!();
+    __cdsl_test_BeqDecodeOp!();
+    __cdsl_test_CmvDecodeOp!();
+    __cdsl_test_NarrowDecodeOp!();
 }
 
 /// Parse `source` as a module into a fresh context holding the default dialects.

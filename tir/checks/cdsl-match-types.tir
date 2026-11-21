@@ -1,11 +1,11 @@
 // RUN: tir opt --verify %s
-// RUN: not tir egglog %s %S/Inputs/cdsl-match-types.cdsl --schedule pointer 2>&1 | filecheck %s --check-prefix=MATCH
-// RUN: tir egglog %s %S/Inputs/cdsl-match-types.cdsl --schedule different_pointer 2>&1 | filecheck %s --check-prefix=MISS
-// RUN: tir egglog %S/../../core/checks/EqSat/definedness.tir %S/Inputs/cdsl-match-types.cdsl --schedule pointer 2>&1 | filecheck %s --check-prefix=MISS
-// RUN: not tir egglog %S/../../core/checks/EqSat/definedness.tir %S/Inputs/cdsl-match-types.cdsl --schedule same_integer_width 2>&1 | filecheck %s --check-prefix=MATCH
+// RUN: not tir egglog %s %S/Inputs/cdsl-match-types.cdsl --schedule matching::pointer 2>&1 | filecheck %s --check-prefix=MATCH
+// RUN: tir egglog %s %S/Inputs/cdsl-match-types.cdsl --schedule matching::different_pointer 2>&1 | filecheck %s --check-prefix=MISS
+// RUN: tir egglog %S/../../core/checks/EqSat/definedness.tir %S/Inputs/cdsl-match-types.cdsl --schedule matching::pointer 2>&1 | filecheck %s --check-prefix=MISS
+// RUN: not tir egglog %S/../../core/checks/EqSat/definedness.tir %S/Inputs/cdsl-match-types.cdsl --schedule matching::same_integer_width 2>&1 | filecheck %s --check-prefix=MATCH
 // RUN: tir opt --verify %S/../../core/checks/InstCombine/type_in_key.tir
-// RUN: tir egglog %S/../../core/checks/InstCombine/type_in_key.tir %S/Inputs/cdsl-match-types.cdsl --schedule same_integer_width 2>&1 | filecheck %s --check-prefix=MISS
-// RUN: not tir egglog %s %S/Inputs/cdsl-match-unsupported.cdsl 2>&1 | filecheck %s --check-prefix=UNSUPPORTED
+// RUN: tir egglog %S/../../core/checks/InstCombine/type_in_key.tir %S/Inputs/cdsl-match-types.cdsl --schedule matching::same_integer_width 2>&1 | filecheck %s --check-prefix=MISS
+// RUN: not tir egglog %s %S/Inputs/cdsl-match-unsupported.cdsl --schedule matching::execute 2>&1 | filecheck %s --check-prefix=UNSUPPORTED
 
 // MATCH: merge of `Attribute` rejects
 // MISS-NOT: merge of `Attribute` rejects

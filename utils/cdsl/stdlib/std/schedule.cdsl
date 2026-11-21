@@ -19,7 +19,7 @@ pub let integer_rules<A: Type>: (A, Type, {
     result: (std::ir::OperationId, std::ir::OperationKind, std::ir::ValueId, Int) -> Prop,
     operand: (std::ir::OperationId, Int, std::ir::ValueId, Int) -> Prop,
     folded: (std::ir::ValueId, std::bigint::BigInt) -> Prop,
-    constant_kind: String -> Prop,
+    constant_kind: std::ir::OperationKind -> Prop,
     flag_value: (std::ir::OperationId, String, Bool, Bool) -> Prop,
     constant: (std::ir::OperationId, std::ir::ValueId, std::bigint::BigInt) -> Prop,
     attribute: (String, Int, String, Int) -> Prop,

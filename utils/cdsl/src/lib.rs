@@ -14,6 +14,7 @@ mod error;
 pub mod format;
 pub mod hm;
 pub mod infer;
+mod kind;
 mod layout;
 pub mod lexer;
 mod lower;

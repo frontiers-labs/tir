@@ -166,7 +166,7 @@ impl Check<'_> {
                 );
             }
         }
-        let terminator = ctx.kind_has_interface::<dyn crate::Terminator>(self.kind);
+        let terminator = ctx.kind_has_interface::<dyn crate::Terminator>(&self.kind);
         if let Some(block) = block
             && !terminator
         {

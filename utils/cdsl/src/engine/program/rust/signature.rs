@@ -13,6 +13,7 @@ pub(super) struct Signature {
     kind: Option<ConId>,
     reference: Option<ConId>,
     parameters: BTreeMap<VarId, usize>,
+    pub(super) kind_uses: Vec<(TokenStream, Ty)>,
 }
 
 impl Signature {
@@ -27,6 +28,7 @@ impl Signature {
             kind: family("OperationKindOf"),
             reference: family("ValueRef"),
             parameters: BTreeMap::new(),
+            kind_uses: Vec::new(),
         }
     }
 
