@@ -72,12 +72,12 @@ fn catalog_producers_publish_complete_current_facts() {
     });
     AnalysisManager::install(&context, r#"
         pub let Values: Int -> Prop;
-        pub let Members: (Int, std::table::IntSet) -> Prop;
+        pub let Members: (Int, std::table::IntSet) -> Prop as tables::Members;
         pub let Count: (Int, Int) -> Prop;
-        pub let Conflict: (Int, Int) -> Prop;
+        pub let Conflict: (Int, Int) -> Prop as tables::Conflict;
         pub mod tables {
-            pub let Members: std::Table<Int, std::table::IntSet, std::Merge::SetUnion>;
-            pub let Conflict: std::Table<Int, Int, std::Merge::Unique>;
+            pub let Members: std::Table<Int, std::table::IntSet, std::Merge::SetUnion> as "Members";
+            pub let Conflict: std::Table<Int, Int, std::Merge::Unique> as "Conflict";
         }
         pub mod source {
             pub let input<root, slot, v>:

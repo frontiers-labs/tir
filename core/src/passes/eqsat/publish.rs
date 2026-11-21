@@ -1,4 +1,6 @@
-use tir_egglog::{Term, TermDag, TermId, ast::Literal, sort::BigInt};
+use tir_egglog::sort::BigInt;
+
+use super::generated::Form;
 
 use crate::{
     Context, NewOp, OpHandle, OpId, Operation, OperationRef, PassError, RegionId, ValueId,
@@ -19,7 +21,7 @@ enum Replacement {
 }
 
 type CheckedEdit = (UseSite, Replacement);
-type Form = (OpId, ValueId, TermDag, TermId);
+type DefinitionRow = (OpId, ValueId, Form);
 type Alias = (UseSite, ValueId, ValueId);
 pub(super) type Local = (UseSite, ValueId, BigInt);
 type Definition = (OpHandle, ValueId, Expression);
@@ -27,12 +29,12 @@ type Definition = (OpHandle, ValueId, Expression);
 enum Expression {
     Read(ValueId),
     Bits(AttributeValue),
-    Binary(&'static str, Box<[Expression; 2]>),
+    Binary(&'static crate::schema::OpSchema, Box<[Expression; 2]>),
 }
 
 pub(super) fn publish(
     context: &Context,
-    rebuild: Vec<Form>,
+    rebuild: Vec<DefinitionRow>,
     edits: Vec<Alias>,
     local: Vec<Local>,
     redirected: &[ValueId],
@@ -176,18 +178,18 @@ fn check_removals(
 
 fn check_definitions(
     context: &Context,
-    mut forms: Vec<Form>,
+    mut forms: Vec<DefinitionRow>,
     redirected: &[ValueId],
     edits: &[CheckedEdit],
 ) -> Result<Vec<Definition>, PassError> {
     forms.sort_unstable_by_key(|row| row.0);
     let mut definitions: Vec<Definition> = Vec::new();
-    for (id, result, terms, term) in forms {
+    for (id, result, form) in forms {
         if redirected.binary_search(&result).is_ok() {
             continue;
         }
         let op = definition(context, id, result)?;
-        let Some(expression) = decode(context, result, &terms, term, redirected) else {
+        let Some(expression) = decode(context, result, form, redirected) else {
             continue;
         };
         let use_offset = edits.partition_point(|edit| edit.0 < UseSite::Operand(id, 0));
@@ -210,56 +212,25 @@ fn check_definitions(
 fn decode(
     context: &Context,
     expected: ValueId,
-    terms: &TermDag,
-    term: TermId,
+    form: Form,
     redirected: &[ValueId],
 ) -> Option<Expression> {
-    let Term::App(tag, arguments) = terms.get(term) else {
-        return None;
-    };
-    match (tag.as_str(), arguments.as_slice()) {
-        ("Form::Read", [id]) => {
-            let Term::Lit(Literal::Int(id)) = terms.get(*id) else {
-                return None;
-            };
-            let value = ValueId::from_number(u32::try_from(*id).ok()?);
+    match form {
+        Form::Read(id) => {
+            let value = ValueId::from_number(id.raw());
             (context.has_value(value)
                 && redirected.binary_search(&value).is_err()
                 && context.get_value(value).ty() == context.get_value(expected).ty())
             .then_some(Expression::Read(value))
         }
-        ("Form::Bits", [bits]) => {
-            let Term::App(parse, args) = terms.get(*bits) else {
-                return None;
-            };
-            let ("from-string", [text]) = (parse.as_str(), args.as_slice()) else {
-                return None;
-            };
-            let Term::Lit(Literal::String(bits)) = terms.get(*text) else {
-                return None;
-            };
-            Some(Expression::Bits(
-                literal(context, expected, bits.parse().ok()?).ok()?,
-            ))
-        }
-        ("Form::Bin", [kind, left, right]) => {
-            let Term::Lit(Literal::String(kind)) = terms.get(*kind) else {
-                return None;
-            };
-            let spelling = [
-                "addi", "subi", "muli", "shli", "shrui", "andi", "ori", "xori",
-            ]
-            .into_iter()
-            .find(|name| *name == kind.as_str())?;
-            Some(Expression::Binary(
-                spelling,
-                Box::new([
-                    decode(context, expected, terms, *left, redirected)?,
-                    decode(context, expected, terms, *right, redirected)?,
-                ]),
-            ))
-        }
-        _ => None,
+        Form::Bits(bits) => Some(Expression::Bits(literal(context, expected, bits).ok()?)),
+        Form::Bin(kind, left, right) => Some(Expression::Binary(
+            context.schema_for_kind(kind.as_str())?,
+            Box::new([
+                decode(context, expected, *left, redirected)?,
+                decode(context, expected, *right, redirected)?,
+            ]),
+        )),
     }
 }
 
@@ -270,20 +241,20 @@ fn materialize(
     expression: Expression,
     root_result: Option<ValueId>,
 ) -> Result<ValueId, PassError> {
-    let (name, operands, attributes) = match expression {
+    let (identity, operands, attributes) = match expression {
         Expression::Read(value) if root_result.is_none() => return Ok(value),
         Expression::Read(_) => return Err(PassError::RewriteFailed(anchor.op().id)),
         Expression::Bits(bits) => (
-            "constant",
+            ("builtin", "constant"),
             Vec::new(),
             vec![NamedAttribute::new(context.intern("value"), bits)],
         ),
-        Expression::Binary(name, children) => {
+        Expression::Binary(schema, children) => {
             let mut operands = Vec::with_capacity(2);
             for child in *children {
                 operands.push(materialize(context, anchor, expected, child, None)?);
             }
-            (name, operands, Vec::new())
+            ((schema.dialect, schema.name), operands, Vec::new())
         }
     };
     let result = root_result.unwrap_or_else(|| {
@@ -294,7 +265,7 @@ fn materialize(
     let op = context.add_operation(
         crate::InsertionPoint::Root,
         NewOp::new_dynamic(
-            ("builtin", name),
+            identity,
             context.clone(),
             operands,
             vec![result],

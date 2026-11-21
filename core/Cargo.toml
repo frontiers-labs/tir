@@ -15,7 +15,6 @@ doctest = false
 tir-cdsl.workspace = true
 tir-macros.workspace = true
 tir-egglog.workspace = true
-tir-ir-schema.workspace = true
 tir-symbolic.workspace = true
 tir-adt.workspace = true
 linkme.workspace = true
@@ -24,9 +23,7 @@ smallvec = "1.15.2"
 ariadne.workspace = true
 
 [build-dependencies]
-tir-ir-schema.workspace = true
 tir-cdsl.workspace = true
-tir-egglog.workspace = true
 
 [dev-dependencies]
 tir-bench.workspace = true

@@ -1,16 +1,20 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use tir_egglog::{
-    Database, Rules, Signature,
+    Database, Rules,
     ast::{Action, Expr, Fact, Facts, GenericActions},
     prelude::exprs::{bool as boolean, call, int, string, var},
     span,
 };
 
-use super::{Schema, error};
+use super::{Schema, error, path};
 use crate::{
     CheckedProgram, Error,
-    ast::{BinaryOp, Declaration, Expr as Source, Expression, Literal, OpField, PatternKind},
+    ast::{
+        BinaryOp, Block, Declaration, Expr as Source, Expression, Literal, OpField, Path,
+        PatternKind,
+    },
+    normalize::substitute,
 };
 
 fn apply(name: &str, args: impl Into<Vec<Expr>>) -> Expr {
@@ -38,8 +42,60 @@ fn not(x: Expr) -> Expr {
     apply("not", [x])
 }
 
-fn bits(name: &str, args: &[Expr], width: &Expr, generics: &[Expr]) -> Option<Expr> {
+struct Term {
+    value: Expr,
+    width: Option<Expr>,
+}
+
+impl Term {
+    fn plain(value: Expr) -> Self {
+        Self { value, width: None }
+    }
+
+    fn bits(value: Expr, width: &Expr) -> Self {
+        Self {
+            value,
+            width: Some(width.clone()),
+        }
+    }
+}
+
+fn width_preserving(name: &str) -> bool {
+    matches!(
+        name,
+        "add_wrapping"
+            | "sub_wrapping"
+            | "mul_wrapping"
+            | "and"
+            | "or"
+            | "xor"
+            | "shl"
+            | "lshr"
+            | "ashr"
+            | "udiv"
+            | "urem"
+            | "sdiv"
+            | "srem"
+    )
+}
+
+fn bits(
+    name: &str,
+    args: &[Term],
+    generics: &[Expr],
+    result_width: Option<&Expr>,
+    bindings: &IntegerBindings,
+) -> Option<Term> {
     if let [x, y] = args {
+        // Checked binary bits primitives use one width for both operands.
+        let width = generics
+            .first()
+            .or(x.width.as_ref())
+            .or(y.width.as_ref())
+            .or(result_width)?;
+        let (x, y) = (&x.value, &y.value);
+        let word = |value| Term::bits(value, width);
+        let control = Term::plain;
         let binary = |op| apply(op, [x.clone(), y.clone()]);
         let signed_binary = |op| apply(op, [signed(x.clone(), width), signed(y.clone(), width)]);
         let signed_overflow = |op| {
@@ -50,36 +106,36 @@ fn bits(name: &str, args: &[Expr], width: &Expr, generics: &[Expr]) -> Option<Ex
             ))
         };
         return Some(match name {
-            "add_wrapping" => narrow(binary("+"), width),
-            "sub_wrapping" => narrow(binary("-"), width),
-            "mul_wrapping" => narrow(binary("*"), width),
-            "and" => binary("&"),
-            "or" => binary("|"),
-            "xor" => binary("^"),
-            "eq" => binary("bool-="),
-            "ne" => not(binary("bool-=")),
-            "ult" => binary("bool-<"),
-            "ugt" => binary("bool->"),
-            "ule" => binary("bool-<="),
-            "uge" => binary("bool->="),
-            "slt" => signed_binary("bool-<"),
-            "sgt" => signed_binary("bool->"),
-            "sle" => signed_binary("bool-<="),
-            "sge" => signed_binary("bool->="),
+            "add_wrapping" => word(narrow(binary("+"), width)),
+            "sub_wrapping" => word(narrow(binary("-"), width)),
+            "mul_wrapping" => word(narrow(binary("*"), width)),
+            "and" => word(binary("&")),
+            "or" => word(binary("|")),
+            "xor" => word(binary("^")),
+            "eq" => control(binary("bool-=")),
+            "ne" => control(not(binary("bool-="))),
+            "ult" => control(binary("bool-<")),
+            "ugt" => control(binary("bool->")),
+            "ule" => control(binary("bool-<=")),
+            "uge" => control(binary("bool->=")),
+            "slt" => control(signed_binary("bool-<")),
+            "sgt" => control(signed_binary("bool->")),
+            "sle" => control(signed_binary("bool-<=")),
+            "sge" => control(signed_binary("bool->=")),
             "shl" | "lshr" | "ashr" => {
-                let shift = apply("eqsat-amount", [y.clone()]);
+                let shift = apply(&bindings.shift_amount, [y.clone()]);
                 let input = if name == "ashr" {
                     signed(x.clone(), width)
                 } else {
                     x.clone()
                 };
                 let op = if name == "shl" { "<<" } else { ">>" };
-                narrow(apply(op, [input, shift]), width)
+                word(narrow(apply(op, [input, shift]), width))
             }
-            "udiv" => binary("/"),
-            "urem" => binary("%"),
-            "sdiv" => narrow(signed_binary("/"), width),
-            "srem" => narrow(signed_binary("%"), width),
+            "udiv" => word(binary("/")),
+            "urem" => word(binary("%")),
+            "sdiv" => word(narrow(signed_binary("/"), width)),
+            "srem" => word(narrow(signed_binary("%"), width)),
             "signed_div_defined" => {
                 let min = apply(">>", [modulus(width), int(1)]);
                 let overflow = apply(
@@ -89,66 +145,152 @@ fn bits(name: &str, args: &[Expr], width: &Expr, generics: &[Expr]) -> Option<Ex
                         apply("bool-=", [y.clone(), narrow(bigint(-1), width)]),
                     ],
                 );
-                apply(
+                control(apply(
                     "and",
                     [not(apply("bool-=", [y.clone(), bigint(0)])), not(overflow)],
-                )
+                ))
             }
-            "unsigned_add_overflows" => apply("bool->=", [binary("+"), modulus(width)]),
-            "unsigned_sub_overflows" => binary("bool-<"),
-            "signed_add_overflows" => signed_overflow("+"),
-            "signed_sub_overflows" => signed_overflow("-"),
+            "unsigned_add_overflows" => control(apply("bool->=", [binary("+"), modulus(width)])),
+            "unsigned_sub_overflows" => control(binary("bool-<")),
+            "signed_add_overflows" => control(signed_overflow("+")),
+            "signed_sub_overflows" => control(signed_overflow("-")),
             _ => return None,
         });
     }
     Some(match (name, args, generics) {
-        ("from_int", [x], [w]) => narrow(x.clone(), w),
-        ("from_bool", [x], _) => apply("eqsat-bool-bit", [x.clone()]),
-        ("zero", [], _) => bigint(0),
-        ("width_value", [], [w]) => apply("bigint", [w.clone()]),
-        ("zext" | "trunc" | "bitcast", [x], [_, out]) => narrow(x.clone(), out),
-        ("sext", [x], [input, out]) => narrow(signed(x.clone(), input), out),
+        ("from_int", [x], [w]) => Term::bits(narrow(x.value.clone(), w), w),
+        ("from_bool", [x], _) => Term::bits(apply(&bindings.bool_bit, [x.value.clone()]), &int(1)),
+        ("zero", [], [w]) => Term::bits(bigint(0), w),
+        ("zero", [], []) => Term::plain(bigint(0)),
+        ("width_value", [], [w]) => Term::bits(apply("bigint", [w.clone()]), w),
+        ("zext" | "trunc" | "bitcast", [x], [_, out]) => {
+            Term::bits(narrow(x.value.clone(), out), out)
+        }
+        ("sext", [x], [input, out]) => Term::bits(narrow(signed(x.value.clone(), input), out), out),
         _ => return None,
     })
 }
 
-struct Attributes {
-    word: Expr,
-    projected: BTreeSet<(String, &'static str)>,
+const OPERAND_BINDING: &str = "\0eqsat_operand";
+const RECEIVER_BINDING: &str = "\0eqsat_receiver";
+
+fn operand_bits(slot: usize) -> Expr {
+    var(&format!("__bits_{slot}"))
+}
+
+#[derive(Clone, Copy)]
+enum Receiver<'a> {
+    None,
+    AttributeParameter,
+    Implicit(&'a str),
+}
+
+struct Attributes<'a> {
+    widths: &'a [Expr],
+    bindings: &'a IntegerBindings,
+    projected: BTreeSet<(String, &'a str)>,
     flags: BTreeSet<(String, bool)>,
 }
 
-impl Attributes {
-    fn body(&mut self, expr: &Source) -> Option<Expr> {
+impl Attributes<'_> {
+    fn body(
+        &mut self,
+        expr: &Source,
+        receiver: Receiver<'_>,
+        result_width: Option<&Expr>,
+    ) -> Option<Term> {
         let Expression::Function(function) = &expr.value else {
             return None;
         };
-        if !function.body.bindings.is_empty() {
+        if !function.generics.is_empty() {
             return None;
         }
-        self.term(&function.body.value)
+        let (receiver, operands) = match (receiver, function.parameters.as_slice()) {
+            (Receiver::Implicit(name), []) => (Some(name), &[][..]),
+            (Receiver::Implicit(_), _) => return None,
+            (Receiver::AttributeParameter, [receiver, operands @ ..])
+                if operands.len() == self.widths.len() =>
+            {
+                (Some(receiver.name.as_str()), operands)
+            }
+            (_, operands) if operands.len() == self.widths.len() => (None, operands),
+            _ => return None,
+        };
+        let mut values = BTreeMap::new();
+        let mut bind = |name: &str, path| {
+            values.insert(
+                vec![name.to_owned()],
+                Source {
+                    value: Expression::Path(path),
+                    range: expr.range.clone(),
+                },
+            );
+        };
+        if let Some(receiver) = receiver {
+            bind(receiver, vec![RECEIVER_BINDING.into()]);
+        }
+        for (slot, operand) in operands.iter().enumerate() {
+            bind(
+                &operand.name,
+                vec![OPERAND_BINDING.into(), slot.to_string()],
+            );
+        }
+        self.block(&function.body, values, result_width)
     }
 
-    fn term(&mut self, expr: &Source) -> Option<Expr> {
+    fn block(
+        &mut self,
+        block: &Block,
+        mut values: BTreeMap<Path, Source>,
+        result_width: Option<&Expr>,
+    ) -> Option<Term> {
+        if block.bindings.is_empty() && values.is_empty() {
+            return self.term(&block.value, result_width);
+        }
+        for binding in &block.bindings {
+            if !binding.generics.is_empty() {
+                return None;
+            }
+            values.insert(
+                binding.path.clone(),
+                substitute(&binding.value, &values).ok()?,
+            );
+        }
+        self.term(&substitute(&block.value, &values).ok()?, result_width)
+    }
+
+    fn term(&mut self, expr: &Source, result_width: Option<&Expr>) -> Option<Term> {
         Some(match &expr.value {
-            Expression::Literal(Literal::Bool(value)) => boolean(*value),
-            Expression::Path(path) if path.len() == 1 => var(&path[0]),
+            Expression::Literal(Literal::Bool(value)) => Term::plain(boolean(*value)),
+            Expression::Path(path) => {
+                let [binding, slot] = path.as_slice() else {
+                    return None;
+                };
+                if binding != OPERAND_BINDING {
+                    return None;
+                }
+                let slot = slot.parse::<usize>().ok()?;
+                Term::bits(operand_bits(slot), self.widths.get(slot)?)
+            }
+            Expression::Block(block) => self.block(block, BTreeMap::new(), result_width)?,
             Expression::Member { .. } => {
                 let name = self_field(expr)?;
-                self.projected.insert((name.to_owned(), "eqsat-attr-int"));
-                var(&format!("__attr_{name}"))
+                self.projected
+                    .insert((name.to_owned(), &self.bindings.attr_int));
+                Term::plain(var(&format!("__attr_{name}")))
             }
-            Expression::Binary { op, left, right } => apply(
+            Expression::Binary { op, left, right } => Term::plain(apply(
                 match op {
                     BinaryOp::And => "and",
                     BinaryOp::Or => "or",
                     _ => return None,
                 },
-                [self.term(left)?, self.term(right)?],
-            ),
+                [self.term(left, None)?.value, self.term(right, None)?.value],
+            )),
             Expression::Match { value, arms } => {
                 let field = self_field(value)?;
-                self.projected.insert((field.to_owned(), "eqsat-attr-case"));
+                self.projected
+                    .insert((field.to_owned(), &self.bindings.attr_case));
                 let selected = var(&format!("__attr_{field}"));
                 let mut answer = boolean(false);
                 for (pattern, consequent) in arms.iter().rev() {
@@ -157,16 +299,16 @@ impl Attributes {
                     };
                     let name = path.last()?.to_ascii_lowercase();
                     answer = apply(
-                        "eqsat-pick-case",
+                        &self.bindings.pick_case,
                         [
                             selected.clone(),
                             string(&name),
-                            self.term(consequent)?,
+                            self.term(consequent, None)?.value,
                             answer,
                         ],
                     );
                 }
-                answer
+                Term::plain(answer)
             }
             Expression::Call { value, arguments } => {
                 let (head, generics) = match &value.value {
@@ -185,11 +327,16 @@ impl Attributes {
                 };
                 match path.as_slice() {
                     [std, module, name] if std == "std" && module == "bits" => {
+                        let result_width = result_width.filter(|_| width_preserving(name));
+                        let input_width = match name.as_str() {
+                            "from_int" | "from_bool" => None,
+                            _ => generics.first().or(result_width),
+                        };
                         let args = arguments
                             .iter()
-                            .map(|arg| self.term(arg))
+                            .map(|arg| self.term(arg, input_width))
                             .collect::<Option<Vec<_>>>()?;
-                        bits(name, &args, &self.word, &generics)?
+                        bits(name, &args, &generics, result_width, self.bindings)?
                     }
                     [std, module, name]
                         if std == "std" && module == "option" && name == "get_or" =>
@@ -202,7 +349,7 @@ impl Attributes {
                             return None;
                         };
                         self.flags.insert((name.to_owned(), default));
-                        var(&format!("__flag_{name}_{default}"))
+                        Term::plain(var(&format!("__flag_{name}_{default}")))
                     }
                     _ => return None,
                 }
@@ -212,28 +359,36 @@ impl Attributes {
     }
 }
 
-fn named(expr: &Source, name: &str) -> bool {
-    matches!(&expr.value, Expression::Path(parts) if parts.last().is_some_and(|part| part == name))
+fn unsupported(kind: &str, field: &str) -> Error {
+    Error(format!(
+        "unsupported EqSat integer semantics in {kind}.{field}"
+    ))
 }
 
 fn self_field(expr: &Source) -> Option<&str> {
     match &expr.value {
-        Expression::Member { value, name } if named(value, "self") => Some(name),
+        Expression::Member { value, name } if matches!(&value.value, Expression::Path(path) if path == &[RECEIVER_BINDING]) => {
+            Some(name)
+        }
         _ => None,
     }
 }
 
 fn width_argument(expr: &Source) -> Option<Expr> {
     match &expr.value {
-        Expression::Path(parts) if parts.len() == 1 => Some(var(&format!("__width_{}", parts[0]))),
+        Expression::Path(parts) if parts.len() == 1 => Some(width_variable(&parts[0])),
         Expression::Literal(Literal::Natural(value)) => Some(int(value.parse().ok()?)),
         _ => None,
     }
 }
 
+fn width_variable(name: &str) -> Expr {
+    var(&format!("__width_{name}"))
+}
+
 fn type_argument<'a>(expr: &'a Source, name: &str) -> Option<&'a Source> {
     if let Expression::Generic { value, arguments } = &expr.value
-        && named(value, name)
+        && matches!(&value.value, Expression::Path(path) if path == &["std", "ir", name])
         && let [argument] = arguments.as_slice()
     {
         return Some(argument);
@@ -242,7 +397,10 @@ fn type_argument<'a>(expr: &'a Source, name: &str) -> Option<&'a Source> {
 }
 
 fn integer_type(expr: &Source) -> Option<Expr> {
-    width_argument(type_argument(type_argument(expr, "El")?, "Bits")?)
+    width_argument(type_argument(
+        type_argument(expr, "El").unwrap_or(expr),
+        "Bits",
+    )?)
 }
 
 fn eq(left: Expr, right: Expr) -> Fact {
@@ -265,62 +423,96 @@ fn add(
         .map_err(error)
 }
 
-fn attribute(field: &str) -> Expr {
-    apply(
-        "Attribute",
-        [string("operation"), var("__op"), string(field)],
-    )
+fn attribute(table: &str, field: &str) -> Expr {
+    apply(table, [string("operation"), var("__op"), string(field)])
 }
 
 fn row(name: &str, args: impl Into<Vec<Expr>>) -> Fact {
     Fact::Fact(apply(name, args))
 }
 
-impl Schema {
-    /// Register a typed external signature for planning a program loaded with host bindings.
-    pub fn bind_external(
-        &mut self,
-        name: &str,
-        inputs: &[&str],
-        output: &str,
-    ) -> Result<(), Error> {
-        let db = self.engine.database_mut();
-        let inputs = inputs
-            .iter()
-            .map(|name| db.sort(name).map_err(error))
-            .collect::<Result<_, _>>()?;
-        let output = db.sort(output).map_err(error)?;
-        db.add_primitive(name, Signature { inputs, output }, |_, _| None);
-        Ok(())
-    }
+struct IntegerBindings {
+    binary: String,
+    flag_field: String,
+    result: String,
+    operand: String,
+    folded: String,
+    constant_kind: String,
+    flag_value: String,
+    constant: String,
+    attribute: String,
+    attr_int: String,
+    attr_case: String,
+    pick_case: String,
+    bool_bit: String,
+    shift_amount: String,
+}
 
-    /// Compile constant evaluation from the checked integer operation signatures and methods.
-    pub fn compile_integer_operations(
+impl Schema {
+    pub(super) fn add_integer_operations(
         &self,
         rule_source: &CheckedProgram,
-        program: &CheckedProgram,
-        dialect: &str,
-    ) -> Result<Vec<u8>, Error> {
+        arguments: &[Source],
+        rules: &mut Rules,
+        flag_fields: &str,
+        fold: &str,
+    ) -> Result<(), Error> {
+        let [operations, interface, bindings] = arguments else {
+            return Err(Error(
+                "integer_rules requires an operation module, interface and bindings".into(),
+            ));
+        };
+        let operations = path(operations)?;
+        let interface = match &interface.value {
+            Expression::Generic { value, .. } => path(value)?,
+            _ => path(interface)?,
+        };
+        let Expression::Record(fields) = &bindings.value else {
+            return Err(Error("integer_rules requires literal bindings".into()));
+        };
+        let binding = |name: &str| {
+            let value = fields
+                .iter()
+                .find(|(field, _)| field == name)
+                .ok_or_else(|| Error(format!("missing integer rule binding {name}")))?;
+            Ok(self.name(path(&value.1)?))
+        };
+        let bindings = IntegerBindings {
+            binary: binding("binary")?,
+            flag_field: binding("flag_field")?,
+            result: binding("result")?,
+            operand: binding("operand")?,
+            folded: binding("folded")?,
+            constant_kind: binding("constant_kind")?,
+            flag_value: binding("flag_value")?,
+            constant: binding("constant")?,
+            attribute: binding("attribute")?,
+            attr_int: binding("attr_int")?,
+            attr_case: binding("attr_case")?,
+            pick_case: binding("pick_case")?,
+            bool_bit: binding("bool_bit")?,
+            shift_amount: binding("shift_amount")?,
+        };
         let db = self.database();
-        let mut rules = self.lower(rule_source)?.rules;
-        rules.set_colored("branch_local");
-        for set in ["eqsat-flag-fields", "eqsat-fold"] {
+        for set in [flag_fields, fold] {
             rules.add_ruleset(set);
         }
         let mut flags = BTreeSet::new();
-        let declarations = program
+        let module = rule_source
             .artifact()
-            .modules
-            .iter()
-            .flat_map(|module| &module.ast.declarations);
-        for declaration in declarations {
+            .all_modules()
+            .find(|module| module.path == *operations)
+            .ok_or_else(|| {
+                Error(format!(
+                    "missing checked operation module {}",
+                    operations.join("::")
+                ))
+            })?;
+        for declaration in &module.ast.declarations {
             let Declaration::Let { binding, .. } = &declaration.value else {
                 continue;
             };
-            let Expression::Op(fields) = &binding.value.value else {
-                continue;
-            };
-            let [name] = binding.path.as_slice() else {
+            let Some(fields) = binding.operation_fields() else {
                 continue;
             };
             let Some((parameters, output)) = fields.iter().find_map(|field| match &field.value {
@@ -338,78 +530,122 @@ impl Schema {
             else {
                 continue;
             };
-            let method = program
-                .operation_interfaces()
-                .iter()
-                .find(|op| op.operation().path() == binding.path.as_slice())
-                .and_then(|op| {
-                    op.implementations().find_map(|(iface, method)| {
-                        (iface.path().last().map(String::as_str) == Some("ConstantLike"))
-                            .then_some(method)
-                    })
-                });
+            let kind = binding
+                .operation_name(&module.path)
+                .ok_or_else(|| Error(format!("unnamed operation in {}", operations.join("::"))))?;
+            if let [left, right] = widths.as_slice()
+                && left == &output
+                && right == &output
+                && binding
+                    .generics
+                    .iter()
+                    .any(|generic| width_variable(&generic.name) == output)
+            {
+                add(
+                    rules,
+                    db,
+                    flag_fields,
+                    Vec::new(),
+                    vec![apply(&bindings.binary, [string(&kind)])],
+                )?;
+            }
+            let method = fields.iter().find_map(|field| {
+                let OpField::Interfaces { receiver, entries } = &field.value else {
+                    return None;
+                };
+                entries
+                    .iter()
+                    .find_map(|(_, path, method)| (path == interface).then_some(method))
+                    .map(|method| (receiver.as_str(), method))
+            });
             let field = |label| {
                 fields.iter().find_map(|field| match &field.value {
                     OpField::Field { name, value } if name == label => Some(value),
                     _ => None,
                 })
             };
-            let body = if let Some(method) = method {
-                let Expression::Record(entries) = &method.expression().value else {
-                    continue;
-                };
-                entries
-                    .iter()
-                    .find(|(name, _)| name == "constant_value")
-                    .map(|(_, body)| body)
+            let receiver = if field("attributes").is_some() {
+                Receiver::AttributeParameter
             } else {
-                if parameters.is_empty() {
-                    continue;
+                Receiver::None
+            };
+            let (label, body, body_receiver) = if let Some((receiver, method)) = method {
+                let label = "ConstantLike.constant_value";
+                let body = match &method.value {
+                    Expression::Record(entries) => entries
+                        .iter()
+                        .find(|(name, _)| name == "constant_value")
+                        .map(|(_, body)| body),
+                    _ => None,
                 }
-                field("exec")
+                .ok_or_else(|| unsupported(&kind, label))?;
+                (label, body, Receiver::Implicit(receiver))
+            } else if let Some(body) = field("exec") {
+                ("exec", body, receiver)
+            } else {
+                continue;
             };
             let mut attrs = Attributes {
-                word: widths.first().cloned().unwrap_or_else(|| output.clone()),
+                widths: &widths,
+                bindings: &bindings,
                 projected: BTreeSet::new(),
                 flags: BTreeSet::new(),
             };
-            let Some(value) = body.and_then(|body| attrs.body(body)) else {
-                continue;
+            let mut lower = |source, label, receiver, result_width| {
+                attrs
+                    .body(source, receiver, result_width)
+                    .ok_or_else(|| unsupported(&kind, label))
             };
+            let result_width = method.is_none().then_some(&output);
+            let value = lower(body, label, body_receiver, result_width)?;
+            if method.is_some() {
+                let width = match &body.value {
+                    Expression::Function(function) => {
+                        function.result.as_ref().and_then(integer_type)
+                    }
+                    _ => None,
+                };
+                if width.as_ref().or(value.width.as_ref()) != Some(&output) {
+                    return Err(Error(format!(
+                        "{kind}.{label} must return the declared integer result width"
+                    )));
+                }
+            }
+            let value = value.value;
             let guards = [("requires", true), ("poison", false)]
                 .into_iter()
-                .filter_map(|(label, expected)| Some((field(label)?, boolean(expected))))
-                .map(|(source, expected)| Some(eq(attrs.body(source)?, expected)))
-                .collect::<Option<Vec<_>>>();
-            let Some(guards) = guards else { continue };
-            let kind = format!("{dialect}.{name}");
+                .filter_map(|(label, expected)| Some((label, field(label)?, boolean(expected))))
+                .map(|(label, source, expected)| {
+                    Ok(eq(lower(source, label, receiver, None)?.value, expected))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
             let mut query = vec![row(
-                "EqSatIntegerResult",
+                &bindings.result,
                 [var("__op"), string(&kind), var("__value"), output],
             )];
-            for (i, (parameter, width)) in parameters.iter().zip(widths).enumerate() {
+            for (i, width) in widths.iter().enumerate() {
                 let operand = var(&format!("__operand_{i}"));
                 query.extend([
                     row(
-                        "EqSatIntegerOperand",
+                        &bindings.operand,
                         [var("__op"), int(i as i64), operand.clone(), width.clone()],
                     ),
-                    row("EqSatFolded", [operand, var(&parameter.name)]),
+                    row(&bindings.folded, [operand, operand_bits(i)]),
                 ]);
             }
             if method.is_some() {
-                query.push(row("EqSatConstantImplementation", [string(&kind)]));
+                query.push(row(&bindings.constant_kind, [string(&kind)]));
             }
             for (field, primitive) in attrs.projected {
                 let handle = var(&format!("__handle_{field}"));
                 query.extend([
-                    eq(handle.clone(), attribute(&field)),
+                    eq(handle.clone(), attribute(&bindings.attribute, &field)),
                     eq(var(&format!("__attr_{field}")), apply(primitive, [handle])),
                 ]);
             }
             for (field, default) in attrs.flags {
                 query.push(row(
-                    "EqSatFlag",
+                    &bindings.flag_value,
                     [
                         var("__op"),
                         string(&field),
@@ -420,24 +656,27 @@ impl Schema {
                 flags.insert((field, default));
             }
             query.extend(guards);
-            let mut heads = vec![apply("EqSatFolded", [var("__value"), value.clone()])];
+            let mut heads = vec![apply(&bindings.folded, [var("__value"), value.clone()])];
             if method.is_none() {
-                heads.push(apply("EqSatConstant", [var("__op"), var("__value"), value]));
+                heads.push(apply(
+                    &bindings.constant,
+                    [var("__op"), var("__value"), value],
+                ));
             }
-            add(&mut rules, db, "eqsat-fold", query, heads)?;
+            add(rules, db, fold, query, heads)?;
         }
         for (field, default) in flags {
             add(
-                &mut rules,
+                rules,
                 db,
-                "eqsat-flag-fields",
+                flag_fields,
                 Vec::new(),
-                vec![apply("EqSatFlagField", [string(&field), boolean(default)])],
+                vec![apply(
+                    &bindings.flag_field,
+                    [string(&field), boolean(default)],
+                )],
             )?;
         }
-        rules
-            .add_combined_ruleset("eqsat-global", &["analyze".into(), "eqsat-fold".into()])
-            .map_err(error)?;
-        Ok(rules.compile(db).map_err(error)?.to_bytes())
+        Ok(())
     }
 }

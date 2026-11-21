@@ -16,7 +16,11 @@ use crate::{
     AnalysisManager, BlockId, CaseGuard, Context, OpId, Operation, OperationRef, Pass, PassError,
     RegionId, TypeId, Value, ValueId,
 };
-use tir_egglog::{Database, IndexId, Program, Row, Schedule, TableId, Value as EggVal};
+
+#[allow(dead_code)]
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/restructure.rs"));
+}
 
 #[derive(Clone, Default)]
 pub struct RestructureNodesPass;
@@ -46,158 +50,131 @@ impl Pass for RestructureNodesPass {
     ) -> Result<(), PassError> {
         cfg::refresh(ctx, op)?;
         let mut db = ctx.eqsat_database().map_err(rule_err)?;
-        let mut program = Program::from_bytes(
-            include_bytes!(concat!(env!("OUT_DIR"), "/restructure-rules.bin")),
-            &mut db,
-        )
-        .map_err(rule_err)?;
-        let phases = "phase_targets! phase_active phase_ord_seed1 * phase_arms \
-            phase_homes_inner phase_homes phase_home_derived! phase_reg_tree phase_reg_tree2 \
-            phase_depths! phase_depth_max phase_vars! phase_static_writes! * phase_flow! \
-            phase_fill phase_fold_prep phase_fold_match phase_fold_diff phase_fold_dup \
-            phase_fold_keep * phase_fold_skip! phase_emit_raw phase_need_val! phase_emit_final";
-        let schedule = Schedule::seq(phases.split_whitespace().map(|tok| match tok {
-            "*" => Schedule::seq([
-                Schedule::run("ord_next"),
-                Schedule::run("ord_links"),
-                Schedule::saturate("ord_index"),
-                Schedule::run("ord_count"),
-            ]),
-            s if s.ends_with('!') => Schedule::saturate(&s[..s.len() - 1]),
-            s => Schedule::run(s),
-        }));
-        program.run(&mut db, &schedule, &[]).map_err(rule_err)?;
-        db.rebuild().map_err(rule_err)?;
-        commit(ctx, &mut db)
+        let mut program = generated::Program::load(&mut db).map_err(rule_err)?;
+        program.transform().map_err(rule_err)?;
+        program.rebuild().map_err(rule_err)?;
+        commit(ctx, &mut program)
     }
 }
 
+use generated::{Class, Index, Program};
+
+type Reg = Class<generated::Reg>;
+type Sw = Class<generated::Sw>;
+type Ty = Class<generated::Ty>;
+type Val = Class<generated::Val>;
+type Slots<K, V> = Index<K, (K, i64, V)>;
+type Results<K> = Index<K, (K, i64, Ty, Val)>;
+
 struct Indexes {
-    reg_orig: TableId,
-    entry_st: TableId,
-    split_st: TableId,
-    join_st: TableId,
-    ty_i1: TableId,
-    ty_i32: TableId,
-    ty_state: TableId,
-    ty_exact: IndexId,
-    ty_ret: IndexId,
-    chain_cnt: IndexId,
-    join_in: IndexId,
-    reg_port: IndexId,
-    for_port: IndexId,
-    for_body: IndexId,
-    moved_by_reg: IndexId,
-    loop_by_reg: IndexId,
-    sw_by_reg: IndexId,
-    for_by_reg: IndexId,
-    synth_by_reg: IndexId,
-    rw_op: IndexId,
-    app_st: IndexId,
-    loop_init: IndexId,
-    loop_res: IndexId,
-    sw_in: IndexId,
-    sw_arm: IndexId,
-    sw_res: IndexId,
-    for_init: IndexId,
-    for_res: IndexId,
-    yield_by_reg: IndexId,
+    ty_i1: Option<Ty>,
+    ty_i32: Option<Ty>,
+    ty_state: Option<Ty>,
+    ty_exact: Index<Ty, (i64, Ty)>,
+    ty_ret: Index<Ty, (i64, Ty)>,
+    chain_cnt: Index<i64, generated::OutChainCountRow>,
+    join_in: Slots<i64, Val>,
+    reg_port: Results<Reg>,
+    for_port: Slots<i64, Val>,
+    for_body: Index<Reg, generated::OutForBodyClassRow>,
+    moved_by_reg: Index<Reg, generated::OutMovedOpClassRow>,
+    loop_by_reg: Index<Reg, generated::OutLoopClassRow>,
+    sw_by_reg: Index<Reg, generated::OutSwitchClassRow>,
+    for_by_reg: Index<Reg, generated::OutForClassRow>,
+    synth_by_reg: Index<Reg, generated::OutSynthClassRow>,
+    rw_op: Slots<i64, Val>,
+    app_st: Index<i64, generated::OutAppendStateClassRow>,
+    loop_init: Slots<Reg, Val>,
+    loop_res: Results<Reg>,
+    sw_in: Slots<Sw, Val>,
+    sw_arm: Slots<Sw, Reg>,
+    sw_res: Results<Sw>,
+    for_init: Slots<i64, Val>,
+    for_res: Results<i64>,
+    yield_by_reg: Slots<Reg, Val>,
 }
 
 impl Indexes {
-    fn build(db: &mut Database) -> Result<Self, PassError> {
-        let idx = |db: &mut Database, name: &str, col: usize| -> Result<IndexId, PassError> {
-            let t = db.table(name).map_err(rule_err)?;
-            Ok(db.add_kept_index(t, &[col], &[]))
-        };
+    fn build(program: &mut Program<'_>) -> Result<Self, tir_egglog::Error> {
         Ok(Self {
-            reg_orig: db.table("Reg::Orig").map_err(rule_err)?,
-            entry_st: db.table("Val::EntryState").map_err(rule_err)?,
-            split_st: db.table("Val::SplitState").map_err(rule_err)?,
-            join_st: db.table("Val::JoinState").map_err(rule_err)?,
-            ty_i1: db.table("Ty::I1").map_err(rule_err)?,
-            ty_i32: db.table("Ty::I32").map_err(rule_err)?,
-            ty_state: db.table("Ty::State").map_err(rule_err)?,
-            ty_exact: idx(db, "Ty::Exact", 1)?,
-            ty_ret: idx(db, "Ty::RetType", 1)?,
-            chain_cnt: idx(db, "OutChainCount", 0)?,
-            join_in: idx(db, "OutJoinState", 0)?,
-            reg_port: idx(db, "OutRegPort", 0)?,
-            for_port: idx(db, "OutForPort", 0)?,
-            for_body: idx(db, "OutForBody", 0)?,
-            moved_by_reg: idx(db, "OutMovedOp", 1)?,
-            loop_by_reg: idx(db, "OutLoop", 1)?,
-            sw_by_reg: idx(db, "OutSwitch", 1)?,
-            for_by_reg: idx(db, "OutFor", 1)?,
-            synth_by_reg: idx(db, "OutSynth", 1)?,
-            rw_op: idx(db, "OutRewriteOperand", 0)?,
-            app_st: idx(db, "OutAppendState", 0)?,
-            loop_init: idx(db, "OutLoopInit", 0)?,
-            loop_res: idx(db, "OutLoopRes", 0)?,
-            sw_in: idx(db, "OutSwitchIn", 0)?,
-            sw_arm: idx(db, "OutSwitchArm", 0)?,
-            sw_res: idx(db, "OutSwitchRes", 0)?,
-            for_init: idx(db, "OutForInit", 0)?,
-            for_res: idx(db, "OutForRes", 0)?,
-            yield_by_reg: idx(db, "OutYield", 0)?,
+            ty_i1: program.lookup_ty_i1()?,
+            ty_i32: program.lookup_ty_i32()?,
+            ty_state: program.lookup_ty_state()?,
+            ty_exact: program.index_ty_exact_by_result()?,
+            ty_ret: program.index_ty_ret_type_by_result()?,
+            chain_cnt: program.index_out_chain_count_by_region(),
+            join_in: program.index_out_join_state_by_region(),
+            reg_port: program.index_out_reg_port_by_region(),
+            for_port: program.index_out_for_port_by_region(),
+            for_body: program.index_out_for_body_by_region(),
+            moved_by_reg: program.index_out_moved_op_by_region(),
+            loop_by_reg: program.index_out_loop_by_region(),
+            sw_by_reg: program.index_out_switch_by_region(),
+            for_by_reg: program.index_out_for_by_region(),
+            synth_by_reg: program.index_out_synth_by_region(),
+            rw_op: program.index_out_rewrite_operand_by_operation(),
+            app_st: program.index_out_append_state_by_operation(),
+            loop_init: program.index_out_loop_init_by_body(),
+            loop_res: program.index_out_loop_res_by_body(),
+            sw_in: program.index_out_switch_input_by_switch(),
+            sw_arm: program.index_out_switch_arm_by_switch(),
+            sw_res: program.index_out_switch_res_by_switch(),
+            for_init: program.index_out_for_init_by_loop_op(),
+            for_res: program.index_out_for_res_by_loop_op(),
+            yield_by_reg: program.index_out_yield_by_region(),
         })
     }
 }
 
-#[derive(Clone, Copy)]
 enum OpItem {
     Moved(OpId),
-    Loop(EggVal),
-    Switch(EggVal, i64, EggVal),
-    For(EggVal, i64, EggVal, EggVal, EggVal),
-    Synth(EggVal, EggVal, i64, i64, EggVal, EggVal, EggVal),
+    Loop(Reg),
+    Switch(Sw, i64, Val),
+    For(i64, i64, Val, Val, Val),
+    Synth(Val, String, i64, i64, Ty, Val, Val),
 }
 
-fn commit(ctx: &Context, db: &mut Database) -> Result<(), PassError> {
-    let orig_tbl = db.table("OutOrigRegion").map_err(rule_err)?;
-    if db.row_count(orig_tbl) == 0 {
+fn commit(ctx: &Context, program: &mut Program<'_>) -> Result<(), PassError> {
+    if program.out_orig_region().next().is_none() {
         return Ok(());
     }
-    let ix = Indexes::build(db)?;
-    let mut vals: Vec<(EggVal, ValueId)> = db
-        .rows(db.table("Val::Orig").map_err(rule_err)?)
-        .map(|r| (r[1], ValueId::from_number(i(db, r, 0) as u32)))
-        .collect();
+    let ix = Indexes::build(program).map_err(rule_err)?;
+    let mut vals: Vec<(Val, ValueId)> = program
+        .rows_val_orig()
+        .map_err(rule_err)?
+        .map(|row| row.map(|(id, class)| (class, ValueId::from_number(id as u32))))
+        .collect::<Result<_, _>>()
+        .map_err(rule_err)?;
     vals.sort_unstable_by_key(|e| e.0);
 
     let (mut regs, mut reg_order, mut orig_ports) = (Vec::new(), Vec::new(), Vec::new());
 
-    for r in db.rows(orig_tbl) {
-        let (r_key, r_id, entry, is_for, depth) = (
-            r[0],
-            i(db, r, 0),
-            BlockId::from_number(i(db, r, 2) as u32),
-            i(db, r, 3) != 0,
-            i(db, r, 4),
-        );
-        let Some(rk) = db.lookup(ix.reg_orig, &[r_key]) else {
+    for row in program.out_orig_region() {
+        let (r_id, _, entry, is_for, depth) = row.map_err(rule_err)?;
+        let entry = BlockId::from_number(entry as u32);
+        let Some(rk) = program.lookup_reg_orig(r_id).map_err(rule_err)? else {
             continue;
         };
         let rid = RegionId::from_number(r_id as u32);
         let mut ports = ctx.block_arguments(entry);
-        if is_for {
-            for pv in listed_slots(db, ix.for_port, r_key) {
+        if is_for != 0 {
+            for pv in listed_slots(program, &ix.for_port, r_id) {
                 let p = ctx.append_block_argument(entry, TypeId::STATE);
                 set(&mut vals, pv, p.id());
                 ports.push(p);
             }
         }
         set(&mut regs, rk, rid);
-        reg_order.push((depth, rk, Some((r_key, orig_ports.len()))));
+        reg_order.push((depth, rk, Some((r_id, orig_ports.len()))));
         orig_ports.push((rid, rk, ports));
     }
-    for r in db.rows(db.table("OutChildRegion").map_err(rule_err)?) {
-        let (rk, depth) = (r[0], i(db, r, 1));
+    for row in program.out_child_region_classes(tir_egglog::Color::BASE) {
+        let (rk, depth) = row.map_err(rule_err)?;
         let rid = ctx.create_region().id();
-        let ports = listed_pairs(db, ix.reg_port, rk)
+        let ports = listed_pairs(program, &ix.reg_port, rk)
             .into_iter()
             .map(|(tk, vk)| {
-                let v = ctx.create_value(decode_ty(ctx, db, &ix, tk), None);
+                let v = ctx.create_value(decode_ty(ctx, program, &ix, tk), None);
                 set(&mut vals, vk, v.id());
                 v
             })
@@ -211,7 +188,7 @@ fn commit(ctx: &Context, db: &mut Database) -> Result<(), PassError> {
     let mut orig_bodies = Vec::new();
     for &(_, rk, orig_info) in &reg_order {
         let orig = orig_info.map(|(k, idx)| (k, orig_ports[idx].2.as_slice()));
-        let (ops, yields) = populate_region(ctx, db, &ix, &regs, &mut vals, rk, orig);
+        let (ops, yields) = populate_region(ctx, program, &ix, &regs, &mut vals, rk, orig);
         if orig_info.is_some() {
             orig_bodies.push((rk, ops, yields));
         } else {
@@ -222,8 +199,9 @@ fn commit(ctx: &Context, db: &mut Database) -> Result<(), PassError> {
     }
     orig_bodies.sort_unstable_by_key(|e| e.0);
 
-    for r in db.rows(db.table("OutEraseOp").map_err(rule_err)?) {
-        let op_id = OpId::from_number(i(db, r, 0) as u32);
+    for row in program.out_erase_op() {
+        let (id,) = row.map_err(rule_err)?;
+        let op_id = OpId::from_number(id as u32);
         if ctx.has_operation(op_id) {
             ctx.erase_op(&OperationRef::new(ctx.get_op(op_id)))?;
         }
@@ -236,31 +214,34 @@ fn commit(ctx: &Context, db: &mut Database) -> Result<(), PassError> {
         let yields = std::mem::take(&mut orig_bodies[idx].2);
         ctx.set_region_nodes(rid, ports, ops, yields);
     }
-    for r in db.rows(db.table("OutEraseBlock").map_err(rule_err)?) {
-        ctx.erase_block(BlockId::from_number(i(db, r, 0) as u32));
+    for row in program.out_erase_block() {
+        let (id,) = row.map_err(rule_err)?;
+        ctx.erase_block(BlockId::from_number(id as u32));
     }
     Ok(())
 }
 
 fn populate_region(
     ctx: &Context,
-    db: &Database,
+    program: &Program<'_>,
     ix: &Indexes,
-    regs: &[(EggVal, RegionId)],
-    vals: &mut Vec<(EggVal, ValueId)>,
-    rk: EggVal,
-    orig: Option<(EggVal, &[Value])>,
+    regs: &[(Reg, RegionId)],
+    vals: &mut Vec<(Val, ValueId)>,
+    rk: Reg,
+    orig: Option<(i64, &[Value])>,
 ) -> (Vec<OpId>, Vec<ValueId>) {
     let mut ops = Vec::new();
     if let Some((r_key, _)) = orig
-        && let Some(row) = db.listed(ix.chain_cnt, &[r_key]).next()
+        && let Some((_, n)) = indexed(program, &ix.chain_cnt, r_key).next()
     {
-        let n = i(db, row, 1);
         let es = state_ops::entry_state(ctx)
             .state_result(TypeId::STATE)
             .build();
         ops.push(es.id());
-        if let Some(ek) = db.lookup(ix.entry_st, &[r_key]) {
+        if let Some(ek) = program
+            .lookup_val_entry_state(r_key)
+            .expect("EntryState constructor")
+        {
             set(vals, ek, es.result());
         }
         if n > 1 {
@@ -270,7 +251,10 @@ fn populate_region(
                 .build();
             ops.push(sp.id());
             for (idx, val) in sp.states().into_iter().enumerate() {
-                if let Some(sk) = db.lookup(ix.split_st, &[r_key, db.base(idx as i64)]) {
+                if let Some(sk) = program
+                    .lookup_val_split_state(r_key, idx as i64)
+                    .expect("SplitState constructor")
+                {
                     set(vals, sk, val);
                 }
             }
@@ -278,39 +262,37 @@ fn populate_region(
     }
 
     let mut reg_items: Vec<(i64, OpItem)> = Vec::new();
-    for r in db.listed(ix.synth_by_reg, &[rk]) {
+    for (out, _, order, kind, width, literal, ty, lhs, rhs) in
+        indexed(program, &ix.synth_by_reg, rk)
+    {
         reg_items.push((
-            i(db, r, 2),
-            OpItem::Synth(r[0], r[3], i(db, r, 4), i(db, r, 5), r[6], r[7], r[8]),
+            order,
+            OpItem::Synth(out, kind, width, literal, ty, lhs, rhs),
         ));
     }
-    for r in db.listed(ix.moved_by_reg, &[rk]) {
-        reg_items.push((
-            i(db, r, 2),
-            OpItem::Moved(OpId::from_number(i(db, r, 0) as u32)),
-        ));
+    for (id, _, order) in indexed(program, &ix.moved_by_reg, rk) {
+        reg_items.push((order, OpItem::Moved(OpId::from_number(id as u32))));
     }
-    for r in db.listed(ix.loop_by_reg, &[rk]) {
-        reg_items.push((i(db, r, 2), OpItem::Loop(r[0])));
+    for (body, _, order) in indexed(program, &ix.loop_by_reg, rk) {
+        reg_items.push((order, OpItem::Loop(body)));
     }
-    for r in db.listed(ix.sw_by_reg, &[rk]) {
-        reg_items.push((i(db, r, 2), OpItem::Switch(r[0], i(db, r, 3), r[4])));
+    for (switch, _, order, terminator, selector) in indexed(program, &ix.sw_by_reg, rk) {
+        reg_items.push((order, OpItem::Switch(switch, terminator, selector)));
     }
-    for r in db.listed(ix.for_by_reg, &[rk]) {
-        reg_items.push((
-            i(db, r, 2),
-            OpItem::For(r[0], i(db, r, 3), r[4], r[5], r[6]),
-        ));
+    for (for_op, _, order, body, lb, ub, step) in indexed(program, &ix.for_by_reg, rk) {
+        reg_items.push((order, OpItem::For(for_op, body, lb, ub, step)));
     }
     reg_items.sort_unstable_by_key(|e| e.0);
     for (_, item) in reg_items {
-        emit_item(ctx, db, ix, regs, vals, &mut ops, item);
+        emit_item(ctx, program, ix, regs, vals, &mut ops, item);
     }
 
     if let Some((r_key, _)) = orig
-        && let Some(jk) = db.lookup(ix.join_st, &[r_key])
+        && let Some(jk) = program
+            .lookup_val_join_state(r_key)
+            .expect("JoinState constructor")
     {
-        let states = listed_vals(db, ix.join_in, r_key, vals);
+        let states = listed_vals(program, &ix.join_in, r_key, vals);
         let join = state_ops::join(ctx)
             .states(states)
             .state_result(TypeId::STATE)
@@ -319,14 +301,14 @@ fn populate_region(
         set(vals, jk, join.result());
     }
 
-    let mut yields = listed_vals(db, ix.yield_by_reg, rk, vals);
+    let mut yields = listed_vals(program, &ix.yield_by_reg, rk, vals);
     if let Some((_, ports)) = orig
-        && let Some(row) = db.listed(ix.for_body, &[rk]).next()
+        && let Some((_, iv, ub, step)) = indexed(program, &ix.for_body, rk).next()
     {
         let (iv, ub, step) = (
-            get(vals, row[1]).expect("iv"),
-            get(vals, row[2]).expect("ub"),
-            get(vals, row[3]).expect("step"),
+            get(vals, iv).expect("iv"),
+            get(vals, ub).expect("ub"),
+            get(vals, step).expect("step"),
         );
         let cmp = b::CmpIOpBuilder::new(ctx)
             .lhs(iv)
@@ -352,10 +334,10 @@ fn populate_region(
 
 fn emit_item(
     ctx: &Context,
-    db: &Database,
+    program: &Program<'_>,
     ix: &Indexes,
-    regs: &[(EggVal, RegionId)],
-    vals: &mut Vec<(EggVal, ValueId)>,
+    regs: &[(Reg, RegionId)],
+    vals: &mut Vec<(Val, ValueId)>,
     ops: &mut Vec<OpId>,
     item: OpItem,
 ) {
@@ -364,13 +346,13 @@ fn emit_item(
             if get(vals, out_k).is_some() {
                 return;
             }
-            let v = match db.base_value::<String>(kind_k).as_str() {
+            let v = match kind_k.as_str() {
                 "const" => {
                     let op = b::constant(ctx, b_val, IntegerType::new(ctx, a as u64)).build();
                     ops.push(op.id());
                     op.result()
                 }
-                "zero" => make_zero(ctx, ops, decode_ty(ctx, db, ix, ty_k)),
+                "zero" => make_zero(ctx, ops, decode_ty(ctx, program, ix, ty_k)),
                 "not" => {
                     let i1 = IntegerType::new(ctx, 1);
                     let one = b::constant(ctx, 1, i1).build();
@@ -410,19 +392,19 @@ fn emit_item(
             set(vals, out_k, v);
         }
         OpItem::Moved(op_id) => {
-            let ok = db.base(i64::from(op_id.raw()));
-            for r in db.listed(ix.rw_op, &[ok]) {
-                ctx.set_op_operand(op_id, i(db, r, 1) as usize, get(vals, r[2]).expect("rw"));
+            let key = i64::from(op_id.raw());
+            for (_, slot, value) in indexed(program, &ix.rw_op, key) {
+                ctx.set_op_operand(op_id, slot as usize, get(vals, value).expect("rw"));
             }
-            for r in db.listed(ix.app_st, &[ok]) {
-                ctx.append_operand(op_id, get(vals, r[1]).expect("state"));
-                set(vals, r[2], ctx.append_result(op_id, TypeId::STATE));
+            for (_, input, output) in indexed(program, &ix.app_st, key) {
+                ctx.append_operand(op_id, get(vals, input).expect("state"));
+                set(vals, output, ctx.append_result(op_id, TypeId::STATE));
             }
             ops.push(op_id);
         }
         OpItem::Loop(body_rk) => {
-            let inits = listed_vals(db, ix.loop_init, body_rk, vals);
-            let (tys, rvals) = res_spec(ctx, db, ix, ix.loop_res, body_rk);
+            let inits = listed_vals(program, &ix.loop_init, body_rk, vals);
+            let (tys, rvals) = res_spec(ctx, program, ix, &ix.loop_res, body_rk);
             let op = LoopOpBuilder::new(ctx)
                 .inits(inits)
                 .body(get(regs, body_rk).expect("body"))
@@ -432,12 +414,12 @@ fn emit_item(
             bind_results(ctx, vals, op.id(), &rvals);
         }
         OpItem::Switch(sw, term_id, pred_k) => {
-            let inputs = listed_vals(db, ix.sw_in, sw, vals);
-            let arms = listed_slots(db, ix.sw_arm, sw)
+            let inputs = listed_vals(program, &ix.sw_in, sw, vals);
+            let arms = listed_slots(program, &ix.sw_arm, sw)
                 .into_iter()
                 .map(|a| get(regs, a).expect("arm"))
                 .collect();
-            let (tys, rvals) = res_spec(ctx, db, ix, ix.sw_res, sw);
+            let (tys, rvals) = res_spec(ctx, program, ix, &ix.sw_res, sw);
             let mut bld = SwitchOpBuilder::new(ctx)
                 .predicate(get(vals, pred_k).expect("sw pred"))
                 .inputs(inputs)
@@ -455,8 +437,8 @@ fn emit_item(
             bind_results(ctx, vals, op.id(), &rvals);
         }
         OpItem::For(for_k, body_r, lb_k, ub_k, step_k) => {
-            let inits = listed_vals(db, ix.for_init, for_k, vals);
-            let (tys, rvals) = res_spec(ctx, db, ix, ix.for_res, for_k);
+            let inits = listed_vals(program, &ix.for_init, for_k, vals);
+            let (tys, rvals) = res_spec(ctx, program, ix, &ix.for_res, for_k);
             let op = ForOpBuilder::new(ctx)
                 .lb(get(vals, lb_k).expect("lb"))
                 .inits(inits)
@@ -471,25 +453,22 @@ fn emit_item(
     }
 }
 
-fn decode_ty(ctx: &Context, db: &Database, ix: &Indexes, ty_k: EggVal) -> TypeId {
-    if db.lookup(ix.ty_i1, &[]) == Some(ty_k) {
+fn decode_ty(ctx: &Context, program: &Program<'_>, ix: &Indexes, ty: Ty) -> TypeId {
+    if ix.ty_i1 == Some(ty) {
         IntegerType::new(ctx, 1)
-    } else if db.lookup(ix.ty_i32, &[]) == Some(ty_k) {
+    } else if ix.ty_i32 == Some(ty) {
         IntegerType::new(ctx, 32)
-    } else if db.lookup(ix.ty_state, &[]) == Some(ty_k) {
+    } else if ix.ty_state == Some(ty) {
         TypeId::STATE
-    } else if let Some(r) = db.listed(ix.ty_exact, &[ty_k]).next() {
-        TypeId::from_number(i(db, r, 0) as u32)
-    } else if let Some(r) = db.listed(ix.ty_ret, &[ty_k]).next() {
-        match ctx
-            .get_op(OpId::from_number(i(db, r, 0) as u32))
-            .attr("ret_type")
-        {
-            Some(AttributeValue::Type(t)) => t,
+    } else if let Some((id, _)) = indexed(program, &ix.ty_exact, ty).next() {
+        TypeId::from_number(id as u32)
+    } else if let Some((id, _)) = indexed(program, &ix.ty_ret, ty).next() {
+        match ctx.get_op(OpId::from_number(id as u32)).attr("ret_type") {
+            Some(AttributeValue::Type(ty)) => ty,
             _ => UnitType::new(ctx),
         }
     } else {
-        unreachable!("unknown Ty e-class {ty_k:?}")
+        unreachable!("missing constructor for generated restructuring type")
     }
 }
 
@@ -524,58 +503,66 @@ fn make_zero(ctx: &Context, ops: &mut Vec<OpId>, ty: TypeId) -> ValueId {
     op.result()
 }
 
-fn res_spec(
+fn res_spec<K>(
     ctx: &Context,
-    db: &Database,
+    program: &Program<'_>,
     ix: &Indexes,
-    idx: IndexId,
-    key: EggVal,
-) -> (Vec<TypeId>, Vec<EggVal>) {
-    listed_pairs(db, idx, key)
+    index: &Results<K>,
+    key: K,
+) -> (Vec<TypeId>, Vec<Val>) {
+    listed_pairs(program, index, key)
         .into_iter()
-        .map(|(tk, rv)| (decode_ty(ctx, db, ix, tk), rv))
+        .map(|(ty, result)| (decode_ty(ctx, program, ix, ty), result))
         .unzip()
 }
 
-fn bind_results(ctx: &Context, vals: &mut Vec<(EggVal, ValueId)>, op: OpId, rvals: &[EggVal]) {
+fn bind_results(ctx: &Context, vals: &mut Vec<(Val, ValueId)>, op: OpId, rvals: &[Val]) {
     rvals
         .iter()
         .zip(ctx.get_op(op).results())
         .for_each(|(&rv, res_v)| set(vals, rv, res_v));
 }
 
-fn listed_vals(
-    db: &Database,
-    idx: IndexId,
-    key: EggVal,
-    vals: &[(EggVal, ValueId)],
+fn listed_vals<K>(
+    program: &Program<'_>,
+    index: &Slots<K, Val>,
+    key: K,
+    vals: &[(Val, ValueId)],
 ) -> Vec<ValueId> {
-    listed_slots(db, idx, key)
+    listed_slots(program, index, key)
         .into_iter()
         .map(|vk| get(vals, vk).expect("val"))
         .collect()
 }
 
-fn listed_slots(db: &Database, idx: IndexId, key: EggVal) -> Vec<EggVal> {
-    let mut v: Vec<_> = db
-        .listed(idx, &[key])
-        .map(|r| (i(db, r, 1), r[2]))
+fn listed_slots<K, V>(program: &Program<'_>, index: &Slots<K, V>, key: K) -> Vec<V> {
+    let mut slots: Vec<_> = indexed(program, index, key)
+        .map(|(_, slot, value)| (slot, value))
         .collect();
-    v.sort_unstable_by_key(|e| e.0);
-    v.into_iter().map(|e| e.1).collect()
+    slots.sort_unstable_by_key(|e| e.0);
+    slots.into_iter().map(|(_, value)| value).collect()
 }
 
-fn listed_pairs(db: &Database, idx: IndexId, key: EggVal) -> Vec<(EggVal, EggVal)> {
-    let mut v: Vec<_> = db
-        .listed(idx, &[key])
-        .map(|r| (i(db, r, 1), r[2], r[3]))
+fn listed_pairs<K>(program: &Program<'_>, index: &Results<K>, key: K) -> Vec<(Ty, Val)> {
+    let mut pairs: Vec<_> = indexed(program, index, key)
+        .map(|(_, slot, ty, value)| (slot, ty, value))
         .collect();
-    v.sort_unstable_by_key(|e| e.0);
-    v.into_iter().map(|e| (e.1, e.2)).collect()
+    pairs.sort_unstable_by_key(|e| e.0);
+    pairs
+        .into_iter()
+        .map(|(_, ty, value)| (ty, value))
+        .collect()
 }
 
-fn i(db: &Database, r: Row<'_>, c: usize) -> i64 {
-    db.base_value::<i64>(r[c])
+fn indexed<'a, K, R>(
+    program: &'a Program<'_>,
+    index: &Index<K, R>,
+    key: K,
+) -> impl Iterator<Item = R> + use<'a, K, R> {
+    program
+        .listed(index, key)
+        .expect("restructuring index")
+        .map(Result::unwrap)
 }
 
 fn get<K: Ord, V: Copy>(map: &[(K, V)], key: K) -> Option<V> {

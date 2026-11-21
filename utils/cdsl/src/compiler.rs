@@ -4,13 +4,14 @@ mod imports;
 mod sources;
 
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 
 use crate::{
-    ast::{Ast, Declaration, Node},
+    ast::{Ast, Declaration, EngineBinding, Node, Path as CdslPath},
     error::Error,
     lexer::{Span, TokenStream},
     parser,
@@ -30,6 +31,7 @@ pub struct Program {
     pub modules: Vec<CompiledModule>,
     support: Vec<CompiledModule>,
     pub(crate) module_exports: BTreeMap<Vec<String>, BTreeMap<String, Vec<String>>>,
+    pub(crate) references: BTreeMap<CdslPath, Vec<BTreeSet<CdslPath>>>,
 }
 
 impl Program {
@@ -88,7 +90,21 @@ impl Program {
             modules,
             support: self.support,
             module_exports: self.module_exports,
+            references: self.references,
         })
+    }
+
+    pub(crate) fn exported_module<'a>(&'a self, selector: &'a [String]) -> Option<&'a [String]> {
+        let mut selected = selector;
+        if !self.module_exports.contains_key(selected) {
+            selected = &[];
+            for component in selector {
+                selected = self.module_exports.get(selected)?.get(component)?;
+            }
+        }
+        self.module_exports
+            .contains_key(selected)
+            .then_some(selected)
     }
 }
 
@@ -107,6 +123,7 @@ fn load_file(file: &Path) -> Result<Program, Error> {
         modules: Vec::new(),
         support: Vec::new(),
         module_exports: BTreeMap::new(),
+        references: BTreeMap::new(),
     };
     load_module(
         &mut program,
@@ -128,6 +145,15 @@ pub fn compile_source(source: &str) -> Result<Program, Error> {
 
 /// Compile a workspace member's defs/lib.cdsl, located by its package name.
 pub fn resolve_crate(name: &str) -> Result<Program, Error> {
+    compile_file(&resolve_package_defs(name, false)?)
+}
+
+/// Resolve the package prefix of a build selector by Cargo name or directory.
+pub fn resolve_program_package(prefix: &str) -> Result<Program, Error> {
+    compile_file(&resolve_package_defs(prefix, true)?)
+}
+
+pub(crate) fn resolve_package_defs(name: &str, allow_directory: bool) -> Result<PathBuf, Error> {
     let current = std::env::current_dir().map_err(|error| Error(error.to_string()))?;
     for root in current.ancestors() {
         let manifest = root.join("Cargo.toml");
@@ -159,8 +185,9 @@ pub fn resolve_crate(name: &str) -> Result<Program, Error> {
                 .and_then(|value| value.trim_start().strip_prefix('"'))
                 .and_then(|value| value.split_once('"'))
                 .is_some_and(|(package, _)| package == name)
+                || (allow_directory && directory.file_name().is_some_and(|part| part == name))
             {
-                return compile_file(&directory.join("defs/lib.cdsl"));
+                return Ok(directory.join("defs/lib.cdsl"));
             }
         }
         return Err(Error(format!(
@@ -242,6 +269,7 @@ fn compile_single(ast: Ast, file: &Path) -> Result<Program, Error> {
         }],
         support: Vec::new(),
         module_exports: BTreeMap::new(),
+        references: BTreeMap::new(),
     };
     finish(program)
 }
@@ -438,6 +466,7 @@ struct Scope<'a> {
     resolved: bool,
     exported: &'a BTreeSet<Vec<String>>,
     exports: &'a BTreeMap<Vec<String>, BTreeMap<String, Vec<String>>>,
+    references: RefCell<BTreeSet<CdslPath>>,
 }
 
 fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
@@ -529,6 +558,7 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
     let imports = imports::resolve(&program.modules, &entries)?;
     let exports = imports.exports;
     let imports = imports.bindings;
+    program.references.clear();
     for module in &mut program.modules {
         let symbols = visible_symbols(&entries, &module.package, &module.path);
         let empty = BTreeMap::new();
@@ -571,7 +601,9 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             resolved,
             exported: &exported,
             exports: &exports,
+            references: RefCell::default(),
         };
+        let mut references = Vec::with_capacity(module.ast.declarations.len());
         for declaration in &mut module.ast.declarations {
             let offset = match module.ast.token_spans.get(declaration.range.start) {
                 Some(Span::Source(range)) => range.start,
@@ -579,7 +611,9 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             };
             resolve_declaration(declaration, &scope)
                 .map_err(|error| Error(format!("{}:{offset}: {error}", module.file.display())))?;
+            references.push(scope.references.take());
         }
+        program.references.insert(module.path.clone(), references);
     }
     program.module_exports = exports;
     Ok(())
@@ -609,10 +643,14 @@ fn visible_symbols(
 }
 
 fn resolve_path(path: &[String], scope: &Scope<'_>) -> Option<Vec<String>> {
-    if scope.resolved && (scope.symbols.contains(path) || scope.exported.contains(path)) {
-        return Some(path.to_vec());
-    }
-    resolve_lexical_path(path, scope)
+    let resolved =
+        if scope.resolved && (scope.symbols.contains(path) || scope.exported.contains(path)) {
+            path.to_vec()
+        } else {
+            resolve_lexical_path(path, scope)?
+        };
+    scope.references.borrow_mut().insert(resolved.clone());
+    Some(resolved)
 }
 
 fn resolve_lexical_path(path: &[String], scope: &Scope<'_>) -> Option<Vec<String>> {
@@ -719,7 +757,12 @@ fn resolve_declaration(
             }
             Ok(())
         }
-        Declaration::Axiom { generics, ty, .. } => {
+        Declaration::Axiom {
+            generics,
+            ty,
+            engine,
+            ..
+        } => {
             let mut locals = BTreeSet::new();
             for generic in generics {
                 if let Some(ty) = &mut generic.ty {
@@ -728,6 +771,10 @@ fn resolve_declaration(
                 locals.insert(generic.name.clone());
             }
             resolve_expr(ty, scope, &locals)?;
+            if let Some(EngineBinding::Table(path)) = engine {
+                *path = resolve_path(path, scope)
+                    .ok_or_else(|| format!("unresolved table {}", path.join("::")))?;
+            }
             Ok(())
         }
     }

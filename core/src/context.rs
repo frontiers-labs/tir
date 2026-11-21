@@ -3,6 +3,11 @@ mod keys;
 mod op_spec;
 mod queries;
 mod records;
+
+#[allow(dead_code)]
+mod ir_program {
+    include!(concat!(env!("OUT_DIR"), "/ir_program.rs"));
+}
 use crate::{
     Dialect, Error, OpId, Operation, OperationParser, TypeId,
     attributes::{AttributeValue, NamedAttribute},
@@ -102,11 +107,19 @@ struct Inner {
 impl Context {
     pub fn new() -> Self {
         let mut engine = EGraph::default();
-        tir_egglog::Program::from_bytes(tir_ir_schema::IR_SCHEMA, engine.database_mut())
-            .unwrap_or_else(|error| panic!("IR schema: {error}"));
-        engine
-            .attach_program(tir_ir_schema::IR_RULES)
-            .unwrap_or_else(|error| panic!("IR rules: {error}"));
+        ir_program::bind_std_ir_integer_width(
+            engine.database_mut(),
+            tir_symbolic::term::integer_width,
+        )
+        .unwrap_or_else(|error| panic!("IR integer width: {error}"));
+        ir_program::bind_std_ir_type_argument(
+            engine.database_mut(),
+            tir_symbolic::term::type_argument,
+        )
+        .unwrap_or_else(|error| panic!("IR type argument: {error}"));
+        ir_program::bind_std_ir_fp_format(engine.database_mut(), tir_symbolic::term::fp_format)
+            .unwrap_or_else(|error| panic!("IR floating-point format: {error}"));
+        ir_program::attach(&mut engine).unwrap_or_else(|error| panic!("IR rules: {error}"));
         keys::install(&mut engine).expect("IR entity keys");
         let queries = queries::Queries::new(engine.database());
         op_spec::install(&mut engine);
@@ -153,83 +166,7 @@ impl Context {
     pub(crate) fn eqsat_database(&self) -> Result<tir_egglog::Database, tir_egglog::Error> {
         let mut db = self.egraph().database().clone();
         attribute_store::bind_integer_attributes(&mut db)?;
-        let int = db.sort("i64")?;
-        db.add_primitive(
-            "eqsat-width",
-            tir_egglog::Signature {
-                inputs: vec![int],
-                output: int,
-            },
-            |p, args| {
-                let [encoded] = args else { return None };
-                Some(p.base(tir_symbolic::term::integer_width(p, *encoded)?))
-            },
-        );
         Ok(db)
-    }
-
-    pub(crate) fn eqsat_layout_values(
-        &self,
-        db: &mut tir_egglog::Database,
-    ) -> Result<(), tir_egglog::Error> {
-        let queries = db.table("EqSatLayoutQuery")?;
-        let values = db.table("EqSatLayoutValue")?;
-        let scoped = db.table("EqSatLayoutScoped")?;
-        let pointer_sizes = db.table("EqSatPointerSize")?;
-        let store_layout = db.table("EqSatStoreLayout")?;
-        let requests: Vec<_> = db
-            .rows(queries)
-            .map(|row| (row[0], db.base_value::<String>(row[1])))
-            .collect();
-        for (key, kind) in requests {
-            let Ok(id) = u32::try_from(db.base_value::<i64>(key)) else {
-                continue;
-            };
-            let id = OpId::from_number(id);
-            let Some(layout) = crate::layout::DataLayout::for_op(self, id) else {
-                continue;
-            };
-            let op = self.get_op(id);
-            if matches!(kind.as_str(), "ptr.store" | "ptr.load" | "ptr.ptradd") {
-                if let Some(width) = layout.pointer_size().filter(|&width| width != 0) {
-                    db.insert(pointer_sizes, &[key, db.base(i64::from(width))])?;
-                }
-                if kind == "ptr.store"
-                    && let Some(data) = op.operands().first()
-                    && let Some(access) = layout.layout_of(self.get_value(*data).ty())
-                    && let Ok(size) = access.size.to_string().parse::<tir_egglog::sort::BigInt>()
-                    && let Ok(align) = access.align.to_string().parse::<tir_egglog::sort::BigInt>()
-                {
-                    db.insert(store_layout, &[key, db.base(size), db.base(align)])?;
-                }
-                if kind == "ptr.ptradd"
-                    && let Some(offset) = op.operands().get(1)
-                    && let Some(ty) =
-                        crate::builtin::IntegerType::view(self, self.get_value(*offset).ty())
-                    && layout.index_width().map(u64::from) == Some(ty.width())
-                {
-                    db.insert(scoped, &[key])?;
-                }
-                continue;
-            }
-            let Some(AttributeValue::Type(ty)) = op.attr("ty") else {
-                continue;
-            };
-            let answer = match kind.as_str() {
-                "layout.sizeof" => layout.layout_of(ty).map(|value| value.size),
-                "layout.alignof" => layout.layout_of(ty).map(|value| value.align),
-                "layout.offsetof" => op
-                    .attr("field")
-                    .and_then(|field| layout.offset_in_bits(ty, field.as_str()?)),
-                _ => None,
-            };
-            if let Some(bits) =
-                answer.and_then(|value| value.to_string().parse::<tir_egglog::sort::BigInt>().ok())
-            {
-                db.insert(values, &[key, db.base(bits)])?;
-            }
-        }
-        Ok(())
     }
 
     fn engine(&self) -> RefMut<'_, EGraph> {

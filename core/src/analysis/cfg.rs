@@ -3,26 +3,15 @@
 
 use crate::{AnalysisManager, Context, OpId, PassError};
 
-const CFG_SCHEMA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cfg-analysis-schema.bin"));
-const CFG_RULES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cfg-analysis-rules.bin"));
-const CFG_PRODUCERS: &[(&str, &[&str], &[&str])] =
-    include!(concat!(env!("OUT_DIR"), "/cfg-analysis-producers.rs"));
-
-/// Terminal tables whose transitive prerequisites cover the full Reissmann §5.1.2 catalog.
-const TERMINAL_TABLES: &[&str] = &[
-    "CfgIdom",
-    "DagTopoRank",
-    "TailLoop",
-    "BranchOutput",
-    "LoopExitOnly",
-    "TopHammock",
-    "IrredLoop",
-];
+#[allow(dead_code)]
+pub(super) mod generated {
+    include!(concat!(env!("OUT_DIR"), "/cfg_analysis.rs"));
+}
 
 /// Ensure the CDSL CFG + Reissmann §5.1.2 analysis catalog is installed on `context`.
 pub fn ensure_installed(context: &Context) -> Result<(), PassError> {
     if !context.analyses().is_installed() {
-        AnalysisManager::install_precompiled(context, CFG_SCHEMA, CFG_RULES, CFG_PRODUCERS)
+        AnalysisManager::install_cfg(context)
             .map_err(|error| PassError::InvalidRuleSet(error.to_string()))?;
     }
     Ok(())
@@ -31,8 +20,19 @@ pub fn ensure_installed(context: &Context) -> Result<(), PassError> {
 /// Refresh all Reissmann §5.1.2 CFG, Control Tree, Demand, and Memory Chain tables for `root`.
 pub fn refresh(context: &Context, root: OpId) -> Result<(), PassError> {
     ensure_installed(context)?;
-    for &table in TERMINAL_TABLES {
-        AnalysisManager::require(context, root, table)
+    use generated::*;
+    type ResolveTable = fn(&tir_egglog::Database) -> Result<tir_egglog::TableId, tir_egglog::Error>;
+    let tables: [ResolveTable; 7] = [
+        table_cfg_idom,
+        table_dag_topo_rank,
+        table_tail_loop,
+        table_branch_output,
+        table_loop_exit_only,
+        table_top_hammock,
+        table_irred_loop,
+    ];
+    for table in tables {
+        AnalysisManager::require_table(context, root, table)
             .map_err(|error| PassError::InvalidRuleSet(error.to_string()))?;
     }
     Ok(())

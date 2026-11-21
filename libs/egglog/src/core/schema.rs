@@ -287,6 +287,8 @@ pub enum Error {
         column: usize,
         value: Value,
     },
+    /// A typed e-class handle belongs to a different database.
+    ForeignClass,
     /// `set_shapes` got the wrong number of shapes.
     Shape {
         table: String,
@@ -353,6 +355,7 @@ impl fmt::Display for Error {
             } => {
                 write!(f, "column {column} of `{table}` holds ids, got {value:?}")
             }
+            Self::ForeignClass => write!(f, "e-class belongs to a different database"),
             Self::Shape {
                 table,
                 expected,

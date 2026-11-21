@@ -25,11 +25,10 @@ fn emit_fixed_operation(
     fields: &[Node<OpField>],
     output: &mut String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let name = binding.path.last().ok_or("operation has no name")?;
-    let dialect = match module {
-        [dialects, module] if dialects == "dialects" => module,
-        _ => "builtin",
-    };
+    let identity = binding
+        .operation_name(module)
+        .ok_or("operation has no name")?;
+    let (dialect, name) = identity.split_once('.').ok_or("operation has no dialect")?;
     let host_path: Path = module
         .iter()
         .cloned()
@@ -186,16 +185,17 @@ fn emit_fixed_operation(
         };
         let canonical = path.last().ok_or("interface has no declaration name")?;
         if let Some(native) = rust_trait(program, path)? {
-            let inherits = inherited.contains(&native);
-            if !inherits && !default_methods(native, methods) {
-                return Err("interface methods require a native implementation".into());
-            }
-            interfaces.push((native, format!("tir::{native}"), !inherits));
+            let implementation = if inherited.contains(&native) {
+                None
+            } else {
+                Some(native_methods(native, methods)?)
+            };
+            interfaces.push((native, format!("tir::{native}"), implementation));
         } else if methods.is_empty() {
             interfaces.push((
                 name.as_str(),
                 format!("super::__cdsl_values::r#{canonical}"),
-                true,
+                Some(String::new()),
             ));
         } else {
             return Err("generated interface methods require Rust lowering".into());
@@ -203,7 +203,7 @@ fn emit_fixed_operation(
     }
     for interface in inherited {
         if !interfaces.iter().any(|(name, _, _)| *name == interface) {
-            interfaces.push((interface, format!("tir::{interface}"), false));
+            interfaces.push((interface, format!("tir::{interface}"), None));
         }
     }
 
@@ -265,14 +265,40 @@ pub(super) fn rust_trait<'a>(
     Ok(Some(rust_name))
 }
 
-fn default_methods(interface: &str, methods: &[(String, Expr)]) -> bool {
-    methods.iter().all(|(method, expression)| {
-        matches!((interface, method.as_str()), ("Commutative", "is_commutative") | ("Speculatable", "is_speculatable"))
-            && matches!(&expression.value, Expression::Function(function)
-                if function.parameters.is_empty()
-                    && function.body.bindings.is_empty()
-                    && matches!(function.body.value.value, Expression::Literal(Literal::Bool(true))))
-    })
+fn native_methods(interface: &str, methods: &[(String, Expr)]) -> Result<String, &'static str> {
+    let unsupported = "interface methods require a native implementation";
+    let mut implementation = String::new();
+    for (method, expression) in methods {
+        let Expression::Function(function) = &expression.value else {
+            return Err(unsupported);
+        };
+        if !function.parameters.is_empty() || !function.body.bindings.is_empty() {
+            return Err(unsupported);
+        }
+        let body = &function.body.value.value;
+        match ((interface, method.as_str()), body) {
+            (
+                ("Commutative", "is_commutative") | ("Speculatable", "is_speculatable"),
+                Expression::Literal(Literal::Bool(true)),
+            ) => {}
+            (("OpCost", "cost"), Expression::Call { value, arguments })
+                if type_argument(value, &["std", "bits", "literal"]).is_some_and(|width| {
+                    matches!(&width.value, Expression::Literal(Literal::Natural(width)) if width == "32")
+                }) =>
+            {
+                let [argument] = arguments.as_slice() else {
+                    return Err(unsupported);
+                };
+                let Expression::Literal(Literal::Natural(cost)) = &argument.value else {
+                    return Err(unsupported);
+                };
+                let cost = cost.parse::<u32>().map_err(|_| "operation cost exceeds u32")?;
+                implementation = format!("fn cost(&self) -> u32 {{ {cost} }}");
+            }
+            _ => return Err(unsupported),
+        }
+    }
+    Ok(implementation)
 }
 
 fn attributes<'a>(
@@ -469,7 +495,7 @@ fn emit_fixed_result_op(
     operands: &[(&str, &str)],
     result: Option<(&str, &str)>,
     attribute_specs: &[(&str, &str)],
-    interfaces: &[(&str, String, bool)],
+    interfaces: &[(&str, String, Option<String>)],
     (region, custom_format): (Option<&str>, bool),
 ) -> Result<String, std::fmt::Error> {
     let mut operand_schema = String::new();
@@ -572,10 +598,13 @@ fn emit_fixed_result_op(
     let mut interface_names = String::new();
     let mut implementations = String::new();
     let mut registrations = String::new();
-    for (interface, rust_path, default_implementation) in interfaces {
+    for (interface, rust_path, implementation) in interfaces {
         writeln!(interface_names, "{interface:?},")?;
-        if *default_implementation {
-            writeln!(implementations, "impl {rust_path} for {rust_name} {{}}")?;
+        if let Some(body) = implementation {
+            writeln!(
+                implementations,
+                "impl {rust_path} for {rust_name} {{{body}}}"
+            )?;
         }
         writeln!(
             implementations,

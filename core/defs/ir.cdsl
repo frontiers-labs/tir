@@ -1,0 +1,125 @@
+pub use std::ir::integer_width;
+pub use std::ir::type_argument;
+pub use std::ir::fp_format;
+
+// IR entity IDs are nonnegative. A missing optional ID or slot is encoded as -1.
+pub let Operation: { id: Int, kind: std::ir::OperationKind, placement: String, container: Int, position: Int, display: Int, location: Int } -> Prop as "Operation";
+pub let Region: (Int, String, Int, Int, Int) -> Prop as "Region"; // id, mode, owner, slot, entry
+pub let Block: (Int, Int, Int) -> Prop as "Block"; // id, region, layout
+pub let Value: (Int, Int, String, Int, Int, Int) -> Prop as "Value"; // id, type, definition kind, owner, slot, declared type
+pub let Operand: (Int, Int, Int) -> Prop as tables::Operand;
+pub let Yield: (Int, Int, Int) -> Prop as tables::Yield;
+pub let Successor: (Int, Int, Int) -> Prop as tables::Successor;
+pub let SuccessorArgument: (Int, Int, Int, Int) -> Prop as tables::SuccessorArgument;
+pub let Attribute: (String, Int, String, Int) -> Prop as tables::Attribute; // owner kind, owner, name, typed attribute handle
+pub let Binding: (Int, String, Int, Int) -> Prop as tables::Binding; // region, role, from slot, to slot
+pub let Control: (Int, Bool, Int, Bool, Int, Int, String) -> Prop as "Control"; // operation, gamma present, selector slot, theta present, body, predicate slot, continuation polarity
+pub let Arm: (Int, Bool, String, Int) -> Prop as tables::Arm; // operation, default flag, canonical case integer, region
+// Payload handles identify immutable values interned by this engine.
+pub let TypeTerm: (Int, Int, Int) -> Prop as "TypeTerm"; // type ID, constructor ID, interned arguments
+pub let TypeCtor: (Int, String, String, Int, Int) -> Prop as "TypeCtor"; // constructor ID, dialect, name, declaration, default
+pub let Symbol: (Int, String, Int, Int) -> Prop as "Symbol"; // symbol ID, spelling, optional type-name entity, kind
+// The empty interface names the operation declaration. Other rows register
+// its interface implementations. The type key distinguishes Rust interfaces
+// with identical spellings from different crates.
+pub let OpSpec: (String, String, Int, Int) -> Prop as tables::OpSpec;
+
+pub let CyclePath: (Int, Int, Int) -> Prop as "CyclePath"; // graph, candidate start, reachable operation
+pub let ReaderAt: (Int, Int, Int) -> Prop as "ReaderAt"; // reader, enclosing region, immediate member
+pub let DependsOn: (Int, Int, Int) -> Prop as "DependsOn"; // graph, consumer, immediate producer
+pub let Bypass: (Int, Int, Int) -> Prop as "Bypass"; // CFG region, avoided defining block, reachable block
+pub use std::int::equal as equal_id;
+pub use std::int::less as less_id;
+pub mod structure {
+    pub let graph<operation, kind, region, position, display, location>:
+        Operation{ id: operation, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }() -> ReaderAt(operation, region, operation);
+    pub let cfg<operation, kind, block, position, display, location, region, layout>:
+        (
+            Operation{ id: operation, kind: kind, placement: "block", container: block, position: position, display: display, location: location }(),
+            Block(block, region, layout)
+        ) -> ReaderAt(operation, region, operation);
+    pub let lift<reader, region, member, mode, parent, region_slot, entry, outer, representative>:
+        (
+            ReaderAt(reader, region, member),
+            Region(region, mode, parent, region_slot, entry),
+            ReaderAt(parent, outer, representative)
+        ) -> ReaderAt(reader, outer, representative);
+    pub let operand_dep<operation, slot, value, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>:
+        (
+            Operand(operation, slot, value),
+            Value(value, ty, "result", producer, result_slot, declared),
+            ReaderAt(operation, region, sibling),
+            Operation{ id: producer, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }()
+        ) -> DependsOn(region, sibling, producer);
+    pub let yield_dep<inner, slot, value, mode, operation, region_slot, entry, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>:
+        (
+            Yield(inner, slot, value),
+            Region(inner, mode, operation, region_slot, entry),
+            Value(value, ty, "result", producer, result_slot, declared),
+            ReaderAt(operation, region, sibling),
+            Operation{ id: producer, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }()
+        ) -> DependsOn(region, sibling, producer);
+}
+pub mod flow {
+    pub let start<region, start_op, next_op>:
+        (
+            DependsOn(region, start_op, next_op),
+            std::int::less(next_op, start_op) == false
+        ) -> CyclePath(region, start_op, next_op);
+    pub let path<region, start_op, next_op, end_op>:
+        (
+            CyclePath(region, start_op, next_op),
+            DependsOn(region, next_op, end_op)
+        ) -> CyclePath(region, start_op, end_op);
+    pub let avoid_param<operation, kind, use_block, position, display, location, slot, value, ty, definition, result_slot, declared, region, layout, other_layout, mode, owner, region_slot, entry>:
+        (
+            Operation{ id: operation, kind: kind, placement: "block", container: use_block, position: position, display: display, location: location }(),
+            Operand(operation, slot, value),
+            Value(value, ty, "block", definition, result_slot, declared),
+            Block(use_block, region, layout),
+            Block(definition, region, other_layout),
+            Region(region, mode, owner, region_slot, entry),
+            std::int::equal(use_block, definition) == false,
+            std::int::equal(definition, entry) == false,
+            std::int::less(entry, 0) == false
+        ) -> Bypass(region, definition, entry);
+    pub let avoid_result<operation, kind, use_block, position, display, location, slot, value, ty, producer, result_slot, declared, producer_kind, definition, producer_pos, producer_display, producer_location, region, layout, other_layout, mode, owner, region_slot, entry>:
+        (
+            Operation{ id: operation, kind: kind, placement: "block", container: use_block, position: position, display: display, location: location }(),
+            Operand(operation, slot, value),
+            Value(value, ty, "result", producer, result_slot, declared),
+            Operation{ id: producer, kind: producer_kind, placement: "block", container: definition, position: producer_pos, display: producer_display, location: producer_location }(),
+            Block(use_block, region, layout),
+            Block(definition, region, other_layout),
+            Region(region, mode, owner, region_slot, entry),
+            std::int::equal(use_block, definition) == false,
+            std::int::equal(definition, entry) == false,
+            std::int::less(entry, 0) == false
+        ) -> Bypass(region, definition, entry);
+    pub let bypass<region, definition, current, terminator, kind, position, display, location, layout, slot, target, other_layout>:
+        (
+            Bypass(region, definition, current),
+            Block(current, region, layout),
+            Operation{ id: terminator, kind: kind, placement: "block", container: current, position: position, display: display, location: location }(),
+            Successor(terminator, slot, target),
+            Block(target, region, other_layout),
+            std::int::equal(target, definition) == false
+        ) -> Bypass(region, definition, target);
+}
+pub mod tables {
+    use std::Table;
+    use std::Merge;
+    pub let Operand: Table<(Int, Int), Int, Merge::Unique> as "Operand";
+    pub let Yield: Table<(Int, Int), Int, Merge::Unique> as "Yield";
+    pub let Successor: Table<(Int, Int), Int, Merge::Unique> as "Successor";
+    pub let SuccessorArgument: Table<(Int, Int, Int), Int, Merge::Unique> as "SuccessorArgument";
+    pub let Attribute: Table<(String, Int, String), Int, Merge::Unique> as "Attribute";
+    pub let OpSpec: Table<(String, String, Int), Int, Merge::Unique> as "OpSpec";
+    pub let Binding: Table<(Int, String, Int), Int, Merge::Unique> as "Binding";
+    pub let Arm: Table<(Int, Bool, String), Int, Merge::Unique> as "Arm";
+}
+
+pub let index = std::schedule::Schedule::Rules((structure, flow));
+
+pub let derive_structure = std::schedule::saturate(structure);
+pub let derive_flow = std::schedule::saturate(flow);

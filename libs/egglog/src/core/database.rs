@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ops::{Index, Range};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tir_adt::FxBuildHasher;
 use tir_adt::simd::hash_row;
@@ -45,6 +46,29 @@ pub(crate) enum Write {
 
 type Names<T> = HashMap<String, T, FxBuildHasher>;
 
+/// Identity of a database instance, preserved when it moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DatabaseId(u64);
+
+struct DatabaseIdentity(DatabaseId);
+
+impl DatabaseIdentity {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let Ok(id) = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        else {
+            panic!("database identity space exhausted");
+        };
+        Self(DatabaseId(id))
+    }
+}
+
+impl Clone for DatabaseIdentity {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
 /// Sorts, tables of rows over them, one union-find over every Eq sort, and
 /// primitives on base values.
 ///
@@ -52,6 +76,7 @@ type Names<T> = HashMap<String, T, FxBuildHasher>;
 /// canonicalizes them.
 #[derive(Clone)]
 pub struct Database {
+    identity: DatabaseIdentity,
     pub(crate) sorts: Vec<SortSchema>,
     pub(crate) sort_names: Names<SortId>,
     pub(crate) tables: Vec<Table>,
@@ -87,6 +112,7 @@ impl Database {
     /// `String` and `Unit` (as `()`).
     pub fn new() -> Self {
         let mut db = Self {
+            identity: DatabaseIdentity::new(),
             sorts: Vec::new(),
             sort_names: HashMap::default(),
             tables: Vec::new(),
@@ -110,6 +136,11 @@ impl Database {
         db.add_arcsort(StringSort.to_arcsort());
         db.add_arcsort(UnitSort.to_arcsort());
         db
+    }
+
+    /// Identifies this database. Clones have distinct identities.
+    pub fn id(&self) -> DatabaseId {
+        self.identity.0
     }
 
     /// # Panics

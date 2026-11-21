@@ -1,72 +1,73 @@
 // Reusable CFG, dominance, post-dominance, loop nesting, and memory-chain analyses.
 
-pub let ScopeOp: Int -> Prop;
-pub let ModuleOp: Int -> Prop;
-pub let CfgRegion: (Int, Int, Int) -> Prop; // region, owner, entry block
-pub let FuncOfRegion: (Int, Int) -> Prop; // cfg region -> enclosing func.func op
-pub let OrderedForInRegion: (Int, Int, Int) -> Prop; // outer region, op, body region
+pub use analysis::root::AnalysisRoot;
+pub let ScopeOp: Int -> Prop as "ScopeOp";
+pub let ModuleOp: Int -> Prop as "ModuleOp";
+pub let CfgRegion: (Int, Int, Int) -> Prop as "CfgRegion"; // region, owner, entry block
+pub let FuncOfRegion: (Int, Int) -> Prop as "FuncOfRegion"; // cfg region -> enclosing func.func op
+pub let OrderedForInRegion: (Int, Int, Int) -> Prop as "OrderedForInRegion"; // outer region, op, body region
 
-pub let CfgEdge: (Int, Int, Int, Int) -> Prop; // region, src, edge slot, dst
-pub let CfgEdgeTarget: (Int, Int, Int) -> Prop;
-pub let CfgExitKind: String -> Prop;
-pub let CfgExitBlock: (Int, Int, Int, String) -> Prop;
-pub let CfgReachable: (Int, Int) -> Prop;
-pub let CfgPath: (Int, Int, Int) -> Prop;
-pub let CfgReachableExit: (Int, Int, Int, String) -> Prop;
-pub let CfgBranchBlock: (Int, Int) -> Prop;
+pub let CfgEdge: (Int, Int, Int, Int) -> Prop as "CfgEdge"; // region, src, edge slot, dst
+pub let CfgEdgeTarget: (Int, Int, Int) -> Prop as "CfgEdgeTarget";
+pub let CfgExitKind: String -> Prop as "CfgExitKind";
+pub let CfgExitBlock: (Int, Int, Int, String) -> Prop as "CfgExitBlock";
+pub let CfgReachable: (Int, Int) -> Prop as "CfgReachable";
+pub let CfgPath: (Int, Int, Int) -> Prop as "CfgPath";
+pub let CfgReachableExit: (Int, Int, Int, String) -> Prop as "CfgReachableExit";
+pub let CfgBranchBlock: (Int, Int) -> Prop as "CfgBranchBlock";
 
-pub let CfgNotDom: (Int, Int, Int) -> Prop;
-pub let CfgDom: (Int, Int, Int) -> Prop;
-pub let CfgStrictDom: (Int, Int, Int) -> Prop;
-pub let CfgNonIdom: (Int, Int, Int) -> Prop;
-pub let CfgIdom: (Int, Int, Int) -> Prop;
-pub let CfgNotPostDom: (Int, Int, Int) -> Prop;
-pub let CfgPostDom: (Int, Int, Int) -> Prop;
-pub let CfgStrictPostDom: (Int, Int, Int) -> Prop;
-pub let CfgNonIpdom: (Int, Int, Int) -> Prop;
-pub let CfgIpdom: (Int, Int, Int) -> Prop;
+pub let CfgNotDom: (Int, Int, Int) -> Prop as "CfgNotDom";
+pub let CfgDom: (Int, Int, Int) -> Prop as "CfgDom";
+pub let CfgStrictDom: (Int, Int, Int) -> Prop as "CfgStrictDom";
+pub let CfgNonIdom: (Int, Int, Int) -> Prop as "CfgNonIdom";
+pub let CfgIdom: (Int, Int, Int) -> Prop as "CfgIdom";
+pub let CfgNotPostDom: (Int, Int, Int) -> Prop as "CfgNotPostDom";
+pub let CfgPostDom: (Int, Int, Int) -> Prop as "CfgPostDom";
+pub let CfgStrictPostDom: (Int, Int, Int) -> Prop as "CfgStrictPostDom";
+pub let CfgNonIpdom: (Int, Int, Int) -> Prop as "CfgNonIpdom";
+pub let CfgIpdom: (Int, Int, Int) -> Prop as "CfgIpdom";
 
-pub let NatLoop: (Int, Int, Int) -> Prop; // region, header, member block
-pub let NatLoopHeader: (Int, Int) -> Prop;
-pub let NatLoopContains: (Int, Int, Int) -> Prop;
-pub let NatLoopNonParent: (Int, Int, Int) -> Prop;
-pub let NatLoopParent: (Int, Int, Int) -> Prop;
-pub let NatLoopTop: (Int, Int) -> Prop;
-pub let BlockHasNatLoop: (Int, Int) -> Prop;
-pub let BlockNonInnerLoop: (Int, Int, Int) -> Prop;
-pub let BlockNatLoop: (Int, Int, Int) -> Prop;
+pub let NatLoop: (Int, Int, Int) -> Prop as "NatLoop"; // region, header, member block
+pub let NatLoopHeader: (Int, Int) -> Prop as "NatLoopHeader";
+pub let NatLoopContains: (Int, Int, Int) -> Prop as "NatLoopContains";
+pub let NatLoopNonParent: (Int, Int, Int) -> Prop as "NatLoopNonParent";
+pub let NatLoopParent: (Int, Int, Int) -> Prop as "NatLoopParent";
+pub let NatLoopTop: (Int, Int) -> Prop as "NatLoopTop";
+pub let BlockHasNatLoop: (Int, Int) -> Prop as "BlockHasNatLoop";
+pub let BlockNonInnerLoop: (Int, Int, Int) -> Prop as "BlockNonInnerLoop";
+pub let BlockNatLoop: (Int, Int, Int) -> Prop as "BlockNatLoop";
 
-pub let ScopeNode: (Int, Int, Int) -> Prop;
-pub let ScopeOwner: (Int, Int, Int) -> Prop;
-pub let ScopeRawEdge: (Int, Int, Int, Int) -> Prop;
-pub let ScopePath: (Int, Int, Int, Int) -> Prop;
-pub let ScopeInCycle: (Int, Int, Int) -> Prop;
-pub let IrredScc: (Int, Int, Int, Int) -> Prop;
-pub let IrredLoop: (Int, Int, Int) -> Prop;
+pub let ScopeNode: (Int, Int, Int) -> Prop as "ScopeNode";
+pub let ScopeOwner: (Int, Int, Int) -> Prop as "ScopeOwner";
+pub let ScopeRawEdge: (Int, Int, Int, Int) -> Prop as "ScopeRawEdge";
+pub let ScopePath: (Int, Int, Int, Int) -> Prop as "ScopePath";
+pub let ScopeInCycle: (Int, Int, Int) -> Prop as "ScopeInCycle";
+pub let IrredScc: (Int, Int, Int, Int) -> Prop as tables::IrredScc;
+pub let IrredLoop: (Int, Int, Int) -> Prop as "IrredLoop";
 
-pub let StateTypeId: Int -> Prop;
-pub let MemOpKind: String -> Prop;
-pub let DirectMemSlot: (String, Int) -> Prop;
-pub let LocalAlloc: Int -> Prop;
-pub let AllocOp: (Int, Int) -> Prop;
-pub let HasStateOperand: Int -> Prop;
-pub let AllocEscapes: Int -> Prop;
-pub let PrivateAlloc: (Int, Int) -> Prop;
-pub let UnthreadedMemOp: (Int, Int, Int, Int) -> Prop;
-pub let RegionChain: (Int, Int) -> Prop;
+pub let StateTypeId: Int -> Prop as "StateTypeId";
+pub let MemOpKind: String -> Prop as "MemOpKind";
+pub let DirectMemSlot: (String, Int) -> Prop as "DirectMemSlot";
+pub let LocalAlloc: Int -> Prop as "LocalAlloc";
+pub let AllocOp: (Int, Int) -> Prop as "AllocOp";
+pub let HasStateOperand: Int -> Prop as "HasStateOperand";
+pub let AllocEscapes: Int -> Prop as "AllocEscapes";
+pub let PrivateAlloc: (Int, Int) -> Prop as "PrivateAlloc";
+pub let UnthreadedMemOp: (Int, Int, Int, Int) -> Prop as "UnthreadedMemOp";
+pub let RegionChain: (Int, Int) -> Prop as "RegionChain";
 
 pub mod tables {
-    pub let IrredScc: std::Table<(Int, Int, Int), Int, std::Merge::Min>;
-    pub let DagTopoRank: std::Table<(Int, Int, Int), Int, std::Merge::Max>;
+    pub let IrredScc: std::Table<(Int, Int, Int), Int, std::Merge::Min> as "IrredScc";
+    pub let DagTopoRank: std::Table<(Int, Int, Int), Int, std::Merge::Max> as "DagTopoRank";
 }
 
 pub mod cfg_scope {
-    pub let root<node>: ir::AnalysisRoot(node) -> ScopeOp(node);
+    pub let root<node>: analysis::root::AnalysisRoot(node) -> ScopeOp(node);
     pub let nested<root, region, mode, slot, entry, node, rep>:
-        (ir::AnalysisRoot(root), ir::Region(region, mode, root, slot, entry), ir::ReaderAt(node, region, rep))
+        (analysis::root::AnalysisRoot(root), ir::Region(region, mode, root, slot, entry), ir::ReaderAt(node, region, rep))
         -> ScopeOp(node);
     pub let module_op<node, place, home, pos, disp, loc>:
-        ir::Operation(node, "builtin.module", place, home, pos, disp, loc) -> ModuleOp(node);
+        ir::Operation{ id: node, kind: std::ir::operation_named("builtin.module"), placement: place, container: home, position: pos, display: disp, location: loc }() -> ModuleOp(node);
 }
 
 pub mod cfg_regions {
@@ -74,14 +75,14 @@ pub mod cfg_regions {
         (ScopeOp(owner), !ModuleOp(owner), ir::Region(r, "cfg", owner, slot, entry), ir::less_id(entry, 0) == false)
         -> CfgRegion(r, owner, entry);
     pub let ordered_for<outer, block, layout, node, pos, disp, loc, body, entry>:
-        (ScopeOp(node), ir::Operation(node, "scf.ordered_for", "block", block, pos, disp, loc),
+        (ScopeOp(node), ir::Operation{ id: node, kind: std::ir::operation_named("scf.ordered_for"), placement: "block", container: block, position: pos, display: disp, location: loc }(),
          ir::Block(block, outer, layout), ir::Region(body, "cfg", node, 0, entry), ir::less_id(entry, 0) == false)
         -> OrderedForInRegion(outer, node, body);
 }
 
 pub mod cfg_func_owner {
     pub let direct<r, owner, entry, place, home, pos, disp, loc>:
-        (CfgRegion(r, owner, entry), ir::Operation(owner, "func.func", place, home, pos, disp, loc))
+        (CfgRegion(r, owner, entry), ir::Operation{ id: owner, kind: std::ir::operation_named("func.func"), placement: place, container: home, position: pos, display: disp, location: loc }())
         -> FuncOfRegion(r, owner);
     pub let nested_for<outer, for_op, body, func_op>:
         (OrderedForInRegion(outer, for_op, body), FuncOfRegion(outer, func_op))
@@ -92,11 +93,11 @@ pub mod cfg_graph {
     pub let ret_exit: CfgExitKind("func.return");
     pub let yield_exit: CfgExitKind("scf.yield");
     pub let edge<r, owner, entry, src, l1, term, kind, pos, disp, loc, slot, dst, l2>:
-        (CfgRegion(r, owner, entry), ir::Block(src, r, l1), ir::Operation(term, kind, "block", src, pos, disp, loc),
+        (CfgRegion(r, owner, entry), ir::Block(src, r, l1), ir::Operation{ id: term, kind: std::ir::operation_named(kind), placement: "block", container: src, position: pos, display: disp, location: loc }(),
          ir::Successor(term, slot, dst), ir::Block(dst, r, l2))
         -> (CfgEdge(r, src, slot, dst), CfgEdgeTarget(r, src, dst));
     pub let exit_block<r, owner, entry, block, layout, term, kind, pos, disp, loc>:
-        (CfgRegion(r, owner, entry), ir::Block(block, r, layout), ir::Operation(term, kind, "block", block, pos, disp, loc), CfgExitKind(kind))
+        (CfgRegion(r, owner, entry), ir::Block(block, r, layout), ir::Operation{ id: term, kind: std::ir::operation_named(kind), placement: "block", container: block, position: pos, display: disp, location: loc }(), CfgExitKind(kind))
         -> CfgExitBlock(r, block, term, kind);
 }
 
@@ -206,7 +207,7 @@ pub mod cfg_mem_types {
     pub let slot_load: DirectMemSlot("ptr.load", 0);
     pub let slot_store: DirectMemSlot("ptr.store", 1);
     pub let alloc<node, place, home, pos, disp, loc, addr, ty, decl>:
-        (ScopeOp(node), ir::Operation(node, "ptr.alloca", place, home, pos, disp, loc), ir::Value(addr, ty, "result", node, 0, decl))
+        (ScopeOp(node), ir::Operation{ id: node, kind: std::ir::operation_named("ptr.alloca"), placement: place, container: home, position: pos, display: disp, location: loc }(), ir::Value(addr, ty, "result", node, 0, decl))
         -> (LocalAlloc(addr), AllocOp(addr, node));
 }
 
@@ -214,7 +215,7 @@ pub mod cfg_mem_state {
     pub let threaded<node, slot, v, ty, dk, owner, vslot, decl>:
         (ir::Operand(node, slot, v), ir::Value(v, ty, dk, owner, vslot, decl), StateTypeId(ty)) -> HasStateOperand(node);
     pub let escape_op<addr, user, slot, kind, place, home, pos, disp, loc>:
-        (LocalAlloc(addr), ir::Operand(user, slot, addr), ir::Operation(user, kind, place, home, pos, disp, loc), !DirectMemSlot(kind, slot))
+        (LocalAlloc(addr), ir::Operand(user, slot, addr), ir::Operation{ id: user, kind: std::ir::operation_named(kind), placement: place, container: home, position: pos, display: disp, location: loc }(), !DirectMemSlot(kind, slot))
         -> AllocEscapes(addr);
     pub let escape_yield<addr, reg, slot>: (LocalAlloc(addr), ir::Yield(reg, slot, addr)) -> AllocEscapes(addr);
 }
@@ -225,87 +226,87 @@ pub mod cfg_mem_private {
 
 pub mod cfg_mem_ops {
     pub let load_priv<r, b, node, pos, disp, loc, addr, chain>:
-        (CfgReachable(r, b), ir::Operation(node, "ptr.load", "block", b, pos, disp, loc), !HasStateOperand(node), ir::Operand(node, 0, addr), PrivateAlloc(addr, chain))
+        (CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named("ptr.load"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(node, 0, addr), PrivateAlloc(addr, chain))
         -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain));
     pub let load_world<fn_id, r, b, node, pos, disp, loc, addr>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation(node, "ptr.load", "block", b, pos, disp, loc), !HasStateOperand(node), ir::Operand(node, 0, addr), !LocalAlloc(addr))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named("ptr.load"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(node, 0, addr), !LocalAlloc(addr))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let load_escaped<fn_id, r, b, node, pos, disp, loc, addr>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation(node, "ptr.load", "block", b, pos, disp, loc), !HasStateOperand(node), ir::Operand(node, 0, addr), AllocEscapes(addr))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named("ptr.load"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(node, 0, addr), AllocEscapes(addr))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let store_priv<r, b, node, pos, disp, loc, addr, chain>:
-        (CfgReachable(r, b), ir::Operation(node, "ptr.store", "block", b, pos, disp, loc), !HasStateOperand(node), ir::Operand(node, 1, addr), PrivateAlloc(addr, chain))
+        (CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named("ptr.store"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(node, 1, addr), PrivateAlloc(addr, chain))
         -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain));
     pub let store_world<fn_id, r, b, node, pos, disp, loc, addr>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation(node, "ptr.store", "block", b, pos, disp, loc), !HasStateOperand(node), ir::Operand(node, 1, addr), !LocalAlloc(addr))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named("ptr.store"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(node, 1, addr), !LocalAlloc(addr))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let store_escaped<fn_id, r, b, node, pos, disp, loc, addr>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation(node, "ptr.store", "block", b, pos, disp, loc), !HasStateOperand(node), ir::Operand(node, 1, addr), AllocEscapes(addr))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named("ptr.store"), placement: "block", container: b, position: pos, display: disp, location: loc }(), !HasStateOperand(node), ir::Operand(node, 1, addr), AllocEscapes(addr))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let world_op<fn_id, r, b, node, kind, pos, disp, loc>:
-        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation(node, kind, "block", b, pos, disp, loc), MemOpKind(kind), !HasStateOperand(node))
+        (FuncOfRegion(r, fn_id), CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named(kind), placement: "block", container: b, position: pos, display: disp, location: loc }(), MemOpKind(kind), !HasStateOperand(node))
         -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id));
     pub let ordered_for_chain<r, b, node, pos, disp, loc, sub, entry, sb, sop, chain>:
-        (CfgReachable(r, b), ir::Operation(node, "scf.ordered_for", "block", b, pos, disp, loc), ir::Region(sub, "cfg", node, 0, entry), UnthreadedMemOp(sub, sb, sop, chain))
+        (CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named("scf.ordered_for"), placement: "block", container: b, position: pos, display: disp, location: loc }(), ir::Region(sub, "cfg", node, 0, entry), UnthreadedMemOp(sub, sb, sop, chain))
         -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain));
 }
 
 // Reissmann §5.1.2 Structural Analysis (Control Tree) & Demand Annotation.
-pub let DagMap: (Int, Int, Int, Int) -> Prop;
-pub let DagNode: (Int, Int, Int) -> Prop;
-pub let DagEntry: (Int, Int, Int) -> Prop;
-pub let DagEdge: (Int, Int, Int, Int) -> Prop;
-pub let DagHasExit: (Int, Int, Int) -> Prop;
-pub let DagDepthStep: (Int, Int, Int, Int) -> Prop;
-pub let DagTopoRank: (Int, Int, Int, Int) -> Prop;
-pub let DagNotDom: (Int, Int, Int, Int) -> Prop;
-pub let DagDom: (Int, Int, Int, Int) -> Prop;
-pub let DagStrictDom: (Int, Int, Int, Int) -> Prop;
-pub let DagNotPostDom: (Int, Int, Int, Int) -> Prop;
-pub let DagPostDom: (Int, Int, Int, Int) -> Prop;
-pub let DagStrictPostDom: (Int, Int, Int, Int) -> Prop;
-pub let DagNonIpdom: (Int, Int, Int, Int) -> Prop;
-pub let DagIpdom: (Int, Int, Int, Int) -> Prop;
-pub let DagHasIpdom: (Int, Int, Int) -> Prop;
-pub let LoopMember: (Int, Int, Int) -> Prop;
-pub let LoopExit: (Int, Int, Int) -> Prop;
-pub let LoopMultiExit: (Int, Int) -> Prop;
-pub let NatBackedge: (Int, Int, Int, Int) -> Prop;
-pub let NatExitEdge: (Int, Int, Int, Int, Int) -> Prop;
-pub let NatMultiBack: (Int, Int) -> Prop;
-pub let NatMultiExitEdge: (Int, Int) -> Prop;
-pub let TailLoop: (Int, Int, Int, Int, Int, Int) -> Prop;
-pub let DagOutEdge: (Int, Int, Int, Int, Int) -> Prop;
-pub let DagBranch: (Int, Int, Int) -> Prop;
-pub let ArmReach: (Int, Int, Int, Int, Int) -> Prop;
-pub let ArmNotDom: (Int, Int, Int, Int, Int) -> Prop;
-pub let ArmBlock: (Int, Int, Int, Int, Int) -> Prop;
-pub let BranchUnstructured: (Int, Int, Int) -> Prop;
-pub let SeseBranch: (Int, Int, Int) -> Prop;
-pub let TopoHammock: (Int, Int, Int) -> Prop;
-pub let HammockMember: (Int, Int, Int, Int) -> Prop;
-pub let HammockNested: (Int, Int, Int) -> Prop;
-pub let TopHammock: (Int, Int, Int) -> Prop;
-pub let ValueDefBlock: (Int, Int, Int) -> Prop;
-pub let OpUseInBlock: (Int, Int, Int) -> Prop;
-pub let NestedUse: (Int, Int, Int) -> Prop;
-pub let ValueUsed: (Int, Int) -> Prop;
-pub let DeadBlockArg: (Int, Int, Int, Int) -> Prop;
-pub let DeadEdgeUse: (Int, Int, Int) -> Prop;
-pub let EdgeAssign: (Int, Int, Int, Int, Int) -> Prop;
-pub let BlockVarWrite: (Int, Int, Int) -> Prop;
-pub let BlockVarRead: (Int, Int, Int) -> Prop;
-pub let BlockLiveIn: (Int, Int, Int) -> Prop;
-pub let BlockLiveOut: (Int, Int, Int) -> Prop;
-pub let LoopWrites: (Int, Int, Int) -> Prop;
-pub let LoopReads: (Int, Int, Int) -> Prop;
-pub let LoopDemandOut: (Int, Int, Int) -> Prop;
-pub let LoopCarried: (Int, Int, Int) -> Prop;
-pub let LoopExitOnly: (Int, Int, Int) -> Prop;
-pub let BranchWrites: (Int, Int, Int, Int) -> Prop;
-pub let BranchReadsMem: (Int, Int, Int, Int) -> Prop;
-pub let BranchDemandOut: (Int, Int, Int, Int) -> Prop;
-pub let BranchOutput: (Int, Int, Int, Int) -> Prop;
+pub let DagMap: (Int, Int, Int, Int) -> Prop as "DagMap";
+pub let DagNode: (Int, Int, Int) -> Prop as "DagNode";
+pub let DagEntry: (Int, Int, Int) -> Prop as "DagEntry";
+pub let DagEdge: (Int, Int, Int, Int) -> Prop as "DagEdge";
+pub let DagHasExit: (Int, Int, Int) -> Prop as "DagHasExit";
+pub let DagDepthStep: (Int, Int, Int, Int) -> Prop as "DagDepthStep";
+pub let DagTopoRank: (Int, Int, Int, Int) -> Prop as tables::DagTopoRank;
+pub let DagNotDom: (Int, Int, Int, Int) -> Prop as "DagNotDom";
+pub let DagDom: (Int, Int, Int, Int) -> Prop as "DagDom";
+pub let DagStrictDom: (Int, Int, Int, Int) -> Prop as "DagStrictDom";
+pub let DagNotPostDom: (Int, Int, Int, Int) -> Prop as "DagNotPostDom";
+pub let DagPostDom: (Int, Int, Int, Int) -> Prop as "DagPostDom";
+pub let DagStrictPostDom: (Int, Int, Int, Int) -> Prop as "DagStrictPostDom";
+pub let DagNonIpdom: (Int, Int, Int, Int) -> Prop as "DagNonIpdom";
+pub let DagIpdom: (Int, Int, Int, Int) -> Prop as "DagIpdom";
+pub let DagHasIpdom: (Int, Int, Int) -> Prop as "DagHasIpdom";
+pub let LoopMember: (Int, Int, Int) -> Prop as "LoopMember";
+pub let LoopExit: (Int, Int, Int) -> Prop as "LoopExit";
+pub let LoopMultiExit: (Int, Int) -> Prop as "LoopMultiExit";
+pub let NatBackedge: (Int, Int, Int, Int) -> Prop as "NatBackedge";
+pub let NatExitEdge: (Int, Int, Int, Int, Int) -> Prop as "NatExitEdge";
+pub let NatMultiBack: (Int, Int) -> Prop as "NatMultiBack";
+pub let NatMultiExitEdge: (Int, Int) -> Prop as "NatMultiExitEdge";
+pub let TailLoop: (Int, Int, Int, Int, Int, Int) -> Prop as "TailLoop";
+pub let DagOutEdge: (Int, Int, Int, Int, Int) -> Prop as "DagOutEdge";
+pub let DagBranch: (Int, Int, Int) -> Prop as "DagBranch";
+pub let ArmReach: (Int, Int, Int, Int, Int) -> Prop as "ArmReach";
+pub let ArmNotDom: (Int, Int, Int, Int, Int) -> Prop as "ArmNotDom";
+pub let ArmBlock: (Int, Int, Int, Int, Int) -> Prop as "ArmBlock";
+pub let BranchUnstructured: (Int, Int, Int) -> Prop as "BranchUnstructured";
+pub let SeseBranch: (Int, Int, Int) -> Prop as "SeseBranch";
+pub let TopoHammock: (Int, Int, Int) -> Prop as "TopoHammock";
+pub let HammockMember: (Int, Int, Int, Int) -> Prop as "HammockMember";
+pub let HammockNested: (Int, Int, Int) -> Prop as "HammockNested";
+pub let TopHammock: (Int, Int, Int) -> Prop as "TopHammock";
+pub let ValueDefBlock: (Int, Int, Int) -> Prop as "ValueDefBlock";
+pub let OpUseInBlock: (Int, Int, Int) -> Prop as "OpUseInBlock";
+pub let NestedUse: (Int, Int, Int) -> Prop as "NestedUse";
+pub let ValueUsed: (Int, Int) -> Prop as "ValueUsed";
+pub let DeadBlockArg: (Int, Int, Int, Int) -> Prop as "DeadBlockArg";
+pub let DeadEdgeUse: (Int, Int, Int) -> Prop as "DeadEdgeUse";
+pub let EdgeAssign: (Int, Int, Int, Int, Int) -> Prop as "EdgeAssign";
+pub let BlockVarWrite: (Int, Int, Int) -> Prop as "BlockVarWrite";
+pub let BlockVarRead: (Int, Int, Int) -> Prop as "BlockVarRead";
+pub let BlockLiveIn: (Int, Int, Int) -> Prop as "BlockLiveIn";
+pub let BlockLiveOut: (Int, Int, Int) -> Prop as "BlockLiveOut";
+pub let LoopWrites: (Int, Int, Int) -> Prop as "LoopWrites";
+pub let LoopReads: (Int, Int, Int) -> Prop as "LoopReads";
+pub let LoopDemandOut: (Int, Int, Int) -> Prop as "LoopDemandOut";
+pub let LoopCarried: (Int, Int, Int) -> Prop as "LoopCarried";
+pub let LoopExitOnly: (Int, Int, Int) -> Prop as "LoopExitOnly";
+pub let BranchWrites: (Int, Int, Int, Int) -> Prop as "BranchWrites";
+pub let BranchReadsMem: (Int, Int, Int, Int) -> Prop as "BranchReadsMem";
+pub let BranchDemandOut: (Int, Int, Int, Int) -> Prop as "BranchDemandOut";
+pub let BranchOutput: (Int, Int, Int, Int) -> Prop as "BranchOutput";
 
 pub mod dag_contract {
     pub let plain<r, s, m>: (ScopeNode(r, s, m), !ScopeInCycle(r, s, m)) -> (DagMap(r, s, m, m), DagNode(r, s, m));
@@ -396,7 +397,7 @@ pub mod loop_tail {
     pub let tail<r, h, latch, exit, be, ee, term, pos, disp, loc>:
         (NatLoopHeader(r, h), !LoopMultiExit(r, h), !NatMultiBack(r, h), !NatMultiExitEdge(r, h),
          NatBackedge(r, h, latch, be), NatExitEdge(r, h, latch, ee, exit),
-         ir::Operation(term, "cfg.cond_br", "block", latch, pos, disp, loc))
+         ir::Operation{ id: term, kind: std::ir::operation_named("cfg.cond_br"), placement: "block", container: latch, position: pos, display: disp, location: loc }())
         -> TailLoop(r, h, latch, exit, be, ee);
 }
 
@@ -467,18 +468,18 @@ pub mod ssa_defs {
     pub let block_arg<r, owner, entry, b, l, v, ty, slot, decl>:
         (CfgRegion(r, owner, entry), ir::Block(b, r, l), ir::Value(v, ty, "block", b, slot, decl)) -> ValueDefBlock(r, b, v);
     pub let op_res<r, owner, entry, b, l, node, k, p, d, loc, v, ty, slot, decl>:
-        (CfgRegion(r, owner, entry), ir::Block(b, r, l), ir::Operation(node, k, "block", b, p, d, loc), ir::Value(v, ty, "result", node, slot, decl))
+        (CfgRegion(r, owner, entry), ir::Block(b, r, l), ir::Operation{ id: node, kind: std::ir::operation_named(k), placement: "block", container: b, position: p, display: d, location: loc }(), ir::Value(v, ty, "result", node, slot, decl))
         -> ValueDefBlock(r, b, v);
     pub let use_direct<r, b, node, k, p, d, loc, slot, v>:
-        (CfgReachable(r, b), ir::Operation(node, k, "block", b, p, d, loc), ir::Operand(node, slot, v)) -> OpUseInBlock(r, b, v);
+        (CfgReachable(r, b), ir::Operation{ id: node, kind: std::ir::operation_named(k), placement: "block", container: b, position: p, display: d, location: loc }(), ir::Operand(node, slot, v)) -> OpUseInBlock(r, b, v);
     pub let use_nested<r, b, outer, k, p, d, loc, sub, m, rs, en, inner, rep, slot, v>:
-        (CfgReachable(r, b), ir::Operation(outer, k, "block", b, p, d, loc), ir::Region(sub, m, outer, rs, en), ir::ReaderAt(inner, sub, rep), ir::Operand(inner, slot, v))
+        (CfgReachable(r, b), ir::Operation{ id: outer, kind: std::ir::operation_named(k), placement: "block", container: b, position: p, display: d, location: loc }(), ir::Region(sub, m, outer, rs, en), ir::ReaderAt(inner, sub, rep), ir::Operand(inner, slot, v))
         -> (OpUseInBlock(r, b, v), NestedUse(r, b, v));
     pub let use_yield<r, b, outer, k, p, d, loc, sub, m, rs, en, slot, v>:
-        (CfgReachable(r, b), ir::Operation(outer, k, "block", b, p, d, loc), ir::Region(sub, m, outer, rs, en), ir::Yield(sub, slot, v))
+        (CfgReachable(r, b), ir::Operation{ id: outer, kind: std::ir::operation_named(k), placement: "block", container: b, position: p, display: d, location: loc }(), ir::Region(sub, m, outer, rs, en), ir::Yield(sub, slot, v))
         -> (OpUseInBlock(r, b, v), NestedUse(r, b, v));
     pub let edge_assign<r, src, term, k, p, d, loc, edge, dst, pslot, oslot, arg, param, ty, decl>:
-        (CfgReachable(r, src), ir::Operation(term, k, "block", src, p, d, loc), ir::Successor(term, edge, dst),
+        (CfgReachable(r, src), ir::Operation{ id: term, kind: std::ir::operation_named(k), placement: "block", container: src, position: p, display: d, location: loc }(), ir::Successor(term, edge, dst),
          ir::SuccessorArgument(term, edge, pslot, oslot), ir::Operand(term, oslot, arg), ir::Value(param, ty, "block", dst, pslot, decl))
         -> EdgeAssign(r, src, edge, param, arg);
 }
@@ -502,7 +503,7 @@ pub mod ssa_dead_edge_uses {
 pub mod demand_block {
     pub let cross_res_direct<r, def_b, v, use_b, node, k, p, d, loc, slot>:
         (ValueDefBlock(r, def_b, v), CfgReachable(r, use_b), ir::equal_id(def_b, use_b) == false,
-         ir::Operation(node, k, "block", use_b, p, d, loc), ir::Operand(node, slot, v), !DeadEdgeUse(r, node, slot))
+         ir::Operation{ id: node, kind: std::ir::operation_named(k), placement: "block", container: use_b, position: p, display: d, location: loc }(), ir::Operand(node, slot, v), !DeadEdgeUse(r, node, slot))
         -> (BlockVarWrite(r, def_b, v), BlockVarRead(r, use_b, v));
     pub let cross_res_nested<r, def_b, v, use_b>:
         (ValueDefBlock(r, def_b, v), NestedUse(r, use_b, v), ir::equal_id(def_b, use_b) == false)

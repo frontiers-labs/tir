@@ -1,6 +1,6 @@
-pub let IntSet: Type;
-pub let singleton: Int -> IntSet;
-pub let cardinality: IntSet -> Int;
+pub let IntSet: Type as "IntSet";
+pub let singleton: Int -> IntSet as "set-of";
+pub let cardinality: IntSet -> Int as "set-length";
 
 pub enum Merge<V: Type> {
     Union,
