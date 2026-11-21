@@ -118,6 +118,7 @@ pub struct TableSchema {
     pub(crate) merge: Option<Merge>,
     // The columns that hold union-find ids, which a rebuild canonicalizes.
     pub(crate) ids: Vec<usize>,
+    pub(crate) native: Vec<usize>,
     pub(crate) symmetries: Vec<Vec<usize>>,
     pub(crate) cost: Option<u64>,
     pub(crate) unextractable: bool,

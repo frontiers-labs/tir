@@ -513,6 +513,7 @@ pub(crate) fn value(base: &BaseValues, literal: &Literal) -> Value {
         Literal::Int(i) => base.get(*i),
         Literal::Float(x) => base.get(*x),
         Literal::String(s) => base.get(s.clone()),
+        Literal::Native(identity) => base.get(*identity),
         Literal::Bool(b) => base.get(*b),
         Literal::Unit => base.get(()),
         Literal::Arg(_) => unreachable!("a run argument has a value only in a run"),

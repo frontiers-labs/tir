@@ -3,6 +3,14 @@ extern crate self as tir;
 // Re-exported so the `register_pass!` macro can reference linkme from
 // downstream crates without each of them depending on it directly.
 pub use linkme;
+pub use tir_egglog::{NativeDeclaration, NativeIdentity};
+
+#[doc(hidden)]
+pub fn bind_native_operation<T: NativeDeclaration>(
+    db: &mut tir_egglog::Database,
+) -> Result<(), tir_egglog::Error> {
+    db.bind_declaration::<T>()
+}
 
 /// Declares an entity's identity from the context-wide allocator.
 macro_rules! id_newtype {

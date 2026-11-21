@@ -66,7 +66,7 @@ macro_rules! record {
 }
 
 record!(OperationRow, "Operation", {
-    kind: String, placement: String, container: i64, position: i64, display: i64, location: i64,
+    kind: tir_egglog::NativeIdentity, placement: String, container: i64, position: i64, display: i64, location: i64,
 });
 record!(RegionRow, "Region", { mode: String, owner: i64, slot: i64, entry: i64 });
 record!(BlockRow, "Block", { region: i64, layout: i64 });
@@ -127,7 +127,7 @@ impl Context {
 }
 
 impl Context {
-    pub(crate) fn operation_kind(&self, id: crate::OpId) -> Option<String> {
+    pub(crate) fn operation_kind(&self, id: crate::OpId) -> Option<tir_egglog::NativeIdentity> {
         self.record::<OperationRow>(id.number()).map(|row| row.kind)
     }
 }

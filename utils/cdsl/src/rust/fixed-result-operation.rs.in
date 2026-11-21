@@ -9,6 +9,9 @@ use tir::{
 #[linkme(crate = tir::linkme)]
 pub static SCHEMA: OpSchema = OpSchema {
     dialect: "@dialect@",
+    declaration: tir::NativeIdentity::of::<@RustName@>,
+    bind: tir::bind_native_operation::<@RustName@>,
+    construct: @RustName@::from_op_instance_dyn,
     name: "@name@",
     operands: &[@operands@],
     results: &[@result@],
@@ -31,7 +34,15 @@ impl @RustName@ {
     @getters@
 }
 
+impl tir::NativeDeclaration for @RustName@ {
+    const NAME: &'static str = concat!("@dialect@", ".", "@name@");
+    const SYMBOL: &'static str = @operation_import@;
+    const PORTS: Option<(usize, usize)> = Some((@operand_count@, @result_count@));
+}
+
 impl Operation for @RustName@ {
+    fn native_identity() -> tir::NativeIdentity { tir::NativeIdentity::of::<Self>() }
+
     fn name() -> &'static str {
         SCHEMA.name
     }

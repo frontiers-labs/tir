@@ -85,6 +85,36 @@ impl Binding {
         }
     }
 
+    pub(crate) fn native_ports(&self) -> Option<(Vec<&Expr>, Vec<&Expr>)> {
+        let Expression::Record(fields) = &self.value.value else {
+            return None;
+        };
+        let field = |name| {
+            fields
+                .iter()
+                .find_map(|(field, value)| (field == name).then_some(value))
+        };
+        if field("rust_name").is_none()
+            || !matches!(field("state").map(|expr| &expr.value), Some(Expression::Literal(Literal::String(mode))) if mode == "none")
+        {
+            return None;
+        }
+        let ports = |name| match field(name) {
+            None => Some(Vec::new()),
+            Some(Expr {
+                value: Expression::Record(ports),
+                ..
+            }) => ports
+                .iter()
+                .map(|(_, ty)| {
+                    (!matches!(ty.value, Expression::Literal(Literal::String(_)))).then_some(ty)
+                })
+                .collect(),
+            _ => None,
+        };
+        Some((ports("operands")?, ports("results")?))
+    }
+
     pub(crate) fn operation_name(&self, module: &[String]) -> Option<String> {
         if self.operation_fields().is_some() {
             let dialect = match module {
