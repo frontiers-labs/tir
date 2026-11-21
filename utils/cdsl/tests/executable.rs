@@ -1,17 +1,26 @@
 use std::{
-    fs,
+    env, fs,
     path::PathBuf,
-    process::Command,
+    process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
 };
-use tir_cdsl::{Schema, compile_file, compile_source};
+use tir_cdsl::{OutputKind::OpDef, Schema, compile_file, compile_source};
 use tir_egglog::{EGraph, Program, Schedule};
 
 #[test]
 fn rust_filters_compile_their_module_exports() {
+    if let Ok(batch) = env::var("CDSL_TEST_BUILD_BATCH") {
+        tir_cdsl::compile(batch.lines().map(|request| {
+            let (filter, path) = request.split_once('\t').unwrap();
+            (filter, OpDef(path))
+        }))
+        .unwrap();
+        return;
+    }
+
     let sources = Sources::new();
-    let package = sources.write(
-        "lib.cdsl",
+    sources.write(
+        "defs/lib.cdsl",
         r#"
 mod hidden {
     pub let enabled: Bool = true;
@@ -31,18 +40,22 @@ pub mod second {
 pub use second as external;
 "#,
     );
-    let checked = tir_cdsl::CheckedProgram::compile_for_rust(&package).unwrap();
-    for (module, alias) in [("first", "first"), ("second", "external")] {
-        let rust = checked
-            .emit_rust_filter("fixture", &format!("fixture::{alias}::*"))
-            .unwrap();
-        sources.write(&format!("{module}.rs"), &rust);
-    }
+    let alias = format!("{}::external::*", sources.0.file_name().unwrap().display());
+    let second = sources.0.join("absolute/second.rs");
+    let built = sources.emit(&[
+        ("fixture::first::*", "nested/first.rs"),
+        (&alias, second.to_str().unwrap()),
+    ]);
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
     let probe = sources.write(
         "main.rs",
         r#"
-mod first { include!("first.rs"); }
-mod second { include!("second.rs"); }
+mod first { include!("out/nested/first.rs"); }
+mod second { include!("absolute/second.rs"); }
 const _: () = {
     assert!(first::exported);
     assert!(first::Exported { flag: true }.flag);
@@ -65,7 +78,7 @@ const _: second::Shade = second::Color::Green;
     );
     std::fs::write(
         &probe,
-        "mod first { include!(\"first.rs\"); } const _: bool = first::internal;",
+        "mod first { include!(\"out/nested/first.rs\"); } const _: bool = first::internal;",
     )
     .unwrap();
     let compiler = Command::new("rustc")
@@ -79,26 +92,45 @@ const _: second::Shade = second::Color::Green;
         !compiler.status.success()
             && String::from_utf8_lossy(&compiler.stderr).contains("cannot find value `internal`")
     );
+
+    let existing = sources.write("out/nested/first.rs", "sentinel");
+    for (filter, path, diagnostic) in [
+        (
+            alias.as_str(),
+            "nested/../nested/first.rs",
+            "duplicate Rust output",
+        ),
+        ("fixture::missing::*", "missing.rs", "unknown module"),
+    ] {
+        let built = sources.emit(&[("fixture::first::*", "nested/first.rs"), (filter, path)]);
+        let stderr = String::from_utf8_lossy(&built.stderr);
+        assert!(
+            !built.status.success() && stderr.contains(diagnostic),
+            "{stderr}"
+        );
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "sentinel");
+    }
 }
 
 #[test]
 fn rust_emission_materializes_both_fp_refinement_paths() {
     let sources = Sources::new();
     sources.write(
-        "fp.cdsl",
+        "defs/fp.cdsl",
         include_str!("../../../core/defs/dialects/fp.cdsl"),
     );
-    let package = sources.write("lib.cdsl", "pub mod fp;");
-    let checked = tir_cdsl::CheckedProgram::compile_for_rust(&package).unwrap();
-    let rust = checked
-        .emit_rust_filter("fixture", "fixture::fp::model::*")
-        .unwrap();
-    sources.write("fp.rs", &rust);
+    sources.write("defs/lib.cdsl", "pub mod fp;");
+    let built = sources.emit(&[("fixture::fp::model::*", "fp.rs")]);
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
     let probe = sources.write(
         "main.rs",
         r#"
 #[allow(dead_code, unused_imports)]
-mod fp { include!("fp.rs"); }
+mod fp { include!("out/fp.rs"); }
 use fp::{Computation, Float, Refinement, Rounding, ValueAlgebra, implementation, materialize, reference};
 
 fn bits(input: Float) -> f64 {
@@ -164,6 +196,7 @@ fn main() {
     );
 }
 
+#[derive(Debug)]
 struct Sources(PathBuf);
 impl Sources {
     fn new() -> Self {
@@ -178,8 +211,30 @@ impl Sources {
     }
     fn write(&self, name: &str, source: &str) -> PathBuf {
         let path = self.0.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, source).unwrap();
         path
+    }
+
+    fn emit(&self, outputs: &[(&str, &str)]) -> Output {
+        let batch = outputs
+            .iter()
+            .map(|(filter, path)| format!("{filter}\t{path}\n"))
+            .collect::<String>();
+        self.build("rust_filters_compile_their_module_exports")
+            .env("CDSL_TEST_BUILD_BATCH", batch)
+            .output()
+            .unwrap()
+    }
+
+    fn build(&self, test: &str) -> Command {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(["--exact", test, "--nocapture"])
+            .env("CARGO_MANIFEST_DIR", &self.0)
+            .env("CARGO_PKG_NAME", "fixture")
+            .env("OUT_DIR", self.0.join("out"));
+        command
     }
 }
 impl Drop for Sources {
@@ -222,12 +277,12 @@ let guarded = {
 }
 
 #[test]
-fn inferring_an_interface_operation_does_not_bypass_its_schema() {
+fn inferring_an_interface_operation_checks_exec_against_its_signature() {
     let error = compile_source(
         r#"
 interface Tag {}
 let make = fn () {
-    op { signature: () -> Bool, interfaces: { Tag: {} }, exec: false }
+    op { signature: () -> Bool, interfaces: { Tag: {} }, exec: fn () -> Int { 1 } }
 };
 "#,
     )
@@ -235,7 +290,54 @@ let make = fn () {
     assert!(
         error
             .to_string()
-            .contains("operation descriptor requires a source-defined contract annotation")
+            .contains("operation exec disagrees with signature")
+    );
+}
+
+#[test]
+fn rewrite_matches_use_declared_operand_and_result_types() {
+    let source = r#"
+pub mod dialects {
+    pub mod downstream {
+        pub let compare = op { signature: (lhs: std::Bits<8>, rhs: std::Bits<8>) -> std::Bits<1> };
+        pub let widen = op { signature: (input: std::Bits<1>) -> std::Bits<16> };
+    }
+}
+pub let Replaced: (Int, Int) -> Prop;
+pub let rewrite<first, last, x, y, flag, result>:
+    (dialects::downstream::compare.matches(first, (x, y), (flag,)),
+     dialects::downstream::widen.matches(last, (flag,), (result,)))
+    -> Replaced(first, std::ir::value_id(result));
+"#;
+    compile_source(source).unwrap();
+    for (original, invalid, diagnostic) in [
+        ("compare.matches", "missing.matches", "unresolved name"),
+        ("(x, y)", "(x,)", "rewrite: HM:"),
+        ("(flag,), (result,)", "(x,), (result,)", "rewrite: HM:"),
+    ] {
+        let error = compile_source(&source.replace(original, invalid)).unwrap_err();
+        assert!(error.to_string().contains(diagnostic), "{error}");
+    }
+}
+
+#[test]
+fn a_shared_named_relation_preserves_its_column_order() {
+    let first = compile_source("pub let Edge: { from: Int, to: Int } -> Prop;")
+        .unwrap()
+        .lower()
+        .unwrap();
+    let reversed = compile_source("pub let OtherEdge: { to: Int, from: Int } -> Prop;")
+        .unwrap()
+        .lower()
+        .unwrap();
+    let aliases = std::collections::BTreeMap::from([(vec!["OtherEdge".into()], "Edge".into())]);
+    let mut schema = Schema::with_names(&first, aliases).unwrap();
+    let error = schema.extend(&reversed).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("incompatible named columns for Edge"),
+        "{error}"
     );
 }
 

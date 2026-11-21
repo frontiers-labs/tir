@@ -13,67 +13,24 @@ mod native;
 mod operation;
 mod value;
 
-struct ModuleGlob(Path);
-
-impl ModuleGlob {
-    fn parse(package: &str, filter: &str) -> Result<Self, Error> {
-        let mut segments = filter.split("::");
-        let path: Path = segments
-            .by_ref()
-            .take_while(|segment| *segment != "*")
-            .map(str::to_owned)
-            .collect();
-        if path.first().is_none_or(|first| first != package)
-            || path.iter().any(String::is_empty)
-            || !filter.ends_with("::*")
-            || segments.next().is_some()
-        {
-            return Err(Error(format!(
-                "invalid Rust filter {filter}; expected {package}::…::*"
-            )));
-        }
-        Ok(Self(path.into_iter().skip(1).collect()))
-    }
-}
-
 struct SelectedExports<'a> {
     entries: &'a BTreeMap<String, Path>,
 }
 
 impl CheckedProgram {
-    /// Load and check a CDSL package for build-script Rust emission.
-    #[doc(hidden)]
-    pub fn compile_for_rust(file: &std::path::Path) -> Result<Self, Error> {
-        crate::compiler::check_file(file)
-    }
-
     /// Check standalone CDSL source and emit the Rust for its root exports.
     #[doc(hidden)]
-    pub fn emit_rust_source(source: &str, package: &str) -> Result<String, Error> {
-        crate::compile_source(source)?.emit_rust_filter(package, &format!("{package}::*"))
-    }
-
-    /// Build-script entry point for emitting the exports of a single module.
-    #[doc(hidden)]
-    pub fn emit_rust_filter(&self, package: &str, filter: &str) -> Result<String, Error> {
-        self.artifact().emit_rust_filter(package, filter)
+    pub fn emit_rust_source(source: &str, _package: &str) -> Result<String, Error> {
+        crate::compile_source(source)?.render_rust_module(&[])
     }
 }
 
 impl Program {
-    fn emit_rust_filter(&self, package: &str, filter: &str) -> Result<String, Error> {
-        let ModuleGlob(module) = ModuleGlob::parse(package, filter)?;
-        let exports = &self.module_exports;
-        let entries = exports
-            .get(&module)
-            .or_else(|| {
-                let mut current: &[String] = &[];
-                for component in &module {
-                    current = exports.get(current)?.get(component)?;
-                }
-                exports.get(current)
-            })
-            .ok_or_else(|| Error(format!("unknown module in Rust filter {filter}")))?;
+    pub(crate) fn render_rust_module(&self, module: &[String]) -> Result<String, Error> {
+        let entries = self
+            .exported_module(module)
+            .and_then(|path| self.module_exports.get(path))
+            .ok_or_else(|| Error(format!("unknown module {}", module.join("::"))))?;
         self.render_rust_exports(SelectedExports { entries })
     }
 

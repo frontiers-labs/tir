@@ -7,6 +7,7 @@
 extern crate proc_macro;
 
 pub mod ast;
+mod build_script;
 mod compiler;
 mod engine;
 mod error;
@@ -23,8 +24,10 @@ mod rust;
 pub mod syntax;
 mod totality;
 
+pub use build_script::{OutputKind, compile};
 pub use compiler::{
     CompiledModule, Program, compile_file, compile_source, compile_tokens, resolve_crate,
+    resolve_program_package,
 };
 pub use engine::{LoweredProgram, Schema};
 pub use error::Error;

@@ -1991,7 +1991,6 @@ dependencies = [
  "tir-bench",
  "tir-cdsl",
  "tir-egglog",
- "tir-ir-schema",
  "tir-macros",
  "tir-symbolic",
 ]
@@ -2046,6 +2045,7 @@ dependencies = [
  "chumsky",
  "criterion",
  "logos",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -2111,13 +2111,6 @@ dependencies = [
  "tir-cdsl",
  "tir-symbolic",
  "tmdl",
-]
-
-[[package]]
-name = "tir-ir-schema"
-version = "0.1.0"
-dependencies = [
- "tir-cdsl",
 ]
 
 [[package]]
@@ -2199,8 +2192,8 @@ dependencies = [
  "chumsky",
  "smallvec",
  "tir-adt",
+ "tir-cdsl",
  "tir-egglog",
- "tir-ir-schema",
 ]
 
 [[package]]
