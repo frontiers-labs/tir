@@ -342,6 +342,289 @@ fn a_pathological_graph_grows_linearly() {
 }
 
 #[test]
+fn random_cfgs_restructure_preserving_semantics() {
+    use tir::builtin::ops as b;
+    use tir::cfg::ops as cb;
+    use tir::func::ops as func_ops;
+
+    fn eval_cfg(blocks: &[(u8, Option<(usize, usize)>)], left: i64, right: i64) -> i64 {
+        let seed = left.wrapping_add(right);
+        let (mut idx, mut val, mut fuel) = (0usize, seed, 12i64);
+        loop {
+            let computed = match blocks[idx].0 {
+                0 => val.wrapping_add(seed),
+                1 => val.wrapping_sub(seed),
+                _ => val.wrapping_mul(seed),
+            };
+            let Some((t_dst, f_dst)) = blocks[idx].1 else {
+                return computed;
+            };
+            let rem = fuel.wrapping_sub(1);
+            let taken = if t_dst <= idx {
+                rem > 0
+            } else {
+                computed > seed
+            };
+            (idx, val, fuel) = if taken {
+                (t_dst, computed, rem)
+            } else {
+                (f_dst, val, rem)
+            };
+        }
+    }
+
+    fn eval_region(
+        context: &Context,
+        region: tir::RegionId,
+        port_vals: &[i64],
+        env: &mut Vec<(tir::ValueId, i64)>,
+    ) -> Vec<i64> {
+        let handle = context.get_region(region);
+        assert!(handle.is_nodes(), "restructured region must be unordered");
+        let saved_len = env.len();
+        for (port, &v) in handle.ports().iter().zip(port_vals) {
+            env.push((port.id(), v));
+        }
+        let get = |env: &[(tir::ValueId, i64)], v: tir::ValueId| -> i64 {
+            env.iter()
+                .rev()
+                .find(|&&(id, _)| id == v)
+                .expect("value in env")
+                .1
+        };
+        let mut pending: Vec<tir::OpId> = handle.op_ids();
+        while !pending.is_empty() {
+            let before = pending.len();
+            let mut next_pending = Vec::new();
+            for op_id in pending {
+                let op = context.get_op(op_id);
+                let ready = op
+                    .operands()
+                    .iter()
+                    .all(|&v| env.iter().any(|&(id, _)| id == v));
+                if !ready {
+                    next_pending.push(op_id);
+                    continue;
+                }
+                let kind = format!("{}.{}", op.dialect().as_str(), op.name().as_str());
+                let ins: Vec<i64> = op.operands().iter().map(|&v| get(env, v)).collect();
+                match kind.as_str() {
+                    "builtin.constant" => {
+                        let val = match op.attr("value").unwrap() {
+                            tir::attributes::AttributeValue::Int(n) => n,
+                            tir::attributes::AttributeValue::UInt(n) => n as i64,
+                            tir::attributes::AttributeValue::Bool(b) => i64::from(b),
+                            other => panic!("unexpected const attr {other:?}"),
+                        };
+                        env.push((op.results()[0], val));
+                    }
+                    "builtin.addi" => env.push((op.results()[0], ins[0].wrapping_add(ins[1]))),
+                    "builtin.subi" => env.push((op.results()[0], ins[0].wrapping_sub(ins[1]))),
+                    "builtin.muli" => env.push((op.results()[0], ins[0].wrapping_mul(ins[1]))),
+                    "builtin.xori" => env.push((op.results()[0], ins[0] ^ ins[1])),
+                    "builtin.cmpi" => {
+                        let res = match op.attr("predicate").unwrap() {
+                            tir::attributes::AttributeValue::Predicate(
+                                tir::attributes::Predicate::Sgt,
+                            ) => ins[0] > ins[1],
+                            tir::attributes::AttributeValue::Predicate(
+                                tir::attributes::Predicate::Slt,
+                            ) => ins[0] < ins[1],
+                            tir::attributes::AttributeValue::Predicate(
+                                tir::attributes::Predicate::Eq,
+                            ) => ins[0] == ins[1],
+                            other => panic!("unexpected cmpi {other:?}"),
+                        };
+                        env.push((op.results()[0], i64::from(res)));
+                    }
+                    "scf.switch" => {
+                        let pred = ins[0];
+                        let arms = op.regions();
+                        let arm_idx = if (pred as usize) < arms.len() {
+                            pred as usize
+                        } else {
+                            arms.len() - 1
+                        };
+                        let outs = eval_region(context, arms[arm_idx], &ins[1..], env);
+                        for (&res, val) in op.results().iter().zip(outs) {
+                            env.push((res, val));
+                        }
+                    }
+                    "scf.loop" => {
+                        let body = op.regions()[0];
+                        let n = ins.len();
+                        let mut carried = ins;
+                        let mut steps = 0;
+                        let final_outs = loop {
+                            steps += 1;
+                            assert!(steps < 500, "loop diverged");
+                            let ys = eval_region(context, body, &carried, env);
+                            if ys[0] != 0 {
+                                carried = ys[1..1 + n].to_vec();
+                            } else {
+                                break ys[1 + n..1 + 2 * n].to_vec();
+                            }
+                        };
+                        for (&res, val) in op.results().iter().zip(final_outs) {
+                            env.push((res, val));
+                        }
+                    }
+                    other => panic!("unexpected op in restructured IR: {other}"),
+                }
+            }
+            assert!(
+                next_pending.len() < before,
+                "cycle or unresolved operand in Nodes region"
+            );
+            pending = next_pending;
+        }
+        let outs: Vec<i64> = handle.results().iter().map(|&v| get(env, v)).collect();
+        env.truncate(saved_len);
+        outs
+    }
+
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next_u8 = || -> u8 {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 32) as u8
+    };
+
+    for seed_idx in 0..100 {
+        let count = 2 + (next_u8() as usize % 6);
+        let mut spec = Vec::with_capacity(count);
+        for i in 0..count {
+            let arith = next_u8() % 3;
+            let term = if i + 1 == count || next_u8() % 4 == 0 {
+                None
+            } else {
+                let left = next_u8() as usize % count;
+                let right = i + 1 + next_u8() as usize % (count - i - 1);
+                Some((left, right))
+            };
+            spec.push((arith, term));
+        }
+
+        let context = Context::with_default_dialects();
+        let i64_ty = IntegerType::new(&context, 64);
+        let i1_ty = IntegerType::new(&context, 1);
+        let p0 = context.create_value(i64_ty, None);
+        let p1 = context.create_value(i64_ty, None);
+        let region = context.create_region();
+        let entry = context.create_block(vec![p0.clone(), p1.clone()]);
+        region.add_block(entry.id());
+        let blocks: Vec<_> = (0..count)
+            .map(|_| {
+                let v = context.create_value(i64_ty, None);
+                let f = context.create_value(i64_ty, None);
+                let b = context.create_block(vec![v, f]);
+                region.add_block(b.id());
+                b
+            })
+            .collect();
+        let seed_v = b::addi(&context, p0.id(), p1.id(), i64_ty)
+            .at(entry.end())
+            .build()
+            .result();
+        let fuel_v = b::constant(&context, 12, i64_ty)
+            .at(entry.end())
+            .build()
+            .result();
+        let one_v = b::constant(&context, 1, i64_ty)
+            .at(entry.end())
+            .build()
+            .result();
+        let zero_v = b::constant(&context, 0, i64_ty)
+            .at(entry.end())
+            .build()
+            .result();
+        cb::br(&context, vec![seed_v, fuel_v], blocks[0].id())
+            .at(entry.end())
+            .build();
+        for (i, &(arith, term)) in spec.iter().enumerate() {
+            let blk = &blocks[i];
+            let arg = blk.arguments()[0].id();
+            let fuel = blk.arguments()[1].id();
+            let val = match arith {
+                0 => b::addi(&context, arg, seed_v, i64_ty)
+                    .at(blk.end())
+                    .build()
+                    .result(),
+                1 => b::subi(&context, arg, seed_v, i64_ty)
+                    .at(blk.end())
+                    .build()
+                    .result(),
+                _ => b::muli(&context, arg, seed_v, i64_ty)
+                    .at(blk.end())
+                    .build()
+                    .result(),
+            };
+            let Some((left, right)) = term else {
+                func_ops::r#return(&context, val).at(blk.end()).build();
+                continue;
+            };
+            let rem = b::subi(&context, fuel, one_v, i64_ty)
+                .at(blk.end())
+                .build()
+                .result();
+            let (lhs, rhs) = if left <= i {
+                (rem, zero_v)
+            } else {
+                (val, seed_v)
+            };
+            let cond = b::CmpIOpBuilder::new(&context)
+                .lhs(lhs)
+                .rhs(rhs)
+                .predicate(tir::attributes::Predicate::Sgt)
+                .result_type(i1_ty)
+                .at(blk.end())
+                .build()
+                .result();
+            cb::cond_br(
+                &context,
+                cond,
+                vec![val, rem],
+                vec![arg, rem],
+                blocks[left].id(),
+                blocks[right].id(),
+            )
+            .at(blk.end())
+            .build();
+        }
+        let func = func_ops::lambda(&context, "f", i64_ty, &region).build();
+        let mut pm = PassManager::new();
+        pm.add_pass(tir::passes::RestructureNodesPass::new());
+        pm.run(&context, func.id())
+            .unwrap_or_else(|e| panic!("seed {seed_idx} failed restructure: {e}"));
+        tir::check_types(&context).unwrap_or_else(|e| {
+            let mut out = String::new();
+            let _ = func.print(&mut tir::IRFormatter::new(&mut out));
+            panic!("seed {seed_idx} failed typecheck: {e}\nspec: {spec:?}\n{out}")
+        });
+        tir::verify_state_forks(&context, func.id())
+            .unwrap_or_else(|e| panic!("seed {seed_idx} failed state forks: {e}"));
+
+        for (l, r) in [(0, 0), (1, 2), (-3, 7), (11, -5)] {
+            let expected = eval_cfg(&spec, l, r);
+            let mut env = Vec::new();
+            let actual = eval_region(&context, func.body_region().id(), &[l, r], &mut env);
+            assert_eq!(
+                actual,
+                vec![expected],
+                "seed {seed_idx} mismatch for f({l}, {r})\nspec: {spec:?}\n{}",
+                {
+                    let mut out = String::new();
+                    let mut fmt = tir::IRFormatter::new(&mut out);
+                    tir::print_ir(&func, &context, &mut fmt).unwrap();
+                    out
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn cloning_a_region_with_a_mapping_binds_arguments_and_outside_values() {
     let context = Context::with_default_dialects();
     let i32 = IntegerType::new(&context, 32);

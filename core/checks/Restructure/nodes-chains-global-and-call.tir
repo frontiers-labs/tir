@@ -1,5 +1,3 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,verify-deps --verify %s | filecheck %s
 
 // A private slot, a global and a call. The memory the function is entered with
@@ -27,12 +25,12 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @f(%[[V:[0-9]+]]: !i32) -> !i32 {
+// CHECK: %[[A:[0-9]+]] = ptr.alloca
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state : !state<memory>
 // CHECK-NEXT: %[[EA:[0-9]+]], %[[EG:[0-9]+]] = state.split state(%[[ENTRY]])
-// CHECK-NEXT: %[[SA:[0-9]+]] = ptr.store %[[V]], %[[A:[0-9]+]] state(%[[EA]])
+// CHECK-NEXT: %[[SA:[0-9]+]] = ptr.store %[[V]], %[[A]] state(%[[EA]])
 // CHECK-NEXT: %[[SG:[0-9]+]] = ptr.store %[[V]], %[[G:[0-9]+]] state(%[[EG]])
+// CHECK-NEXT: %[[C:[0-9]+]] = func.call %{{[0-9]+}}() state(%[[SG]])
 // CHECK-NEXT: %{{[0-9]+}}, %[[RA:[0-9]+]] = ptr.load %[[A]] state(%[[SA]]) : !i32
-// CHECK-NEXT: %[[ENV:[0-9]+]] = state.entry_state : !state<fp.env>
-// CHECK-NEXT: %[[C:[0-9]+]], %[[CALL_ENV:[0-9]+]] = func.call %{{[0-9]+}}() state(%[[SG]], %[[ENV]])
 // CHECK-NEXT: %{{[0-9]+}}, %[[RG:[0-9]+]] = ptr.load %[[G]] state(%[[C]]) : !i32
-// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[CALL_ENV]]
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}

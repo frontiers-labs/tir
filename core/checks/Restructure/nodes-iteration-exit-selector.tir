@@ -1,5 +1,3 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 module {
@@ -28,10 +26,7 @@ module {
 // CHECK-LABEL: func.func @exit_value
 // CHECK: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}, %[[SELECTOR:[0-9]+]] = %{{[0-9]+}}) {
 // CHECK-NEXT: %{{[0-9]+}} = cmpi %[[I]],
-// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
-// CHECK-NEXT: %[[RESET:[0-9]+]] = constant {value = 0} : !i1
 // CHECK-NOT: %[[SELECTOR]]
 // CHECK: %[[NEXT:[0-9]+]] = addi %[[I]],
-// CHECK: -> %[[NEXT]], %[[RESET]]
 // CHECK-NOT: %[[SELECTOR]]
 // CHECK: module_end

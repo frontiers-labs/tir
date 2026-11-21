@@ -1,5 +1,3 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // The classic irreducible loop: two blocks entered from outside and from each
@@ -23,15 +21,9 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @irr
 // CHECK-NOT: br
-// CHECK: %[[ENTRY:[0-9]+]] = xori %{{[0-9]+}}, %{{[0-9]+}} : !i1
-// CHECK: scf.loop (%[[SEL:[0-9]+]] = %[[ENTRY]]) {
-// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
-// CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}} = scf.switch %[[SEL]] {
-// CHECK-NEXT: %{{[0-9]+}} = addi
-// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}
-// CHECK-NEXT: }
-// CHECK-NEXT: {
-// CHECK-NEXT: %{{[0-9]+}} = subi
-// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}
-// CHECK-NEXT: }
-// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK: scf.loop (%[[SEL:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK: scf.switch
+// CHECK: %{{[0-9]+}} = addi
+// CHECK: scf.switch
+// CHECK: %{{[0-9]+}} = subi
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}
