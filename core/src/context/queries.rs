@@ -1,6 +1,10 @@
 //! Invalidate derived rows when one of their inputs changes, including raw engine edits.
 use std::cell::Cell;
-use tir_egglog::{Database, EGraph, Schedule, TableId};
+use tir_egglog::{Database, EGraph, Error, RunReport, TableId};
+
+use super::ir_program;
+
+type ResolveTable = fn(&Database) -> Result<TableId, Error>;
 
 struct Inputs<const N: usize> {
     tables: [TableId; N],
@@ -8,9 +12,9 @@ struct Inputs<const N: usize> {
 }
 
 impl<const N: usize> Inputs<N> {
-    fn new(db: &Database, names: [&str; N]) -> Self {
+    fn new(db: &Database, tables: [ResolveTable; N]) -> Self {
         Self {
-            tables: names.map(|name| db.table(name).expect("core IR relation")),
+            tables: tables.map(|table| table(db).expect("core IR relation")),
             last: Cell::new(None),
         }
     }
@@ -19,16 +23,16 @@ impl<const N: usize> Inputs<N> {
         self.tables.map(|table| db.table_version(table))
     }
 
-    fn refresh(&self, engine: &mut EGraph, rules: &str, outputs: &[&str]) {
+    fn refresh(&self, engine: &mut EGraph, run: fn(&mut EGraph) -> Result<RunReport, Error>) {
         if self.last.get() == Some(self.versions(engine.database())) {
             return;
         }
-        for name in outputs {
-            engine.clear_function(name).expect("derived IR relation");
+        for table in &self.tables[N - 2..] {
+            engine.database_mut().clear(*table);
         }
         let previous = engine.seminaive;
         engine.seminaive = false;
-        let result = engine.run_schedule(&Schedule::saturate(rules));
+        let result = run(engine);
         engine.seminaive = previous;
         result.expect("core IR rules");
         self.last.set(Some(self.versions(engine.database())));
@@ -46,28 +50,28 @@ impl Queries {
             structure: Inputs::new(
                 db,
                 [
-                    "Operation",
-                    "Region",
-                    "Block",
-                    "Value",
-                    "Operand",
-                    "Yield",
-                    "ReaderAt",
-                    "DependsOn",
+                    ir_program::table_operation,
+                    ir_program::table_region,
+                    ir_program::table_block,
+                    ir_program::table_value,
+                    ir_program::table_operand,
+                    ir_program::table_yield,
+                    ir_program::table_reader_at,
+                    ir_program::table_depends_on,
                 ],
             ),
             flow: Inputs::new(
                 db,
                 [
-                    "DependsOn",
-                    "Operation",
-                    "Region",
-                    "Block",
-                    "Value",
-                    "Operand",
-                    "Successor",
-                    "CyclePath",
-                    "Bypass",
+                    ir_program::table_depends_on,
+                    ir_program::table_operation,
+                    ir_program::table_region,
+                    ir_program::table_block,
+                    ir_program::table_value,
+                    ir_program::table_operand,
+                    ir_program::table_successor,
+                    ir_program::table_cycle_path,
+                    ir_program::table_bypass,
                 ],
             ),
         }
@@ -75,12 +79,12 @@ impl Queries {
 
     pub fn structure(&self, engine: &mut EGraph) {
         self.structure
-            .refresh(engine, "structure", &["ReaderAt", "DependsOn"]);
+            .refresh(engine, ir_program::run_derive_structure);
     }
 
     pub fn verification(&self, engine: &mut EGraph) {
         self.structure(engine);
-        self.flow.refresh(engine, "flow", &["CyclePath", "Bypass"]);
+        self.flow.refresh(engine, ir_program::run_derive_flow);
     }
 
     pub fn invalidate(&self) {

@@ -1,0 +1,35 @@
+pub mod dialects { pub mod builtin {
+    pub let freeze<T: Type> = op { signature: (input: T) -> T };
+    pub let trunci<I: Nat, O: Nat> = op {
+        signature: (input: std::El<std::Bits<I>>) -> std::El<std::Bits<O>>
+    };
+} }
+pub let Operation: { id: Int, kind: String, placement: String, container: Int, position: Int, display: Int, location: Int } -> Prop;
+pub let Operand: (Int, Int, Int) -> Prop;
+pub let Value: (Int, Int, String, Int, Int, Int) -> Prop;
+pub let Attribute: (String, Int, String, Int) -> Prop;
+pub mod tables { pub let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>; }
+
+pub mod pointer_i8 {
+    pub let recognize<node, input, result: std::ValueRef<std::El<std::Ptr<std::Bits<8>>>>>:
+        dialects::builtin::freeze.matches(node, (input,), (result,))
+        -> (Attribute("operation", node, "probe", 1), Attribute("operation", node, "probe", 2));
+}
+pub mod pointer_i32 {
+    pub let recognize<node, input, result: std::ValueRef<std::El<std::Ptr<std::Bits<32>>>>>:
+        dialects::builtin::freeze.matches(node, (input,), (result,))
+        -> (Attribute("operation", node, "probe", 1), Attribute("operation", node, "probe", 2));
+}
+pub mod integer {
+    pub let Candidate<I: Type, O: Type>:
+        std::OperationKindOf<(std::ValueRef<I>,), (std::ValueRef<O>,)> -> Prop;
+    pub let freeze: Candidate(dialects::builtin::freeze.typed_kind);
+    pub let truncate: Candidate(dialects::builtin::trunci.typed_kind);
+    pub let recognize<kind, node, input: std::IntegerRef, result: std::IntegerRef>:
+        (Candidate(kind), std::match_kind(kind, node, (input,), (result,)))
+        -> (Attribute("operation", node, "probe", 1), Attribute("operation", node, "probe", 2));
+}
+
+pub let pointer = std::schedule::saturate(pointer_i8);
+pub let different_pointer = std::schedule::saturate(pointer_i32);
+pub let same_integer_width = std::schedule::saturate(integer);

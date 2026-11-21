@@ -17,7 +17,7 @@ pub use color::Color;
 pub(crate) use color::{Colors, check_pure};
 pub use containers::{ContainerValue, ContainerValues};
 pub(crate) use database::View;
-pub use database::{Database, PrimCtx, PrimFn, Row, Rows};
+pub use database::{Database, DatabaseId, PrimCtx, PrimFn, Row, Rows};
 pub(crate) use group::{GroupRow, GroupView, group_at};
 pub(crate) use keymap::{EMPTY, RowTable, l2, same_key};
 pub(crate) use rebuild::Delta;

@@ -2,6 +2,11 @@
 
 mod tables;
 
+#[allow(dead_code)]
+mod ir_catalog {
+    include!(concat!(env!("OUT_DIR"), "/ir_catalog.rs"));
+}
+
 use std::{cell::RefCell, fmt, rc::Rc};
 use tables::{Arguments, Declaration, DefaultArg, Tables, load, replace, store};
 use tir_egglog::{Database, EGraph};
@@ -340,7 +345,7 @@ impl Terms {
     /// Allocate type names from the context's shared entity sequence.
     pub fn with_entity_ids(next_entity: Arc<AtomicU32>) -> Self {
         let mut engine = EGraph::default();
-        tir_egglog::Program::from_bytes(tir_ir_schema::IR_SCHEMA, engine.database_mut())
+        ir_catalog::install_schema(engine.database_mut())
             .expect("the compiled structural IR schema loads");
         Self::with_engine(Rc::new(RefCell::new(engine)), next_entity)
     }
@@ -948,5 +953,38 @@ fn has_encoding(shape: &Param, domain: &str, accepts: &mut impl FnMut(&Param) ->
         }
         Param::ListOf(element) | Param::Optional(element) => has_encoding(element, domain, accepts),
         _ => false,
+    }
+}
+
+/// Read a single natural argument from a checked integer type's argument row.
+pub fn integer_width(p: &tir_egglog::PrimCtx, encoded: i64) -> Option<i64> {
+    let raw = u32::try_from(encoded).ok()?;
+    let args = p.base_value::<tables::Arguments>(tir_egglog::Value::new(raw));
+    match args.0.as_ref() {
+        [TypeArg::Nat(width)] if *width > 0 => i64::try_from(*width).ok(),
+        _ => None,
+    }
+}
+
+/// Read a type or symbol argument selected by an operation match.
+pub fn type_argument(p: &tir_egglog::PrimCtx, encoded: i64, index: i64) -> Option<i64> {
+    let raw = u32::try_from(encoded).ok()?;
+    let args = p.base_value::<Arguments>(tir_egglog::Value::new(raw));
+    match args.0.get(usize::try_from(index).ok()?)? {
+        TypeArg::Type(ty) => Some(i64::from(ty.number())),
+        TypeArg::Sym(name) => Some(i64::from(name.number())),
+        _ => None,
+    }
+}
+
+/// Read the CDSL IEEE format index from a checked float type's argument row.
+pub fn fp_format(p: &tir_egglog::PrimCtx, encoded: i64) -> Option<i64> {
+    let raw = u32::try_from(encoded).ok()?;
+    let args = p.base_value::<Arguments>(tir_egglog::Value::new(raw));
+    match args.0.as_ref() {
+        [TypeArg::Nat(5), TypeArg::Nat(10)] => Some(16),
+        [TypeArg::Nat(8), TypeArg::Nat(23)] => Some(32),
+        [TypeArg::Nat(11), TypeArg::Nat(52)] => Some(64),
+        _ => None,
     }
 }

@@ -3,6 +3,11 @@ mod keys;
 mod op_spec;
 mod queries;
 mod records;
+
+#[allow(dead_code)]
+mod ir_program {
+    include!(concat!(env!("OUT_DIR"), "/ir_program.rs"));
+}
 use crate::{
     Dialect, Error, OpId, Operation, OperationParser, TypeId,
     attributes::{AttributeValue, NamedAttribute},
@@ -106,11 +111,19 @@ struct Inner {
 impl Context {
     pub fn new() -> Self {
         let mut engine = EGraph::default();
-        tir_egglog::Program::from_bytes(tir_ir_schema::IR_SCHEMA, engine.database_mut())
-            .unwrap_or_else(|error| panic!("IR schema: {error}"));
-        engine
-            .attach_program(tir_ir_schema::IR_RULES)
-            .unwrap_or_else(|error| panic!("IR rules: {error}"));
+        ir_program::bind_std_ir_integer_width(
+            engine.database_mut(),
+            tir_symbolic::term::integer_width,
+        )
+        .unwrap_or_else(|error| panic!("IR integer width: {error}"));
+        ir_program::bind_std_ir_type_argument(
+            engine.database_mut(),
+            tir_symbolic::term::type_argument,
+        )
+        .unwrap_or_else(|error| panic!("IR type argument: {error}"));
+        ir_program::bind_std_ir_fp_format(engine.database_mut(), tir_symbolic::term::fp_format)
+            .unwrap_or_else(|error| panic!("IR floating-point format: {error}"));
+        ir_program::attach(&mut engine).unwrap_or_else(|error| panic!("IR rules: {error}"));
         keys::install(&mut engine).expect("IR entity keys");
         let queries = queries::Queries::new(engine.database());
         op_spec::install(&mut engine);

@@ -14,7 +14,6 @@ doctest = false
 [dependencies]
 tir-macros.workspace = true
 tir-egglog.workspace = true
-tir-ir-schema.workspace = true
 tir-pdl = { workspace = true, default-features = false }
 tir-symbolic.workspace = true
 tir-adt.workspace = true
@@ -22,6 +21,9 @@ linkme.workspace = true
 logos.workspace = true
 smallvec = "1.15.2"
 ariadne.workspace = true
+
+[build-dependencies]
+tir-cdsl.workspace = true
 
 [dev-dependencies]
 tir-bench.workspace = true

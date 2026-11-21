@@ -298,9 +298,13 @@ impl<'a> Operation<'a> {
         for slot in self.operands.iter().chain(&self.results) {
             let _: Ident = parse_rust(&format!("r#{}", slot.name))?;
         }
+        let mut data_results = self.results.iter().filter(|slot| !slot.state());
+        let multiple_results = data_results.clone().count() > 1;
         if self.results.iter().filter(|slot| slot.state()).count() > 1
             || self.operands.iter().filter(|slot| slot.state()).count() > 1
-            || self.results.iter().filter(|slot| !slot.state()).count() > 1
+            || (multiple_results
+                && (!self.custom_format
+                    || data_results.any(|slot| slot.ty.starts_with(['*', '?']))))
         {
             return Err(Error(
                 "unsupported result or state groups in Rust operation".into(),
@@ -608,6 +612,10 @@ impl<'a> Operation<'a> {
             methods.extend(setter);
             getters.extend(getter);
         }
+        let multiple_results = self.results.iter().filter(|slot| !slot.state()).count() > 1;
+        if self.results.iter().any(|slot| !slot.state()) {
+            getters.extend(quote! { pub fn result(&self) -> tir::ValueId { self.0.results()[0] } });
+        }
         for result in &self.results {
             if result.state() {
                 fields.extend(quote! { state_result_types: Vec<tir::TypeId>, });
@@ -636,8 +644,23 @@ impl<'a> Operation<'a> {
                 }
                 continue;
             }
-            getters.extend(quote! { pub fn result(&self) -> tir::ValueId { self.0.results()[0] } });
-            if result.variadic() {
+            if multiple_results {
+                let name = format_ident!("r#{}", result.name);
+                let missing = format!("result type for '{}' must be set", result.name);
+                fields.extend(quote! { #name: Option<tir::TypeId>, });
+                methods.extend(quote! {
+                    pub fn #name(mut self, ty: tir::TypeId) -> Self {
+                        self.ports.#name = Some(ty);
+                        self
+                    }
+                });
+                collect_results.extend(quote! {
+                    let ty = self.ports.#name.expect(#missing);
+                    results.push(self.context.create_value(ty, None).id());
+                });
+                result_parameter.extend(quote! { #name: tir::TypeId, });
+                arguments.extend(quote! { builder = builder.#name(#name); });
+            } else if result.variadic() {
                 fields.extend(
                     quote! { result_types: Vec<tir::TypeId>, result_values: Vec<tir::ValueId>, },
                 );
@@ -722,7 +745,7 @@ impl<'a> Operation<'a> {
             #collect_results
             #store_sizes
             let instance = tir::NewOp::new::<#op>(self.context.clone(), operands, results, regions, self.parts);
-            let operation = #op(self.context.add_operation(instance));
+            let operation = #op(self.context.add_operation(self.insertion, instance));
         };
         let build_method = if self.assembly.is_some() {
             quote! {
@@ -752,6 +775,7 @@ impl<'a> Operation<'a> {
             pub struct #builder {
                 context: tir::Context,
                 parts: tir::NewOpParts,
+                insertion: tir::InsertionPoint,
                 #ports_field
             }
 
@@ -760,11 +784,17 @@ impl<'a> Operation<'a> {
                     Self {
                         context: context.clone(),
                         parts: tir::NewOpParts::default(),
+                        insertion: tir::InsertionPoint::Root,
                         #ports_default
                     }
                 }
 
                 #methods
+
+                pub fn at(mut self, insertion: tir::InsertionPoint) -> Self {
+                    self.insertion = insertion;
+                    self
+                }
 
                 pub fn attr(mut self, name: &str, value: tir::attributes::AttributeValue) -> Self {
                     self.parts.attributes.push(self.context.named_attribute(name, value));

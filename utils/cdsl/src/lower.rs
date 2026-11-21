@@ -7,7 +7,7 @@ use std::{
 use crate::{
     Error, Program,
     ast::{Expr, Path},
-    hm::{Scheme, Ty},
+    hm::{ConId, Scheme, Ty},
 };
 
 static NEXT_REVISION: AtomicU64 = AtomicU64::new(0);
@@ -99,10 +99,39 @@ impl CheckedOpInterfaces {
 }
 
 #[derive(Debug)]
+pub(crate) enum PortType {
+    Variable(usize),
+    Integer(PortIndex),
+    Pointer(Box<PortType>),
+    Float(PortIndex),
+    Computation {
+        format: PortIndex,
+        rounding: PortIndex,
+        contraction: PortIndex,
+    },
+    Unsupported,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PortIndex {
+    Variable(usize),
+    Constant(i64),
+    Symbol(&'static str),
+}
+
+#[derive(Debug)]
+pub(crate) struct CheckedMatch {
+    pub operands: Vec<PortType>,
+    pub results: Vec<PortType>,
+}
+
+#[derive(Debug)]
 pub struct CheckedProgram {
     revision: u64,
     artifact: Program,
     types: BTreeMap<Path, Scheme>,
+    pub(crate) type_families: BTreeMap<Path, ConId>,
+    pub(crate) operation_matches: BTreeMap<Path, BTreeMap<usize, CheckedMatch>>,
     operation_interfaces: Vec<CheckedOpInterfaces>,
 }
 
@@ -115,6 +144,8 @@ impl CheckedProgram {
         artifact: Program,
         types: BTreeMap<Path, Scheme>,
         mut operations: BTreeMap<Path, BTreeMap<Path, CheckedMethods>>,
+        type_families: BTreeMap<Path, ConId>,
+        operation_matches: BTreeMap<Path, BTreeMap<usize, CheckedMatch>>,
     ) -> Result<Self, Error> {
         let revision = NEXT_REVISION
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
@@ -143,6 +174,8 @@ impl CheckedProgram {
             artifact,
             types,
             operation_interfaces,
+            type_families,
+            operation_matches,
         })
     }
 

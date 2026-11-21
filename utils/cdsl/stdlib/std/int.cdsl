@@ -1,0 +1,5 @@
+pub let equal: (Int, Int) -> Bool as "bool-=";
+pub let less: (Int, Int) -> Bool as "bool-<";
+pub let add: (Int, Int) -> Int as "+";
+pub let sub: (Int, Int) -> Int as "-";
+pub let mul: (Int, Int) -> Int as "*";

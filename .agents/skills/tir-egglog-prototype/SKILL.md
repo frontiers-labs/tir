@@ -14,7 +14,7 @@ Run from the TIR repository root. Inspect local instructions and `git status` fi
 Read these sources for the parts the prototype needs:
 
 - `tir/src/egglog.rs` for CLI arguments, REPL behavior and timing boundaries.
-- `libs/ir-schema/src/ir.cdsl` for relation names, sorts, invariants and index schedules.
+- `core/defs/ir.cdsl` for relation names, sorts, invariants and index schedules.
 - `tir/checks/Inputs/egglog-rules.cdsl` for an executable imported-IR example.
 
 Build `cargo build -p tir-cli` when the binary is missing or stale. Check `target/debug/tir egglog --help`. The command takes a TIR file, followed by an optional CDSL file. Use `--schedule` to select a schedule other than `execute`.

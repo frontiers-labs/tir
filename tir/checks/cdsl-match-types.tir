@@ -1,0 +1,21 @@
+// RUN: tir opt --verify %s
+// RUN: not tir egglog %s %S/Inputs/cdsl-match-types.cdsl --schedule pointer 2>&1 | filecheck %s --check-prefix=MATCH
+// RUN: tir egglog %s %S/Inputs/cdsl-match-types.cdsl --schedule different_pointer 2>&1 | filecheck %s --check-prefix=MISS
+// RUN: tir egglog %S/../../backends/x86_64/checks/isel/freeze-copy.tir %S/Inputs/cdsl-match-types.cdsl --schedule pointer 2>&1 | filecheck %s --check-prefix=MISS
+// RUN: not tir egglog %S/../../backends/x86_64/checks/isel/freeze-copy.tir %S/Inputs/cdsl-match-types.cdsl --schedule same_integer_width 2>&1 | filecheck %s --check-prefix=MATCH
+// RUN: tir opt --verify %S/../../core/checks/InstCombine/type_in_key.tir
+// RUN: tir egglog %S/../../core/checks/InstCombine/type_in_key.tir %S/Inputs/cdsl-match-types.cdsl --schedule same_integer_width 2>&1 | filecheck %s --check-prefix=MISS
+// RUN: not tir egglog %s %S/Inputs/cdsl-match-unsupported.cdsl 2>&1 | filecheck %s --check-prefix=UNSUPPORTED
+
+// MATCH: merge of `Attribute` rejects
+// MISS-NOT: merge of `Attribute` rejects
+// MISS: egglog: compile=
+// UNSUPPORTED: cannot enforce the checked type of operation match port operand:0
+
+module {
+  func.func @pointer(%arg: !ptr.p<!i8>) -> !ptr.p<!i8> {
+    %result = freeze %arg : !ptr.p<!i8>
+    func.return %result
+  }
+  module_end
+}

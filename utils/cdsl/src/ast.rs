@@ -60,7 +60,16 @@ pub enum Declaration {
         name: String,
         generics: Vec<RuleBinder>,
         ty: Expr,
+        engine: Option<EngineBinding>,
     },
+}
+
+/// Engine interoperability declared alongside an axiom's checked type.
+#[derive(Clone, Debug)]
+pub enum EngineBinding {
+    Name(String),
+    Host(String),
+    Table(Path),
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +84,41 @@ pub struct Binding {
     pub generics: Vec<Binder>,
     pub ty: Option<Expr>,
     pub value: Expr,
+}
+
+impl Binding {
+    pub(crate) fn operation_fields(&self) -> Option<&[Node<OpField>]> {
+        match &self.value.value {
+            Expression::Op(fields) => Some(fields),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn operation_name(&self, module: &[String]) -> Option<String> {
+        if self.operation_fields().is_some() {
+            let dialect = match module {
+                [.., namespace, dialect] if namespace == "dialects" => dialect,
+                _ => "builtin",
+            };
+            return Some(format!("{dialect}.{}", self.path.last()?));
+        }
+        let Expression::Record(fields) = &self.value.value else {
+            return None;
+        };
+        let field = |name| {
+            fields.iter().find_map(|(key, value)| {
+                if key == name
+                    && let Expression::Literal(Literal::String(value)) = &value.value
+                {
+                    Some(value.as_str())
+                } else {
+                    None
+                }
+            })
+        };
+        field("rust_name")?;
+        Some(format!("{}.{}", field("dialect")?, field("name")?))
+    }
 }
 
 #[derive(Clone, Debug)]
