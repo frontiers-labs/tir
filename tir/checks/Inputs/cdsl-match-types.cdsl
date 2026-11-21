@@ -4,21 +4,20 @@ pub mod dialects { pub mod builtin {
         signature: (input: std::El<std::Bits<I>>) -> std::El<std::Bits<O>>
     };
 } }
-pub let Operation: { id: Int, kind: String, placement: String, container: Int, position: Int, display: Int, location: Int } -> Prop;
-pub let Operand: (Int, Int, Int) -> Prop;
-pub let Value: (Int, Int, String, Int, Int, Int) -> Prop;
-pub let Attribute: (String, Int, String, Int) -> Prop;
-pub mod tables { pub let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>; }
+pub let Operation: { id: std::ir::OperationId, kind: std::ir::OperationKind, placement: String, container: Int, position: Int, display: Int, location: Int } -> Prop;
+pub let Operand: std::Table<(std::ir::OperationId, Int), std::ir::ValueId, std::Merge::Unique>;
+pub let Value: (std::ir::ValueId, Int, String, Int, Int, Int) -> Prop;
+pub let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>;
 
 pub mod pointer_i8 {
     pub let recognize<node, input, result: std::ValueRef<std::El<std::Ptr<std::Bits<8>>>>>:
         dialects::builtin::freeze.matches(node, (input,), (result,))
-        -> (Attribute("operation", node, "probe", 1), Attribute("operation", node, "probe", 2));
+        -> (Attribute("operation", std::ir::raw_operation_id(node), "probe", 1), Attribute("operation", std::ir::raw_operation_id(node), "probe", 2));
 }
 pub mod pointer_i32 {
     pub let recognize<node, input, result: std::ValueRef<std::El<std::Ptr<std::Bits<32>>>>>:
         dialects::builtin::freeze.matches(node, (input,), (result,))
-        -> (Attribute("operation", node, "probe", 1), Attribute("operation", node, "probe", 2));
+        -> (Attribute("operation", std::ir::raw_operation_id(node), "probe", 1), Attribute("operation", std::ir::raw_operation_id(node), "probe", 2));
 }
 pub mod integer {
     pub let Candidate<I: Type, O: Type>:
@@ -27,7 +26,7 @@ pub mod integer {
     pub let truncate: Candidate(dialects::builtin::trunci.typed_kind);
     pub let recognize<kind, node, input: std::IntegerRef, result: std::IntegerRef>:
         (Candidate(kind), std::match_kind(kind, node, (input,), (result,)))
-        -> (Attribute("operation", node, "probe", 1), Attribute("operation", node, "probe", 2));
+        -> (Attribute("operation", std::ir::raw_operation_id(node), "probe", 1), Attribute("operation", std::ir::raw_operation_id(node), "probe", 2));
 }
 
 pub let pointer = std::schedule::saturate(pointer_i8);

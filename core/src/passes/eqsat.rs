@@ -5,6 +5,30 @@ pub(crate) mod generated {
     include!(concat!(env!("OUT_DIR"), "/eqsat.rs"));
 }
 
+impl From<generated::OperationId> for OpId {
+    fn from(id: generated::OperationId) -> Self {
+        Self::from_number(id.raw())
+    }
+}
+
+impl From<OpId> for generated::OperationId {
+    fn from(id: OpId) -> Self {
+        Self::from_raw(id.number())
+    }
+}
+
+impl From<generated::ValueId> for ValueId {
+    fn from(id: generated::ValueId) -> Self {
+        Self::from_number(id.raw())
+    }
+}
+
+impl<T> From<generated::ValueRef<T>> for ValueId {
+    fn from(reference: generated::ValueRef<T>) -> Self {
+        Self::from_number(reference.raw())
+    }
+}
+
 use tir_egglog::{Color, Database};
 
 use crate::{
@@ -53,38 +77,24 @@ impl Pass for EqSatPass {
             .eq_sat_definition()
             .map(|row| {
                 let (op, result, form) = row.map_err(rule_error)?;
-                Ok((
-                    OpId::from_number(op.raw()),
-                    ValueId::from_number(result.raw()),
-                    form,
-                ))
+                Ok((OpId::from(op), ValueId::from(result), form))
             })
             .collect::<Result<Vec<_>, PassError>>()?;
         let edits = program
             .eq_sat_alias_edit()
             .map(|row| {
-                let (owner, slot, old, new, is_yield) = row.map_err(rule_error)?;
-                let site = use_site(owner, slot, is_yield)?;
-                Ok((
-                    site,
-                    ValueId::from_number(old.raw()),
-                    ValueId::from_number(new.raw()),
-                ))
+                let (owner, slot, old, new) = row.map_err(rule_error)?;
+                let site = use_site(owner, slot)?;
+                Ok((site, ValueId::from(old), ValueId::from(new)))
             })
             .collect::<Result<Vec<_>, PassError>>()?;
         let mut redirected = program
             .eq_sat_redirect()
-            .map(|row| {
-                row.map(|(old, _)| ValueId::from_number(old.raw()))
-                    .map_err(rule_error)
-            })
+            .map(|row| row.map(|(old, _)| ValueId::from(old)).map_err(rule_error))
             .collect::<Result<Vec<_>, _>>()?;
         let mut erase = program
             .eq_sat_erase()
-            .map(|row| {
-                row.map(|(id,)| OpId::from_number(id.raw()))
-                    .map_err(rule_error)
-            })
+            .map(|row| row.map(|(id,)| OpId::from(id)).map_err(rule_error))
             .collect::<Result<Vec<_>, _>>()?;
         redirected.sort_unstable();
         erase.sort_unstable();
@@ -103,7 +113,7 @@ fn snapshot<'db>(
 ) -> Result<generated::Program<'db>, PassError> {
     let mut program = generated::Program::load(db).map_err(rule_error)?;
     program
-        .insert_eq_sat_root((generated::OperationId::from_raw(root.raw()),))
+        .insert_eq_sat_root((root.into(),))
         .map_err(rule_error)?;
     program.prepare().map_err(rule_error)?;
     layout_values(context, &mut program)?;
@@ -117,7 +127,7 @@ fn sweep(context: &Context, root: OpId) -> Result<(), PassError> {
     let removals = program
         .eq_sat_dead()
         .map(|row| {
-            row.map(|(id,)| context.get_op(OpId::from_number(id.raw())))
+            row.map(|(id,)| context.get_op(OpId::from(id)))
                 .map_err(rule_error)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -154,22 +164,23 @@ fn scoped_literals(program: &mut generated::Program<'_>) -> Result<Vec<publish::
     let mut edits = Vec::new();
     for color in std::iter::once(Color::BASE).chain(colors) {
         for row in program.eq_sat_scoped_edit_in(color) {
-            let (owner, slot, old, bits, is_yield) = row.map_err(rule_error)?;
-            let site = use_site(owner, slot, is_yield)?;
-            let old = ValueId::from_number(u32::try_from(old).map_err(rule_error)?);
+            let (owner, slot, old, bits) = row.map_err(rule_error)?;
+            let site = use_site(owner, slot)?;
+            let old = ValueId::from(old);
             edits.push((site, old, bits));
         }
     }
     Ok(edits)
 }
 
-fn use_site(owner: i64, slot: i64, is_yield: bool) -> Result<publish::UseSite, PassError> {
-    let owner = u32::try_from(owner).map_err(rule_error)?;
+fn use_site(owner: generated::UseOwner, slot: i64) -> Result<publish::UseSite, PassError> {
     let slot = usize::try_from(slot).map_err(rule_error)?;
-    Ok(if is_yield {
-        publish::UseSite::Yield(RegionId::from_number(owner), slot)
-    } else {
-        publish::UseSite::Operand(OpId::from_number(owner), slot)
+    Ok(match owner {
+        generated::UseOwner::Operand(op) => publish::UseSite::Operand(OpId::from(op), slot),
+        generated::UseOwner::Yield(region) => publish::UseSite::Yield(
+            RegionId::from_number(u32::try_from(region).map_err(rule_error)?),
+            slot,
+        ),
     })
 }
 
@@ -180,10 +191,7 @@ fn layout_values(context: &Context, program: &mut generated::Program<'_>) -> Res
         .collect::<Result<Vec<_>, _>>()?;
     for (key, kind) in requests {
         let kind = kind.as_str();
-        let Ok(id) = u32::try_from(key) else {
-            continue;
-        };
-        let id = OpId::from_number(id);
+        let id = OpId::from(key);
         let Some(layout) = crate::layout::DataLayout::for_op(context, id) else {
             continue;
         };

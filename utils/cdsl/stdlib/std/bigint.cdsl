@@ -1,5 +1,11 @@
-pub let BigInt: Type as "BigInt";
-pub let add: (BigInt, BigInt) -> BigInt as "+";
-pub let sub: (BigInt, BigInt) -> BigInt as "-";
-pub let from_string: String -> BigInt as "from-string";
-pub let ge: (BigInt, BigInt) -> Bool as "bool->=";
+pub let BigInt: Type;
+pub let from_string: String -> BigInt;
+pub let ge: (BigInt, BigInt) -> Bool;
+pub let bigint: Int -> BigInt;
+pub let le: (BigInt, BigInt) -> Bool;
+pub let bit_and: (BigInt, BigInt) -> BigInt;
+pub let bit_or: (BigInt, BigInt) -> BigInt;
+pub let bit_not: BigInt -> BigInt;
+pub let shl: (BigInt, Int) -> BigInt;
+pub let bits: BigInt -> BigInt;
+pub let to_string: BigInt -> String;

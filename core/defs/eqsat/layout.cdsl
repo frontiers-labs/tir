@@ -1,0 +1,69 @@
+use std::bigint::BigInt;
+
+pub let EqSatLayoutKind: std::ir::OperationKind -> Prop;
+pub let EqSatLayoutQuery: (std::ir::OperationId, std::ir::OperationKind) -> Prop;
+pub let EqSatLayoutValue: (std::ir::OperationId, BigInt) -> Prop;
+
+pub mod layout_queries {
+    pub let size: EqSatLayoutKind(dialects::layout::sizeof.kind);
+    pub let alignment: EqSatLayoutKind(dialects::layout::alignof.kind);
+    pub let offset: EqSatLayoutKind(dialects::layout::offsetof.kind);
+    pub let pointer: EqSatLayoutKind(dialects::ptr::ptradd.kind);
+    pub let write: EqSatLayoutKind(dialects::ptr::store.kind);
+    pub let read: EqSatLayoutKind(dialects::ptr::load.kind);
+    pub let query<node, kind, place, home, pos, display, loc>:
+        (EqSatLive(node), EqSatLayoutKind(kind), ir::Operation{ id: node, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }())
+        -> EqSatLayoutQuery(node, kind);
+}
+
+pub mod layout_values {
+    pub let fold<node, value, result, ty, declared, mask, bits>:
+        (EqSatLayoutValue(node, value), ir::result(result, ty, node, 0, declared),
+         EqSatAllBits(ty, mask), bits == std::bigint::bit_and(value, mask))
+        -> (EqSatFolded(result, bits), EqSatConstant(node, result, bits));
+}
+
+pub let EqSatLayoutScoped: std::ir::OperationId -> Prop;
+pub mod layout_pointer {
+    pub let identity<node, place, home, pos, display, loc, ptr, offset, result, ty, pk, po, ps, pd, rd>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::ptradd.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+         EqSatLayoutScoped(node), ir::Operand(node, 0, ptr), ir::Operand(node, 1, offset),
+         EqSatFolded(offset, std::bigint::bigint(0)),
+         ir::Value(ptr, ty, pk, po, ps, pd), ir::result(result, ty, node, 0, rd))
+        -> (EqSatReplace(node, result, ptr), EqSatErase(node));
+}
+
+pub let EqSatOffsetStep: (std::ir::ValueId, std::ir::ValueId, Int, Int, Int, BigInt, BigInt) -> Prop;
+pub let EqSatAddress: (std::ir::ValueId, std::ir::ValueId, Int, Int, Int, BigInt) -> Prop;
+pub let EqSatAddressEquals: (std::ir::ValueId, std::ir::ValueId) -> Prop;
+pub let EqSatLocalAddress: (std::ir::ValueId, std::ir::ValueId, BigInt) -> Prop;
+pub mod address_keys {
+    pub let step<node,place,home,p,d,l,base,disp,address,ty,decl,index,kind,owner,slot,id,
+                 width,offset,mask>:
+        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::ptradd.kind, placement: place, container: home, position: p, display: d, location: l }(),
+         EqSatLayoutScoped(node), EqSatPointerSize(node,width),
+         ir::Operand(node,0,base), ir::Operand(node,1,disp), ir::result(address, ty, node,0,decl),
+         ir::Value(disp,index,kind,owner,slot,id), EqSatFolded(disp,offset), EqSatAllBits(index,mask),
+         std::bigint::le((offset + offset),mask) == true,
+         !EqSatHasAttr(node,"inbounds"), !EqSatHasAttr(node,"nuw"), !EqSatHasAttr(node,"nsw"))
+        -> EqSatOffsetStep(address,base,ty,index,width,offset,mask);
+    pub let direct<address,base,ty,index,width,offset,mask>:
+        EqSatOffsetStep(address,base,ty,index,width,offset,mask)
+        -> EqSatAddress(address,base,ty,index,width,offset);
+    pub let add<address,parent,base,ty,index,width,offset,prior,total,mask>:
+        (EqSatOffsetStep(address,parent,ty,index,width,offset,mask),
+         EqSatAddress(parent,base,ty,index,width,prior), total == (offset + prior),
+         std::bigint::le((total + total),mask) == true)
+        -> EqSatAddress(address,base,ty,index,width,total);
+
+    pub let twins<a,b,base,ty,index,width,offset>:
+        (EqSatAddress(a,base,ty,index,width,offset), EqSatAddress(b,base,ty,index,width,offset))
+        -> EqSatAddressEquals(a,b);
+    pub let same_cell<a,b,state,ty,data>:
+        (EqSatAddressEquals(a,b), EqSatStored(state,a,ty,data))
+        -> EqSatStored(state,b,ty,data);
+    pub let root<base>: EqSatAllocation(base) -> EqSatLocalAddress(base,base,std::bigint::bigint(0));
+    pub let local<address,base,ty,index,width,offset>:
+        (EqSatAddress(address,base,ty,index,width,offset), EqSatAllocation(base))
+        -> EqSatLocalAddress(address,base,offset);
+}

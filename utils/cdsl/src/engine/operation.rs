@@ -101,7 +101,7 @@ fn bits(
         let signed_overflow = |op| {
             let result = signed_binary(op);
             not(apply(
-                "bool-=",
+                "equal",
                 [result.clone(), signed(narrow(result, width), width)],
             ))
         };
@@ -112,16 +112,16 @@ fn bits(
             "and" => word(binary("&")),
             "or" => word(binary("|")),
             "xor" => word(binary("^")),
-            "eq" => control(binary("bool-=")),
-            "ne" => control(not(binary("bool-="))),
+            "eq" => control(binary("equal")),
+            "ne" => control(not(binary("equal"))),
             "ult" => control(binary("bool-<")),
             "ugt" => control(binary("bool->")),
-            "ule" => control(binary("bool-<=")),
-            "uge" => control(binary("bool->=")),
+            "ule" => control(binary("le")),
+            "uge" => control(binary("ge")),
             "slt" => control(signed_binary("bool-<")),
             "sgt" => control(signed_binary("bool->")),
-            "sle" => control(signed_binary("bool-<=")),
-            "sge" => control(signed_binary("bool->=")),
+            "sle" => control(signed_binary("le")),
+            "sge" => control(signed_binary("ge")),
             "shl" | "lshr" | "ashr" => {
                 let shift = apply(&bindings.shift_amount, [y.clone()]);
                 let input = if name == "ashr" {
@@ -141,16 +141,16 @@ fn bits(
                 let overflow = apply(
                     "and",
                     [
-                        apply("bool-=", [x.clone(), min]),
-                        apply("bool-=", [y.clone(), narrow(bigint(-1), width)]),
+                        apply("equal", [x.clone(), min]),
+                        apply("equal", [y.clone(), narrow(bigint(-1), width)]),
                     ],
                 );
                 control(apply(
                     "and",
-                    [not(apply("bool-=", [y.clone(), bigint(0)])), not(overflow)],
+                    [not(apply("equal", [y.clone(), bigint(0)])), not(overflow)],
                 ))
             }
-            "unsigned_add_overflows" => control(apply("bool->=", [binary("+"), modulus(width)])),
+            "unsigned_add_overflows" => control(apply("ge", [binary("+"), modulus(width)])),
             "unsigned_sub_overflows" => control(binary("bool-<")),
             "signed_add_overflows" => control(signed_overflow("+")),
             "signed_sub_overflows" => control(signed_overflow("-")),

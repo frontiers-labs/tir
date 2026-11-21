@@ -306,11 +306,11 @@ pub mod dialects {
         pub let widen = op { signature: (input: std::Bits<1>) -> std::Bits<16> };
     }
 }
-pub let Replaced: (Int, Int) -> Prop;
+pub let Replaced: (std::ir::OperationId, std::ir::ValueId) -> Prop;
 pub let rewrite<first, last, x, y, flag, result>:
     (dialects::downstream::compare.matches(first, (x, y), (flag,)),
      dialects::downstream::widen.matches(last, (flag,), (result,)))
-    -> Replaced(first, std::ir::value_id(result));
+    -> Replaced(first, result);
 "#;
     compile_source(source).unwrap();
     for (original, invalid, diagnostic) in [
@@ -329,12 +329,11 @@ fn a_shared_named_relation_preserves_its_column_order() {
         .unwrap()
         .lower()
         .unwrap();
-    let reversed = compile_source("pub let OtherEdge: { to: Int, from: Int } -> Prop;")
+    let reversed = compile_source("pub let Edge: { to: Int, from: Int } -> Prop;")
         .unwrap()
         .lower()
         .unwrap();
-    let aliases = std::collections::BTreeMap::from([(vec!["OtherEdge".into()], "Edge".into())]);
-    let mut schema = Schema::with_names(&first, aliases).unwrap();
+    let mut schema = Schema::new(&first).unwrap();
     let error = schema.extend(&reversed).unwrap_err();
     assert!(
         error
@@ -375,13 +374,13 @@ fn separately_compiled_programs_share_populated_tables_and_keep_incremental_stat
     let mut engine = EGraph::default();
     let db = engine.database_mut();
     Program::from_bytes(&schema.to_bytes().unwrap(), db).unwrap();
-    let input = db.table("schema::Input").unwrap();
-    let middle = db.table("schema::Middle").unwrap();
+    let input = db.table("Input").unwrap();
+    let middle = db.table("Middle").unwrap();
     db.insert(input, &[db.base(0_i64)]).unwrap();
     let mut first = Program::from_bytes(&first_bytes, db).unwrap();
     let mut second = Program::from_bytes(&second_bytes, db).unwrap();
-    assert_eq!(db.table("schema::Input").unwrap(), input);
-    assert_eq!(db.table("schema::Middle").unwrap(), middle);
+    assert_eq!(db.table("Input").unwrap(), input);
+    assert_eq!(db.table("Middle").unwrap(), middle);
     first.run(db, first_schedule, &[]).unwrap();
     second.run(db, second_schedule, &[]).unwrap();
     first.run(db, first_schedule, &[]).unwrap();
@@ -398,7 +397,7 @@ fn separately_compiled_programs_share_populated_tables_and_keep_incremental_stat
     second.run(db, second_schedule, &[]).unwrap();
     assert_eq!(values(db, input), [0, 2, 4]);
     assert_eq!(db.table_count(), 3);
-    assert_eq!(db.rows(db.table("schema::Sentinel").unwrap()).count(), 0);
+    assert_eq!(db.rows(db.table("Sentinel").unwrap()).count(), 0);
 }
 
 #[test]
@@ -477,15 +476,14 @@ fn cli_emits_the_executable_library_program_to_file_and_stdout() {
 }
 
 #[test]
-fn host_names_do_not_capture_local_rule_variables() {
+fn declaration_names_do_not_capture_local_rule_variables() {
     let sources = Sources::new();
     let source = sources.write(
         "locals.cdsl",
         "pub let x: Int -> Prop; pub let Input: (Int, Int) -> Prop; pub let Output: (Int, Int) -> Prop; pub mod rules { pub let copy<x, y>: Input(x, y) -> Output(x, y); }",
     );
     let checked = compile_file(&source).unwrap().lower().unwrap();
-    let names = std::collections::BTreeMap::from([(vec!["x".into()], "y".into())]);
-    let schema = Schema::with_names(&checked, names).unwrap();
+    let schema = Schema::new(&checked).unwrap();
     let bytes = schema
         .lower(&checked)
         .unwrap()
@@ -508,7 +506,7 @@ fn host_names_do_not_capture_local_rule_variables() {
 }
 
 #[test]
-fn unsupported_computations_and_incompatible_host_bindings_fail_explicitly() {
+fn unsupported_executable_computations_and_invalid_merges_fail() {
     let sources = Sources::new();
     let source = sources.write(
         "function.cdsl",
@@ -522,11 +520,6 @@ fn unsupported_computations_and_incompatible_host_bindings_fail_explicitly() {
             .to_string()
             .contains("unsupported executable")
     );
-
-    let source = sources.write("enum.cdsl", "pub enum Term { Leaf }");
-    let checked = compile_file(&source).unwrap().lower().unwrap();
-    let names = std::collections::BTreeMap::from([(vec!["Term".into()], "i64".into())]);
-    assert!(Schema::with_names(&checked, names).is_err());
 
     let source = sources.write(
         "bad_merge.cdsl",
@@ -566,29 +559,29 @@ pub let evaluate = Schedule::Rules(integers.fold);
 pub let discover = Schedule::Rules(integers.flags);
 pub mod input {
     pub let results: (
-        EqSatIntegerResult(1, std::ir::operation_named("builtin.divide"), 1, 8),
-        EqSatIntegerResult(2, std::ir::operation_named("builtin.divide"), 2, 8),
-        EqSatIntegerResult(3, std::ir::operation_named("builtin.divide"), 3, 8),
-        EqSatIntegerResult(4, std::ir::operation_named("builtin.wide_sum"), 4, 16),
-        EqSatIntegerResult(5, std::ir::operation_named("builtin.zero"), 5, 16),
-        EqSatIntegerResult(6, std::ir::operation_named("builtin.unary_zero"), 6, 16),
-        EqSatIntegerResult(7, std::ir::operation_named("builtin.nullary_zero"), 7, 16),
+        EqSatIntegerResult(std::ir::operation_key(1), std::ir::operation_named("builtin.divide"), std::ir::value_key(1), 8),
+        EqSatIntegerResult(std::ir::operation_key(2), std::ir::operation_named("builtin.divide"), std::ir::value_key(2), 8),
+        EqSatIntegerResult(std::ir::operation_key(3), std::ir::operation_named("builtin.divide"), std::ir::value_key(3), 8),
+        EqSatIntegerResult(std::ir::operation_key(4), std::ir::operation_named("builtin.wide_sum"), std::ir::value_key(4), 16),
+        EqSatIntegerResult(std::ir::operation_key(5), std::ir::operation_named("builtin.zero"), std::ir::value_key(5), 16),
+        EqSatIntegerResult(std::ir::operation_key(6), std::ir::operation_named("builtin.unary_zero"), std::ir::value_key(6), 16),
+        EqSatIntegerResult(std::ir::operation_key(7), std::ir::operation_named("builtin.nullary_zero"), std::ir::value_key(7), 16),
     );
 }
 pub let seed = Schedule::Rules(input);
 
 let Attribute: (String, Int, String, Int) -> Prop;
-let attr_int: Int -> BigInt as extern "attr_int";
-let attr_case: Int -> String as extern "attr_case";
-let pick_case: (String, String, Bool, Bool) -> Bool as extern "pick_case";
-let bool_bit: Bool -> BigInt as extern "bool_bit";
-let shift_amount: BigInt -> Int as extern "shift_amount";
-pub let EqSatIntegerResult: (Int, std::ir::OperationKind, Int, Int) -> Prop;
-pub let EqSatIntegerOperand: (Int, Int, Int, Int) -> Prop;
-pub let EqSatFolded: (Int, BigInt) -> Prop;
-pub let EqSatConstant: (Int, Int, BigInt) -> Prop;
+let attr_int: Int -> BigInt;
+let attr_case: Int -> String;
+let pick_case: (String, String, Bool, Bool) -> Bool;
+let bool_bit: Bool -> BigInt;
+let shift_amount: BigInt -> Int;
+pub let EqSatIntegerResult: (std::ir::OperationId, std::ir::OperationKind, std::ir::ValueId, Int) -> Prop;
+pub let EqSatIntegerOperand: (std::ir::OperationId, Int, std::ir::ValueId, Int) -> Prop;
+pub let EqSatFolded: (std::ir::ValueId, BigInt) -> Prop;
+pub let EqSatConstant: (std::ir::OperationId, std::ir::ValueId, BigInt) -> Prop;
 pub let EqSatFlagField: (String, Bool) -> Prop;
-pub let EqSatFlag: (Int, String, Bool, Bool) -> Prop;
+pub let EqSatFlag: (std::ir::OperationId, String, Bool, Bool) -> Prop;
 pub let EqSatBinaryKind: std::ir::BinaryIntegerOperation -> Prop;
 pub let EqSatConstantImplementation: String -> Prop;
 pub mod analyze { pub let marker: EqSatFlagField("unused", false); }
@@ -693,20 +686,21 @@ pub mod dialects {
 #![allow(dead_code)]
 mod generated { include!("../out/fold.rs"); }
 use tir_egglog::{EGraph, sort::BigInt};
+use generated::{OperationId, ValueId};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = EGraph::default();
     let mut program = generated::Program::load(engine.database_mut())?;
     program.seed()?;
     program.insert_eq_sat_constant_implementation(("builtin.zero".into(),))?;
-    program.insert_eq_sat_integer_operand((6, 0, 60, 16))?;
-    program.insert_eq_sat_folded((60, BigInt::new(7)))?;
+    program.insert_eq_sat_integer_operand((OperationId::from_raw(6), 0, ValueId::from_raw(60), 16))?;
+    program.insert_eq_sat_folded((ValueId::from_raw(60), BigInt::new(7)))?;
     for (node, lhs, rhs, rhs_width) in [(1, 84, 20, 8), (2, 84, 0, 8), (3, 20, 20, 8), (4, 7, 160, 16)] {
-        program.insert_eq_sat_flag((node, "reject_equal".into(), false, true))?;
+        program.insert_eq_sat_flag((OperationId::from_raw(node), "reject_equal".into(), false, true))?;
         for (slot, bits, width) in [(0, lhs, 8), (1, rhs, rhs_width)] {
             let input = node * 10 + slot;
-            program.insert_eq_sat_integer_operand((node, slot, input, width))?;
-            program.insert_eq_sat_folded((input, BigInt::new(bits)))?;
+            program.insert_eq_sat_integer_operand((OperationId::from_raw(node), i64::from(slot), ValueId::from_raw(input), width))?;
+            program.insert_eq_sat_folded((ValueId::from_raw(input), BigInt::new(bits)))?;
         }
     }
     program.rebuild()?;
@@ -715,8 +709,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|row| row.map(|(node, _, bits)| (node, bits)))
         .collect::<Result<Vec<_>, _>>()?;
     rows.sort_by_key(|(node, _)| *node);
-    assert_eq!(rows, [(1, 4), (4, 320), (6, 0), (7, 0)].map(|(id, value)| (id, BigInt::new(value))));
-    assert!(program.eq_sat_folded().any(|row| row.is_ok_and(|(id, bits)| id == 5 && bits == BigInt::new(0))));
+    assert_eq!(rows, [(1, 4), (4, 320), (6, 0), (7, 0)].map(|(id, value)| (OperationId::from_raw(id), BigInt::new(value))));
+    assert!(program.eq_sat_folded().any(|row| row.is_ok_and(|(id, bits)| id == ValueId::from_raw(5) && bits == BigInt::new(0))));
 
     program.discover()?;
     let mut kinds = program.eq_sat_binary_kind()

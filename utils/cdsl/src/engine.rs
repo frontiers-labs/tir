@@ -2,7 +2,7 @@
 mod operation;
 mod program;
 
-use program::{Dependencies, Selection, relation_columns};
+use program::{Dependencies, Selection};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,17 +10,14 @@ use tir_egglog::{Database, EGraph, Merge, Rules, Schedule, SortId, SortKind, Tab
 
 use crate::{
     CheckedProgram, Error,
-    ast::{
-        BinaryOp, Binding, Declaration, EngineBinding, Expr, Expression, Literal, Path, RuleBinder,
-        UnaryOp,
-    },
+    ast::{BinaryOp, Binding, Declaration, Expr, Expression, Literal, Path, RuleBinder, UnaryOp},
     lower::{CheckedMatch, PortIndex, PortType},
 };
 
 /// Reusable schema and host bindings, shared by independently compiled programs.
 pub struct Schema {
     engine: EGraph,
-    names: BTreeMap<Path, String>,
+    hosts: BTreeSet<Path>,
     functions: BTreeSet<Path>,
     constructors: BTreeSet<Path>,
     named_relations: BTreeMap<String, Vec<String>>,
@@ -32,6 +29,18 @@ fn error(error: impl std::fmt::Display) -> Error {
 fn path_name(path: &[String]) -> String {
     path.join("::")
 }
+fn constructor_name(path: &[String]) -> String {
+    path_name(&path[path.len().saturating_sub(2)..])
+}
+
+fn ir_identity(path: &[String]) -> bool {
+    matches!(path, [std, ir, name] if std == "std" && ir == "ir" && matches!(
+        name.as_str(), "operation_named" | "operation_kind" | "operation_name" |
+        "operation_key" | "value_key" | "value_id" | "value_ref_key" |
+        "raw_operation_id" | "raw_value_id"
+    ))
+}
+
 fn parts(expr: &Expr) -> &[Expr] {
     match &expr.value {
         Expression::Tuple(items) => items,
@@ -71,6 +80,16 @@ fn proposition(expr: &Expr) -> bool {
     matches!(&expr.value, Expression::Path(path) if path == &["Prop"])
 }
 
+fn storage_name(declaration: &Declaration) -> Option<&str> {
+    let Declaration::Axiom { name, ty, .. } = declaration else {
+        return None;
+    };
+    if table_type(ty).is_none() && !arrow(ty).is_some_and(|(_, output)| proposition(output)) {
+        return None;
+    }
+    Some(name)
+}
+
 fn ir_function(expr: &Expr) -> Option<&str> {
     let Expression::Path(path) = &expr.value else {
         return None;
@@ -96,7 +115,7 @@ fn clause(expr: &Expr) -> bool {
             op: UnaryOp::Not, ..
         }
         | Expression::Binary {
-            op: BinaryOp::Equal,
+            op: BinaryOp::Equal | BinaryOp::NotEqual,
             ..
         } => true,
         Expression::Tuple(items) => items.iter().any(clause),
@@ -125,34 +144,26 @@ impl Schema {
     pub(crate) fn from_engine(engine: EGraph) -> Self {
         Self {
             engine,
-            names: BTreeMap::new(),
+            hosts: BTreeSet::new(),
             functions: BTreeSet::new(),
             constructors: BTreeSet::new(),
             named_relations: BTreeMap::new(),
         }
     }
 
-    /// Install declarations once, using canonical CDSL paths as engine names.
+    /// Install each relation and table under its declared name.
     pub fn new(program: &CheckedProgram) -> Result<Self, Error> {
-        Self::with_names(program, BTreeMap::new())
+        let mut schema = Self::from_engine(EGraph::default());
+        schema.install(
+            &Dependencies::collect(program, &[], Selection::FullSchema),
+            true,
+        )?;
+        Ok(schema)
     }
 
-    /// Install declarations with explicit host ABI names for selected paths.
-    pub fn with_names(
-        program: &CheckedProgram,
-        names: BTreeMap<Path, String>,
-    ) -> Result<Self, Error> {
-        Self::with_engine(program, names, EGraph::default())
-    }
-
-    /// Check a program against an existing engine catalog, including its registered host functions.
-    pub fn with_engine(
-        program: &CheckedProgram,
-        names: BTreeMap<Path, String>,
-        engine: EGraph,
-    ) -> Result<Self, Error> {
+    /// Check a program against an existing engine, including its native functions.
+    pub fn with_engine(program: &CheckedProgram, engine: EGraph) -> Result<Self, Error> {
         let mut schema = Self::from_engine(engine);
-        schema.names = names;
         schema.extend(program)?;
         Ok(schema)
     }
@@ -165,89 +176,28 @@ impl Schema {
     /// Install additional checked declarations without importing their rules.
     pub fn extend(&mut self, program: &CheckedProgram) -> Result<(), Error> {
         self.install(
-            program,
             &Dependencies::collect(program, &[], Selection::FullSchema),
+            false,
         )
-    }
-
-    fn bind_engine_names(
-        &mut self,
-        program: &CheckedProgram,
-        dependencies: &Dependencies<'_>,
-    ) -> Result<(), Error> {
-        let declarations = dependencies
-            .ordered
-            .iter()
-            .map(|path| (path, dependencies.declarations[path]));
-        for (path, declaration) in declarations.clone() {
-            let Declaration::Axiom {
-                engine: Some(binding),
-                ..
-            } = declaration
-            else {
-                continue;
-            };
-            match binding {
-                EngineBinding::Name(name) | EngineBinding::Host(name) => {
-                    if let Some(previous) = self.names.get(path)
-                        && previous != name
-                    {
-                        return Err(Error(format!(
-                            "conflicting engine names for {}",
-                            path_name(path)
-                        )));
-                    }
-                    self.names.insert(path.clone(), name.clone());
-                }
-                EngineBinding::Table(_) => {}
-            }
-        }
-        for (path, declaration) in declarations.clone() {
-            let Declaration::Axiom {
-                ty,
-                engine: Some(EngineBinding::Table(target)),
-                ..
-            } = declaration
-            else {
-                continue;
-            };
-            let Some(Declaration::Axiom { ty: storage, .. }) = dependencies.declarations.get(target)
-                .filter(|declaration| matches!(declaration, Declaration::Axiom { ty, .. } if table_type(ty).is_some()))
-            else {
-                return Err(Error(format!("{} is not a table descriptor", path_name(target))));
-            };
-            if !arrow(ty).is_some_and(|(_, result)| proposition(result))
-                || relation_columns(ty, &program.types()[path].ty)
-                    != relation_columns(storage, &program.types()[target].ty)
-            {
-                return Err(Error(format!(
-                    "{} has incompatible columns for {}",
-                    path_name(path),
-                    path_name(target)
-                )));
-            }
-            let name = self.name(target);
-            if self
-                .names
-                .get(path)
-                .is_some_and(|previous| previous != &name)
-            {
-                return Err(Error(format!(
-                    "conflicting engine names for {}",
-                    path_name(path)
-                )));
-            }
-            self.names.insert(path.clone(), name);
-        }
-        Ok(())
     }
 
     fn install(
         &mut self,
-        program: &CheckedProgram,
         dependencies: &Dependencies<'_>,
+        generate_hosts: bool,
     ) -> Result<(), Error> {
-        self.bind_engine_names(program, dependencies)?;
+        let mut storage = BTreeMap::new();
+        for path in &dependencies.ordered {
+            if let Some(name) = storage_name(dependencies.declarations[path])
+                && let Some(previous) = storage.insert(name, path)
+            {
+                return Err(Error(format!(
+                    "storage {name} is declared by both {} and {}",
+                    path_name(previous),
+                    path_name(path)
+                )));
+            }
+        }
         let declarations = dependencies
             .ordered
             .iter()
@@ -303,7 +253,7 @@ impl Schema {
                         .iter()
                         .map(|arg| self.sort(arg))
                         .collect::<Result<Vec<_>, _>>()?;
-                    let name = self.name(&variant_path);
+                    let name = constructor_name(&variant_path);
                     if let Some(id) = self.database().schema().table_named(&name) {
                         let table = self.database().schema().table(id);
                         let mut columns = args.clone();
@@ -376,58 +326,45 @@ impl Schema {
                 self.install_relation(full.clone(), args)?;
             }
         }
+        if generate_hosts {
+            self.declare_hosts(dependencies)?;
+        }
+        Ok(())
+    }
+
+    fn declare_hosts(&mut self, dependencies: &Dependencies<'_>) -> Result<(), Error> {
         for path in &dependencies.needed {
-            let Declaration::Axiom {
-                generics,
-                ty,
-                engine: Some(binding),
-                ..
-            } = dependencies.declarations[path]
-            else {
+            let Declaration::Axiom { generics, ty, .. } = dependencies.declarations[path] else {
                 continue;
             };
-            if matches!(binding, EngineBinding::Table(_)) {
-                continue;
-            }
-            if !generics.is_empty() || clause(ty) {
-                return Err(Error(format!(
-                    "engine binding requires a non-generic declaration: {}",
-                    path_name(path)
-                )));
-            }
-            let host = matches!(binding, EngineBinding::Host(_));
             let Some((inputs, output)) = arrow(ty).filter(|(_, output)| !proposition(output))
             else {
-                if host {
-                    return Err(Error(format!(
-                        "host binding requires a function: {}",
-                        path_name(path)
-                    )));
-                }
                 continue;
             };
-            let name = self.name(path);
-            let signature = tir_egglog::Signature {
-                inputs: parts(inputs)
-                    .iter()
-                    .map(|ty| self.sort(ty))
-                    .collect::<Result<_, _>>()?,
-                output: self.sort(output)?,
+            if !generics.is_empty() || clause(ty) || ir_identity(path) {
+                continue;
+            }
+            let Ok(inputs) = parts(inputs)
+                .iter()
+                .map(|ty| self.sort(ty))
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                continue;
             };
+            let Ok(output) = self.sort(output) else {
+                continue;
+            };
+            let signature = tir_egglog::Signature { inputs, output };
+            let name = self.name(path);
             let schema = self.database().schema();
             if !schema
                 .primitives(&name)
                 .any(|id| schema.primitive(id).1 == &signature)
             {
-                if !host {
-                    return Err(Error(format!(
-                        "missing engine function {name} for {}",
-                        path_name(path)
-                    )));
-                }
                 self.engine
                     .database_mut()
                     .add_primitive(&name, signature, |_, _| None);
+                self.hosts.insert(path.clone());
             }
         }
         Ok(())
@@ -489,10 +426,10 @@ impl Schema {
     }
 
     fn name(&self, path: &[String]) -> String {
-        self.names
-            .get(path)
-            .cloned()
-            .unwrap_or_else(|| path_name(path))
+        if self.constructors.contains(path) {
+            return constructor_name(path);
+        }
+        path.last().cloned().unwrap_or_default()
     }
 
     fn sort_path(&self, path: &[String]) -> Result<SortId, Error> {
@@ -574,7 +511,7 @@ impl Schema {
             if module.first().is_some_and(|name| name == "std") {
                 continue;
             }
-            let ruleset = self.name(module);
+            let ruleset = path_name(module);
             let declaration = dependencies.declarations[full];
             if let Declaration::Let { binding, .. } = declaration {
                 if let Expression::Call { value, arguments } = &binding.value.value
@@ -582,7 +519,7 @@ impl Schema {
                 {
                     let names = ["flags", "fold"].map(|name| {
                         let path = [full.as_slice(), &[name.to_owned()]].concat();
-                        let name = self.name(&path);
+                        let name = path_name(&path);
                         modules.insert(path, name.clone());
                         name
                     });
@@ -597,7 +534,11 @@ impl Schema {
                         self.name(full)
                     )));
                 }
-                definitions.insert(full.clone(), binding.value.clone());
+                if !matches!(&binding.value.value, Expression::Function(function)
+                    if function.result.as_ref().is_some_and(|ty| path(ty).is_ok_and(|p| p == &["Prop"])))
+                {
+                    definitions.insert(full.clone(), binding.value.clone());
+                }
                 continue;
             }
             let Declaration::Axiom {
@@ -618,12 +559,20 @@ impl Schema {
             let lowering = RuleLowering {
                 schema: self,
                 operations: &operations,
+                declarations: &dependencies.declarations,
                 binders: generics,
                 operation_matches: program.operation_matches.get(full),
             };
             let mut facts = Vec::new();
             if let Some(premise) = premise {
-                let clauses = propositions(premise);
+                let expanded = propositions(premise)
+                    .into_iter()
+                    .map(|expr| lowering.predicate_row(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let clauses = expanded
+                    .iter()
+                    .map(|expr| expr.as_ref())
+                    .collect::<Vec<_>>();
                 lowering
                     .validate_inputs(&clauses)
                     .map_err(|error| Error(format!("{ruleset}::{name}: {error}")))?;
@@ -650,7 +599,7 @@ impl Schema {
         for (path, expression) in &definitions {
             let schedule = self.schedule(
                 expression,
-                &self.name(path),
+                &path_name(path),
                 &modules,
                 &definitions,
                 &mut BTreeSet::from([path.clone()]),
@@ -832,6 +781,7 @@ impl Schema {
 struct RuleLowering<'a> {
     schema: &'a Schema,
     operations: &'a BTreeMap<Path, (String, &'a Binding)>,
+    declarations: &'a BTreeMap<Path, &'a Declaration>,
     binders: &'a [RuleBinder],
     operation_matches: Option<&'a BTreeMap<usize, CheckedMatch>>,
 }
@@ -1013,6 +963,37 @@ impl RuleLowering<'_> {
             .iter()
             .any(|binder| &binder.name == name)
             .then_some(name)
+    }
+
+    fn predicate_row<'a>(&self, expr: &'a Expr) -> Result<std::borrow::Cow<'a, Expr>, Error> {
+        let Expression::Call { value, arguments } = &expr.value else {
+            return Ok(std::borrow::Cow::Borrowed(expr));
+        };
+        let Some(Declaration::Let { binding, .. }) = path(value)
+            .ok()
+            .and_then(|name| self.declarations.get(name))
+        else {
+            return Ok(std::borrow::Cow::Borrowed(expr));
+        };
+        let Expression::Function(function) = &binding.value.value else {
+            return Ok(std::borrow::Cow::Borrowed(expr));
+        };
+        let body = &function.body;
+        if !body.bindings.is_empty()
+            || !matches!(&body.value.value, Expression::Call { value, .. }
+            if path(value).is_ok_and(|p| self.schema.database().schema().table_named(&self.schema.name(p)).is_some()))
+        {
+            return Err(Error(
+                "a predicate view must select one relation row".into(),
+            ));
+        }
+        let values = function
+            .parameters
+            .iter()
+            .zip(arguments)
+            .map(|(param, arg)| (vec![param.name.clone()], arg.clone()))
+            .collect();
+        crate::normalize::substitute(&body.value, &values).map(std::borrow::Cow::Owned)
     }
 
     fn operation(&self, expr: &Expr, member: &str) -> Option<&(String, &Binding)> {
@@ -1263,12 +1244,17 @@ impl RuleLowering<'_> {
         {
             ast::Fact::Not(self.term(value)?)
         } else if let Expression::Binary {
-            op: BinaryOp::Equal,
+            op: op @ (BinaryOp::Equal | BinaryOp::NotEqual),
             left,
             right,
         } = &expr.value
         {
-            ast::Fact::Eq(span, self.term(left)?, self.term(right)?)
+            let left = self.term(left)?;
+            let right = self.term(right)?;
+            match op {
+                BinaryOp::Equal => ast::Fact::Eq(span, left, right),
+                _ => ast::Fact::Fact(ast::Expr::Call(span, "!=".into(), vec![left, right])),
+            }
         } else if let Expression::Call { value, arguments } = &expr.value
             && let Expression::Path(function) = &value.value
             && self.schema.functions.contains(function)

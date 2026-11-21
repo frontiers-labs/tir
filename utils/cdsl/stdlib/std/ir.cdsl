@@ -11,7 +11,7 @@ pub let OperationKindOf<Inputs: Type, Outputs: Type>: Type;
 pub let operation_name<Inputs: Type, Outputs: Type>: OperationKindOf<Inputs, Outputs> -> String;
 pub let operation_kind<Inputs: Type, Outputs: Type>: OperationKindOf<Inputs, Outputs> -> OperationKind;
 pub let match_kind<Inputs: Type, Outputs: Type>:
-    (OperationKindOf<Inputs, Outputs>, Int, Inputs, Outputs) -> Prop;
+    (OperationKindOf<Inputs, Outputs>, OperationId, Inputs, Outputs) -> Prop;
 pub let ValueRef<S: Type>: Type;
 pub let value_id<S: Type>: ValueRef<S> -> Int;
 let RuleWidth: Nat;
@@ -172,6 +172,14 @@ pub let value_ref_key<S: Type>: ValueRef<S> -> ValueId;
 pub let raw_value_id: ValueId -> Int;
 pub let raw_operation_id: OperationId -> Int;
 
-pub let integer_width: Int -> Int as extern "ir-integer-width";
-pub let type_argument: (Int, Int) -> Int as extern "ir-type-argument";
-pub let fp_format: Int -> Int as extern "ir-fp-format";
+pub let integer_width: Int -> Int;
+pub let type_argument: (Int, Int) -> Int;
+pub let fp_format: Int -> Int;
+
+pub mod operation_ids {
+    pub let less: (OperationId, OperationId) -> Bool;
+}
+
+pub mod value_ids {
+    pub let less: (ValueId, ValueId) -> Bool;
+}

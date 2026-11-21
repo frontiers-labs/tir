@@ -217,7 +217,7 @@ fn decode(
 ) -> Option<Expression> {
     match form {
         Form::Read(id) => {
-            let value = ValueId::from_number(id.raw());
+            let value = ValueId::from(id);
             (context.has_value(value)
                 && redirected.binary_search(&value).is_err()
                 && context.get_value(value).ty() == context.get_value(expected).ty())
