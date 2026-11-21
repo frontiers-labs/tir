@@ -5,6 +5,7 @@ mod database;
 mod group;
 mod index;
 mod keymap;
+mod native;
 mod rebuild;
 mod schema;
 mod table;
@@ -20,6 +21,7 @@ pub(crate) use database::View;
 pub use database::{Database, DatabaseId, PrimCtx, PrimFn, Row, Rows};
 pub(crate) use group::{GroupRow, GroupView, group_at};
 pub(crate) use keymap::{EMPTY, RowTable, l2, same_key};
+pub use native::{NativeDeclaration, NativeIdentity};
 pub(crate) use rebuild::Delta;
 pub(crate) use schema::close_group;
 pub use schema::{

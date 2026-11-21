@@ -184,6 +184,7 @@ pub fn literal_sort(literal: &Literal) -> ArcSort {
         Literal::Int(_) => I64Sort.to_arcsort(),
         Literal::Float(_) => F64Sort.to_arcsort(),
         Literal::String(_) => StringSort.to_arcsort(),
+        Literal::Native(_) => NativeIdentitySort.to_arcsort(),
         Literal::Bool(_) => BoolSort.to_arcsort(),
         Literal::Unit => UnitSort.to_arcsort(),
         Literal::Arg(_) => unreachable!("a run argument has no sort of its own"),
@@ -263,6 +264,23 @@ base_sort!(StringSort, "String", String, register_string, |x| {
     Literal::String(x)
 });
 base_sort!(UnitSort, "Unit", (), register_unit, |_x| Literal::Unit);
+
+base_sort!(
+    NativeIdentitySort,
+    "NativeIdentity",
+    crate::NativeIdentity,
+    register_unit,
+    |id| Literal::Native(id)
+);
+
+pub(crate) fn register_native_identity(db: &mut Database) {
+    let kind = db.sort("NativeIdentity").expect("native identity sort");
+    let int = db.sort("i64").expect("integer sort");
+    let unit = db.sort("Unit").expect("unit sort");
+    prim!(db, "native-ports", [kind, int, int] -> unit, |id: crate::NativeIdentity, inputs: i64, outputs: i64| {
+        (id.ports() == Some((usize::try_from(inputs).ok()?, usize::try_from(outputs).ok()?))).then_some(())
+    });
+}
 
 fn register_unit(_db: &mut Database) {}
 

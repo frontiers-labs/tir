@@ -209,8 +209,11 @@ fn emit_fixed_operation(
 
     let rust_name = operation_name(name);
     let signature = super::emit_scheme(&scheme)?;
+    let import = binding
+        .operation_import(module, program.declaration_source(module))
+        .ok_or("missing operation declaration")?;
     let generated = emit_fixed_result_op(
-        (dialect, name, &rust_name),
+        (dialect, name, &rust_name, &import.symbol),
         (&scheme, &signature),
         &operands,
         result_type
@@ -417,7 +420,7 @@ fn fp_slot(expression: &Expr) -> Option<(&str, &[Expr])> {
     }
 }
 
-fn slot_type(
+pub(super) fn slot_type(
     expression: &Expr,
     variables: &BTreeMap<&str, &crate::ast::Binder>,
 ) -> Result<String, &'static str> {
@@ -490,7 +493,7 @@ fn type_argument<'a>(expression: &'a Expr, constructor: &[&str]) -> Option<&'a E
 }
 
 fn emit_fixed_result_op(
-    (dialect, name, rust_name): (&str, &str, &str),
+    (dialect, name, rust_name, import): (&str, &str, &str, &str),
     (scheme, signature): (&str, &str),
     operands: &[(&str, &str)],
     result: Option<(&str, &str)>,
@@ -727,6 +730,9 @@ fn emit_fixed_result_op(
         ("@print_body@", printer),
         ("@spelled@", &spelled),
         ("@dialect@", dialect),
+        ("@operation_import@", &format!("{import:?}")),
+        ("@operand_count@", &operands.len().to_string()),
+        ("@result_count@", &usize::from(result.is_some()).to_string()),
         ("@RustName@", rust_name),
         ("@name@", name),
         ("@scheme@", &format!("{scheme:?}")),

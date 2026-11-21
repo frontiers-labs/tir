@@ -108,7 +108,23 @@ id_newtype!(OpId);
 ///
 /// Because all operations implement this trait, generic IR passes can inspect,
 /// transform, or analyze any construct in the IR using the same programming model.
+struct RustOperation<T>(std::marker::PhantomData<T>);
+
+impl<T: Operation> tir_egglog::NativeDeclaration for RustOperation<T> {
+    const NAME: &'static str = "";
+    fn label() -> &'static str {
+        T::name()
+    }
+}
+
 pub trait Operation: 'static + Any {
+    fn native_identity() -> tir_egglog::NativeIdentity
+    where
+        Self: Sized,
+    {
+        tir_egglog::NativeIdentity::of::<RustOperation<Self>>()
+    }
+
     fn name() -> &'static str
     where
         Self: Sized;
@@ -306,7 +322,7 @@ pub enum InsertionPoint {
 /// An operation as it is described before the context stores it: the parts a
 /// builder assembles, handed to [`crate::Context::add_operation`] in one go.
 pub struct NewOp {
-    pub(crate) name: (&'static str, &'static str),
+    pub(crate) declaration: tir_egglog::NativeIdentity,
     pub(crate) operands: Vec<ValueId>,
     pub(crate) results: Vec<ValueId>,
     pub(crate) regions: Vec<RegionId>,
@@ -322,35 +338,33 @@ impl NewOp {
         regions: Vec<RegionId>,
         parts: NewOpParts,
     ) -> Self {
-        Self::assemble(
-            (T::dialect(), T::name()),
-            context,
+        context.register_operation::<T>();
+        Self::from_declaration(
+            T::native_identity(),
             operands,
             results,
             regions,
-            parts,
+            parts.attributes,
         )
     }
 
-    fn assemble(
-        identity: (&'static str, &'static str),
-        context: Context,
+    pub(crate) fn from_declaration(
+        declaration: tir_egglog::NativeIdentity,
         operands: Vec<ValueId>,
         results: Vec<ValueId>,
         regions: Vec<RegionId>,
-        parts: NewOpParts,
+        attributes: Vec<crate::attributes::NamedAttribute>,
     ) -> Self {
-        context.register_op_name(identity.0, identity.1);
-        NewOp {
-            name: identity,
+        Self {
+            declaration,
             operands,
             results,
             regions,
-            attributes: parts.attributes,
+            attributes,
         }
     }
 
-    /// Describes an operation selected from textual input at a parser boundary.
+    /// Resolve a textual operation at a parser or encoding boundary.
     pub fn new_dynamic(
         identity: (&'static str, &'static str),
         context: Context,
@@ -359,14 +373,10 @@ impl NewOp {
         regions: Vec<RegionId>,
         attributes: Vec<crate::attributes::NamedAttribute>,
     ) -> Self {
-        context.register_op_name(identity.0, identity.1);
-        NewOp {
-            name: identity,
-            operands,
-            results,
-            regions,
-            attributes,
-        }
+        let kind = context
+            .resolve_native_operation(identity)
+            .unwrap_or_else(|| panic!("unregistered operation {}.{}", identity.0, identity.1));
+        Self::from_declaration(kind, operands, results, regions, attributes)
     }
 }
 
@@ -481,7 +491,7 @@ impl OpHandle {
 
     /// Returns whether this operation has type `T`.
     pub fn is<T: Operation>(&self) -> bool {
-        self.identity() == (T::dialect(), T::name())
+        self.context().operation_kind(self.id) == Some(T::native_identity())
     }
 
     pub fn as_op<T: Operation + Sized>(self) -> Option<T> {

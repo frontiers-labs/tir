@@ -39,6 +39,9 @@ pub struct OpLayout {
 
 /// The declarative shape of one operation.
 pub struct OpSchema {
+    pub declaration: fn() -> tir_egglog::NativeIdentity,
+    pub bind: fn(&mut tir_egglog::Database) -> Result<(), tir_egglog::Error>,
+    pub construct: fn(crate::OpHandle) -> Box<dyn crate::Operation>,
     pub dialect: &'static str,
     pub name: &'static str,
     pub operands: &'static [FieldSchema],

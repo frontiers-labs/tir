@@ -383,8 +383,7 @@ pub(super) fn emit_instruction_decoder(
     shapes: &[EncodingShape],
     ops_map: &HashMap<String, Type>,
     resolved_params: &HashMap<String, (Type, Option<ast::Expr>)>,
-    dialect: &str,
-    op_name: &str,
+    operation: &proc_macro2::Ident,
 ) -> Option<(proc_macro2::TokenStream, proc_macro2::Ident, u32)> {
     if shapes.is_empty() || width_range(shapes).1 > 4 {
         return None;
@@ -444,8 +443,6 @@ pub(super) fn emit_instruction_decoder(
         shape_specs.into_iter().map(|(_, spec)| spec).collect();
 
     let spec_ident = format_ident!("DECODE_{}", inst.name.to_uppercase());
-    let dialect_lit = proc_macro2::Literal::string(dialect);
-    let op_name_lit = proc_macro2::Literal::string(op_name);
     // Sorted so generated code is stable across runs; the interpreter only
     // needs the set.
     let mut attr_names: Vec<&String> = ops_map.keys().collect();
@@ -458,7 +455,9 @@ pub(super) fn emit_instruction_decoder(
     let spec = quote! {
         static #spec_ident: tir::backend::binary::DecodeSpec =
             tir::backend::binary::DecodeSpec {
-                op: (#dialect_lit, #op_name_lit),
+                construct: |ctx, attributes| tir::NewOp::new::<#operation>(
+                    ctx.clone(), vec![], vec![], vec![], tir::NewOpParts { attributes },
+                ),
                 shapes: &[#(#shape_specs),*],
                 attrs: &[#(#attr_lits),*],
             };

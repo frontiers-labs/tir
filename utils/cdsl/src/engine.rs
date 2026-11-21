@@ -11,6 +11,7 @@ use tir_egglog::{Database, EGraph, Merge, Rules, Schedule, SortId, SortKind, Tab
 use crate::{
     CheckedProgram, Error,
     ast::{BinaryOp, Binding, Declaration, Expr, Expression, Literal, Path, RuleBinder, UnaryOp},
+    kind::OperationImport,
     lower::{CheckedMatch, PortIndex, PortType},
 };
 
@@ -21,6 +22,7 @@ pub struct Schema {
     functions: BTreeSet<Path>,
     constructors: BTreeSet<Path>,
     named_relations: BTreeMap<String, Vec<String>>,
+    operation_imports: BTreeMap<Path, OperationImport>,
     producers_only: bool,
 }
 
@@ -36,7 +38,7 @@ fn constructor_name(path: &[String]) -> String {
 
 fn ir_identity(path: &[String]) -> bool {
     matches!(path, [std, ir, name] if std == "std" && ir == "ir" && matches!(
-        name.as_str(), "operation_named" | "operation_kind" | "operation_name" |
+        name.as_str(), "operation_kind" |
         "operation_key" | "value_key" | "value_id" | "value_ref_key" |
         "raw_operation_id" | "raw_value_id"
     ))
@@ -149,6 +151,7 @@ impl Schema {
             functions: BTreeSet::new(),
             constructors: BTreeSet::new(),
             named_relations: BTreeMap::new(),
+            operation_imports: BTreeMap::new(),
             producers_only: false,
         }
     }
@@ -177,17 +180,19 @@ impl Schema {
     /// Install each relation and table under its declared name.
     pub fn new(program: &CheckedProgram) -> Result<Self, Error> {
         let mut schema = Self::from_engine(EGraph::default());
-        schema.install(
-            &Dependencies::collect(program, &[], Selection::FullSchema),
-            true,
-        )?;
+        let dependencies = Dependencies::collect(program, &[], Selection::FullSchema);
+        schema.install(&dependencies, true)?;
+        schema.bind_operation_imports(dependencies.operation_imports(program))?;
         Ok(schema)
     }
 
     /// Check a program against an existing engine, including its native functions.
     pub fn with_engine(program: &CheckedProgram, engine: EGraph) -> Result<Self, Error> {
         let mut schema = Self::from_engine(engine);
-        schema.extend(program)?;
+        schema.install(
+            &Dependencies::collect(program, &[], Selection::Program),
+            false,
+        )?;
         Ok(schema)
     }
 
@@ -479,6 +484,25 @@ impl Schema {
         Ok(self.lower(program)?.compile(self.database())?.to_bytes())
     }
 
+    fn bind_operation_imports(
+        &mut self,
+        imports: BTreeMap<Path, OperationImport>,
+    ) -> Result<(), Error> {
+        let output = self.database().sort("NativeIdentity").map_err(error)?;
+        for import in imports.values() {
+            self.engine.database_mut().add_primitive(
+                &import.symbol,
+                tir_egglog::Signature {
+                    inputs: vec![],
+                    output,
+                },
+                |_, _| None,
+            );
+        }
+        self.operation_imports = imports;
+        Ok(())
+    }
+
     fn name(&self, path: &[String]) -> String {
         if self.constructors.contains(path) {
             return constructor_name(path);
@@ -496,7 +520,7 @@ impl Schema {
                     && ir == "ir"
                     && matches!(name.as_str(), "OperationKind" | "BinaryIntegerOperation") =>
             {
-                "String".into()
+                "NativeIdentity".into()
             }
             [std, ir, name]
                 if std == "std"
@@ -513,7 +537,7 @@ impl Schema {
         if let Expression::Generic { value, .. } = &expr.value {
             let family = path(value)?;
             if family == &["std", "ir", "OperationKindOf"] {
-                return self.database().sort("String").map_err(error);
+                return self.database().sort("NativeIdentity").map_err(error);
             }
             if family == &["std", "ir", "ValueRef"] {
                 return self.database().sort("i64").map_err(error);
@@ -543,20 +567,7 @@ impl Schema {
         program: &CheckedProgram,
         dependencies: &Dependencies<'_>,
     ) -> Result<LoweredProgram, Error> {
-        let operations = program
-            .artifact()
-            .all_modules()
-            .flat_map(|module| {
-                module.ast.declarations.iter().filter_map(|declaration| {
-                    let Declaration::Let { binding, .. } = &declaration.value else {
-                        return None;
-                    };
-                    let name = binding.operation_name(&module.path)?;
-                    let path = [module.path.as_slice(), &binding.path].concat();
-                    Some((path, (name, binding)))
-                })
-            })
-            .collect();
+        let operations = dependencies.operation_imports(program);
         let mut rules = Rules::new();
         let mut modules = BTreeMap::new();
         let mut definitions = BTreeMap::new();
@@ -568,9 +579,10 @@ impl Schema {
             let ruleset = path_name(module);
             let declaration = dependencies.declarations[full];
             if let Declaration::Let { binding, .. } = declaration {
-                if let Expression::Call { value, arguments } = &binding.value.value
-                    && path(value).is_ok_and(|path| path == &["std", "schedule", "integer_rules"])
-                {
+                if dependencies.operations.contains_key(full) {
+                    continue;
+                }
+                if let Some(arguments) = operation::integer_rule_arguments(binding) {
                     let names = ["flags", "fold"].map(|name| {
                         let path = [full.as_slice(), &[name.to_owned()]].concat();
                         let name = path_name(&path);
@@ -836,7 +848,7 @@ impl Schema {
 
 struct RuleLowering<'a> {
     schema: &'a Schema,
-    operations: &'a BTreeMap<Path, (String, &'a Binding)>,
+    operations: &'a BTreeMap<Path, OperationImport>,
     declarations: &'a BTreeMap<Path, &'a Declaration>,
     binders: &'a [RuleBinder],
     operation_matches: Option<&'a BTreeMap<usize, CheckedMatch>>,
@@ -1052,7 +1064,7 @@ impl RuleLowering<'_> {
         crate::normalize::substitute(&body.value, &values).map(std::borrow::Cow::Owned)
     }
 
-    fn operation(&self, expr: &Expr, member: &str) -> Option<&(String, &Binding)> {
+    fn operation(&self, expr: &Expr, member: &str) -> Option<&OperationImport> {
         let Expression::Path(path) = &expr.value else {
             return None;
         };
@@ -1060,7 +1072,10 @@ impl RuleLowering<'_> {
             return None;
         }
         let operation = self.operations.get(path)?;
-        if matches!(&operation.1.value.value, Expression::Record(fields)
+        let Declaration::Let { binding, .. } = self.declarations[path] else {
+            return None;
+        };
+        if matches!(&binding.value.value, Expression::Record(fields)
             if fields.iter().any(|(field, _)| field == member))
         {
             return None;
@@ -1080,13 +1095,7 @@ impl RuleLowering<'_> {
                 if matches!(&value.value, Expression::Path(path) if self.schema.constructors.contains(path))
                     || matches!(
                         ir_function(value),
-                        Some(
-                            "operation_key"
-                                | "value_key"
-                                | "raw_value_id"
-                                | "raw_operation_id"
-                                | "operation_named"
-                        )
+                        Some("operation_key" | "value_key" | "raw_value_id" | "raw_operation_id")
                     ) =>
             {
                 for argument in arguments {
@@ -1180,10 +1189,10 @@ impl RuleLowering<'_> {
             Expression::Member { value, name }
                 if matches!(name.as_str(), "kind" | "typed_kind") =>
             {
-                let (name, _) = self.operation(value, name).ok_or_else(|| {
+                let name = self.operation(value, name).ok_or_else(|| {
                     Error("ordinary member projections are unsupported in executable rules".into())
                 })?;
-                ast::Expr::Lit(span, ast::Literal::String(name.clone()))
+                ast::Expr::Call(span, name.symbol.clone(), vec![])
             }
             Expression::Literal(literal) => ast::Expr::Lit(
                 span,
@@ -1197,9 +1206,7 @@ impl RuleLowering<'_> {
                 if matches!(
                     ir_function(value),
                     Some(
-                        "operation_name"
-                            | "operation_kind"
-                            | "operation_named"
+                        "operation_kind"
                             | "value_id"
                             | "value_ref_key"
                             | "operation_key"
@@ -1275,22 +1282,28 @@ impl RuleLowering<'_> {
                     .ok_or_else(|| Error("missing checked operation match ports".into()))
             };
             if let Some(operation) = static_match(value) {
-                let (kind, _) = self
+                let kind = self
                     .operation(operation, "matches")
                     .ok_or_else(|| Error("matches requires a declared operation".into()))?;
-                let kind = ast::Expr::Lit(span, ast::Literal::String(kind.clone()));
+                let kind = ast::Expr::Call(span, kind.symbol.clone(), vec![]);
                 return self.match_facts(kind, MatchPorts::parse(arguments)?, checked()?, facts);
             }
             if ir_function(value) == Some("match_kind") {
                 let Some((kind, ports)) = arguments.split_first() else {
                     return Err(Error("match_kind requires an operation kind".into()));
                 };
-                return self.match_facts(
-                    self.term(kind)?,
-                    MatchPorts::parse(ports)?,
-                    checked()?,
-                    facts,
-                );
+                let kind = self.term(kind)?;
+                let ports = MatchPorts::parse(ports)?;
+                facts.push(ast::Fact::Fact(ast::Expr::Call(
+                    span,
+                    "native-ports".into(),
+                    vec![
+                        kind.clone(),
+                        tir_egglog::prelude::exprs::int(ports.operands.len() as i64),
+                        tir_egglog::prelude::exprs::int(ports.results.len() as i64),
+                    ],
+                )));
+                return self.match_facts(kind, ports, checked()?, facts);
             }
         }
         let fact = if let Expression::Unary {

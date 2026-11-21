@@ -1,114 +1,114 @@
-pub let alloca = {
+pub let alloca<P0: std::ir::Ty> = {
     rust_name: "AllocaOp",
     name: "alloca",
     dialect: "ptr",
-    results: { result: "ptr.p<_>" },
+    results: { result: std::ir::El<std::ir::Ptr<P0>> },
     attributes: { size: "UInt", align: "UInt" },
     interfaces: "PromotableAllocation",
     state: "out",
 };
 
-pub let null = {
+pub let null<P0: std::ir::Ty> = {
     rust_name: "NullOp",
     name: "null",
     dialect: "ptr",
-    results: { result: "ptr.p<_>" },
+    results: { result: std::ir::El<std::ir::Ptr<P0>> },
     interfaces: "crate::ConstantLike",
     state: "none",
 };
 
-pub let cmp = {
+pub let cmp<P0: std::ir::Ty, P1: std::ir::Ty> = {
     rust_name: "CmpOp",
     name: "cmp",
     dialect: "ptr",
-    operands: { lhs: "ptr.p<_>", rhs: "ptr.p<_>" },
-    results: { result: "int<1>" },
+    operands: { lhs: std::ir::El<std::ir::Ptr<P0>>, rhs: std::ir::El<std::ir::Ptr<P1>> },
+    results: { result: std::ir::El<std::ir::Bits<1>> },
     attributes: { predicate: "Predicate in POINTER" },
     state: "none",
 };
 
-pub let ptradd = {
+pub let ptradd<P0: std::ir::Ty, W1: Nat, P2: std::ir::Ty> = {
     rust_name: "PtrAddOp",
     name: "ptradd",
     dialect: "ptr",
-    operands: { base: "ptr.p<_>", offset: "int<_>" },
-    results: { result: "ptr.p<_>" },
+    operands: { base: std::ir::El<std::ir::Ptr<P0>>, offset: std::ir::El<std::ir::Bits<W1>> },
+    results: { result: std::ir::El<std::ir::Ptr<P2>> },
     interfaces: "crate::Additive",
     state: "none",
 };
 
-pub let ptrdiff = {
+pub let ptrdiff<P0: std::ir::Ty, P1: std::ir::Ty, W2: Nat> = {
     rust_name: "PtrDiffOp",
     name: "ptrdiff",
     dialect: "ptr",
-    operands: { lhs: "ptr.p<_>", rhs: "ptr.p<_>" },
-    results: { result: "int<_>" },
+    operands: { lhs: std::ir::El<std::ir::Ptr<P0>>, rhs: std::ir::El<std::ir::Ptr<P1>> },
+    results: { result: std::ir::El<std::ir::Bits<W2>> },
     interfaces: "crate::Subtractive",
     state: "none",
 };
 
-pub let disjoint = {
+pub let disjoint<P0: std::ir::Ty, W1: Nat, P2: std::ir::Ty, W3: Nat> = {
     rust_name: "DisjointOp",
     name: "disjoint",
     dialect: "ptr",
-    operands: { lhs: "ptr.p<_>", lhs_size: "int<_>", rhs: "ptr.p<_>", rhs_size: "int<_>" },
-    results: { result: "int<1>" },
+    operands: { lhs: std::ir::El<std::ir::Ptr<P0>>, lhs_size: std::ir::El<std::ir::Bits<W1>>, rhs: std::ir::El<std::ir::Ptr<P2>>, rhs_size: std::ir::El<std::ir::Bits<W3>> },
+    results: { result: std::ir::El<std::ir::Bits<1>> },
     state: "none",
 };
 
-pub let load = {
+pub let load<P0: std::ir::Ty, T1: Type> = {
     rust_name: "LoadOp",
     name: "load",
     dialect: "ptr",
-    operands: { ptr: "ptr.p<_>" },
-    results: { result: "_" },
+    operands: { ptr: std::ir::El<std::ir::Ptr<P0>> },
+    results: { result: T1 },
     interfaces: ("MemoryRead", "ResourceEffects"),
     state: "in_out",
 };
 
-pub let store = {
+pub let store<T0: Type, P1: std::ir::Ty> = {
     rust_name: "StoreOp",
     name: "store",
     dialect: "ptr",
-    operands: { value: "_", ptr: "ptr.p<_>" },
+    operands: { value: T0, ptr: std::ir::El<std::ir::Ptr<P1>> },
     interfaces: ("MemoryWrite", "ResourceEffects"),
     state: "in_out",
 };
 
-pub let memcpy = {
+pub let memcpy<P0: std::ir::Ty, P1: std::ir::Ty> = {
     rust_name: "MemcpyOp",
     name: "memcpy",
     dialect: "ptr",
-    operands: { destination: "ptr.p<_>", source: "ptr.p<_>", size: "int<64>" },
+    operands: { destination: std::ir::El<std::ir::Ptr<P0>>, source: std::ir::El<std::ir::Ptr<P1>>, size: std::ir::El<std::ir::Bits<64>> },
     interfaces: ("ResourceEffects", "crate::Intrinsic"),
     state: "in_out",
 };
 
-pub let memset = {
+pub let memset<P0: std::ir::Ty> = {
     rust_name: "MemsetOp",
     name: "memset",
     dialect: "ptr",
-    operands: { destination: "ptr.p<_>", value: "int<8>", size: "int<64>" },
+    operands: { destination: std::ir::El<std::ir::Ptr<P0>>, value: std::ir::El<std::ir::Bits<8>>, size: std::ir::El<std::ir::Bits<64>> },
     interfaces: ("MemoryWrite", "ResourceEffects", "crate::Intrinsic"),
     state: "in_out",
 };
 
-pub let field = {
+pub let field<P0: std::ir::Ty, P1: std::ir::Ty> = {
     rust_name: "FieldOp",
     name: "field",
     dialect: "ptr",
-    operands: { base: "ptr.p<_>" },
-    results: { result: "ptr.p<_>" },
+    operands: { base: std::ir::El<std::ir::Ptr<P0>> },
+    results: { result: std::ir::El<std::ir::Ptr<P1>> },
     attributes: { ty: "Type", field: "Str" },
     interfaces: "crate::Speculatable",
     state: "none",
 };
 
-pub let copy = {
+pub let copy<P0: std::ir::Ty, P1: std::ir::Ty> = {
     rust_name: "CopyOp",
     name: "copy",
     dialect: "ptr",
-    operands: { destination: "ptr.p<_>", source: "ptr.p<_>" },
+    operands: { destination: std::ir::El<std::ir::Ptr<P0>>, source: std::ir::El<std::ir::Ptr<P1>> },
     attributes: { ty: "Type" },
     interfaces: ("ResourceEffects", "crate::Congruent"),
     state: "in_out",

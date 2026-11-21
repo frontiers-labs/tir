@@ -107,10 +107,8 @@ pub mod shift_bits {
 pub let EqSatIntegerWidth: (Int, Int) -> Prop;
 pub let EqSatIntegerResult: (std::ir::OperationId, std::ir::OperationKind, std::ir::ValueId, Int) -> Prop;
 pub let EqSatIntegerOperand: (std::ir::OperationId, Int, std::ir::ValueId, Int) -> Prop;
-pub let EqSatConstantImplementation: String -> Prop;
+pub let EqSatConstantImplementation: std::ir::OperationKind -> Prop;
 pub mod integer_inputs {
-    pub let constant<kind,key,method>: ir::OpSpec(kind,"dyn tir::interfaces::ConstantLike",key,method)
-        -> EqSatConstantImplementation(kind);
     pub let width<ty,ctor,args,bits>:
         (EqSatInteger(ty), ir::TypeTerm(ty,ctor,args), bits == std::ir::integer_width(args)) -> EqSatIntegerWidth(ty,bits);
     pub let result<node,kind,place,home,pos,display,loc,out,ty,decl,bits>:

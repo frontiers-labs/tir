@@ -66,7 +66,7 @@ impl Check<'_> {
         };
         let input = self.inputs.one(1);
         let output = self.outputs.one(0);
-        match self.kind {
+        match self.kind.as_str() {
             "builtin.bitcast" => {
                 let w = width(self.inputs.one(0));
                 errors.require(w.is_some() && w == width(output), "bitcast width");
@@ -133,11 +133,14 @@ impl Check<'_> {
                 "floating-point policies belong in the computation type",
             );
         }
-        if self.kind == "type.def"
+        if self.kind.as_str() == "type.def"
             && let Some(owner) = self.ctx.parent_op(self.op.id)
         {
             errors.require(
-                self.ctx.operation_kind(owner).as_deref() == Some("builtin.module"),
+                self.ctx
+                    .operation_kind(owner)
+                    .map(tir_egglog::NativeIdentity::as_str)
+                    == Some("builtin.module"),
                 "type definition outside module scope",
             );
         }
@@ -151,7 +154,7 @@ impl Check<'_> {
         if let Some(v) = self.op.attr("argument_alignments") {
             errors.require(matches!(v,Attr::Array(entries) if entries.len() == args.len() && entries.iter().all(|x| match x {Attr::UInt(n)=>n.is_power_of_two(),_=>unsigned(x).is_some_and(u64::is_power_of_two)})), "argument alignment");
         }
-        if self.kind == "func.func"
+        if self.kind.as_str() == "func.func"
             && let Some(v) = self.op.attr("noalias")
         {
             errors.require(matches!(v,Attr::Array(entries) if entries.iter().all(|x| unsigned(x).is_some_and(|i|pointer(i as usize)))),"noalias arguments");
@@ -206,7 +209,7 @@ impl Check<'_> {
         self.metadata(errors);
         let a = self.inputs.one(0);
         let b = self.outputs.one(0);
-        match self.kind {
+        match self.kind.as_str() {
             "builtin.bitcast" | "ptr.ptrdiff" | "ptr.ptradd" | "ptr.disjoint" => {
                 self.layout(errors)
             }
@@ -227,7 +230,7 @@ impl Check<'_> {
                 errors.require(element.is_some() && element == b, "tuple projection");
             }
             "state.join" | "state.split" => {
-                let join = self.kind == "state.join";
+                let join = self.kind.as_str() == "state.join";
                 let (single, many) = if join {
                     (&self.outputs, &self.inputs)
                 } else {
@@ -252,8 +255,12 @@ impl Check<'_> {
             "func.return" => {
                 let ret = self
                     .scoped(|op| {
-                        (self.ctx.operation_kind(op.id).as_deref() == Some("func.func"))
-                            .then(|| op.attr("ret_type"))
+                        (self
+                            .ctx
+                            .operation_kind(op.id)
+                            .map(tir_egglog::NativeIdentity::as_str)
+                            == Some("func.func"))
+                        .then(|| op.attr("ret_type"))
                     })
                     .flatten();
                 let valid = match (ret, self.inputs.list(0)) {

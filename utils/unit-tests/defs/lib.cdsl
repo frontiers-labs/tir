@@ -55,3 +55,15 @@ pub let exit = {
     interfaces: ("tir::Terminator", "tir::NonLocalExit"),
     state: "none",
 };
+
+pub let beq = {
+    rust_name: "BeqDecodeOp", name: "beq", dialect: "test", state: "none",
+};
+
+pub let cmv = {
+    rust_name: "CmvDecodeOp", name: "cmv", dialect: "test", state: "none",
+};
+
+pub let narrow = {
+    rust_name: "NarrowDecodeOp", name: "narrow", dialect: "test", state: "none",
+};

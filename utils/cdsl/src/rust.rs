@@ -56,8 +56,13 @@ impl Program {
                     target.join("::")
                 ))
             })?;
-            if native::emit(&mut output, &declaration.value)
-                .map_err(|error| export_error(source, declaration, target, error))?
+            if native::emit(
+                &mut output,
+                &source.path,
+                self.declaration_source(&source.path),
+                &declaration.value,
+            )
+            .map_err(|error| export_error(source, declaration, target, error))?
             {
                 continue;
             }

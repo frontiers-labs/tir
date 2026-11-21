@@ -5,6 +5,7 @@ pub(in crate::engine) struct Dependencies<'a> {
     pub ordered: Vec<Path>,
     pub needed: BTreeSet<Path>,
     pub active: BTreeSet<Path>,
+    pub operations: BTreeMap<Path, &'a Binding>,
 }
 
 pub(in crate::engine) enum Selection {
@@ -24,6 +25,7 @@ impl<'a> Dependencies<'a> {
             .map(|module| module.path.as_slice())
             .collect::<BTreeSet<_>>();
         let mut declarations = BTreeMap::new();
+        let mut operations = BTreeMap::new();
         let mut references = BTreeMap::new();
         let mut active = BTreeSet::new();
         let mut pending = Vec::new();
@@ -34,13 +36,18 @@ impl<'a> Dependencies<'a> {
                 .iter()
                 .zip(&artifact.references[&module.path])
             {
-                let (name, executable) = match &node.value {
-                    Declaration::Axiom { name, ty, .. } => (std::slice::from_ref(name), clause(ty)),
-                    Declaration::Enum { name, .. } => (std::slice::from_ref(name), false),
-                    Declaration::Let { binding, .. }
-                        if binding.operation_name(&module.path).is_none() =>
-                    {
-                        (binding.path.as_slice(), module.package != "<embedded std>")
+                let (name, executable, operation) = match &node.value {
+                    Declaration::Axiom { name, ty, .. } => {
+                        (std::slice::from_ref(name), clause(ty), None)
+                    }
+                    Declaration::Enum { name, .. } => (std::slice::from_ref(name), false, None),
+                    Declaration::Let { binding, .. } => {
+                        let operation = binding.operation_name(&module.path).map(|_| binding);
+                        (
+                            binding.path.as_slice(),
+                            operation.is_none() && module.package != "<embedded std>",
+                            operation,
+                        )
                     }
                     _ => continue,
                 };
@@ -49,17 +56,22 @@ impl<'a> Dependencies<'a> {
                     && module.path.starts_with(selected)
                     && roots.contains(module.path.as_slice())
                     && (!catalog_only || !executable)
+                    && operation.is_none()
                 {
                     active.insert(path.clone());
                 }
                 if matches!(mode, Selection::FullSchema)
                     && !executable
                     && module.package != "<embedded std>"
+                    && operation.is_none()
                 {
                     pending.push(path.clone());
                 }
                 ordered.push(path.clone());
                 references.insert(path.clone(), refs);
+                if let Some(binding) = operation {
+                    operations.insert(path.clone(), binding);
+                }
                 declarations.insert(path, &node.value);
             }
         }
@@ -93,13 +105,27 @@ impl<'a> Dependencies<'a> {
             } else {
                 continue;
             };
-            if catalog_only && is_executable(declarations[&owner]) {
+            let is_operation = operations.contains_key(&owner);
+            if catalog_only && !is_operation && is_executable(declarations[&owner]) {
                 continue;
             }
             if !needed.insert(owner.clone()) {
                 continue;
             }
+            if is_operation {
+                continue;
+            }
             pending.extend(references[&owner].iter().cloned());
+            if let Declaration::Let { binding, .. } = declarations[&owner]
+                && let Some(arguments) = operation::integer_rule_arguments(binding)
+                && let Ok((module, operations, _)) =
+                    operation::integer_operations(program, arguments)
+            {
+                pending.extend(
+                    operations
+                        .map(|operation| [module, operation.binding.path.as_slice()].concat()),
+                );
+            }
             if let Some(matches) = program.operation_matches.get(&owner) {
                 for checked in matches.values() {
                     let mut names = vec!["Operation"];
@@ -123,12 +149,26 @@ impl<'a> Dependencies<'a> {
             }
         }
         ordered.retain(|path| needed.contains(path));
+        operations.retain(|path, _| needed.contains(path));
         Self {
             declarations,
             ordered,
             needed,
             active,
+            operations,
         }
+    }
+
+    pub fn operation_imports(&self, program: &CheckedProgram) -> BTreeMap<Path, OperationImport> {
+        self.operations
+            .iter()
+            .filter_map(|(path, binding)| {
+                let module = &path[..path.len() - binding.path.len()];
+                let import = binding
+                    .operation_import(module, program.artifact().declaration_source(module))?;
+                Some((path.clone(), import))
+            })
+            .collect()
     }
 }
 

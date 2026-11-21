@@ -19,10 +19,8 @@ pub let Arm: std::Table<(std::ir::OperationId, Bool, String), Int, std::Merge::U
 pub let TypeTerm: (Int, Int, Int) -> Prop; // type ID, constructor ID, interned arguments
 pub let TypeCtor: (Int, String, String, Int, Int) -> Prop; // constructor ID, dialect, name, declaration, default
 pub let Symbol: (Int, String, Int, Int) -> Prop; // symbol ID, spelling, optional type-name entity, kind
-// The empty interface names the operation declaration. Other rows register
-// its interface implementations. The type key distinguishes Rust interfaces
-// with identical spellings from different crates.
-pub let OpSpec: std::Table<(String, String, Int), Int, std::Merge::Unique>;
+// The -1 key identifies the declaration. Other keys identify Rust interface types.
+pub let OpSpec: std::Table<(std::ir::OperationKind, Int), Int, std::Merge::Unique>;
 
 pub let result = fn (value: std::ir::ValueId, ty: Int, owner: std::ir::OperationId, slot: Int, declared: Int) -> Prop {
     Value(value, ty, "result", std::ir::raw_operation_id(owner), slot, declared)

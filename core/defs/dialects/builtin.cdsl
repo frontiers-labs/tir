@@ -86,16 +86,10 @@ pub interface Speculatable { is_speculatable: () -> Bool }
 pub interface OpCost { cost: () -> El<Bits<32>> }
 
 let rust_interfaces = {
-    Additive: "Additive",
     Commutative: "Commutative",
-    Congruent: "Congruent",
     ConstantLike: "ConstantLike",
-    IntegerArithmetic: "IntegerArithmetic",
     OpCost: "OpCost",
-    PureInterface: "Pure",
-    SameOperandAndResultType: "SameOperandAndResultType",
     Speculatable: "Speculatable",
-    Subtractive: "Subtractive",
     SymbolInterface: "Symbol",
     Terminator: "Terminator",
 };

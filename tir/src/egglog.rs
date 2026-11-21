@@ -53,6 +53,14 @@ fn execute(
     allow_missing_schedule: bool,
 ) -> Result<(), Box<dyn Error>> {
     let start = Instant::now();
+    let module = &schedule[..schedule.len().saturating_sub(1)];
+    let selected;
+    let source = if !module.is_empty() && source.modules.iter().any(|part| part.path == module) {
+        selected = source.clone().select(module)?;
+        &selected
+    } else {
+        source
+    };
     let checked = source.lower()?;
     let schema = Schema::with_engine(&checked, EGraph::from_database(egraph.database().clone()))?;
     let lowered = schema.lower(&checked)?;

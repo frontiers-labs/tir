@@ -2,7 +2,7 @@ use super::{
     Attr, Check, Failures,
     structure::{BindingRole, Control},
 };
-use crate::{OpHandle, RegionId, ValueId};
+use crate::{OpHandle, Operation, RegionId, ValueId};
 
 impl Check<'_> {
     fn group_start(&self, field: usize) -> Option<usize> {
@@ -39,7 +39,7 @@ impl Check<'_> {
             self.ty(v)?;
             let value = self.ctx.get_value(v);
             let producer = value.defining_op()?;
-            if self.ctx.operation_kind(producer).as_deref() != Some("builtin.constant") {
+            if !self.ctx.get_op(producer).is::<crate::builtin::ConstantOp>() {
                 return None;
             }
             let attr: Vec<(i64,)> = self.ctx.index_rows(
@@ -56,12 +56,12 @@ impl Check<'_> {
         constant(actual).is_some_and(|a| Some(a) == constant(expected))
     }
 
-    fn producer(&self, value: Option<&ValueId>, name: &str) -> Option<OpHandle> {
+    fn producer<T: Operation>(&self, value: Option<&ValueId>) -> Option<OpHandle> {
         let v = *value?;
         self.ty(v)?;
         let producer = self.ctx.get_value(v).defining_op()?;
-        (self.ctx.operation_kind(producer).as_deref() == Some(name))
-            .then(|| self.ctx.get_op(producer))
+        let handle = self.ctx.get_op(producer);
+        handle.is::<T>().then_some(handle)
     }
 
     fn counted(
@@ -89,7 +89,9 @@ impl Check<'_> {
                 (ports.get(induction), operand(upper), operand(step))
             {
                 let counter = counter.id();
-                if let Some(cmp) = self.producer(yields.get(control.predicate), "builtin.cmpi") {
+                if let Some(cmp) =
+                    self.producer::<crate::builtin::CmpIOp>(yields.get(control.predicate))
+                {
                     let args = cmp.operands();
                     comparison = matches!(cmp.attr("predicate"),Some(Attr::Predicate(p)) if p.name()=="slt")
                         && args.first() == Some(&counter)
@@ -106,7 +108,8 @@ impl Check<'_> {
                     }
                     if role == BindingRole::Feedback
                         && slot == induction
-                        && let Some(add) = self.producer(yields.get(target), "builtin.addi")
+                        && let Some(add) =
+                            self.producer::<crate::builtin::AddIOp>(yields.get(target))
                     {
                         let args = add.operands();
                         if let [a, b, ..] = &args[..] {
@@ -131,12 +134,12 @@ impl Check<'_> {
                 continue;
             };
             let ports = self.ctx.block_arguments(block);
-            let latch = self
-                .ctx
-                .block_ops(block)
-                .last()
-                .copied()
-                .filter(|op| self.ctx.operation_kind(*op).as_deref() == Some("scf.yield"));
+            let latch = self.ctx.block_ops(block).last().copied().filter(|op| {
+                self.ctx
+                    .operation_kind(*op)
+                    .map(tir_egglog::NativeIdentity::as_str)
+                    == Some("scf.yield")
+            });
             let latch_args = latch.map(|op| self.ctx.op_operands(op));
             let carried = self.inputs.spans.get(1);
             shape |= latch_args
@@ -299,7 +302,7 @@ impl Check<'_> {
         if let Some(groups) = self.schema.and_then(|s| s.counted_groups) {
             self.counted(control.as_ref(), groups, errors);
         }
-        match self.kind {
+        match self.kind.as_str() {
             "scf.ordered_for" => self.ordered(errors),
             "cfg.switch" => self.switch(errors),
             "cir.for" => self.cir(&["condition", "step", "body"], errors),

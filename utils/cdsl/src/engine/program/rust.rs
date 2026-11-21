@@ -74,7 +74,9 @@ impl Codec {
                 }
                 ["std", "ir", "OperationKind"] => Self::Kind(quote!(OperationKind)),
                 ["std", "ir", "OperationKindOf" | "BinaryIntegerOperation"] => {
-                    Self::Kind(signature.render(checked))
+                    let ty = signature.render(checked);
+                    signature.kind_uses.push((ty.clone(), checked.clone()));
+                    Self::Kind(ty)
                 }
                 _ => match schema.database().schema().sort(schema.sort(ty)?).name() {
                     "i64" => Self::Int,
@@ -121,12 +123,14 @@ impl Codec {
                 let ty = self.ty();
                 quote!(<#ty>::from_raw(u32::try_from(#db.base_value::<i64>(#value))?))
             }
-            Self::Kind(ty) => quote!(<#ty>::decode_name(#db.base_value::<String>(#value))),
+            Self::Kind(ty) => quote!(<#ty>::decode(
+                #db, #db.native_identity(#value).ok_or("invalid native operation cell")?
+            )?),
             Self::Enum(name) => quote!({
                 let (terms, term) = extractor
                     .get_or_init(|| ::tir_egglog::extract::Extractor::new_in(db, color))
                     .best(#value)?;
-                #name::decode(&terms, term)?
+                #name::decode(db, &terms, term)?
             }),
             _ => {
                 let ty = self.ty();
@@ -157,7 +161,7 @@ impl Codec {
             Self::Int => literal("Int", quote!(*value)),
             Self::Bool => literal("Bool", quote!(*value)),
             Self::String => literal("String", quote!(value.clone())),
-            Self::Kind(ty) => literal("String", quote!(<#ty>::decode_name(value.clone()))),
+            Self::Kind(ty) => literal("Native", quote!(<#ty>::decode(_db, *value)?)),
             Self::OpId | Self::ValueId | Self::ValueRef(_) => {
                 let ty = self.ty();
                 literal("Int", quote!(<#ty>::from_raw(u32::try_from(*value)?)))
@@ -172,7 +176,7 @@ impl Codec {
                 },
                 _ => return Err(invalid()),
             }),
-            Self::Enum(name) => quote!(Box::new(#name::decode(terms, *#value)?)),
+            Self::Enum(name) => quote!(Box::new(#name::decode(_db, terms, *#value)?)),
         }
     }
 }
@@ -295,15 +299,20 @@ fn enum_tokens(
             cases.push(quote!((#constructor, [#(#args),*]) => Ok(Self::#case(#(#decoded),*))));
         }
     }
+    let owner_qualified = name
+        .to_string()
+        .contains('_')
+        .then(|| quote!(#[allow(non_camel_case_types)]));
     Ok(quote! {
         #[allow(clippy::type_complexity)]
         #[derive(Clone, Debug, PartialEq, Eq)]
+        #owner_qualified
         pub enum #name { #(#declarations),* }
 
         impl #name {
             // The checked enum determines how many constructor arms are needed.
             #[allow(clippy::too_many_lines)]
-            fn decode(terms: &::tir_egglog::TermDag, term: ::tir_egglog::TermId) -> Result<Self, Box<dyn std::error::Error>> {
+            fn decode(_db: &::tir_egglog::Database, terms: &::tir_egglog::TermDag, term: ::tir_egglog::TermId) -> Result<Self, Box<dyn std::error::Error>> {
                 let invalid = || -> Box<dyn std::error::Error> {
                     concat!("invalid engine term for ", stringify!(#name)).into()
                 };
@@ -691,30 +700,49 @@ fn ir_type_tokens() -> TokenStream {
             pub fn raw(self) -> u32 { self.0 }
         }
 
-        /// An operation name without a port signature.
-        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct OperationKind(String);
+        /// An operation declaration without a port signature refinement.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct OperationKind(::tir_egglog::NativeIdentity);
+
+        impl From<::tir_egglog::NativeIdentity> for OperationKind {
+            fn from(declaration: ::tir_egglog::NativeIdentity) -> Self { Self(declaration) }
+        }
 
         impl OperationKind {
-            fn decode_name(name: String) -> Self { Self(name) }
+            fn decode(_: &::tir_egglog::Database, identity: ::tir_egglog::NativeIdentity) -> DecodeResult<Self> {
+                Ok(Self(identity))
+            }
 
-            /// Retrieve the operation name used by the host IR.
-            pub fn as_str(&self) -> &str { &self.0 }
+            pub fn declaration(&self) -> ::tir_egglog::NativeIdentity { self.0 }
+
+            /// Retrieve the operation's diagnostic spelling.
+            pub fn as_str(&self) -> &str { self.0.as_str() }
         }
 
         type Invariant<T> = std::marker::PhantomData<fn(T) -> T>;
+        struct KindWitness<T>(Invariant<T>);
 
-        /// An operation with its declared operand and result signature.
+        /// A declaration admitted by the checked operand and result signature.
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct OperationKindOf<I, O>(String, Invariant<(I, O)>);
+        pub struct OperationKindOf<I, O>(::tir_egglog::NativeIdentity, Invariant<(I, O)>);
 
-        impl<I, O> OperationKindOf<I, O> {
-            fn decode_name(name: String) -> Self {
-                Self(name, std::marker::PhantomData)
+        impl<I: 'static, O: 'static> OperationKindOf<I, O> {
+            fn decode(db: &::tir_egglog::Database, identity: ::tir_egglog::NativeIdentity) -> DecodeResult<Self> {
+                if db.admits_declaration::<KindWitness<Self>>(identity) {
+                    Ok(Self(identity, std::marker::PhantomData))
+                } else {
+                    Err("operation declaration does not have the checked port signature".into())
+                }
             }
 
-            /// Retrieve the operation name used by the host IR.
-            pub fn as_str(&self) -> &str { &self.0 }
+            fn admit(db: &mut ::tir_egglog::Database, identity: ::tir_egglog::NativeIdentity) {
+                db.admit_declaration::<KindWitness<Self>>(identity);
+            }
+
+            pub fn declaration(&self) -> ::tir_egglog::NativeIdentity { self.0 }
+
+            /// Retrieve the operation's diagnostic spelling.
+            pub fn as_str(&self) -> &str { self.0.as_str() }
         }
     }
 }
@@ -748,6 +776,81 @@ pub(super) fn exported_members(
         }
     }
     members
+}
+
+fn native_import_tokens(
+    program: &CheckedProgram,
+    imports: &BTreeMap<Path, OperationImport>,
+    uses: &[(TokenStream, Ty)],
+) -> (TokenStream, TokenStream) {
+    if imports.is_empty() {
+        return Default::default();
+    }
+    let tags = (0..imports.len())
+        .map(|index| format_ident!("Declaration{index}"))
+        .collect::<Vec<_>>();
+    let imported = imports.values().zip(&tags).map(|(import, tag)| {
+        let name = &import.name;
+        let symbol = &import.symbol;
+        let ports = import.ports.map_or_else(
+            || quote!(None),
+            |(inputs, outputs)| quote!(Some((#inputs, #outputs))),
+        );
+        quote! {
+            struct #tag;
+            impl ::tir_egglog::NativeDeclaration for #tag {
+                const NAME: &'static str = #name;
+                const SYMBOL: &'static str = #symbol;
+                const PORTS: Option<(usize, usize)> = #ports;
+            }
+        }
+    });
+    let mut witnesses = BTreeMap::new();
+    for (rust_type, checked) in uses {
+        let matching = imports
+            .keys()
+            .zip(&tags)
+            .filter_map(|(path, tag)| program.admits_kind(path, checked).then_some(tag));
+        witnesses
+            .entry(rust_type.to_string())
+            .or_insert_with(|| (rust_type, BTreeSet::new()))
+            .1
+            .extend(matching);
+    }
+    let admissions = witnesses.into_values().filter(|(_, tags)| !tags.is_empty()).map(|(rust_type, declarations)| {
+        let tags = declarations.into_iter();
+        quote!((<#rust_type>::admit, &[#(<#tags as ::tir_egglog::NativeDeclaration>::SYMBOL),*]))
+    });
+    let declarations = quote! {
+        #(#imported)*
+        fn link_declaration<T: ::tir_egglog::NativeDeclaration>(
+            db: &mut ::tir_egglog::Database,
+        ) -> Result<(), ::tir_egglog::LoadError> {
+            if db.declaration(T::SYMBOL).is_none() {
+                db.bind_declaration::<T>().map_err(|_| ::tir_egglog::LoadError::SortMismatch {
+                    name: "NativeIdentity".to_owned(),
+                })?;
+            }
+            Ok(())
+        }
+        type DeclarationLink = fn(&mut ::tir_egglog::Database) -> Result<(), ::tir_egglog::LoadError>;
+        const DECLARATION_LINKS: &[DeclarationLink] = &[#(link_declaration::<#tags>),*];
+        type KindAdmission = fn(&mut ::tir_egglog::Database, ::tir_egglog::NativeIdentity);
+        const KIND_ADMISSIONS: &[(KindAdmission, &[&str])] = &[#(#admissions),*];
+    };
+    let install = quote! {
+        for link in DECLARATION_LINKS {
+            link(db)?;
+        }
+        for (admit, symbols) in KIND_ADMISSIONS {
+            for symbol in *symbols {
+                if let Some(identity) = db.declaration(symbol) {
+                    admit(db, identity);
+                }
+            }
+        }
+    };
+    (declarations, install)
 }
 
 pub(super) fn emit(
@@ -912,11 +1015,14 @@ pub(super) fn emit(
         .iter()
         .map(|host| host_tokens(*host, program, &mut signature, selected, schema))
         .collect::<Result<Vec<_>, _>>()?;
+    let (native_declarations, native_imports) =
+        native_import_tokens(program, &schema.operation_imports, &signature.kind_uses);
     let ir_types = ir_type_tokens();
     let signatures = signature.declarations();
     let source = quote! {
         #ir_types
         #signatures
+        #native_declarations
         #(#enums)*
         #(#rows)*
         #(#host)*
@@ -983,6 +1089,7 @@ pub(super) fn emit(
 
         /// Install the declared catalog on the caller's database.
         pub fn install_schema(db: &mut ::tir_egglog::Database) -> Result<(), ::tir_egglog::LoadError> {
+            #native_imports
             ::tir_egglog::Program::from_static(CATALOG, db)?;
             Ok(())
         }

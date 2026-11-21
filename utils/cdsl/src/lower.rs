@@ -133,6 +133,7 @@ pub struct CheckedProgram {
     pub(crate) type_families: BTreeMap<Path, ConId>,
     pub(crate) operation_matches: BTreeMap<Path, BTreeMap<usize, CheckedMatch>>,
     operation_interfaces: Vec<CheckedOpInterfaces>,
+    operation_kinds: (usize, BTreeMap<Path, Scheme>),
 }
 
 impl CheckedProgram {
@@ -146,6 +147,7 @@ impl CheckedProgram {
         mut operations: BTreeMap<Path, BTreeMap<Path, CheckedMethods>>,
         type_families: BTreeMap<Path, ConId>,
         operation_matches: BTreeMap<Path, BTreeMap<usize, CheckedMatch>>,
+        operation_kinds: (usize, BTreeMap<Path, Scheme>),
     ) -> Result<Self, Error> {
         let revision = NEXT_REVISION
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
@@ -176,7 +178,17 @@ impl CheckedProgram {
             operation_interfaces,
             type_families,
             operation_matches,
+            operation_kinds,
         })
+    }
+
+    pub(crate) fn admits_kind(&self, operation: &[String], expected: &Ty) -> bool {
+        let Some(scheme) = self.operation_kinds.1.get(operation) else {
+            return false;
+        };
+        let mut next = self.operation_kinds.0;
+        crate::hm::instantiate(scheme, &mut next)
+            .is_ok_and(|actual| crate::hm::unify(&actual, expected).is_ok())
     }
 
     /// Identity of this immutable compilation within the current process.

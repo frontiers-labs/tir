@@ -488,8 +488,8 @@ pub struct DecodeShape {
 /// The decoding of one instruction: its shapes, most specific first. Only
 /// emitted for instructions the generator can invert.
 pub struct DecodeSpec {
-    /// `(dialect, op)` identity of the operation to build.
-    pub op: (&'static str, &'static str),
+    /// The constructor of the decoded operation's declared Rust type.
+    pub construct: fn(&Context, Vec<NamedAttribute>) -> NewOp,
     pub shapes: &'static [DecodeShape],
     /// Every attribute the op declares; decoding fills all of them.
     pub attrs: &'static [&'static str],
@@ -547,7 +547,7 @@ pub fn decode_with(context: &Context, word: u32, spec: &DecodeSpec) -> Option<Op
             panic!("Missing required attribute: {declared}");
         }
     }
-    let instance = NewOp::new_dynamic(spec.op, context.clone(), vec![], vec![], vec![], attributes);
+    let instance = (spec.construct)(context, attributes);
     Some(
         context
             .add_operation(tir::InsertionPoint::Root, instance)
