@@ -5,10 +5,17 @@ use std::{
     process::ExitCode,
 };
 
-use tir_cdsl::{Error, compile_file, resolve_crate};
+use tir_cdsl::{Error, compile_file, resolve_crate, resolve_program_package};
 
 enum Input {
-    Package { name: String, selector: Vec<String> },
+    Package {
+        name: String,
+        selector: Vec<String>,
+    },
+    Qualified {
+        prefix: String,
+        selector: Vec<String>,
+    },
     File(PathBuf),
 }
 
@@ -27,7 +34,7 @@ fn options() -> Result<Options, Error> {
     let mut output = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--cargo" => {
+            "--crate" | "--cargo" => {
                 package = Some(
                     args.next()
                         .ok_or_else(|| Error(format!("{arg} needs a package name")))?,
@@ -51,7 +58,7 @@ fn options() -> Result<Options, Error> {
                         .ok_or_else(|| Error("--output needs a destination".into()))?,
                 )
             }
-            value if value.starts_with("::") => {
+            value if value.starts_with("::") || value.ends_with("::*") => {
                 if selector.replace(value.to_owned()).is_some() {
                     return Err(Error("only one module selector is allowed".into()));
                 }
@@ -66,29 +73,24 @@ fn options() -> Result<Options, Error> {
     };
     let output = output.ok_or_else(|| Error("expected --output <file or ->".into()))?;
     let input = match (package, file, selector) {
-        (Some(name), None, Some(selector)) => {
-            let selector = selector.strip_prefix("::").unwrap_or_default();
-            let selector = if selector == "*" {
-                ""
-            } else {
-                selector
-                    .strip_suffix("::*")
-                    .ok_or_else(|| Error("selector must end in ::*".into()))?
-            };
-            let selector = if selector.is_empty() {
-                Vec::new()
-            } else {
-                selector.split("::").map(str::to_owned).collect::<Vec<_>>()
-            };
-            if selector.iter().any(String::is_empty) {
-                return Err(Error("invalid module selector".into()));
-            }
+        (Some(name), None, Some(selector)) if selector.starts_with("::") => {
+            let selector = module_selector(&selector[2..])?;
             Input::Package { name, selector }
+        }
+        (None, None, Some(selector)) => {
+            let (prefix, module) = selector
+                .split_once("::")
+                .filter(|(prefix, _)| !prefix.is_empty())
+                .ok_or_else(|| Error("expected a package-qualified selector".into()))?;
+            Input::Qualified {
+                prefix: prefix.into(),
+                selector: module_selector(module)?,
+            }
         }
         (None, Some(file), None) => Input::File(file),
         _ => {
             return Err(Error(
-                "choose --cargo <package> ::module::* or --input <file.cdsl>".into(),
+                "choose <package>::module::*, --crate <package> ::module::*, or --input <file.cdsl>".into(),
             ));
         }
     };
@@ -99,10 +101,27 @@ fn options() -> Result<Options, Error> {
     })
 }
 
+fn module_selector(input: &str) -> Result<Vec<String>, Error> {
+    if input == "*" {
+        return Ok(Vec::new());
+    }
+    let module = input
+        .strip_suffix("::*")
+        .ok_or_else(|| Error("selector must end in ::*".into()))?;
+    let selector = module.split("::").map(str::to_owned).collect::<Vec<_>>();
+    if selector.iter().any(String::is_empty) {
+        return Err(Error("invalid module selector".into()));
+    }
+    Ok(selector)
+}
+
 fn run() -> Result<(), Error> {
     let options = options()?;
     let program = match options.input {
         Input::Package { name, selector } => resolve_crate(&name)?.select(&selector)?,
+        Input::Qualified { prefix, selector } => {
+            resolve_program_package(&prefix)?.select(&selector)?
+        }
         Input::File(file) => compile_file(&file)?,
     };
     let text = if options.typed {

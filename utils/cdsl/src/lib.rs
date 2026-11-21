@@ -21,6 +21,8 @@ mod parser_syntax;
 pub mod syntax;
 mod totality;
 
-pub use compiler::{CompiledModule, Program, compile_file, compile_tokens, resolve_crate};
+pub use compiler::{
+    CompiledModule, Program, compile_file, compile_tokens, resolve_crate, resolve_program_package,
+};
 pub use error::Error;
 pub use lower::CheckedProgram;

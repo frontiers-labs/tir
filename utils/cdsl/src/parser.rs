@@ -519,6 +519,12 @@ pub(super) fn module<'a>(ctx: &'a Context<'a>) -> P<'a, Vec<DeclNode>> {
             generics,
             variants,
         });
+    let engine_name = select! { Token::String(name) => name };
+    let engine = just(Token::As).ignore_then(choice((
+        just(Token::Extern).ignore_then(engine_name.clone()).map(EngineBinding::Host),
+        engine_name.map(EngineBinding::Name),
+        path(ctx).map(EngineBinding::Table),
+    )));
     let axiom = just(Token::Let)
         .ignore_then(identifier(ctx))
         .then(identifier(ctx)
@@ -529,8 +535,9 @@ pub(super) fn module<'a>(ctx: &'a Context<'a>) -> P<'a, Vec<DeclNode>> {
             .or_not().map(Option::unwrap_or_default))
         .then_ignore(just(Token::Colon))
         .then(expr)
+        .then(engine.or_not())
         .then_ignore(just(Token::Semi))
-        .map(|((name, generics), ty)| Declaration::Axiom { public: false, name, generics, ty });
+        .map(|(((name, generics), ty), engine)| Declaration::Axiom { public: false, name, generics, ty, engine });
     let declaration = just(Token::Pub).or_not()
         .then(choice((use_decl, mod_decl, let_decl, enumeration, axiom)))
         .map(move |(visibility, mut declaration)| {

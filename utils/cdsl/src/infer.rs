@@ -1981,7 +1981,8 @@ fn clause_annotation(annotation: &Expr) -> bool {
             op: BinaryOp::Equal,
             ..
         }
-        | Expression::Call { .. } => true,
+        | Expression::Call { .. }
+        | Expression::RecordCall { .. } => true,
         Expression::Tuple(items) => items.iter().any(clause_annotation),
         Expression::Binary {
             op: BinaryOp::Arrow,

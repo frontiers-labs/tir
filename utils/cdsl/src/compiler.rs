@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{
-    ast::{Ast, Declaration, Node},
+    ast::{Ast, Declaration, EngineBinding, Node},
     error::Error,
     lexer::{Span, TokenStream},
     parser,
@@ -113,6 +113,15 @@ pub fn compile_file(file: &Path) -> Result<Program, Error> {
 
 /// Compile a workspace member's defs/lib.cdsl, located by its package name.
 pub fn resolve_crate(name: &str) -> Result<Program, Error> {
+    compile_file(&resolve_package_defs(name, false)?)
+}
+
+/// Resolve the package prefix of a build selector by Cargo name or directory.
+pub fn resolve_program_package(prefix: &str) -> Result<Program, Error> {
+    compile_file(&resolve_package_defs(prefix, true)?)
+}
+
+pub(crate) fn resolve_package_defs(name: &str, allow_directory: bool) -> Result<PathBuf, Error> {
     let current = std::env::current_dir().map_err(|error| Error(error.to_string()))?;
     for root in current.ancestors() {
         let manifest = root.join("Cargo.toml");
@@ -144,8 +153,9 @@ pub fn resolve_crate(name: &str) -> Result<Program, Error> {
                 .and_then(|value| value.trim_start().strip_prefix('"'))
                 .and_then(|value| value.split_once('"'))
                 .is_some_and(|(package, _)| package == name)
+                || (allow_directory && directory.file_name().is_some_and(|part| part == name))
             {
-                return compile_file(&directory.join("defs/lib.cdsl"));
+                return Ok(directory.join("defs/lib.cdsl"));
             }
         }
         return Err(Error(format!(
@@ -682,7 +692,12 @@ fn resolve_declaration(
             }
             Ok(())
         }
-        Declaration::Axiom { generics, ty, .. } => {
+        Declaration::Axiom {
+            generics,
+            ty,
+            engine,
+            ..
+        } => {
             let mut locals = BTreeSet::new();
             for generic in generics {
                 if let Some(ty) = &mut generic.ty {
@@ -691,6 +706,10 @@ fn resolve_declaration(
                 locals.insert(generic.name.clone());
             }
             resolve_expr(ty, scope, &locals)?;
+            if let Some(EngineBinding::Table(path)) = engine {
+                *path = resolve_path(path, scope)
+                    .ok_or_else(|| format!("unresolved table {}", path.join("::")))?;
+            }
             Ok(())
         }
     }

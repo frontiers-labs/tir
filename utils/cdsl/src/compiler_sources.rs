@@ -13,6 +13,7 @@ const SOURCES: &[(&str, &str)] = &[
         include_str!("../stdlib/std/schedule.cdsl"),
     ),
     ("std/option.cdsl", include_str!("../stdlib/std/option.cdsl")),
+    ("std/int.cdsl", include_str!("../stdlib/std/int.cdsl")),
     ("std/bits.cdsl", include_str!("../stdlib/std/bits.cdsl")),
     ("std/ir.cdsl", include_str!("../stdlib/std/ir.cdsl")),
     ("std/nat.cdsl", include_str!("../stdlib/std/nat.cdsl")),

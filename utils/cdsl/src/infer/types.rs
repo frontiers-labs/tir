@@ -211,6 +211,11 @@ impl Checker {
             Ty::Con(SUM, args) | Ty::Con(PRODUCT, args) => {
                 list_values(args).iter().all(|t| self.index_term(t))
             }
+            Ty::Con(id, args) if list_values(args).is_empty() => {
+                self.declared.values().any(|(declared, parameters, sort)| {
+                    id == declared && parameters.is_empty() && *sort == con(NAT)
+                })
+            }
             _ => false,
         }
     }
@@ -507,6 +512,12 @@ impl Checker {
         match &expr.value {
             Expression::Literal(Literal::Natural(n))=>self.natural(n.replace('_',"").parse().map_err(|_|Error("natural exceeds supported u128 representation".into()))?),
             Expression::Path(path)=> {
+                if !types.contains_key(path)
+                    && !self.types.contains_key(path)
+                    && let Some((generics, annotation)) = self.axioms.get(path).cloned()
+                {
+                    self.axiom(definitions, path, &generics, &annotation)?;
+                }
                 if let Some(binding)=lookup_type(types,&self.types,path) {
                     if let Some(ty)=binding && self.index_term(&ty) {return Ok(ty);}
                     return Err(Error("neutral value needs explicit index/normalization evidence".into()));
