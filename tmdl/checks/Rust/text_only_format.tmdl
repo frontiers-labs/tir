@@ -38,5 +38,5 @@ instruction Sub for [TextIsa] : Binary {
 }
 
 // CHECK: AddOp {
-// CHECK: operands : O { d, a, control }
+// CHECK: scheme : "(_?, _?) -> ()"
 // CHECK: SubOp {
