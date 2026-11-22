@@ -1,10 +1,12 @@
+use std::ir::interfaces::*;
+
 pub let alloca<P0: std::ir::Ty> = {
     rust_name: "AllocaOp",
     name: "alloca",
     dialect: "ptr",
     results: { result: std::ir::El<std::ir::Ptr<P0>> },
     attributes: { size: "UInt", align: "UInt" },
-    interfaces: "PromotableAllocation",
+    interfaces: PromotableAllocation,
     state: "out",
 };
 
@@ -13,7 +15,7 @@ pub let null<P0: std::ir::Ty> = {
     name: "null",
     dialect: "ptr",
     results: { result: std::ir::El<std::ir::Ptr<P0>> },
-    interfaces: "crate::ConstantLike",
+    interfaces: ConstantLike,
     state: "none",
 };
 
@@ -33,7 +35,7 @@ pub let ptradd<P0: std::ir::Ty, W1: Nat, P2: std::ir::Ty> = {
     dialect: "ptr",
     operands: { base: std::ir::El<std::ir::Ptr<P0>>, offset: std::ir::El<std::ir::Bits<W1>> },
     results: { result: std::ir::El<std::ir::Ptr<P2>> },
-    interfaces: "crate::Additive",
+    interfaces: Additive,
     state: "none",
 };
 
@@ -43,7 +45,7 @@ pub let ptrdiff<P0: std::ir::Ty, P1: std::ir::Ty, W2: Nat> = {
     dialect: "ptr",
     operands: { lhs: std::ir::El<std::ir::Ptr<P0>>, rhs: std::ir::El<std::ir::Ptr<P1>> },
     results: { result: std::ir::El<std::ir::Bits<W2>> },
-    interfaces: "crate::Subtractive",
+    interfaces: Subtractive,
     state: "none",
 };
 
@@ -62,7 +64,7 @@ pub let load<P0: std::ir::Ty, T1: Type> = {
     dialect: "ptr",
     operands: { ptr: std::ir::El<std::ir::Ptr<P0>> },
     results: { result: T1 },
-    interfaces: ("MemoryRead", "ResourceEffects"),
+    interfaces: (MemoryRead, ResourceEffects),
     state: "in_out",
 };
 
@@ -71,7 +73,7 @@ pub let store<T0: Type, P1: std::ir::Ty> = {
     name: "store",
     dialect: "ptr",
     operands: { value: T0, ptr: std::ir::El<std::ir::Ptr<P1>> },
-    interfaces: ("MemoryWrite", "ResourceEffects"),
+    interfaces: (MemoryWrite, ResourceEffects),
     state: "in_out",
 };
 
@@ -80,7 +82,7 @@ pub let memcpy<P0: std::ir::Ty, P1: std::ir::Ty> = {
     name: "memcpy",
     dialect: "ptr",
     operands: { destination: std::ir::El<std::ir::Ptr<P0>>, source: std::ir::El<std::ir::Ptr<P1>>, size: std::ir::El<std::ir::Bits<64>> },
-    interfaces: ("ResourceEffects", "crate::Intrinsic"),
+    interfaces: ResourceEffects,
     state: "in_out",
 };
 
@@ -89,7 +91,7 @@ pub let memset<P0: std::ir::Ty> = {
     name: "memset",
     dialect: "ptr",
     operands: { destination: std::ir::El<std::ir::Ptr<P0>>, value: std::ir::El<std::ir::Bits<8>>, size: std::ir::El<std::ir::Bits<64>> },
-    interfaces: ("MemoryWrite", "ResourceEffects", "crate::Intrinsic"),
+    interfaces: (MemoryWrite, ResourceEffects),
     state: "in_out",
 };
 
@@ -100,7 +102,7 @@ pub let field<P0: std::ir::Ty, P1: std::ir::Ty> = {
     operands: { base: std::ir::El<std::ir::Ptr<P0>> },
     results: { result: std::ir::El<std::ir::Ptr<P1>> },
     attributes: { ty: "Type", field: "Str" },
-    interfaces: "crate::Speculatable",
+    interfaces: Speculatable,
     state: "none",
 };
 
@@ -110,6 +112,6 @@ pub let copy<P0: std::ir::Ty, P1: std::ir::Ty> = {
     dialect: "ptr",
     operands: { destination: std::ir::El<std::ir::Ptr<P0>>, source: std::ir::El<std::ir::Ptr<P1>> },
     attributes: { ty: "Type" },
-    interfaces: ("ResourceEffects", "crate::Congruent"),
+    interfaces: (ResourceEffects, Congruent),
     state: "in_out",
 };

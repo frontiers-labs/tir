@@ -780,6 +780,7 @@ fn resolve_declaration(
     declaration: &mut Node<Declaration>,
     scope: &Scope<'_>,
 ) -> Result<(), String> {
+    let interface = matches!(&declaration.value, Declaration::Interface { .. });
     match &mut declaration.value {
         Declaration::Use { .. } | Declaration::Mod { .. } => Ok(()),
         Declaration::Let { binding, .. } | Declaration::Interface { binding, .. } => {
@@ -790,6 +791,9 @@ fn resolve_declaration(
             }
             if let Some(ty) = &mut binding.ty {
                 resolve_expr(ty, scope, &locals)?;
+            }
+            if interface {
+                locals.insert("self".into());
             }
             resolve_expr(&mut binding.value, scope, &locals)
         }

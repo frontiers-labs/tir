@@ -70,7 +70,7 @@ mod dialects;
 mod edits;
 mod error;
 mod idmap;
-mod interfaces;
+pub mod interfaces;
 mod intrinsic;
 mod ir_formatter;
 pub mod layout;

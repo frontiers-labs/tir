@@ -22,6 +22,10 @@ use crate as tir;
 
 pub use arith::*;
 pub use fn_type::*;
+pub use generated::{
+    Additive, Commutative, Congruent, ConstantLike, IntegerArithmetic, OpCost, PureInterface,
+    SameOperandAndResultType, Speculatable, Subtractive, Symbol, Terminator, Visibility,
+};
 pub use global::*;
 pub use module::*;
 pub use state::*;

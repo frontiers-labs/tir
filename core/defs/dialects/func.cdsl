@@ -1,10 +1,12 @@
+use std::ir::interfaces::*;
+
 pub let call = {
     rust_name: "CallOp",
     name: "call",
     dialect: "func",
     operands: { callee: "fn<_, _>", args: "*_" },
     results: { result: "_" },
-    interfaces: ("Apply", "ResourceEffects"),
+    interfaces: (Apply, ResourceEffects),
     custom_format: true,
     state: "in_out",
 };
@@ -15,7 +17,7 @@ pub let declare = {
     dialect: "func",
     results: { result: "fn<_, _>" },
     attributes: { sym_name: "Str" },
-    interfaces: ("Symbol", "Callable"),
+    interfaces: (Symbol, Callable),
     custom_format: true,
     state: "none",
 };
@@ -26,7 +28,7 @@ pub let func = {
     dialect: "func",
     results: { result: "fn<_, _>" },
     attributes: { sym_name: "Str", ret_type: "Type" },
-    interfaces: ("Symbol", "Callable"),
+    interfaces: (Symbol, Callable),
     regions: { body: { kind: "Any", variadic: false } },
     custom_format: true,
     state: "none",
@@ -37,6 +39,6 @@ pub let r#return = {
     name: "return",
     dialect: "func",
     operands: { value: "?_" },
-    interfaces: "Terminator",
+    interfaces: Terminator,
     state: "in",
 };

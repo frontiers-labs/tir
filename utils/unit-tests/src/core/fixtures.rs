@@ -11,11 +11,11 @@ use tir::{BlockHandle, Context, OpId, Operation, RegionId};
 pub mod ops {
     include!(concat!(env!("OUT_DIR"), "/core_fixtures.rs"));
 
-    __cdsl_dep_DefOp!();
-    __cdsl_dep_UpdateParamOp!();
-    __cdsl_dep_SetFlagsOp!();
-    __cdsl_dep_ReadFlagsOp!();
-    __cdsl_test_AddTestOp!();
+    __cdsl_dep_DefOp!(tir::backend::MachineInstruction);
+    __cdsl_dep_UpdateParamOp!(tir::backend::MachineInstruction);
+    __cdsl_dep_SetFlagsOp!(tir::backend::MachineInstruction);
+    __cdsl_dep_ReadFlagsOp!(tir::backend::MachineInstruction);
+    __cdsl_test_AddTestOp!(tir::backend::MachineInstruction);
     __cdsl_test_ExitOp!();
     __cdsl_test_BeqDecodeOp!();
     __cdsl_test_CmvDecodeOp!();
