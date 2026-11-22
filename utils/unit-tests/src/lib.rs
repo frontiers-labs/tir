@@ -117,6 +117,8 @@ mod core {
     mod idmap;
     mod instcombine;
     mod interfaces;
+    #[cfg(feature = "interp")]
+    mod interp;
     mod layout;
     mod machine_ir;
     mod pass;

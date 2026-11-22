@@ -1,0 +1,1073 @@
+use std::ir::OperationId;
+use std::ir::ValueId;
+
+// Each domain is activated on one graph path. Theta's predicate, feedback, and
+// exit have separate domains so a continuation cannot observe an exit effect.
+pub enum Domain {
+    Root(Int),
+    ArmBody(Domain, Int),
+    Predicate(Domain, Int),
+    Feedback(Domain, Int),
+    Exit(Domain, Int)
+}
+pub enum Label {
+    Cfg(Int),
+    Enter(Domain, OperationId),
+    Test(Label, Int),
+    Eval(Domain, OperationId),
+    Start(Domain),
+    At(Domain, OperationId),
+    End(Domain)
+}
+pub let InterpRoot: OperationId -> Prop;
+let FunctionBody: (OperationId, Int, String, Int) -> Prop;
+pub let Entry: (OperationId, Label) -> Prop;
+let Active: (OperationId, Domain, Int) -> Prop;
+let Need: (Domain, ValueId) -> Prop;
+let Compute: (Domain, OperationId) -> Prop;
+let ResultNeeded: (Domain, OperationId, Int) -> Prop;
+let Nested: (Domain, Domain, OperationId, Int) -> Prop;
+let Gamma: (Domain, OperationId, ValueId) -> Prop;
+let Theta: (Domain, OperationId, Int, ValueId) -> Prop;
+let ControlOp: OperationId -> Prop;
+let DefRegion: (ValueId, Int) -> Prop;
+let StateTy: Int -> Prop;
+let Rank: std::Table<OperationId, Int, std::Merge::Max>;
+let Placed: (Domain, OperationId) -> Prop;
+let Before: (Domain, OperationId, OperationId) -> Prop;
+let Middle: (Domain, OperationId, OperationId) -> Prop;
+let HasPrev: (Domain, OperationId) -> Prop;
+let HasNext: (Domain, OperationId) -> Prop;
+let Nonempty: Domain -> Prop;
+let Next: (Domain, OperationId, Label) -> Prop;
+let Site: (OperationId, Label, Int, OperationId, std::ir::OperationKind) -> Prop;
+let Owned: (OperationId, Label) -> Prop;
+let Param: (Label, Int, ValueId) -> Prop;
+pub let Flow: { block: Label, side: Int, target: Label } -> Prop;
+let BindArg: (Label, Int, ValueId, ValueId) -> Prop;
+let Code: (Label, Int, OperationId, String, Int, Int, Int) -> Prop;
+pub let Arg: { operation: OperationId, slot: Int, value: Int } -> Prop;
+let Selected: OperationId -> Prop;
+pub let ErrorOp: (OperationId, std::ir::OperationKind) -> Prop;
+let Defines: (Label, Int) -> Prop;
+let Reads: (Label, Int) -> Prop;
+let Live: (Label, Int) -> Prop;
+pub let OutParam: { block: Label, position: Int, order: Int, value: Int } -> Prop;
+pub let OutArg: { block: Label, side: Int, position: Int, order: Int, value: Int } -> Prop;
+mod demand {
+    pub let func<f, r, m, e, place, home, pos, display, loc>: (
+        InterpRoot(f),
+        ir::Operation{ id: f, kind: dialects::func::func.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
+        ir::Region(r, m, f, 0, e)
+    )
+        -> FunctionBody(f, r, m, e);
+    pub let cfg<f, r, e>: FunctionBody(f, r, "cfg", e) -> Entry(f, Label::Cfg(e));
+    pub let graph<f, r, e>: FunctionBody(f, r, "graph", e)
+        -> (Entry(f, Label::Start(Domain::Root(r))), Active(f, Domain::Root(r), r));
+    pub let yield_root<f, r, e, s, v>: (FunctionBody(f, r, "graph", e), Output(r, s, v))
+        -> Need(Domain::Root(r), v);
+    pub let result_home<v, t, o, s, dt, k, r, p, h, l>: (
+        ir::result(v, t, o, s, dt),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: r, position: p, display: h, location: l }()
+    )
+        -> DefRegion(v, r);
+    pub let port_home<v, t, r, s, dt>: ir::Value(v, t, "region", r, s, dt) -> DefRegion(v, r);
+    pub let value<f, d, r, v, t, o, s, dt, k, p, h, l>: (
+        Active(f, d, r),
+        Need(d, v),
+        ir::result(v, t, o, s, dt),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: r, position: p, display: h, location: l }()
+    )
+        -> (Compute(d, o), ResultNeeded(d, o, s));
+    pub let operands<d, o, s, v>: (Compute(d, o), !ControlOp(o), Input(o, s, v)) -> Need(d, v);
+    pub let gamma<d, o, s, h, b, p, k, v>: (
+        Compute(d, o),
+        ir::Control(o, true, s, h, b, p, k),
+        Input(o, s, v)
+    )
+        -> (Gamma(d, o, v), Need(d, v));
+    pub let arm<f, d, r, o, v, def, k, a>: (Active(f, d, r), Gamma(d, o, v), ir::Arm(o, def, k, a))
+        -> (Active(f, Domain::ArmBody(d, a), a), Nested(Domain::ArmBody(d, a), d, o, a));
+    pub let arm_yield<child, d, o, a, i, j, v>: (
+        Nested(child, d, o, a),
+        child == Domain::ArmBody(d, a),
+        ResultNeeded(d, o, j),
+        ir::Binding(a, "exit", j, i),
+        Output(a, i, v)
+    )
+        -> Need(child, v);
+    pub let theta<f, d, r, o, s, b, p, v>: (
+        Active(f, d, r),
+        Compute(d, o),
+        ir::Control(o, false, s, true, b, p, "true"),
+        Output(b, p, v)
+    )
+        -> (
+        Theta(d, o, b, v),
+        Active(f, Domain::Predicate(d, b), b),
+        Active(f, Domain::Feedback(d, b), b),
+        Active(f, Domain::Exit(d, b), b),
+        Nested(Domain::Predicate(d, b), d, o, b),
+        Nested(Domain::Feedback(d, b), d, o, b),
+        Nested(Domain::Exit(d, b), d, o, b),
+        Need(Domain::Predicate(d, b), v)
+    );
+    pub let exit_yield<d, o, b, p, i, j, v>: (
+        Theta(d, o, b, p),
+        ResultNeeded(d, o, j),
+        ir::Binding(b, "exit", j, i),
+        Output(b, i, v)
+    )
+        -> Need(Domain::Exit(d, b), v);
+    pub let capture<child, d, o, r, v, home>: (
+        Nested(child, d, o, r),
+        Need(child, v),
+        DefRegion(v, home),
+        !DeferredValue(v),
+        home != r
+    )
+        -> Need(d, v);
+    pub let state_ty<t, c, a, k, decl, def>: (ir::TypeTerm(t, c, a), ir::TypeCtor(c, k, "state", decl, def))
+        -> StateTy(t);
+    pub let cfg_block<f, r, e, b, layout>: (FunctionBody(f, r, "cfg", e), ir::Block(b, r, layout))
+        -> Owned(f, Label::Cfg(b));
+    pub let cfg_op<f, b, o, k, p, h, l>: (
+        Owned(f, Label::Cfg(b)),
+        ir::Operation{ id: o, kind: k, placement: "block", container: b, position: p, display: h, location: l }()
+    )
+        -> Site(f, Label::Cfg(b), p, o, k);
+    pub let predicate_result<d, r, o, s>: ResultNeeded(Domain::Predicate(d, r), o, s)
+        -> PredResult(d, r, o, s);
+    pub let pred_op<d, r, o>: Compute(Domain::Predicate(d, r), o) -> PredOp(d, r, o);
+    pub let external_control<f, d, r, o, home, k, p, h, l, v, t, s, dt>: (
+        Active(f, d, r),
+        Need(d, v),
+        DeferredValue(v),
+        ir::result(v, t, o, s, dt),
+        ControlOp(o),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: home, position: p, display: h, location: l }(),
+        home != r
+    )
+        -> (Compute(d, o), ResultNeeded(d, o, s), ExternalControl(o));
+    pub let all_ports<child, d, o, r, p, v, t, j, dt>: (
+        Theta(d, o, r, p),
+        Nested(child, d, o, r),
+        Need(child, v),
+        ir::Value(v, t, "region", r, j, dt)
+    )
+        -> VisiblePort(o, j, v);
+    pub let shared_feedback<d, o, r, p, j, v, i, w>: (
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        ir::Binding(r, "feedback", j, i),
+        Output(r, i, w)
+    )
+        -> Need(Domain::Feedback(d, r), w);
+    pub let shared_initial<d, o, r, p, j, v, i, w>: (
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        ir::Binding(r, "entry", j, i),
+        Input(o, i, w)
+    )
+        -> Need(d, w);
+    pub let deferred<f, d, r, o, home, k, p, h, l, v, t, s, dt>: (
+        Active(f, d, r),
+        Need(d, v),
+        ir::result(v, t, o, s, dt),
+        Deferred(o),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: home, position: p, display: h, location: l }(),
+        home != r
+    )
+        -> (Compute(d, o), Cached(o), ResultNeeded(d, o, s));
+    pub let direct_rank<d, o, v, s, t, prev, j, dt, n>: (
+        Compute(d, o),
+        Input(o, s, v),
+        ir::result(v, t, prev, j, dt),
+        Rank(prev, n)
+    )
+        -> Rank(o, (n + 1));
+    pub let rank<d, o>: Compute(d, o) -> Rank(o, 0);
+    pub let dep<f, d, r, o, prev, n>: (
+        Active(f, d, r),
+        Compute(d, o),
+        ir::DependsOn(r, o, prev),
+        Rank(prev, n)
+    )
+        -> Rank(o, (n + 1));
+    pub let graph_call<d, o, k, r, p, h, l, callee, t, target, dt>: (
+        Compute(d, o),
+        ir::Operation{ id: o, kind: dialects::func::call.kind, placement: k, container: r, position: p, display: h, location: l }(),
+        Input(o, 0, callee),
+        ir::result(callee, t, target, 0, dt)
+    )
+        -> InterpRoot(target);
+    pub let call<f, l, p, o, callee, t, target, dt>: (
+        Site(f, l, p, o, dialects::func::call.kind),
+        Input(o, 0, callee),
+        ir::result(callee, t, target, 0, dt)
+    )
+        -> InterpRoot(target);
+}
+let PredOp: (Domain, Int, OperationId) -> Prop;
+mod placement {
+    pub let captured_theta<d, o, r, p>: (Theta(d, o, r, p), ExternalControl(o)) -> ReplayTheta(o);
+    pub let captured_gamma<d, o, v>: (Gamma(d, o, v), ExternalControl(o)) -> RepeatGamma(o);
+    pub let feedback_theta<d, r, o, b, v, s>: (
+        Theta(Domain::Feedback(d, r), o, b, v),
+        PredOp(d, r, o),
+        ResultNeeded(Domain::Feedback(d, r), o, s),
+        !PredResult(d, r, o, s)
+    )
+        -> (Placed(Domain::Feedback(d, r), o), ReplayTheta(o));
+    pub let exit_theta<d, r, o, b, v, s>: (
+        Theta(Domain::Exit(d, r), o, b, v),
+        PredOp(d, r, o),
+        ResultNeeded(Domain::Exit(d, r), o, s),
+        !PredResult(d, r, o, s)
+    )
+        -> (Placed(Domain::Exit(d, r), o), ReplayTheta(o));
+    pub let again_gamma<d, r, o, v, s>: (
+        Gamma(Domain::Feedback(d, r), o, v),
+        PredOp(d, r, o),
+        ResultNeeded(Domain::Feedback(d, r), o, s),
+        !PredResult(d, r, o, s)
+    )
+        -> (Placed(Domain::Feedback(d, r), o), RepeatGamma(o));
+    pub let exit_gamma<d, r, o, v, s>: (
+        Gamma(Domain::Exit(d, r), o, v),
+        PredOp(d, r, o),
+        ResultNeeded(Domain::Exit(d, r), o, s),
+        !PredResult(d, r, o, s)
+    )
+        -> (Placed(Domain::Exit(d, r), o), RepeatGamma(o));
+    pub let root<r, o>: Compute(Domain::Root(r), o) -> Placed(Domain::Root(r), o);
+    pub let arm<d, r, o>: Compute(Domain::ArmBody(d, r), o) -> Placed(Domain::ArmBody(d, r), o);
+    pub let pred<d, r, o>: Compute(Domain::Predicate(d, r), o) -> Placed(Domain::Predicate(d, r), o);
+    pub let again<d, r, o>: (Compute(Domain::Feedback(d, r), o), !PredOp(d, r, o))
+        -> Placed(Domain::Feedback(d, r), o);
+    pub let done<d, r, o>: (Compute(Domain::Exit(d, r), o), !PredOp(d, r, o))
+        -> Placed(Domain::Exit(d, r), o);
+}
+mod ordering {
+    pub let depth<d, a, b, x, y>: (
+        Placed(d, a),
+        Placed(d, b),
+        Rank(a, x),
+        Rank(b, y),
+        std::int::less(x, y) == true
+    )
+        -> Before(d, a, b);
+    pub let tie<d, a, b, x>: (
+        Placed(d, a),
+        Placed(d, b),
+        Rank(a, x),
+        Rank(b, x),
+        std::ir::operation_ids::less(a, b) == true
+    )
+        -> Before(d, a, b);
+    pub let links<d, a, b>: Before(d, a, b) -> (HasNext(d, a), HasPrev(d, b));
+    pub let between<d, a, b, c>: (Before(d, a, b), Before(d, b, c)) -> Middle(d, a, c);
+    pub let nonempty<d, o>: Placed(d, o) -> Nonempty(d);
+}
+mod layout {
+    pub let endpoints<f, d, r>: Active(f, d, r)
+        -> (Owned(f, Label::Start(d)), Owned(f, Label::End(d)));
+    pub let operation_site<f, d, r, o, k, home, p, h, l>: (
+        Placed(d, o),
+        Active(f, d, r),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: home, position: p, display: h, location: l }(),
+        !Cached(o)
+    )
+        -> (Owned(f, Label::At(d, o)), Site(f, Label::At(d, o), 0, o, k));
+    pub let empty<f, d, r>: (Active(f, d, r), !Nonempty(d))
+        -> Flow{ block: Label::Start(d), side: 0, target: Label::End(d) }();
+    pub let first<d, o>: (Placed(d, o), !HasPrev(d, o)) -> Flow{ block: Label::Start(d), side: 0, target: Label::At(d, o) }();
+    pub let next<d, o, n>: (Before(d, o, n), !Middle(d, o, n)) -> Next(d, o, Label::At(d, n));
+    pub let last<d, o>: (Placed(d, o), !HasNext(d, o)) -> Next(d, o, Label::End(d));
+    pub let plain<d, o, n>: (Next(d, o, n), !ControlOp(o), !Cached(o))
+        -> Flow{ block: Label::At(d, o), side: 0, target: n }();
+    pub let root_param<f, r, e, v, t, i, dt>: (
+        FunctionBody(f, r, "graph", e),
+        ir::Value(v, t, "region", r, i, dt),
+        !StateTy(t)
+    )
+        -> Param(Label::Start(Domain::Root(r)), i, v);
+    pub let cfg_param<f, b, v, t, i, dt>: (
+        Owned(f, Label::Cfg(b)),
+        ir::Value(v, t, "block", b, i, dt),
+        !StateTy(t)
+    )
+        -> Param(Label::Cfg(b), i, v);
+    pub let cfg_edge<f, b, p, o, k, s, to>: (
+        Site(f, Label::Cfg(b), p, o, k),
+        ir::Successor(o, s, to),
+        !SwitchOp(o)
+    )
+        -> Flow{ block: Label::Cfg(b), side: s, target: Label::Cfg(to) }();
+    pub let theta_start<d, o, r, v>: (Placed(d, o), Theta(d, o, r, v), !ReplayTheta(o))
+        -> (Flow{ block: Label::At(d, o), side: 0, target: Label::Start(Domain::Predicate(d, r)) }(), Selected(o));
+    pub let theta_test<d, o, r, v>: Theta(d, o, r, v)
+        -> (
+        Code(Label::End(Domain::Predicate(d, r)), 0, o, "branch", (0 - 1), std::ir::raw_value_id(v), (0 - 1)),
+        Flow{ block: Label::End(Domain::Predicate(d, r)), side: 0, target: Label::Start(Domain::Feedback(d, r)) }(),
+        Flow{ block: Label::End(Domain::Predicate(d, r)), side: 1, target: Label::Start(Domain::Exit(d, r)) }(),
+        Flow{ block: Label::End(Domain::Feedback(d, r)), side: 0, target: Label::Start(Domain::Predicate(d, r)) }()
+    );
+    pub let arm_done<d, o, v, r, def, k, n>: (Gamma(d, o, v), ir::Arm(o, def, k, r), Next(d, o, n))
+        -> Flow{ block: Label::End(Domain::ArmBody(d, r)), side: 0, target: n }();
+    pub let loop_done<d, o, r, v, n>: (Theta(d, o, r, v), Next(d, o, n))
+        -> Flow{ block: Label::End(Domain::Exit(d, r)), side: 0, target: n }();
+    pub let exported<child, d, o, r, j, i, w, t, v, dt, n>: (
+        Nested(child, d, o, r),
+        Flow{ block: Label::End(child), side: 0, target: n }(),
+        Next(d, o, n),
+        ResultNeeded(d, o, j),
+        ir::result(v, t, o, j, dt),
+        !StateTy(t),
+        ir::Binding(r, "exit", j, i),
+        Output(r, i, w)
+    )
+        -> BindArg(Label::End(child), 0, v, w);
+    pub let init<d, o, r, p, v, t, j, dt, i, w>: (
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        ir::Value(v, t, "region", r, j, dt),
+        !StateTy(t),
+        ir::Binding(r, "entry", j, i),
+        Input(o, i, w),
+        !ReplayTheta(o)
+    )
+        -> BindArg(Label::At(d, o), 0, v, w);
+    pub let replay_init<d, o, r, p, v, t, j, dt, i, w>: (
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        ir::Value(v, t, "region", r, j, dt),
+        !StateTy(t),
+        ir::Binding(r, "entry", j, i),
+        Input(o, i, w),
+        ReplayTheta(o)
+    )
+        -> BindArg(Label::Enter(d, o), 0, v, w);
+    pub let carry<d, o, r, p, v, t, j, dt, i, w>: (
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        ir::Value(v, t, "region", r, j, dt),
+        !StateTy(t),
+        ir::Binding(r, "feedback", j, i),
+        Output(r, i, w)
+    )
+        -> BindArg(Label::End(Domain::Feedback(d, r)), 0, v, w);
+}
+mod select {
+    pub let load_op<f, l, p, o, addr, v, t, dt>: (
+        Site(f, l, p, o, dialects::ptr::load.kind),
+        !SpecialLoad(o),
+        Input(o, 0, addr),
+        ir::result(v, t, o, 0, dt),
+        IntegerType(t)
+    )
+        -> Code(l, p, o, "load", std::ir::raw_value_id(v), std::ir::raw_value_id(addr), (0 - 1));
+    pub let state_entry<f, l, p, o>: Site(f, l, p, o, dialects::state::entry_state.kind) -> Selected(o);
+    pub let state_join<f, l, p, o>: Site(f, l, p, o, dialects::state::join.kind) -> Selected(o);
+    pub let state_split<f, l, p, o>: Site(f, l, p, o, dialects::state::split.kind) -> Selected(o);
+    pub let constant<f, l, p, o, v, t, dt>: (
+        Site(f, l, p, o, dialects::builtin::constant.kind),
+        ir::result(v, t, o, 0, dt)
+    )
+        -> Code(l, p, o, "constant", std::ir::raw_value_id(v), (0 - 1), (0 - 1));
+    pub let arithmetic<f, l, p, o, v, t, dt, a, b, k, m, s, u>: (
+        Site(f, l, p, o, k),
+        Arithmetic(k, m, s, u),
+        ir::result(v, t, o, 0, dt),
+        Input(o, 0, a),
+        Input(o, 1, b)
+    )
+        -> Code(l, p, o, m, std::ir::raw_value_id(v), std::ir::raw_value_id(a), std::ir::raw_value_id(b));
+    pub let cmp<f, l, p, o, v, t, dt, a, b, h, k, kind, field, label>: (
+        Site(f, l, p, o, kind),
+        PredicateMethod(kind, field, label, k),
+        ir::result(v, t, o, 0, dt),
+        Input(o, 0, a),
+        Input(o, 1, b),
+        ir::operation_attribute(o, field, h),
+        label == eqsat::eqsat_attr_case(h)
+    )
+        -> Code(l, p, o, k, std::ir::raw_value_id(v), std::ir::raw_value_id(a), std::ir::raw_value_id(b));
+    pub let assume<f, l, p, o, v, k>: (Site(f, l, p, o, k), RequireBit(k), Input(o, 0, v))
+        -> Code(l, p, o, "require", (0 - 1), std::ir::raw_value_id(v), (0 - 1));
+    pub let cfg_return<f, l, p, o, v>: (Site(f, l, p, o, dialects::func::r#return.kind), Input(o, 0, v))
+        -> Code(l, p, o, "return", (0 - 1), std::ir::raw_value_id(v), (0 - 1));
+    pub let graph_return<f, r, e, i, v, t, k, owner, j, dt>: (
+        FunctionBody(f, r, "graph", e),
+        Output(r, i, v),
+        ir::Value(v, t, k, owner, j, dt),
+        !StateTy(t)
+    )
+        -> Code(Label::End(Domain::Root(r)), 0, f, "return", (0 - 1), std::ir::raw_value_id(v), (0 - 1));
+    pub let cfg_jump<f, l, p, o>: Site(f, l, p, o, dialects::cfg::br.kind)
+        -> Code(l, p, o, "jump", (0 - 1), (0 - 1), (0 - 1));
+    pub let cfg_branch<f, l, p, o, v>: (Site(f, l, p, o, dialects::cfg::cond_br.kind), Input(o, 0, v))
+        -> Code(l, p, o, "branch", (0 - 1), std::ir::raw_value_id(v), (0 - 1));
+    pub let call<f, l, p, o, v, t, dt, c, ft, g, fd>: (
+        Site(f, l, p, o, dialects::func::call.kind),
+        Input(o, 0, c),
+        ir::result(c, ft, g, 0, fd),
+        ir::result(v, t, o, 0, dt)
+    )
+        -> (Code(l, p, o, "call", std::ir::raw_value_id(v), (0 - 1), (0 - 1)), Arg{ operation: o, slot: (0 - 1), value: std::ir::raw_operation_id(g) }());
+    pub let call_arg<f, l, p, o, i, v, t, k, h, s, dt>: (
+        Site(f, l, p, o, dialects::func::call.kind),
+        std::int::less(0, i) == true,
+        Input(o, i, v),
+        ir::Value(v, t, k, h, s, dt),
+        !StateTy(t)
+    )
+        -> (Arg{ operation: o, slot: i, value: std::ir::raw_value_id(v) }(), Reads(l, std::ir::raw_value_id(v)));
+}
+mod operands {
+    pub let selected<f, l, p, o, k, m, i, v, a, b>: (
+        Site(f, l, p, o, k),
+        Emit{ block: l, position: p, step: i, operation: o, opcode: m, output: v, lhs: a, rhs: b }()
+    )
+        -> Selected(o);
+    pub let dst<l, p, o, k, v, a, b>: (Code(l, p, o, k, v, a, b), std::int::less(v, 0) == false)
+        -> Defines(l, v);
+    pub let left<l, p, o, k, v, a, b>: (Code(l, p, o, k, v, a, b), std::int::less(a, 0) == false)
+        -> Reads(l, a);
+    pub let right<l, p, o, k, v, a, b>: (Code(l, p, o, k, v, a, b), std::int::less(b, 0) == false)
+        -> Reads(l, b);
+    pub let declared<l, i, v>: Param(l, i, v) -> (Defines(l, std::ir::raw_value_id(v)), OutParam{ block: l, position: 0, order: i, value: std::ir::raw_value_id(v) }());
+    pub let given<l, s, to, i, v, w>: (Flow{ block: l, side: s, target: to }(), Param(to, i, v), BindArg(l, s, v, w))
+        -> (Reads(l, std::ir::raw_value_id(w)), OutArg{ block: l, side: s, position: 0, order: i, value: std::ir::raw_value_id(w) }());
+}
+mod liveness {
+    pub let use_value<l, v>: (Reads(l, v), !Defines(l, v)) -> Live(l, v);
+    pub let renamed<l, s, to, v, w>: (Flow{ block: l, side: s, target: to }(), Live(to, std::ir::raw_value_id(v)), BindArg(l, s, v, w))
+        -> (Reads(l, std::ir::raw_value_id(w)), OutArg{ block: l, side: s, position: 1, order: std::ir::raw_value_id(v), value: std::ir::raw_value_id(w) }());
+    pub let passthrough<l, s, to, v>: (Flow{ block: l, side: s, target: to }(), Live(to, v), !Renamed(l, s, v))
+        -> (Reads(l, v), OutArg{ block: l, side: s, position: 1, order: v, value: v }());
+    pub let carried<l, v>: Live(l, v) -> OutParam{ block: l, position: 1, order: v, value: v }();
+}
+let Renamed: (Label, Int, Int) -> Prop;
+mod bindings {
+    pub let renamed<l, s, v, w>: BindArg(l, s, v, w) -> Renamed(l, s, std::ir::raw_value_id(v));
+    pub let unknown<f, l, p, o, k>: (Site(f, l, p, o, k), !Selected(o)) -> ErrorOp(o, k);
+}
+mod classify {
+    pub let switch<o, pl, r, p, h, l>: ir::Operation{ id: o, kind: dialects::cfg::r#switch.kind, placement: pl, container: r, position: p, display: h, location: l }() -> SwitchOp(o);
+    pub let gamma_op<o, s, h, b, p, k>: ir::Control(o, true, s, h, b, p, k) -> ControlOp(o);
+    pub let theta_op<o, g, s, b, p, k>: ir::Control(o, g, s, true, b, p, k) -> ControlOp(o);
+    pub let nsw<o, h, k, m, s, u, pl, r, p, d, l>: (
+        ir::Operation{ id: o, kind: k, placement: pl, container: r, position: p, display: d, location: l }(),
+        Arithmetic(k, m, s, u),
+        ir::operation_attribute(o, s, h),
+        eqsat::eqsat_attr_bool(h) == true
+    )
+        -> SignedOverflow(o);
+    pub let nuw<o, h, k, m, s, u, pl, r, p, d, l>: (
+        ir::Operation{ id: o, kind: k, placement: pl, container: r, position: p, display: d, location: l }(),
+        Arithmetic(k, m, s, u),
+        ir::operation_attribute(o, u, h),
+        eqsat::eqsat_attr_bool(h) == true
+    )
+        -> UnsignedOverflow(o);
+}
+
+pub let Emit: { block: Label, position: Int, step: Int, operation: OperationId, opcode: String, output: Int, lhs: Int, rhs: Int } -> Prop;
+pub let Temp: (Int, Int) -> Prop; // virtual slot, value with the same width (-1 denotes i1)
+let Scratch: (OperationId, Int, Int, Int, Int, Int) -> Prop;
+let OrderCmp: (String, Bool, Bool, Bool) -> Prop; // signed, swap, invert
+let Compare: (Label, Int, OperationId, Bool, Bool, Int, Int, Int) -> Prop;
+let Equality: (String, Bool) -> Prop;
+let CmpResult: (Label, Int, OperationId, Int, Int, Bool) -> Prop;
+let Plain: String -> Prop;
+mod expand {
+    pub let eq: Equality("eq", false);
+    pub let ne: Equality("ne", true);
+    pub let ult: OrderCmp("ult", false, false, false);
+    pub let ule: OrderCmp("ule", false, true, true);
+    pub let ugt: OrderCmp("ugt", false, true, false);
+    pub let uge: OrderCmp("uge", false, false, true);
+    pub let slt: OrderCmp("slt", true, false, false);
+    pub let sle: OrderCmp("sle", true, true, true);
+    pub let sgt: OrderCmp("sgt", true, true, false);
+    pub let sge: OrderCmp("sge", true, false, true);
+    pub let normal<l, p, o, k, v, a, b, s, n>: (Code(l, p, o, k, v, a, b), OrderCmp(k, s, false, n))
+        -> Compare(l, p, o, s, n, v, a, b);
+    pub let reverse<l, p, o, k, v, a, b, s, n>: (Code(l, p, o, k, v, a, b), OrderCmp(k, s, true, n))
+        -> Compare(l, p, o, s, n, v, b, a);
+    pub let temps<l, p, o, k, v, a, b, base>: (
+        Code(l, p, o, k, v, a, b),
+        base == (0 - ((std::ir::raw_operation_id(o) * 16) + 2))
+    )
+        -> Scratch(o, base, (base - 1), (base - 2), (base - 3), (base - 4));
+    pub let cmp_dst<l, p, o, k, v, a, b>: Code(l, p, o, k, v, a, b)
+        -> CmpResult(l, p, o, v, v, false);
+    pub let negated<l, p, o, k, v, a, b, m, x, y, z, t>: (
+        Code(l, p, o, k, v, a, b),
+        Scratch(o, m, x, y, z, t)
+    )
+        -> CmpResult(l, p, o, v, z, true);
+    pub let equal<l, p, o, k, v, a, b, n, d>: (
+        Code(l, p, o, k, v, a, b),
+        Equality(k, n),
+        CmpResult(l, p, o, v, d, n)
+    )
+        -> Emit{ block: l, position: p, step: 3, operation: o, opcode: "eq", output: d, lhs: a, rhs: b }();
+    pub let unsigned<l, p, o, n, v, a, b, d>: (
+        Compare(l, p, o, false, n, v, a, b),
+        CmpResult(l, p, o, v, d, n)
+    )
+        -> Emit{ block: l, position: p, step: 3, operation: o, opcode: "ult", output: d, lhs: a, rhs: b }();
+    pub let signed<l, p, o, n, v, a, b, d, m, x, y, z, t>: (
+        Compare(l, p, o, true, n, v, a, b),
+        CmpResult(l, p, o, v, d, n),
+        Scratch(o, m, x, y, z, t)
+    )
+        -> (
+        Temp(m, a),
+        Temp(x, a),
+        Temp(y, a),
+        Emit{ block: l, position: p, step: 0, operation: o, opcode: "signbit", output: m, lhs: a, rhs: a }(),
+        Emit{ block: l, position: p, step: 1, operation: o, opcode: "add", output: x, lhs: a, rhs: m }(),
+        Emit{ block: l, position: p, step: 2, operation: o, opcode: "add", output: y, lhs: b, rhs: m }(),
+        Emit{ block: l, position: p, step: 3, operation: o, opcode: "ult", output: d, lhs: x, rhs: y }()
+    );
+    pub let invert_order<l, p, o, v, a, b, s>: Compare(l, p, o, s, true, v, a, b)
+        -> Invert(l, p, o, v);
+    pub let invert_eq<l, p, o, v, a, b>: Code(l, p, o, "ne", v, a, b) -> Invert(l, p, o, v);
+    pub let invert<l, p, o, v, m, x, y, z, t>: (Invert(l, p, o, v), Scratch(o, m, x, y, z, t))
+        -> (
+        Temp(z, (0 - 1)),
+        Temp(t, (0 - 1)),
+        Emit{ block: l, position: p, step: 4, operation: o, opcode: "zero", output: t, lhs: t, rhs: t }(),
+        Emit{ block: l, position: p, step: 5, operation: o, opcode: "eq", output: v, lhs: z, rhs: t }()
+    );
+    pub let keep<l, p, o, k, d, a, b>: (Code(l, p, o, k, d, a, b), Plain(k))
+        -> Emit{ block: l, position: p, step: 0, operation: o, opcode: k, output: d, lhs: a, rhs: b }();
+    pub let zero_kind: Plain("zero");
+    pub let one_kind: Plain("one");
+    pub let const_kind: Plain("constant");
+    pub let add_kind: Plain("add");
+    pub let sub_kind: Plain("sub");
+    pub let ret_kind: Plain("return");
+    pub let branch_kind: Plain("branch");
+    pub let jump_kind: Plain("jump");
+    pub let call_kind: Plain("call");
+    pub let require_kind: Plain("require");
+    pub let load_kind: Plain("load");
+}
+let Invert: (Label, Int, OperationId, Int) -> Prop;
+let IntegerType: Int -> Prop;
+let LoadMetadata: String -> Prop;
+pub let BadLoadAttr: (OperationId, String) -> Prop;
+let SpecialLoad: OperationId -> Prop;
+mod memory_attrs {
+    pub let integer<t, c, args, decl, def>: (
+        ir::TypeTerm(t, c, args),
+        ir::TypeCtor(c, "builtin", "i", decl, def)
+    )
+        -> IntegerType(t);
+    pub let segments: LoadMetadata("operand_segment_sizes");
+}
+mod load_attrs {
+    pub let flag<o, k, v, pl, h, p, d, l>: (
+        ir::Operation{ id: o, kind: dialects::ptr::load.kind, placement: pl, container: h, position: p, display: d, location: l }(),
+        ir::operation_attribute(o, k, v),
+        !LoadMetadata(k)
+    )
+        -> (SpecialLoad(o), BadLoadAttr(o, k));
+}
+
+let StructuredEffect: OperationId -> Prop;
+let ExternalControl: OperationId -> Prop;
+let Deferred: OperationId -> Prop;
+let DeferredValue: ValueId -> Prop;
+let Cached: OperationId -> Prop;
+let CacheFlag: (OperationId, Int) -> Prop;
+let Activation: (Domain, Int) -> Prop;
+mod effects {
+    pub let theta_effect<o, g, s, r, p, k>: ir::Control(o, g, s, true, r, p, k) -> StructuredEffect(o);
+    pub let arm_effect<o, def, k, r, s, v>: (ir::Arm(o, def, k, r), Output(r, s, v), DeferredValue(v))
+        -> StructuredEffect(o);
+    pub let selector_effect<o, s, t, r, p, k, v>: (
+        ir::Control(o, true, s, t, r, p, k),
+        Input(o, s, v),
+        DeferredValue(v)
+    )
+        -> StructuredEffect(o);
+    pub let structure_result<o, v, t, s, dt>: (StructuredEffect(o), ir::result(v, t, o, s, dt))
+        -> DeferredValue(v);
+    pub let read<o, r, p, h, l>: ir::Operation{ id: o, kind: dialects::ptr::load.kind, placement: "graph", container: r, position: p, display: h, location: l }() -> Deferred(o);
+    pub let invoke<o, r, p, h, l>: ir::Operation{ id: o, kind: dialects::func::call.kind, placement: "graph", container: r, position: p, display: h, location: l }() -> Deferred(o);
+    pub let result<o, v, t, s, dt>: (Deferred(o), ir::result(v, t, o, s, dt))
+        -> DeferredValue(v);
+    pub let dependent<o, v, s, r, k, p, h, l>: (
+        Input(o, s, v),
+        DeferredValue(v),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: r, position: p, display: h, location: l }(),
+        !ControlOp(o)
+    )
+        -> Deferred(o);
+}
+mod caching {
+    pub let root<f, r>: Active(f, Domain::Root(r), r) -> Activation(Domain::Root(r), r);
+    pub let arm<f, d, r, o, home, parent>: (
+        Active(f, Domain::ArmBody(d, r), r),
+        Nested(Domain::ArmBody(d, r), d, o, r),
+        Active(f, d, home),
+        Activation(parent, home)
+    )
+        -> Activation(parent, r);
+    pub let loop_body<f, d, r>: Active(f, Domain::Predicate(d, r), r)
+        -> Activation(Domain::Predicate(d, r), r);
+    pub let repeat_arm<o, r, def, k, child, p, disp, loc, name>: (
+        RepeatGamma(o),
+        ir::Arm(o, def, k, r),
+        ir::Operation{ id: child, kind: name, placement: "graph", container: r, position: p, display: disp, location: loc }(),
+        Deferred(child)
+    )
+        -> Cached(child);
+    pub let nested_repeat<o, r, def, key, g, k, p, h, l>: (
+        RepeatGamma(o),
+        ir::Arm(o, def, key, r),
+        ir::Operation{ id: g, kind: k, placement: "graph", container: r, position: p, display: h, location: l }(),
+        ControlOp(g)
+    )
+        -> (RepeatGamma(g), ReplayTheta(g));
+    pub let replay_effect<o, child, r, b, k, p, h, name, pos, disp, loc>: (
+        ReplayTheta(o),
+        ir::Control(o, false, p, true, r, h, k),
+        Encloses(r, b),
+        ir::Operation{ id: child, kind: name, placement: "graph", container: b, position: pos, display: disp, location: loc }(),
+        Deferred(child)
+    )
+        -> Cached(child);
+    pub let flag<o>: Cached(o) -> CacheFlag(o, (0 - ((std::ir::raw_operation_id(o) * 16) + 15)));
+}
+mod cached_code {
+    pub let fresh<o, flag, r, k, p, h, l, d>: (
+        CacheFlag(o, flag),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: r, position: p, display: h, location: l }(),
+        Activation(d, r)
+    )
+        -> (
+        Temp(flag, (0 - 1)),
+        Code(Label::Start(d), 0, o, "zero", flag, (0 - 1), (0 - 1)),
+        Defines(Label::Start(d), flag)
+    );
+    pub let placeholder<o, r, k, p, h, l, d, v, t, s, dt>: (
+        Cached(o),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: r, position: p, display: h, location: l }(),
+        Activation(d, r),
+        ir::result(v, t, o, s, dt),
+        !StateTy(t)
+    )
+        -> Code(Label::Start(d), 0, o, "zero", std::ir::raw_value_id(v), (0 - 1), (0 - 1));
+    pub let cached_site<f, d, r, o, k, home, p, h, l, n, flag>: (
+        Placed(d, o),
+        Active(f, d, r),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: home, position: p, display: h, location: l }(),
+        Next(d, o, n),
+        CacheFlag(o, flag)
+    )
+        -> (
+        Owned(f, Label::Eval(d, o)),
+        Owned(f, Label::At(d, o)),
+        Site(f, Label::Eval(d, o), 0, o, k),
+        Code(Label::At(d, o), 0, o, "branch", (0 - 1), flag, (0 - 1)),
+        Reads(Label::At(d, o), flag),
+        Flow{ block: Label::At(d, o), side: 0, target: n }(),
+        Flow{ block: Label::At(d, o), side: 1, target: Label::Eval(d, o) }(),
+        Code(Label::Eval(d, o), 1, o, "one", flag, (0 - 1), (0 - 1)),
+        Defines(Label::Eval(d, o), flag),
+        Flow{ block: Label::Eval(d, o), side: 0, target: n }()
+    );
+}
+
+let UnsignedOverflow: OperationId -> Prop;
+let SignedOverflow: OperationId -> Prop;
+let OverflowOrder: (Label, Int, OperationId, Int, Int, Int, Int) -> Prop;
+mod overflow {
+    // For signed addition, a negative rhs makes the result smaller unless it
+    // overflowed. Subtraction reverses that comparison. Adding the sign bit
+    // maps signed order to the VM's unsigned order at every integer width.
+    pub let signed_add<l, p, o, v, a, b>: (Code(l, p, o, "add", v, a, b), SignedOverflow(o))
+        -> OverflowOrder(l, p, o, v, b, v, a);
+    pub let signed_sub<l, p, o, v, a, b>: (Code(l, p, o, "sub", v, a, b), SignedOverflow(o))
+        -> OverflowOrder(l, p, o, v, b, a, v);
+    pub let signed_test<l, p, o, v, b, left, right, mask, x, y, sign, cmp>: (
+        OverflowOrder(l, p, o, v, b, left, right),
+        Scratch(o, mask, x, y, sign, cmp)
+    )
+        -> (
+        Temp(mask, b),
+        Temp(x, b),
+        Temp(y, b),
+        Temp(sign, (0 - 1)),
+        Temp(cmp, (0 - 1)),
+        Emit{ block: l, position: p, step: 1, operation: o, opcode: "signbit", output: mask, lhs: b, rhs: b }(),
+        Emit{ block: l, position: p, step: 2, operation: o, opcode: "add", output: x, lhs: left, rhs: mask }(),
+        Emit{ block: l, position: p, step: 3, operation: o, opcode: "add", output: y, lhs: right, rhs: mask }(),
+        Emit{ block: l, position: p, step: 4, operation: o, opcode: "ult", output: cmp, lhs: x, rhs: y }(),
+        Emit{ block: l, position: p, step: 5, operation: o, opcode: "ult", output: sign, lhs: b, rhs: mask }(),
+        Emit{ block: l, position: p, step: 6, operation: o, opcode: "eq", output: cmp, lhs: sign, rhs: cmp }(),
+        Emit{ block: l, position: p, step: 7, operation: o, opcode: "poison_if", output: v, lhs: v, rhs: cmp }()
+    );
+    pub let unsigned_add<l, p, o, v, a, b, m, x, y, z, flag>: (
+        Code(l, p, o, "add", v, a, b),
+        UnsignedOverflow(o),
+        Scratch(o, m, x, y, z, flag)
+    )
+        -> (
+        Temp(flag, (0 - 1)),
+        Emit{ block: l, position: p, step: 8, operation: o, opcode: "ult", output: flag, lhs: v, rhs: a }(),
+        Emit{ block: l, position: p, step: 9, operation: o, opcode: "poison_if", output: v, lhs: v, rhs: flag }()
+    );
+    pub let unsigned_sub<l, p, o, v, a, b, m, x, y, z, flag>: (
+        Code(l, p, o, "sub", v, a, b),
+        UnsignedOverflow(o),
+        Scratch(o, m, x, y, z, flag)
+    )
+        -> (
+        Temp(flag, (0 - 1)),
+        Emit{ block: l, position: p, step: 8, operation: o, opcode: "ult", output: flag, lhs: a, rhs: b }(),
+        Emit{ block: l, position: p, step: 9, operation: o, opcode: "poison_if", output: v, lhs: v, rhs: flag }()
+    );
+}
+
+let SwitchOp: OperationId -> Prop;
+// An explicit arm compares its literal. The last successor is the default.
+let Choice: (OperationId, Label, OperationId, ValueId, Int, Label, String) -> Prop;
+let DefaultChoice: (OperationId, Label, OperationId, ValueId, Int, Label) -> Prop;
+let Dispatch: (Label, Int, Label, Int) -> Prop;
+pub let CaseBits: { block: Label, index: Int, literal: String } -> Prop;
+let CaseTest: (Label, OperationId, ValueId) -> Prop;
+mod choices {
+    pub let graph_case<f, d, r, o, v, a, j, e, k>: (
+        Active(f, d, r),
+        Placed(d, o),
+        Gamma(d, o, v),
+        ir::Arm(o, false, k, a),
+        ir::Region(a, "graph", o, j, e)
+    )
+        -> Choice(f, Label::At(d, o), o, v, j, Label::Start(Domain::ArmBody(d, a)), k);
+    pub let graph_default<f, d, r, o, v, a, j, e>: (
+        Active(f, d, r),
+        Placed(d, o),
+        Gamma(d, o, v),
+        ir::Arm(o, true, "", a),
+        ir::Region(a, "graph", o, j, e)
+    )
+        -> DefaultChoice(f, Label::At(d, o), o, v, j, Label::Start(Domain::ArmBody(d, a)));
+    pub let cfg_case<f, l, p, o, v, j, to, next>: (
+        Site(f, l, p, o, dialects::cfg::r#switch.kind),
+        Input(o, 0, v),
+        ir::Successor(o, j, to),
+        ir::Successor(o, (j + 1), next)
+    )
+        -> Choice(f, l, o, v, j, Label::Cfg(to), "");
+    pub let cfg_slot<o, j, to>: ir::Successor(o, j, to) -> HasSuccessor(o, j);
+}
+let HasSuccessor: (OperationId, Int) -> Prop;
+mod dispatch {
+    pub let cfg_default<f, l, p, o, v, j, to, k>: (
+        Site(f, l, p, o, dialects::cfg::r#switch.kind),
+        Input(o, 0, v),
+        ir::Successor(o, j, to),
+        k == (j + 1),
+        !HasSuccessor(o, k)
+    )
+        -> DefaultChoice(f, l, o, v, j, Label::Cfg(to));
+    pub let first<f, l, o, v, to, k>: Choice(f, l, o, v, 0, to, k)
+        -> (Flow{ block: l, side: 0, target: Label::Test(l, 0) }(), Selected(o));
+    pub let test<f, l, o, v, j, to, k>: Choice(f, l, o, v, j, to, k)
+        -> (
+        Owned(f, Label::Test(l, j)),
+        CaseBits{ block: Label::Test(l, j), index: j, literal: k }(),
+        CaseTest(Label::Test(l, j), o, v),
+        Flow{ block: Label::Test(l, j), side: 0, target: to }(),
+        Dispatch(l, j, Label::Test(l, j), 0)
+    );
+    pub let next<f, l, o, v, j, to, k, n, other, kk>: (
+        Choice(f, l, o, v, j, to, k),
+        n == (j + 1),
+        Choice(f, l, o, v, n, other, kk)
+    )
+        -> Flow{ block: Label::Test(l, j), side: 1, target: Label::Test(l, n) }();
+    pub let last<f, l, o, v, j, to, k, n, other>: (
+        Choice(f, l, o, v, j, to, k),
+        n == (j + 1),
+        DefaultChoice(f, l, o, v, n, other)
+    )
+        -> (Flow{ block: Label::Test(l, j), side: 1, target: other }(), Dispatch(l, n, Label::Test(l, j), 1));
+    pub let only<f, l, o, v, to>: DefaultChoice(f, l, o, v, 0, to)
+        -> (Selected(o), Flow{ block: l, side: 0, target: to }(), Dispatch(l, 0, l, 0));
+    pub let ordinary<f, l, p, o, k, s, to>: (Site(f, l, p, o, k), ir::Successor(o, s, to), !SwitchOp(o))
+        -> Dispatch(l, s, l, s);
+    pub let arg<f, b, p, o, k, s, to, i, j, v, w, t, dt, src, side>: (
+        Site(f, Label::Cfg(b), p, o, k),
+        ir::Successor(o, s, to),
+        ir::SuccessorArgument(o, s, i, j),
+        Input(o, j, v),
+        ir::Value(w, t, "block", to, i, dt),
+        Dispatch(Label::Cfg(b), s, src, side)
+    )
+        -> BindArg(src, side, w, v);
+    pub let condition<l, o, selector, v, base, m, flag>: (
+        CaseTest(l, o, selector),
+        v == std::ir::raw_value_id(selector),
+        base == (0 - (std::ir::raw_operation_id(o) * 16)),
+        m == (base - 8),
+        flag == (base - 9)
+    )
+        -> (
+        Temp(m, v),
+        Temp(flag, (0 - 1)),
+        Reads(l, v),
+        Emit{ block: l, position: 0, step: 0, operation: o, opcode: "case_literal", output: m, lhs: v, rhs: v }(),
+        Emit{ block: l, position: 0, step: 1, operation: o, opcode: "eq", output: flag, lhs: v, rhs: m }(),
+        Emit{ block: l, position: 0, step: 2, operation: o, opcode: "branch", output: flag, lhs: flag, rhs: flag }()
+    );
+}
+
+pub enum Expr {
+    Arg(Int),
+    Field(String),
+    Binary(String, Expr, Expr),
+    Absent,
+    UnitValue,
+    False,
+    ZeroBit
+}
+let Method: (std::ir::OperationKind, String, String, String, Expr) -> Prop;
+let Arithmetic: (std::ir::OperationKind, String, String, String) -> Prop;
+let Wrap: (String, String, String, String) -> Prop;
+let PredicateMethod: (std::ir::OperationKind, String, String, String) -> Prop;
+let RequireBit: std::ir::OperationKind -> Prop;
+mod contracts {
+    pub let add: Wrap(
+        "std::bits::add_wrapping",
+        "std::bits::signed_add_overflows",
+        "std::bits::unsigned_add_overflows",
+        "add"
+    );
+    pub let sub: Wrap(
+        "std::bits::sub_wrapping",
+        "std::bits::signed_sub_overflows",
+        "std::bits::unsigned_sub_overflows",
+        "sub"
+    );
+}
+mod methods {
+    pub let arithmetic<kind, execute, signed, unsigned, opcode, s, u>: (
+        Wrap(execute, signed, unsigned, opcode),
+        Method(kind, "exec", "", "", Expr::Binary(execute, Expr::Arg(0), Expr::Arg(1))),
+        Method(kind, "requires", "", "", Expr::Absent),
+        Method(
+            kind,
+            "poison",
+            "",
+            "",
+            Expr::Binary(
+                "or",
+                Expr::Binary(
+                    "and",
+                    Expr::Binary("std::option::get_or", Expr::Field(s), Expr::False),
+                    Expr::Binary(signed, Expr::Arg(0), Expr::Arg(1))
+                ),
+                Expr::Binary(
+                    "and",
+                    Expr::Binary("std::option::get_or", Expr::Field(u), Expr::False),
+                    Expr::Binary(unsigned, Expr::Arg(0), Expr::Arg(1))
+                )
+            )
+        )
+    )
+        -> Arithmetic(kind, opcode, s, u);
+    pub let comparison<kind, field, label, primitive, opcode>: (
+        Method(kind, "exec", field, label, Expr::Binary(primitive, Expr::Arg(0), Expr::Arg(1))),
+        Method(kind, "poison", "", "", Expr::Absent),
+        Method(kind, "requires", "", "", Expr::Absent),
+        ComparePrimitive(primitive, opcode)
+    )
+        -> PredicateMethod(kind, field, label, opcode);
+    pub let assume<kind>: (
+        Method(kind, "exec", "", "", Expr::UnitValue),
+        Method(kind, "poison", "", "", Expr::Absent),
+        Method(kind, "requires", "", "", Expr::Binary("std::bits::ne", Expr::Arg(0), Expr::ZeroBit))
+    )
+        -> RequireBit(kind);
+}
+let ComparePrimitive: (String, String) -> Prop;
+mod compare_primitives {
+    pub let eq: ComparePrimitive("std::bits::eq", "eq");
+    pub let ne: ComparePrimitive("std::bits::ne", "ne");
+    pub let ult: ComparePrimitive("std::bits::ult", "ult");
+    pub let ule: ComparePrimitive("std::bits::ule", "ule");
+    pub let ugt: ComparePrimitive("std::bits::ugt", "ugt");
+    pub let uge: ComparePrimitive("std::bits::uge", "uge");
+    pub let slt: ComparePrimitive("std::bits::slt", "slt");
+    pub let sle: ComparePrimitive("std::bits::sle", "sle");
+    pub let sgt: ComparePrimitive("std::bits::sgt", "sgt");
+    pub let sge: ComparePrimitive("std::bits::sge", "sge");
+}
+
+let PredResult: (Domain, Int, OperationId, Int) -> Prop;
+let RepeatGamma: OperationId -> Prop;
+pub let ReachBlock: { function: OperationId, block: Label } -> Prop;
+mod reachable {
+    pub let entry<f, l>: Entry(f, l) -> ReachBlock{ function: f, block: l }();
+    pub let cfg<f, b>: Owned(f, Label::Cfg(b)) -> ReachBlock{ function: f, block: Label::Cfg(b) }();
+    pub let edge<f, l, s, to>: (ReachBlock{ function: f, block: l }(), Flow{ block: l, side: s, target: to }()) -> ReachBlock{ function: f, block: to }();
+}
+
+let Alias: (ValueId, ValueId) -> Prop;
+let IsAlias: ValueId -> Prop;
+let Source: (ValueId, ValueId) -> Prop;
+let Input: (OperationId, Int, ValueId) -> Prop;
+let Output: (Int, Int, ValueId) -> Prop;
+mod aliases {
+    pub let arm_port<o, def, k, r, j, i, v, t, dt, w>: (
+        ir::Arm(o, def, k, r),
+        ir::Binding(r, "entry", j, i),
+        ir::Value(v, t, "region", r, j, dt),
+        ir::Operand(o, i, w)
+    )
+        -> (Alias(v, w), IsAlias(v));
+}
+mod resolve_ports {
+    pub let direct<v, t, k, owner, s, dt>: (ir::Value(v, t, k, owner, s, dt), !IsAlias(v))
+        -> Source(v, v);
+    pub let bound<v, w, source>: (Alias(v, w), Source(w, source)) -> Source(v, source);
+    pub let operand<o, s, v, w>: (ir::Operand(o, s, v), Source(v, w)) -> Input(o, s, w);
+    pub let result<r, s, v, w>: (ir::Yield(r, s, v), Source(v, w)) -> Output(r, s, w);
+}
+
+let HasTerminator: Label -> Prop;
+mod terminators {
+    pub let jump<l, p, i, o, d, a, b>: Emit{ block: l, position: p, step: i, operation: o, opcode: "jump", output: d, lhs: a, rhs: b }() -> HasTerminator(l);
+    pub let branch<l, p, i, o, d, a, b>: Emit{ block: l, position: p, step: i, operation: o, opcode: "branch", output: d, lhs: a, rhs: b }() -> HasTerminator(l);
+    pub let ret<l, p, i, o, d, a, b>: Emit{ block: l, position: p, step: i, operation: o, opcode: "return", output: d, lhs: a, rhs: b }() -> HasTerminator(l);
+}
+mod finish {
+    pub let fallthrough<f, l, to>: (ReachBlock{ function: f, block: l }(), Flow{ block: l, side: 0, target: to }(), !HasTerminator(l))
+        -> Emit{ block: l, position: 9223372036854775807, step: 0, operation: f, opcode: "jump", output: (0 - 1), lhs: (0 - 1), rhs: (0 - 1) }();
+}
+
+let VisiblePort: (OperationId, Int, ValueId) -> Prop;
+let ReplayTheta: OperationId -> Prop;
+let LexicalParent: (Int, Int) -> Prop;
+let Encloses: (Int, Int) -> Prop;
+let DeclaredIn: (Int, ValueId, Int) -> Prop;
+let FlagIn: (Int, Int) -> Prop;
+let Completed: (OperationId, Int) -> Prop;
+mod theta_cache {
+    pub let lexical<r, m, o, s, e, k, home, p, h, l>: (
+        ir::Region(r, m, o, s, e),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: home, position: p, display: h, location: l }()
+    )
+        -> LexicalParent(home, r);
+    pub let body<d, o, r, p>: Theta(d, o, r, p) -> Encloses(r, r);
+    pub let inner<r, t, n>: (Encloses(r, t), LexicalParent(t, n)) -> Encloses(r, n);
+    pub let port<v, t, r, s, dt>: ir::Value(v, t, "region", r, s, dt) -> DeclaredIn(r, v, t);
+    pub let result<v, t, o, s, dt, k, r, p, h, l>: (
+        ir::result(v, t, o, s, dt),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: r, position: p, display: h, location: l }()
+    )
+        -> DeclaredIn(r, v, t);
+    pub let flag<o>: ReplayTheta(o) -> Completed(o, (0 - ((std::ir::raw_operation_id(o) * 16) + 14)));
+}
+mod theta_code {
+    pub let inner_cache<o, flag, k, r, p, h, l>: (
+        CacheFlag(o, flag),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: r, position: p, display: h, location: l }()
+    )
+        -> FlagIn(r, flag);
+    pub let inner_theta<o, flag, k, r, p, h, l>: (
+        Completed(o, flag),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: r, position: p, display: h, location: l }()
+    )
+        -> FlagIn(r, flag);
+    pub let initial_flag<o, d, r, p, inner, bit, home, k, pos, h, l, start>: (
+        ReplayTheta(o),
+        Theta(d, o, r, p),
+        Encloses(r, inner),
+        FlagIn(inner, bit),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: home, position: pos, display: h, location: l }(),
+        Activation(start, home)
+    )
+        -> (
+        Code(Label::Start(start), 0, o, "zero", bit, (0 - 1), (0 - 1)),
+        Defines(Label::Start(start), bit)
+    );
+    pub let first<o, bit, home, k, p, h, l, start>: (
+        Completed(o, bit),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: home, position: p, display: h, location: l }(),
+        Activation(start, home)
+    )
+        -> (
+        Temp(bit, (0 - 1)),
+        Code(Label::Start(start), 0, o, "zero", bit, (0 - 1), (0 - 1)),
+        Defines(Label::Start(start), bit)
+    );
+    pub let initial_slots<o, d, r, p, inner, v, t, home, k, pos, h, l, start>: (
+        ReplayTheta(o),
+        Theta(d, o, r, p),
+        Encloses(r, inner),
+        DeclaredIn(inner, v, t),
+        !StateTy(t),
+        ir::Operation{ id: o, kind: k, placement: "graph", container: home, position: pos, display: h, location: l }(),
+        Activation(start, home)
+    )
+        -> Code(Label::Start(start), 0, o, "zero", std::ir::raw_value_id(v), (0 - 1), (0 - 1));
+    pub let resume<f, d, home, o, r, p, flag>: (
+        Active(f, d, home),
+        Placed(d, o),
+        Theta(d, o, r, p),
+        Completed(o, flag)
+    )
+        -> (
+        Owned(f, Label::Enter(d, o)),
+        Flow{ block: Label::At(d, o), side: 0, target: Label::Start(Domain::Exit(d, r)) }(),
+        Flow{ block: Label::At(d, o), side: 1, target: Label::Enter(d, o) }(),
+        Flow{ block: Label::Enter(d, o), side: 0, target: Label::Start(Domain::Predicate(d, r)) }(),
+        Code(Label::At(d, o), 0, o, "branch", (0 - 1), flag, (0 - 1)),
+        Reads(Label::At(d, o), flag),
+        Code(Label::Start(Domain::Exit(d, r)), 0, o, "one", flag, (0 - 1), (0 - 1)),
+        Defines(Label::Start(Domain::Exit(d, r)), flag),
+        Selected(o)
+    );
+}
+
+pub let compile = std::schedule::sequence((
+    std::schedule::Schedule::Rules(memory_attrs),
+    std::schedule::Schedule::Rules(load_attrs),
+    std::schedule::Schedule::Rules(contracts),
+    std::schedule::Schedule::Rules(compare_primitives),
+    std::schedule::saturate(methods),
+    std::schedule::Schedule::Rules(classify),
+    std::schedule::Schedule::Rules(aliases),
+    std::schedule::saturate(resolve_ports),
+    std::schedule::saturate(effects),
+    std::schedule::saturate(demand),
+    std::schedule::Schedule::Rules(placement),
+    std::schedule::saturate(theta_cache),
+    std::schedule::saturate(caching),
+    std::schedule::saturate(theta_cache),
+    std::schedule::saturate(ordering),
+    std::schedule::saturate(layout),
+    std::schedule::saturate(choices),
+    std::schedule::saturate(dispatch),
+    std::schedule::Schedule::Rules(cached_code),
+    std::schedule::saturate(theta_code),
+    std::schedule::saturate(select),
+    std::schedule::saturate(expand),
+    std::schedule::saturate(overflow),
+    std::schedule::saturate(operands),
+    std::schedule::Schedule::Rules(bindings),
+    std::schedule::saturate(liveness),
+    std::schedule::saturate(reachable),
+    std::schedule::Schedule::Rules(terminators),
+    std::schedule::Schedule::Rules(finish),
+));

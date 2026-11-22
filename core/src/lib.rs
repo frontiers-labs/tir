@@ -71,6 +71,8 @@ mod edits;
 mod error;
 mod idmap;
 pub mod interfaces;
+#[cfg(feature = "interp")]
+pub mod interp;
 mod intrinsic;
 mod ir_formatter;
 pub mod layout;

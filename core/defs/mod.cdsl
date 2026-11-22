@@ -1,0 +1,5 @@
+// Feature-specific root for the interpreter build.
+mod dialects;
+mod ir;
+mod eqsat;
+pub mod interp;

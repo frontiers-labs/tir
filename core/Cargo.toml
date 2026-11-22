@@ -11,6 +11,9 @@ bench = false
 test = false
 doctest = false
 
+[features]
+interp = []
+
 [dependencies]
 tir-cdsl.workspace = true
 tir-macros.workspace = true

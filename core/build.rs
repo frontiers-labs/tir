@@ -1,9 +1,11 @@
-use tir_cdsl::{
-    Error,
-    OutputKind::{OpDef, Producers, Program},
-};
+#[cfg(feature = "interp")]
+mod interp_build;
 
-fn main() -> Result<(), Error> {
+use tir_cdsl::OutputKind::{OpDef, Producers, Program};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "interp")]
+    interp_build::compile()?;
     tir_cdsl::compile([
         ("core::ir::*", Program("ir_program.rs")),
         ("core::std::ir::interfaces::*", OpDef("interfaces.rs")),
@@ -22,5 +24,6 @@ fn main() -> Result<(), Error> {
         ("core::eqsat::*", Program("eqsat.rs")),
         ("core::analysis::cfg::*", Producers("cfg_analysis.rs")),
         ("core::passes::restructure::*", Program("restructure.rs")),
-    ])
+    ])?;
+    Ok(())
 }

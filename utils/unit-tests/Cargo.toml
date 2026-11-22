@@ -17,6 +17,9 @@ doctest = false
 name = "torture"
 harness = false
 
+[features]
+interp = ["tir/interp"]
+
 [dev-dependencies]
 tir-cdsl.workspace = true
 xtask = { path = "../xtask" }
