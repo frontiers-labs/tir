@@ -878,6 +878,17 @@ fn resolve_expr(
         Expression::Record(fields) | Expression::Limit(fields) => {
             resolve_record(fields, scope, locals)?
         }
+        Expression::Rule { binders, clause } => {
+            let mut local = locals.clone();
+            for binder in binders {
+                if let Some(ty) = &mut binder.ty {
+                    resolve_expr(ty, scope, &local)?;
+                }
+                local.insert(binder.name.clone());
+            }
+            resolve_expr(clause, scope, &local)?;
+        }
+        Expression::LocalTable(ty) | Expression::Run(ty) => resolve_expr(ty, scope, locals)?,
         Expression::Block(block) => resolve_block(block, scope, locals)?,
         Expression::Function(function) => resolve_function(function, scope, locals)?,
         Expression::If {

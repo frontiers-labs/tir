@@ -569,6 +569,36 @@ impl Checker {
         self.rigid_types.insert(id.0, kind);
         Ok(id)
     }
+    fn schedule_family(&self, family: ConId) -> bool {
+        let path = vec!["std".into(), "schedule".into(), "Schedule".into()];
+        matches!(self.types.get(&path), Some(Some(Ty::Con(id, _))) if *id == family)
+    }
+
+    fn table_relation(
+        &mut self,
+        definitions: &Definitions<'_>,
+        annotation: &Expr,
+        types: &Types,
+    ) -> Result<Ty, Error> {
+        let descriptor = self.annotation(definitions, annotation, types)?;
+        let (Expression::Generic { arguments, .. }, Ty::Con(_, parameters)) =
+            (&annotation.value, descriptor)
+        else {
+            return Err(Error("invalid Table declaration".into()));
+        };
+        let parameters = list_values(&parameters);
+        let (Some(keys), [key, output, _]) = (arguments.first(), parameters.as_slice()) else {
+            return Err(Error("Table requires key, value and merge".into()));
+        };
+        let mut columns = match (&keys.value, key) {
+            (Expression::Unit, _) => Vec::new(),
+            (Expression::Tuple(_), Ty::Con(_, columns)) => list_values(columns),
+            _ => vec![key.clone()],
+        };
+        columns.push(output.clone());
+        Ok(Ty::Fun(type_list(columns), Box::new(con(FACT))))
+    }
+
     fn local_binding(
         &mut self,
         definitions: &Definitions<'_>,
@@ -1207,6 +1237,22 @@ impl Checker {
         match &expression.value {
             Expression::Literal(literal) => Ok(literal_type(literal)),
             Expression::Unit => Ok(con(UNIT)),
+            Expression::LocalTable(ty) => {
+                if table_type(ty).is_some() {
+                    self.table_relation(definitions, ty, types)
+                } else {
+                    self.annotation(definitions, ty, types)
+                }
+            }
+            Expression::Run(schedule) => {
+                let ty = self.expression(definitions, schedule, environment, types)?;
+                if !matches!(self.substitution.apply(&ty), Ty::Con(family, _)
+                    if self.schedule_family(family))
+                {
+                    return Err(Error("expected a schedule before ?".into()));
+                }
+                Ok(con(UNIT))
+            }
             Expression::Path(path) => self.lookup(definitions, path, environment),
             Expression::Tuple(items) => {
                 let args = self.expressions(definitions, items, environment, types)?;
@@ -1252,6 +1298,27 @@ impl Checker {
                 }
                 outcome?;
                 Ok(Ty::Con(self.record_id(names)?, type_list(args)))
+            }
+            Expression::Rule { binders, clause } => {
+                if !clause_annotation(clause) {
+                    return Err(Error("a local rule requires a clause".into()));
+                }
+                let mut local = environment.clone();
+                let mut types = types.clone();
+                let mut names = BTreeSet::new();
+                for binder in binders {
+                    if !names.insert(&binder.name) {
+                        return Err(Error("duplicate rule binder".into()));
+                    }
+                    let ty = match &binder.ty {
+                        Some(ty) => self.annotation(definitions, ty, &types)?,
+                        None => self.fresh()?,
+                    };
+                    let name = vec![binder.name.clone()];
+                    local.insert(name.clone(), BoundValue::mono(ty));
+                    types.insert(name, None);
+                }
+                self.check_clause(definitions, binders, clause, &local, &types)
             }
             Expression::Block(block) => self.block(definitions, block, environment, types),
             Expression::Function(function) => self.function(
@@ -1399,6 +1466,54 @@ impl Checker {
             ),
         }
     }
+    fn check_clause(
+        &mut self,
+        definitions: &Definitions<'_>,
+        generics: &[RuleBinder],
+        annotation: &Expr,
+        local: &Environment,
+        types: &Types,
+    ) -> Result<Ty, Error> {
+        let (premises, heads) = match &annotation.value {
+            Expression::Binary {
+                op: BinaryOp::Arrow,
+                left,
+                right,
+            } => (Some(&**left), &**right),
+            _ => (None, annotation),
+        };
+        if let Some(premises) = premises {
+            self.propositions(definitions, premises, local, types)?;
+        }
+        self.propositions(definitions, heads, local, types)?;
+        let binding = if let Some(premises) = premises {
+            Some(premises)
+        } else if let Expression::Binary {
+            op: BinaryOp::Equal,
+            left,
+            ..
+        } = &heads.value
+        {
+            Some(&**left)
+        } else {
+            None
+        };
+        let bound = binding
+            .map(crate::totality::free_paths)
+            .transpose()?
+            .unwrap_or_default();
+        if generics
+            .iter()
+            .any(|binder| !bound.contains(&vec![binder.name.clone()]))
+        {
+            return Err(Error(
+                "every clause binder must occur in a premise or the left side of an equation"
+                    .into(),
+            ));
+        }
+        Ok(con(FACT))
+    }
+
     fn axiom(
         &mut self,
         definitions: &Definitions<'_>,
@@ -1445,44 +1560,7 @@ impl Checker {
             self.relations.insert(path.clone());
             ty
         } else if clause_annotation(annotation) {
-            let (premises, heads) = match &annotation.value {
-                Expression::Binary {
-                    op: BinaryOp::Arrow,
-                    left,
-                    right,
-                } => (Some(&**left), &**right),
-                _ => (None, annotation),
-            };
-            if let Some(premises) = premises {
-                self.propositions(definitions, premises, &local, &types)?;
-            }
-            self.propositions(definitions, heads, &local, &types)?;
-            let binding = if let Some(premises) = premises {
-                Some(premises)
-            } else if let Expression::Binary {
-                op: BinaryOp::Equal,
-                left,
-                ..
-            } = &heads.value
-            {
-                Some(&**left)
-            } else {
-                None
-            };
-            let bound = binding
-                .map(crate::totality::free_paths)
-                .transpose()?
-                .unwrap_or_default();
-            if generics
-                .iter()
-                .any(|binder| !bound.contains(&vec![binder.name.clone()]))
-            {
-                return Err(Error(
-                    "every clause binder must occur in a premise or the left side of an equation"
-                        .into(),
-                ));
-            }
-            con(FACT)
+            self.check_clause(definitions, generics, annotation, &local, &types)?
         } else {
             self.annotation(definitions, annotation, &types)?
         };

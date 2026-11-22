@@ -117,6 +117,12 @@ pub enum Expression {
     Record(Record),
     Block(Block),
     Function(Box<Function>),
+    LocalTable(Box<Expr>),
+    Run(Box<Expr>),
+    Rule {
+        binders: Vec<RuleBinder>,
+        clause: Box<Expr>,
+    },
     If {
         condition: Box<Expr>,
         then: Block,
@@ -168,6 +174,7 @@ pub struct Block {
 
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub memo: bool,
     pub generics: Vec<Binder>,
     pub parameters: Vec<Binder>,
     pub result: Option<Expr>,
@@ -202,4 +209,13 @@ pub enum OpField {
 pub struct RuleBinder {
     pub name: String,
     pub ty: Option<Expr>,
+}
+
+pub(crate) fn table_type(ty: &Expr) -> Option<&[Expr]> {
+    match &ty.value {
+        Expression::Generic { value, arguments } if matches!(&value.value, Expression::Path(path) if path == &["std", "table", "Table"]) => {
+            Some(arguments)
+        }
+        _ => None,
+    }
 }
