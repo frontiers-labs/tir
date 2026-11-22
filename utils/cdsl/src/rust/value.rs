@@ -16,13 +16,6 @@ pub(super) fn emit(
     target: &[String],
     declaration: &Declaration,
 ) -> Result<BTreeSet<Path>, Error> {
-    if matches!(declaration, Declaration::Interface { .. })
-        && let Some(native) = super::operation::rust_trait(program, target)?
-    {
-        writeln!(output, "pub use tir::{native} as r#{name};")
-            .map_err(|error| Error(error.to_string()))?;
-        return Ok(BTreeSet::new());
-    }
     let (_, module) = target
         .split_last()
         .ok_or_else(|| Error("missing declaration path".into()))?;
@@ -36,6 +29,33 @@ pub(super) fn emit(
         .emit(output, name, declaration)
         .map_err(|error| Error(error.to_string()))?;
     Ok(scope.dependencies.into_inner())
+}
+
+pub(super) fn interface_methods(
+    program: &Program,
+    module: &[String],
+    methods: &[(String, Expr)],
+    generics: &[Binder],
+) -> Result<(String, BTreeSet<Path>)> {
+    let scope = Scope {
+        program,
+        target: &[],
+        module,
+        dependencies: RefCell::new(BTreeSet::new()),
+    };
+    let parameters = generics
+        .iter()
+        .filter(|binder| path_is(&binder.ty, &["Type"]))
+        .map(|binder| format!("r#{}", binder.name))
+        .collect::<Vec<_>>();
+    let mut output = String::new();
+    for (name, method) in methods {
+        let Expression::Function(function) = &method.value else {
+            return Err("interface implementation must be a function".into());
+        };
+        scope.method(&mut output, name, function, &parameters)?;
+    }
+    Ok((output, scope.dependencies.into_inner()))
 }
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -57,7 +77,7 @@ impl Scope<'_> {
             } => {
                 let parameters = self.type_parameters(generics)?;
                 if is_fieldless(variants) {
-                    output.push_str("#[derive(Clone, Copy)]\n");
+                    output.push_str("#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n");
                 }
                 writeln!(output, "pub enum r#{name}{} {{", angles(&parameters))?;
                 for variant in variants {
@@ -92,6 +112,10 @@ impl Scope<'_> {
                 };
                 writeln!(output, "pub trait r#{name}{} {{", angles(&parameters))?;
                 for (method, signature) in methods {
+                    if let Expression::Function(function) = &signature.value {
+                        self.method(output, method, function, &parameters)?;
+                        continue;
+                    }
                     let Expression::Binary {
                         op: BinaryOp::Arrow,
                         left,
@@ -113,6 +137,33 @@ impl Scope<'_> {
             Declaration::Let { binding, .. } => self.emit_binding(output, name, binding)?,
             _ => return Err("unsupported Rust export declaration".into()),
         }
+        Ok(())
+    }
+
+    fn method(
+        &self,
+        output: &mut String,
+        name: &str,
+        function: &Function,
+        parameters: &[String],
+    ) -> Result<()> {
+        if !function.generics.is_empty() || !function.body.bindings.is_empty() {
+            return Err("unsupported Rust interface method definition".into());
+        }
+        let result = self.ty(
+            function
+                .result
+                .as_ref()
+                .ok_or("interface method needs a result type")?,
+            parameters,
+        )?;
+        write!(output, "fn r#{name}(&self")?;
+        for parameter in &function.parameters {
+            let ty = self.ty(&parameter.ty, parameters)?;
+            write!(output, ", r#{}: {ty}", parameter.name)?;
+        }
+        let body = self.expression(&function.body.value, &[])?;
+        writeln!(output, ") -> {result} {{ {body} }}")?;
         Ok(())
     }
 
@@ -277,7 +328,29 @@ impl Scope<'_> {
                 [name] if name == "Bool" => Ok("bool".into()),
                 [name] if name == "String" => Ok("String".into()),
                 [std, ir, ty] if std == "std" && ir == "ir" && ty == "Ty" => {
-                    Ok("crate::TypeId".into())
+                    Ok("::tir::TypeId".into())
+                }
+                [std, ir, ty]
+                    if std == "std"
+                        && ir == "ir"
+                        && matches!(
+                            ty.as_str(),
+                            "BlockId"
+                                | "RegionId"
+                                | "ValueId"
+                                | "Binding"
+                                | "ResourceEffect"
+                                | "ExitTarget"
+                                | "ExitScopeKind"
+                        ) =>
+                {
+                    Ok(format!("::tir::{ty}"))
+                }
+                [std, ir, ty] if std == "std" && ir == "ir" && ty == "OperandIndex" => {
+                    Ok("usize".into())
+                }
+                [std, ir, ty] if std == "std" && ir == "ir" && ty == "OperandRange" => {
+                    Ok("::std::ops::Range<usize>".into())
                 }
                 _ => self.named_type(path, &[], parameters),
             },
@@ -314,7 +387,7 @@ impl Scope<'_> {
                         Some(32) => "u32",
                         Some(64) => "u64",
                         Some(128) => "u128",
-                        _ => "crate::utils::APInt",
+                        _ => "::tir::utils::APInt",
                     };
                     return Ok(carrier.into());
                 }
@@ -407,7 +480,19 @@ impl Scope<'_> {
             Expression::Literal(Literal::Natural(value)) => {
                 value.replace('_', "").parse::<u64>()?.to_string()
             }
+            Expression::Path(path) if path == &["self"] => "self".into(),
             Expression::Path(path) => self.value_path(path)?,
+            Expression::Function(function)
+                if function.generics.is_empty() && function.body.bindings.is_empty() =>
+            {
+                let parameters = function
+                    .parameters
+                    .iter()
+                    .map(|parameter| format!("r#{}", parameter.name))
+                    .collect::<Vec<_>>();
+                let body = self.expression(&function.body.value, indices)?;
+                format!("|{}| {{ {body} }}", parameters.join(", "))
+            }
             Expression::Unary {
                 op: UnaryOp::Not,
                 value,
@@ -427,6 +512,14 @@ impl Scope<'_> {
                 )
             }
             Expression::Unit => "()".into(),
+            Expression::Generic { value, .. }
+                if path_is(value, &["std", "list", "List", "Nil"]) =>
+            {
+                "Vec::new()".into()
+            }
+            Expression::Generic { value, .. } if path_is(value, &["std", "option", "none"]) => {
+                "None".into()
+            }
             Expression::Member { value, name } => {
                 format!("{}.r#{name}", self.expression(value, indices)?)
             }
@@ -473,6 +566,15 @@ impl Scope<'_> {
     }
 
     fn call(&self, value: &Expr, arguments: &[Expr], indices: &[&Binder]) -> Result<String> {
+        if let Expression::Generic { value, .. } = &value.value
+            && path_is(value, &["std", "bits", "literal"])
+            && let [argument] = arguments
+        {
+            return self.expression(argument, indices);
+        }
+        if let Some(call) = self.standard_call(value, arguments, indices)? {
+            return Ok(call);
+        }
         let mut args = Vec::new();
         let mut fields = None;
         let callee = match &value.value {
@@ -486,6 +588,9 @@ impl Scope<'_> {
                 fields = Some((owner, variant.arguments.as_deref().unwrap_or_default()));
                 constructor
             }
+            Expression::Member {
+                value: receiver, ..
+            } if path_is(receiver, &["self"]) => self.expression(value, indices)?,
             Expression::Member { .. } => format!("({})", self.expression(value, indices)?),
             _ => return Err("unsupported Rust function expression".into()),
         };
@@ -503,6 +608,37 @@ impl Scope<'_> {
             });
         }
         Ok(format!("{callee}({})", args.join(", ")))
+    }
+
+    fn standard_call(
+        &self,
+        value: &Expr,
+        arguments: &[Expr],
+        indices: &[&Binder],
+    ) -> Result<Option<String>> {
+        let render = |expression| self.expression(expression, indices);
+        Ok(match arguments {
+            [left, right] if path_is(value, &["std", "bits", "eq"]) => {
+                Some(format!("{} == {}", render(left)?, render(right)?))
+            }
+            [list, test] if path_is(value, &["std", "list", "all_indexed"]) => Some(format!(
+                "{{ let values = {}; let test = {}; values.into_iter().enumerate().all(|(index, value)| test(index as u64, value)) }}",
+                render(list)?,
+                render(test)?,
+            )),
+            [list, test] if path_is(value, &["std", "list", "first_index_or_length"]) => {
+                Some(format!(
+                    "{{ let values = {}; let len = values.len(); values.into_iter().position({}).unwrap_or(len) as u64 }}",
+                    render(list)?,
+                    render(test)?,
+                ))
+            }
+            [index] if path_is(value, &["std", "ir", "operand_index"]) => Some(format!(
+                "usize::try_from({}).expect(\"operand index fits usize\")",
+                render(index)?
+            )),
+            _ => None,
+        })
     }
 
     fn pattern(

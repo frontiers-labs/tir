@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     CheckedProgram, CompiledModule, Error, Program,
-    ast::{Declaration, Expression, Node, OpField, Path},
+    ast::{Declaration, Expr, Expression, Node, Path},
     lexer::Span,
 };
 
@@ -15,7 +15,10 @@ mod value;
 
 struct SelectedExports<'a> {
     entries: &'a BTreeMap<String, Path>,
+    owner: &'a [String],
 }
+
+const STANDARD_INTERFACES: &[&str] = &["std", "ir", "interfaces"];
 
 impl CheckedProgram {
     /// Check standalone CDSL source and emit the Rust for its root exports.
@@ -27,11 +30,13 @@ impl CheckedProgram {
 
 impl Program {
     pub(crate) fn render_rust_module(&self, module: &[String]) -> Result<String, Error> {
-        let entries = self
+        let owner = self
             .exported_module(module)
-            .and_then(|path| self.module_exports.get(path))
             .ok_or_else(|| Error(format!("unknown module {}", module.join("::"))))?;
-        self.render_rust_exports(SelectedExports { entries })
+        self.render_rust_exports(SelectedExports {
+            entries: &self.module_exports[owner],
+            owner,
+        })
     }
 
     fn render_rust_exports(&self, selection: SelectedExports<'_>) -> Result<String, Error> {
@@ -56,7 +61,7 @@ impl Program {
                     target.join("::")
                 ))
             })?;
-            if native::emit(&mut output, &declaration.value)
+            if native::emit(self, &mut output, &mut values, &declaration.value)
                 .map_err(|error| export_error(source, declaration, target, error))?
             {
                 continue;
@@ -67,17 +72,10 @@ impl Program {
                 let module = target
                     .strip_suffix(&binding.path[..])
                     .ok_or_else(|| Error("operation has no owning module".into()))?;
-                for field in fields {
-                    if let OpField::Interfaces { entries, .. } = &field.value {
-                        for (_, path, _) in entries {
-                            if operation::rust_trait(self, path)?.is_none() {
-                                values.insert(path.clone());
-                            }
-                        }
-                    }
-                }
-                operation::emit(self, name, module, binding, fields, &mut output)
-                    .map_err(|error| export_error(source, declaration, target, error))?;
+                values.extend(
+                    operation::emit(self, name, module, binding, fields, &mut output)
+                        .map_err(|error| export_error(source, declaration, target, error))?,
+                );
                 for alias in aliases {
                     writeln!(output, "pub use self::r#{name} as r#{alias};")
                         .map_err(|error| Error(error.to_string()))?;
@@ -98,7 +96,7 @@ impl Program {
         }
         if !values.is_empty() {
             output.push_str("mod __cdsl_values {\n");
-            self.render_rust_values(&mut output, values)?;
+            self.render_rust_values(&mut output, values, selection.owner)?;
             output.push_str("}\n");
         }
         Ok(output)
@@ -108,6 +106,7 @@ impl Program {
         &self,
         output: &mut String,
         mut pending: BTreeSet<Path>,
+        owner: &[String],
     ) -> Result<(), Error> {
         let mut emitted = BTreeMap::new();
         while let Some(target) = pending.pop_first() {
@@ -125,9 +124,14 @@ impl Program {
             let (source, declaration) = self
                 .find_rust_declaration(&target)
                 .ok_or_else(|| Error(format!("missing Rust declaration {}", target.join("::"))))?;
-            let dependencies = value::emit(self, output, name, &target, &declaration.value)
-                .map_err(|error| export_error(source, declaration, &target, error))?;
-            pending.extend(dependencies);
+            if owner != STANDARD_INTERFACES && target[..target.len() - 1] == *STANDARD_INTERFACES {
+                writeln!(output, "pub use ::tir::interfaces::r#{name};")
+                    .map_err(|error| Error(error.to_string()))?;
+            } else {
+                let dependencies = value::emit(self, output, name, &target, &declaration.value)
+                    .map_err(|error| export_error(source, declaration, &target, error))?;
+                pending.extend(dependencies);
+            }
             emitted.insert(name.clone(), target);
         }
         Ok(())
@@ -157,6 +161,44 @@ impl Program {
                 (local == name).then_some((module, node))
             })
         })
+    }
+}
+
+fn interface_path(
+    program: &Program,
+    module: &[String],
+    path: &[String],
+    local: &str,
+    dependencies: &mut BTreeSet<Path>,
+) -> Result<String, Error> {
+    let (name, owner) = path
+        .split_last()
+        .ok_or_else(|| Error("interface has no declaration name".into()))?;
+    if !matches!(
+        program.find_rust_export(path),
+        Some(Declaration::Interface { .. })
+    ) {
+        return Err(Error(format!("{} is not an interface", path.join("::"))));
+    }
+    if owner == STANDARD_INTERFACES && owner != module {
+        return Ok(format!("::tir::interfaces::r#{name}"));
+    }
+    dependencies.insert(path.to_vec());
+    Ok(format!("{local}::__cdsl_values::r#{name}"))
+}
+
+fn interface_entries(expression: Option<&Expr>) -> &[Expr] {
+    match expression {
+        None
+        | Some(Expr {
+            value: Expression::Unit,
+            ..
+        }) => &[],
+        Some(Expr {
+            value: Expression::Tuple(interfaces),
+            ..
+        }) => interfaces,
+        Some(interface) => std::slice::from_ref(interface),
     }
 }
 

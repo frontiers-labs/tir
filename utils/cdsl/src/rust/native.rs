@@ -1,11 +1,11 @@
-use std::fmt::Write;
+use std::{collections::BTreeSet, fmt::Write};
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Ident, Path, ext::IdentExt};
 
 use crate::{
-    Error,
+    Error, Program,
     ast::{Declaration, Expr, Expression, Literal, Record},
 };
 
@@ -62,7 +62,12 @@ struct AssemblyLayout<'a> {
     attributes: Vec<Attribute<'a>>,
 }
 
-pub(super) fn emit(output: &mut String, declaration: &Declaration) -> Result<bool, Error> {
+pub(super) fn emit(
+    program: &Program,
+    output: &mut String,
+    dependencies: &mut BTreeSet<crate::ast::Path>,
+    declaration: &Declaration,
+) -> Result<bool, Error> {
     let Declaration::Let { binding, .. } = declaration else {
         return Ok(false);
     };
@@ -72,7 +77,14 @@ pub(super) fn emit(output: &mut String, declaration: &Declaration) -> Result<boo
     if !record.iter().any(|(name, _)| name == "rust_name") {
         return Ok(false);
     }
-    let operation = Operation::parse(record)?;
+    let interface = |expression: &Expr| {
+        let Expression::Path(path) = &expression.value else {
+            return Err(Error("expected a declared interface".into()));
+        };
+        super::interface_path(program, &[], path, "self", dependencies)
+            .and_then(|path| parse_rust(&path))
+    };
+    let operation = Operation::parse(record, interface)?;
     let binding = |name| find_field(record, name).map(string).transpose();
     let binds = Bindings::parse(
         binding("binds")?.unwrap_or_default(),
@@ -192,7 +204,10 @@ impl<'a> AssemblyLayout<'a> {
 }
 
 impl<'a> Operation<'a> {
-    fn parse(record: &'a Record) -> Result<Self, Error> {
+    fn parse(
+        record: &'a Record,
+        interface: impl FnMut(&Expr) -> Result<Path, Error>,
+    ) -> Result<Self, Error> {
         let read = |name| field(record, name).and_then(string);
         let flag = |name| find_field(record, name).map(boolean).transpose();
         let rust_name = parse_rust(read("rust_name")?)?;
@@ -247,21 +262,10 @@ impl<'a> Operation<'a> {
                 AssemblyLayout::parse(layout)
             })
             .transpose()?;
-        let interfaces = match find_field(record, "interfaces") {
-            None
-            | Some(Expr {
-                value: Expression::Unit,
-                ..
-            }) => &[][..],
-            Some(Expr {
-                value: Expression::Tuple(interfaces),
-                ..
-            }) => interfaces,
-            Some(interface) => std::slice::from_ref(interface),
-        }
-        .iter()
-        .map(|expression| parse_rust(string(expression)?))
-        .collect::<Result<Vec<Path>, _>>()?;
+        let interfaces = super::interface_entries(find_field(record, "interfaces"))
+            .iter()
+            .map(interface)
+            .collect::<Result<Vec<_>, _>>()?;
         let regions = optional_entries(record, "regions")?
             .iter()
             .map(|(name, value)| Region::parse(name, value))
@@ -361,15 +365,8 @@ impl<'a> Operation<'a> {
         let interface_names: Vec<_> = interfaces
             .iter()
             .filter_map(|path| path.segments.last())
-            .map(|segment| segment.ident.to_string())
+            .map(|segment| segment.ident.unraw().to_string())
             .collect();
-        let registrations = (!interfaces.is_empty()).then(|| {
-            quote! {
-                fn register_interfaces(context: &tir::Context) {
-                    #(context.register_operation_interface::<Self, dyn #interfaces>();)*
-                }
-            }
-        });
         let (print, parse) = if self.custom_format {
             (
                 quote! { self.custom_print(formatter) },
@@ -385,7 +382,7 @@ impl<'a> Operation<'a> {
         };
         quote! {
             macro_rules! #macro_name {
-                () => {
+                ($($host:path),* $(,)?) => {
                     #[allow(non_upper_case_globals)]
                     #[tir::linkme::distributed_slice(tir::OP_SCHEMAS)]
                     #[linkme(crate = tir::linkme)]
@@ -395,7 +392,14 @@ impl<'a> Operation<'a> {
                         operands: &[#(#operand_schema),*],
                         results: &[#(#result_schema),*],
                         attributes: &[#(#attr_schema),*],
-                        interfaces: &[#(#interface_names),*],
+                        interfaces: &[#(#interface_names,)* $(const {
+                            let name = stringify!($host);
+                            let mut start = name.len();
+                            while start > 0 && name.as_bytes()[start - 1] != b':' {
+                                start -= 1;
+                            }
+                            name.split_at(start).1.trim_ascii()
+                        }),*],
                         regions: &[#(#region_schema),*],
                         binding_inputs: #binding_inputs,
                         counted_groups: #counted_groups,
@@ -432,11 +436,17 @@ impl<'a> Operation<'a> {
                             #parse
                         }
 
-                        #registrations
+                        fn register_interfaces(_context: &tir::Context) {
+                            #(_context.register_operation_interface::<Self, dyn #interfaces>();)*
+                            $(_context.register_operation_interface::<Self, dyn $host>();)*
+                        }
                     }
 
                     #(impl tir::ImplementsOpInterface<dyn #interfaces> for #op {
                         fn into_interface(self: Box<Self>) -> Box<dyn #interfaces> { self }
+                    })*
+                    $(impl tir::ImplementsOpInterface<dyn $host> for #op {
+                        fn into_interface(self: Box<Self>) -> Box<dyn $host> { self }
                     })*
 
                     impl From<&#op> for tir::OpId {

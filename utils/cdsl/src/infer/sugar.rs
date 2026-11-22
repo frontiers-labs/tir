@@ -11,6 +11,64 @@ fn port_variable(ty: &Ty, variables: &mut Vec<Ty>) -> usize {
 }
 
 impl Checker {
+    pub(super) fn interface_type(
+        &mut self,
+        definitions: &Definitions<'_>,
+        contract: &Binding,
+        types: &Types,
+    ) -> Result<Ty, Error> {
+        let Expression::Record(methods) = &contract.value.value else {
+            return Err(Error("interface contract must be a record".into()));
+        };
+        let mut defaults = Vec::new();
+        let signatures = methods
+            .iter()
+            .map(|(name, method)| {
+                let ty = if let Expression::Function(function) = &method.value {
+                    if !function.generics.is_empty() {
+                        return Err(Error("interface method cannot declare generics".into()));
+                    }
+                    let inputs = function
+                        .parameters
+                        .iter()
+                        .map(|parameter| self.annotation(definitions, &parameter.ty, types))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let output = function.result.as_ref().ok_or_else(|| {
+                        Error(format!("interface method {name} needs a result type"))
+                    })?;
+                    let output = self.annotation(definitions, output, types)?;
+                    let ty = Ty::Fun(type_list(inputs), Box::new(output));
+                    defaults.push((function, ty.clone()));
+                    ty
+                } else {
+                    self.annotation(definitions, method, types)?
+                };
+                if !matches!(ty, Ty::Fun(..)) {
+                    return Err(Error(format!("interface method {name} needs a signature")));
+                }
+                Ok((name.clone(), ty))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let contract = self.record_type(signatures, Vec::new())?;
+        if !defaults.is_empty() {
+            let receiver = vec!["self".into()];
+            let environment =
+                Environment::from([(receiver.clone(), BoundValue::mono(contract.clone()))]);
+            let mut types = types.clone();
+            types.insert(receiver, None);
+            for (function, signature) in defaults {
+                self.function(
+                    definitions,
+                    function,
+                    &environment,
+                    &types,
+                    FunctionMode::Check(&signature),
+                )?;
+            }
+        }
+        Ok(contract)
+    }
+
     pub(super) fn operation_member(
         &mut self,
         definitions: &Definitions<'_>,
@@ -341,7 +399,7 @@ impl Checker {
             let declaration_types = self.types.clone();
             let (contract_types, generics) =
                 self.generics(definitions, &contract.generics, &declaration_types)?;
-            let ty = self.annotation(definitions, &contract.value, &contract_types)?;
+            let ty = self.interface_type(definitions, contract, &contract_types)?;
             let mut components = vec![ty];
             components.extend(generics.iter().copied().map(Ty::Rigid));
             let packed = Ty::Con(TUPLE, type_list(components));
