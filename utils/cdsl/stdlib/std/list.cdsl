@@ -22,3 +22,25 @@ pub let item<A: Type> = fn (xs: List<A>, index: Nat) -> Option<A> decreases xs {
         },
     }
 };
+
+let all_from<A: Type> = fn (xs: List<A>, index: Nat, test: (Nat, A) -> Bool) -> Bool decreases xs {
+    match xs {
+        List::Nil => true,
+        List::Cons(value, rest) => test(index, value) && all_from(rest, index + 1, test),
+    }
+};
+
+pub let all_indexed<A: Type> = fn (xs: List<A>, test: (Nat, A) -> Bool) -> Bool {
+    all_from(xs, 0, test)
+};
+
+let first_from<A: Type> = fn (xs: List<A>, index: Nat, test: A -> Bool) -> Nat decreases xs {
+    match xs {
+        List::Nil => index,
+        List::Cons(value, rest) => if test(value) { index } else { first_from(rest, index + 1, test) },
+    }
+};
+
+pub let first_index_or_length<A: Type> = fn (xs: List<A>, test: A -> Bool) -> Nat {
+    first_from(xs, 0, test)
+};

@@ -1,96 +1,49 @@
-use crate::utils::APInt;
-use crate::{BlockId, RegionId, TypeId, ValueId};
+use crate::ValueId;
 
-/// Whether a symbol may be referenced from outside the module that defines it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Visibility {
-    Public,
-    Private,
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/interfaces.rs"));
 }
 
-/// An operation that defines a named entity in the enclosing module's symbol
-/// table. Functions are overloadable and key on their argument types; data
-/// symbols carry no signature and own their name outright.
-pub trait Symbol {
-    fn symbol_name(&self) -> String;
-
-    /// `None` for a symbol that cannot be overloaded (a global, a struct
-    /// definition); `Some(argument types)` for one that keys on a signature.
-    fn symbol_signature(&self) -> Option<Vec<TypeId>>;
-
-    /// The type a call to this symbol produces; `None` for a symbol that is not
-    /// callable.
-    fn symbol_result_type(&self) -> Option<TypeId>;
-
-    fn symbol_visibility(&self) -> Visibility;
-
-    /// Whether the symbol has a body here rather than naming an external
-    /// definition.
-    fn is_definition(&self) -> bool;
-}
-
-/// Relative execution cost of an operation, consulted by cost-driven rewriters
-/// (e.g. InstCombine) to choose among equivalent forms. The default models one
-/// cheap instruction; expensive ops override it. Exposed as an interface so the
-/// cost is reachable from a `dyn Operation` without the concrete type.
-pub trait OpCost {
-    fn cost(&self) -> u32 {
-        1
-    }
-}
-
-/// An operation that yields a compile-time constant, exposed generically so
-/// rewriters can read the value without knowing the concrete constant op: an
-/// integer, or the bits of a value of another type.
-pub trait ConstantLike {
-    fn constant_value(&self) -> APInt;
-}
+pub use generated::{
+    Commutative, ConstantLike, OpCost, Speculatable, Symbol, Terminator, Visibility,
+};
 
 /// An operation that produces its results and does nothing else: no memory
 /// effect, no control flow, no machine state. Dead code elimination may erase
 /// one whose results go unread, whether or not it declares semantics.
-pub use crate::builtin::generated::PureInterface as Pure;
-
-pub trait Commutative {
-    fn is_commutative(&self) -> bool {
-        true
-    }
-}
+pub use generated::PureInterface;
+pub use generated::PureInterface as Pure;
 
 /// An operation computing `lhs + rhs` modulo 2^W, W the result's width: a
 /// constant added to either operand moves to the result, and a zero operand
 /// returns the other wherever that one has the result's type. A definition the
 /// e-graph builds value identity from (`docs/design/instcombine.md`), declared
 /// rather than proved, and read off the operation's name alone.
-pub use crate::builtin::generated::Additive;
+pub use generated::Additive;
 
 /// An operation computing `lhs - rhs` modulo 2^W, W the result's width: a
 /// constant added to `lhs` moves to the result, one added to `rhs` moves to it
 /// negated, and a zero `rhs` returns `lhs` wherever `lhs` has the result's
 /// type. Read the way [`Additive`] is.
-pub use crate::builtin::generated::Subtractive;
+pub use generated::Subtractive;
 
 /// An arithmetic operation over integer values.
-pub use crate::builtin::generated::IntegerArithmetic;
+pub use generated::IntegerArithmetic;
 
-pub trait Terminator {
-    fn successors(&self) -> Vec<BlockId> {
-        Vec::new()
-    }
-}
-
+/// A [`BranchTerminator`] whose successor edges run under a known boolean fact — e.g.
+/// `cond_br %c` enters its true successor when `%c` is 1 and its false successor when
+/// `%c` is 0. The CFG analog of [`Gamma`], letting a flow-sensitive analysis recover
+/// the predicate gating a merge without knowing the concrete branch op.
+pub use generated::BranchGuard;
 /// A terminator that transfers control to successor blocks within the same region,
 /// forwarding values to their block arguments. Lets a CFG analysis read the edge
 /// targets and the values flowing along each edge without knowing the concrete
 /// branch op.
-pub trait BranchTerminator {
-    /// One entry per outgoing control-flow edge: the successor block and the values
-    /// forwarded to its block arguments, in argument order.
-    fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)>;
-    /// Each destination parameter's slot in the terminator operand list.
-    fn successor_operand_slots(&self) -> Vec<(BlockId, Vec<usize>)>;
-}
-
+pub use generated::BranchTerminator;
+/// A [`BranchTerminator`] choosing its successor edge by value: edge `i` is taken
+/// where the selector equals case `i`, and the last edge where it equals none.
+/// The CFG analog of a [`Gamma`] naming its cases.
+pub use generated::CaseGuard;
 /// A [`Theta`] whose iterations are counted: a counter starts at
 /// [`CountedLoop::lower_bound`], gains [`CountedLoop::step`] once per iteration, and the
 /// loop runs while the counter is signed-less-than [`CountedLoop::upper_bound`]. That
@@ -101,66 +54,18 @@ pub trait BranchTerminator {
 /// one. A loop that carries only the recurrence answers `None`: the counter is then not
 /// a value of the IR, and naming a `ValueId` for it would oblige the implementor to
 /// materialize one.
-pub trait CountedLoop {
-    /// The counter's value on the first iteration.
-    fn lower_bound(&self) -> ValueId;
-    /// The bound the counter is compared against before each iteration.
-    fn upper_bound(&self) -> ValueId;
-    /// What the counter gains each iteration.
-    fn step(&self) -> ValueId;
-    /// The body port carrying the counter, for a loop whose counter is a value
-    /// of the IR; `None` where the counter exists only as the recurrence above.
-    fn induction(&self) -> Option<usize> {
-        None
-    }
-}
-
-/// A [`BranchTerminator`] whose successor edges run under a known boolean fact — e.g.
-/// `cond_br %c` enters its true successor when `%c` is 1 and its false successor when
-/// `%c` is 0. The CFG analog of [`Gamma`], letting a flow-sensitive analysis recover
-/// the predicate gating a merge without knowing the concrete branch op.
-pub trait BranchGuard {
-    /// For each guarded successor edge, the value known to equal a boolean when that
-    /// edge is taken (`true` => 1, `false` => 0).
-    fn guarded_successors(&self) -> Vec<(BlockId, ValueId, bool)>;
-}
-
-/// A [`BranchTerminator`] choosing its successor edge by value: edge `i` is taken
-/// where the selector equals case `i`, and the last edge where it equals none.
-/// The CFG analog of a [`Gamma`] naming its cases.
-pub trait CaseGuard {
-    fn selector(&self) -> ValueId;
-    /// The selector bits taking each edge but the last.
-    fn cases(&self) -> Vec<u64>;
-}
-
+pub use generated::CountedLoop;
 /// An operation whose operands and results all carry one type.
-pub use crate::builtin::generated::SameOperandAndResultType;
+pub use generated::SameOperandAndResultType;
 
+/// Identifies an operation that reads a value from a memory location.
+pub use generated::MemoryRead;
+/// Identifies an operation that writes a value to a memory location.
+pub use generated::MemoryWrite;
 /// Identifies an operation that creates a memory location eligible for local SSA
 /// promotion. Implementations describe the location generically rather than tying
 /// the promoting transforms to a concrete pointer dialect.
-pub trait PromotableAllocation {
-    /// The SSA value that names the promotable memory location.
-    fn promoted_location(&self) -> ValueId;
-}
-
-/// Identifies an operation that reads a value from a memory location.
-pub trait MemoryRead {
-    /// The memory location being read.
-    fn read_location(&self) -> ValueId;
-    /// The SSA value produced by the read.
-    fn read_value(&self) -> ValueId;
-}
-
-/// Identifies an operation that writes a value to a memory location.
-pub trait MemoryWrite {
-    /// The memory location being written.
-    fn write_location(&self) -> ValueId;
-    /// The SSA value stored into the memory location.
-    fn written_value(&self) -> ValueId;
-}
-
+pub use generated::PromotableAllocation;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourceAccess {
     Read,
@@ -176,10 +81,7 @@ pub struct ResourceEffect {
 }
 
 /// The execution resources an operation reads or changes.
-pub trait ResourceEffects {
-    fn resource_effects(&self) -> Vec<ResourceEffect>;
-}
-
+pub use generated::ResourceEffects;
 /// Where the carried values sit on each side of a structured op: index ranges
 /// into the op's operands, the region's ports, the region's results (the
 /// values the next iteration takes, then the values the op produces when it
@@ -197,98 +99,31 @@ pub struct Binding {
     pub results: std::ops::Range<usize>,
 }
 
-/// An operation that maps explicit operands to one region's ports and that
-/// region's yields to its results without loop or branch control flow.
-pub trait RegionBinding {
-    fn region(&self) -> RegionId;
-    fn binding(&self) -> Binding;
-}
-
-/// A structured conditional over unordered arms (γ): the predicate picks the
-/// arm, every arm reads the forwarded operands through its own ports, and the
-/// chosen arm's results become the op's.
-pub trait Gamma {
-    /// The selector slot in the operation operand list.
-    fn predicate_slot(&self) -> usize;
-    fn predicate(&self) -> ValueId;
-    fn arms(&self) -> Vec<RegionId>;
-    /// Operands to arm ports, and arm results to op results.
-    fn binding(&self) -> Binding;
-    /// The predicate value selecting each arm but the last, as bits of the
-    /// predicate's width; the last arm takes every other value. A gate that
-    /// names no cases indexes its arms: `0, 1, .., arms - 2`.
-    fn cases(&self) -> Vec<u64>;
-
-    /// Whether the predicate is the arm index, as a gate naming no cases has it.
-    fn indexes_arms(&self) -> bool {
-        self.cases()
-            .iter()
-            .enumerate()
-            .all(|(index, &case)| case == index as u64)
-    }
-
-    /// The arm the predicate value `bits` selects.
-    fn arm_for(&self, bits: u64) -> usize {
-        let cases = self.cases();
-        cases
-            .iter()
-            .position(|&case| case == bits)
-            .unwrap_or(cases.len())
-    }
-}
-
-/// A structured loop over an unordered body (θ): the body reads the carried
-/// values through its ports and produces a predicate, the values the next
-/// iteration carries, and the values the op produces once the predicate is
-/// false.
-pub trait Theta {
-    /// The predicate slot in the body yield list.
-    fn predicate_slot(&self) -> usize;
-    fn body(&self) -> RegionId;
-    fn binding(&self) -> Binding;
-    /// The body result deciding whether another iteration runs.
-    fn predicate(&self) -> ValueId;
-}
-
+/// An application of a callable to a run of the op's value operands.
+pub use generated::Apply;
 /// A λ node: a function definition or declaration, read through the value a
 /// call takes as its callee.
-pub trait Callable {
-    /// The body, absent for a declaration.
-    fn body(&self) -> Option<RegionId>;
-    fn value(&self) -> ValueId;
-    fn params(&self) -> Vec<TypeId>;
-    fn result(&self) -> TypeId;
-}
-
-/// An application of a callable to a run of the op's value operands.
-pub trait Apply {
-    fn callee(&self) -> ValueId;
-    /// The indices of the arguments among the op's value operands.
-    fn args(&self) -> std::ops::Range<usize>;
-}
-
-/// A δ node: a data object with an address, and an initializer image when it
-/// defines one here.
-pub trait Global {
-    fn address(&self) -> ValueId;
-    fn initializer(&self) -> Option<Vec<u8>>;
-}
-
+pub use generated::Callable;
 /// An operation whose results, the states it publishes among them, are a
 /// function of its operands, attributes and the states it takes, though no
 /// semantics says which: two over equal inputs are one, so a rewrite may match
 /// it and replace it as a term.
-pub use crate::builtin::generated::Congruent;
-
-/// An operation that cannot trap, so it may run whether or not control would
-/// have reached it: a loop cone may hoist it, and a lowering may evaluate it on
-/// a path the source did not take.
-pub trait Speculatable {
-    /// Whether this instance may execute on a path that did not demand it.
-    fn is_speculatable(&self) -> bool {
-        true
-    }
-}
+pub use generated::Congruent;
+/// A structured conditional over unordered arms (γ): the predicate picks the
+/// arm, every arm reads the forwarded operands through its own ports, and the
+/// chosen arm's results become the op's.
+pub use generated::Gamma;
+/// A δ node: a data object with an address, and an initializer image when it
+/// defines one here.
+pub use generated::Global;
+/// An operation that maps explicit operands to one region's ports and that
+/// region's yields to its results without loop or branch control flow.
+pub use generated::RegionBinding;
+/// A structured loop over an unordered body (θ): the body reads the carried
+/// values through its ports and produces a predicate, the values the next
+/// iteration carries, and the values the op produces once the predicate is
+/// false.
+pub use generated::Theta;
 
 /// What a non-local exit leaves: the loop or switch nearest around it, or the
 /// enclosing scope carrying `label`.
@@ -302,11 +137,7 @@ pub enum ExitTarget {
 /// An operation leaving an enclosing structured op from inside its subtree
 /// (a `break` or `continue`), naming the target by kind or label rather than by
 /// a token value, and carrying the values the target's ports take.
-pub trait NonLocalExit {
-    fn target(&self) -> ExitTarget;
-    fn values(&self) -> Vec<ValueId>;
-}
-
+pub use generated::NonLocalExit;
 /// Which kind of structured op a `break` or `continue` may leave.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExitScopeKind {
@@ -316,9 +147,4 @@ pub enum ExitScopeKind {
 
 /// An operation a [`NonLocalExit`] can target: what kind of scope it is, and
 /// the label it carries, if any.
-pub trait ExitScope {
-    fn exit_scope(&self) -> ExitScopeKind;
-    fn label(&self) -> Option<String> {
-        None
-    }
-}
+pub use generated::ExitScope;

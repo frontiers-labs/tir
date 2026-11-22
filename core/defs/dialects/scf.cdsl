@@ -1,9 +1,11 @@
+use std::ir::interfaces::*;
+
 pub let r#yield = {
     rust_name: "YieldOp",
     name: "yield",
     dialect: "scf",
     operands: { values: "*_" },
-    interfaces: "Terminator",
+    interfaces: Terminator,
     state: "none",
 };
 
@@ -13,7 +15,7 @@ pub let r#loop = {
     dialect: "scf",
     operands: { inits: "*_" },
     results: { results: "*_" },
-    interfaces: "ExitScope",
+    interfaces: ExitScope,
     regions: { body: { kind: "Nodes", variadic: false } },
     state: "none",
     binds: "Theta { carried: inits ~ body.ports ~ body.results[1..n+1] ~ body.results[n+1..] ~ results, predicate: body.results[0], }",
@@ -25,7 +27,7 @@ pub let r#switch = {
     dialect: "scf",
     operands: { predicate: "int<_>", inputs: "*_" },
     results: { results: "*_" },
-    interfaces: "ExitScope",
+    interfaces: ExitScope,
     regions: { arms: { kind: "Nodes", variadic: true } },
     state: "none",
     binds: "Gamma { predicate, forwarded: inputs ~ arms.ports, joined: arms.results ~ results, }",
@@ -38,7 +40,7 @@ pub let r#for = {
     quantified: "forall C: index | int<_>.",
     operands: { lb: "C", inits: "*_", ub: "C", step: "C" },
     results: { results: "*_" },
-    interfaces: "ExitScope",
+    interfaces: ExitScope,
     regions: { body: { kind: "Nodes", variadic: false } },
     custom_format: true,
     state: "none",
@@ -53,7 +55,7 @@ pub let ordered_for = {
     quantified: "forall C: index | int<_>.",
     operands: { lb: "C", inits: "*_", ub: "C", step: "C" },
     results: { results: "*_" },
-    interfaces: ("ExitScope", "CountedLoop"),
+    interfaces: (ExitScope, CountedLoop),
     regions: { body: { kind: "Blocks", variadic: false } },
     custom_format: true,
     state: "none",

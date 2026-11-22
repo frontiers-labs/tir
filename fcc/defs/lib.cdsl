@@ -1,3 +1,5 @@
+use std::ir::interfaces::*;
+
 pub let va_start = {
     rust_name: "VaStartOp",
     name: "va_start",
@@ -32,7 +34,7 @@ pub let r#for = {
         step_region: { kind: "Blocks", variadic: false },
         body_region: { kind: "Blocks", variadic: false },
     },
-    interfaces: "ExitScope",
+    interfaces: ExitScope,
     custom_format: true,
     state: "none",
 };
@@ -45,7 +47,7 @@ pub let r#while = {
         condition_region: { kind: "Blocks", variadic: false },
         body_region: { kind: "Blocks", variadic: false },
     },
-    interfaces: "ExitScope",
+    interfaces: ExitScope,
     custom_format: true,
     state: "none",
 };
@@ -58,7 +60,7 @@ pub let r#do = {
         body_region: { kind: "Blocks", variadic: false },
         condition_region: { kind: "Blocks", variadic: false },
     },
-    interfaces: "ExitScope",
+    interfaces: ExitScope,
     custom_format: true,
     state: "none",
 };
@@ -68,7 +70,7 @@ pub let condition = {
     name: "condition",
     dialect: "cir",
     operands: { condition: "int<1>" },
-    interfaces: "Terminator",
+    interfaces: Terminator,
     state: "none",
 };
 
@@ -76,7 +78,7 @@ pub let r#yield = {
     rust_name: "YieldOp",
     name: "yield",
     dialect: "cir",
-    interfaces: "Terminator",
+    interfaces: Terminator,
     state: "none",
 };
 
@@ -84,7 +86,7 @@ pub let r#break = {
     rust_name: "BreakOp",
     name: "break",
     dialect: "cir",
-    interfaces: ("Terminator", "NonLocalExit"),
+    interfaces: (Terminator, NonLocalExit),
     state: "none",
 };
 
@@ -92,6 +94,6 @@ pub let r#continue = {
     rust_name: "ContinueOp",
     name: "continue",
     dialect: "cir",
-    interfaces: ("Terminator", "NonLocalExit"),
+    interfaces: (Terminator, NonLocalExit),
     state: "none",
 };

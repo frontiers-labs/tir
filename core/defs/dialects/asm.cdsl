@@ -1,3 +1,5 @@
+use std::ir::interfaces::*;
+
 pub let section = {
     rust_name: "SectionOp",
     name: "section",
@@ -10,7 +12,7 @@ pub let section_end = {
     rust_name: "SectionEndOp",
     name: "section_end",
     dialect: "asm",
-    interfaces: "Terminator",
+    interfaces: Terminator,
     state: "none",
 };
 
@@ -26,7 +28,7 @@ pub let symbol_end = {
     rust_name: "SymbolEndOp",
     name: "symbol_end",
     dialect: "asm",
-    interfaces: "Terminator",
+    interfaces: Terminator,
     state: "none",
 };
 
@@ -44,7 +46,7 @@ pub let symbol_address = {
     dialect: "asm",
     results: { result: "ptr.p<_>" },
     attributes: { sym_name: "Str" },
-    interfaces: ("tir::Pure", "tir::Speculatable"),
+    interfaces: (PureInterface, Speculatable),
     state: "none",
 };
 
@@ -60,7 +62,7 @@ pub let block_end = {
     rust_name: "BlockEndOp",
     name: "block_end",
     dialect: "asm",
-    interfaces: "Terminator",
+    interfaces: Terminator,
     state: "none",
 };
 
@@ -69,7 +71,7 @@ pub let vret = {
     name: "vret",
     dialect: "asm",
     operands: { values: "*_" },
-    interfaces: ("Terminator", "tir::backend::MachineInstruction"),
+    interfaces: Terminator,
     custom_format: true,
     state: "none",
 };
@@ -80,7 +82,7 @@ pub let vbr = {
     dialect: "asm",
     operands: { dest_args: "*_" },
     attributes: { dest: "Block" },
-    interfaces: ("Terminator", "tir::backend::MachineInstruction"),
+    interfaces: Terminator,
     custom_format: true,
     state: "none",
 };
@@ -91,7 +93,6 @@ pub let pcopy = {
     dialect: "asm",
     operands: { sources: "*_" },
     results: { copies: "*_" },
-    interfaces: "tir::backend::MachineInstruction",
     state: "none",
 };
 
@@ -102,7 +103,7 @@ pub let vcall = {
     operands: { args: "*_" },
     results: { results: "*_" },
     attributes: { callee: "Str", outgoing_stack_size: "UInt" },
-    interfaces: ("tir::backend::MachineInstruction", "ResourceEffects"),
+    interfaces: ResourceEffects,
     state: "in_out",
 };
 
@@ -113,6 +114,6 @@ pub let vcall_indirect = {
     operands: { callee: "backend.reg<_, _>", args: "*_" },
     results: { results: "*_" },
     attributes: { outgoing_stack_size: "UInt" },
-    interfaces: ("tir::backend::MachineInstruction", "ResourceEffects"),
+    interfaces: ResourceEffects,
     state: "in_out",
 };
