@@ -1,4 +1,4 @@
-use crate::{AnalysisManager, Context, OpId, Pass, PassError};
+use crate::{Context, OpId, Pass, PassError};
 
 #[derive(Clone, Default)]
 pub struct InstCombineNodesPass;
@@ -28,12 +28,7 @@ impl Pass for InstCombineNodesPass {
     fn name(&self) -> &'static str {
         "instcombine-nodes"
     }
-    fn run(
-        &mut self,
-        _op: OpId,
-        _context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, _op: OpId, _context: &Context) -> Result<(), PassError> {
         Ok(())
     }
 }

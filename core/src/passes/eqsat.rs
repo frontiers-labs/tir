@@ -5,6 +5,11 @@ pub(crate) mod generated {
     include!(concat!(env!("OUT_DIR"), "/eqsat.rs"));
 }
 
+#[allow(dead_code)]
+mod masks {
+    include!(concat!(env!("OUT_DIR"), "/eqsat_masks.rs"));
+}
+
 pub use generated::{add_zero_rewrites, builtin_rewrites};
 
 impl From<generated::OperationId> for OpId {
@@ -33,9 +38,7 @@ impl<T> From<generated::ValueRef<T>> for ValueId {
 
 use tir_egglog::{Color, Database, RuleCollection, Schedule};
 
-use crate::{
-    AnalysisManager, Context, OpId, Pass, PassError, RegionId, ValueId, attributes::AttributeValue,
-};
+use crate::{Context, OpId, Pass, PassError, RegionId, ValueId, attributes::AttributeValue};
 
 /// Saturate equalities in a private snapshot of the current IR.
 pub struct EqSatPass {
@@ -85,12 +88,7 @@ impl Pass for EqSatPass {
         "eqsat"
     }
 
-    fn run(
-        &mut self,
-        root_id: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, root_id: OpId, context: &Context) -> Result<(), PassError> {
         let mut db = context.eqsat_database().map_err(rule_error)?;
         let mut program = snapshot(context, root_id, &mut db)?;
         let local = match &self.rules {
@@ -99,30 +97,36 @@ impl Pass for EqSatPass {
                     program.prepare_custom().map_err(rule_error)?;
                 }
                 prepare_builtin(context, &mut program)?;
-                if rules.is_empty() {
-                    program.analyze().map_err(rule_error)?;
+                let phase = if let Schedule::Repeat(_, _, step) = generated::schedule_global()
+                    && let Schedule::Run(_, phase) = *step
+                {
+                    phase.ruleset
                 } else {
-                    let phase = if let Schedule::Repeat(_, _, step) = generated::schedule_global()
-                        && let Schedule::Run(_, phase) = *step
-                    {
-                        phase.ruleset
-                    } else {
-                        return Err(rule_error(
-                            "EqSat global schedule must repeat a single ruleset",
-                        ));
-                    };
-                    let mut extras = rules
-                        .iter()
-                        .map(|rules| program.load_rules(rules).map_err(rule_error))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let mut extras = extras
-                        .iter_mut()
-                        .map(|(program, name)| (program, *name))
-                        .collect::<Vec<_>>();
-                    program
-                        .run_schedule_with(&generated::schedule_analyze(), &phase, &mut extras)
-                        .map_err(rule_error)?;
-                }
+                    return Err(rule_error(
+                        "EqSat global schedule must repeat a single ruleset",
+                    ));
+                };
+                let mut extras = rules
+                    .iter()
+                    .map(|rules| program.load_rules(rules).map_err(rule_error))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut extras = extras
+                    .iter_mut()
+                    .map(|(program, name)| (program, *name))
+                    .collect::<Vec<_>>();
+                program
+                    .run_schedule_with_after(
+                        &generated::schedule_analyze(),
+                        &phase,
+                        &mut extras,
+                        |db| {
+                            let result = generated::known_zeros(db).map_err(analysis_error)?;
+                            masks::Program::load_with_tables(db, &result.bindings())
+                                .map_err(analysis_error)?
+                                .apply()
+                        },
+                    )
+                    .map_err(rule_error)?;
                 program.seed_assumptions().map_err(rule_error)?;
                 scoped_literals(&mut program)?
             }
@@ -167,6 +171,10 @@ impl Pass for EqSatPass {
         }
         Ok(())
     }
+}
+
+fn analysis_error(error: Box<dyn std::error::Error>) -> tir_egglog::Error {
+    tir_egglog::Error::Unsupported(error.to_string())
 }
 
 fn snapshot<'db>(

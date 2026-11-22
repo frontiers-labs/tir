@@ -125,6 +125,8 @@ pub(crate) enum Expression {
     Record(Record),
     Block(Block),
     Function(Box<Function>),
+    LocalTable(Box<Expr>),
+    Run(Box<Expr>),
     Rule {
         binders: Vec<RuleBinder>,
         clause: Box<Expr>,
@@ -180,6 +182,7 @@ pub(crate) struct Block {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Function {
+    pub(crate) memo: bool,
     pub(crate) generics: Vec<Binder>,
     pub(crate) parameters: Vec<Binder>,
     pub(crate) result: Option<Expr>,
@@ -318,6 +321,7 @@ impl Children for Expression {
                 binders.children(into);
                 clause.children(into);
             }
+            Self::LocalTable(value) | Self::Run(value) => value.children(into),
             Self::Function(v0) => {
                 v0.children(into);
             }
@@ -385,6 +389,7 @@ impl Children for Block {
 }
 impl Children for Function {
     fn children(self, into: &mut Vec<Result<Fragment, BuildError>>) {
+        let _memo = self.memo;
         self.generics.children(into);
         self.parameters.children(into);
         self.result.children(into);

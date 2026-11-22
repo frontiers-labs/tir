@@ -195,6 +195,8 @@ pub(crate) trait Reads<'a> {
     const COLORED: bool;
 
     fn copy(&self) -> &CopyRead<'a>;
+
+    fn full(&self, last: u32) -> bool;
 }
 
 pub(crate) struct BaseRead;
@@ -204,6 +206,10 @@ impl<'a> Reads<'a> for BaseRead {
 
     fn copy(&self) -> &CopyRead<'a> {
         unreachable!("the base reads no color")
+    }
+
+    fn full(&self, last: u32) -> bool {
+        last == 0
     }
 }
 
@@ -215,6 +221,7 @@ pub(crate) struct CopyRead<'a> {
     colors: &'a Colors,
     // Rows of a color at or after its timestamp here are New, by color.
     last: Vec<u32>,
+    full: bool,
     // The mirror of each program index in its color table, color first.
     mirrors: Vec<usize>,
     // The (color) index of each color table, by base table.
@@ -226,6 +233,10 @@ impl<'a> Reads<'a> for CopyRead<'a> {
 
     fn copy(&self) -> &CopyRead<'a> {
         self
+    }
+
+    fn full(&self, _: u32) -> bool {
+        self.full
     }
 }
 
@@ -286,7 +297,7 @@ pub(crate) fn search_colors(
     db: &mut Database,
     ruleset: usize,
     level: &[Color],
-    last: &[u32],
+    last: Option<&[u32]>,
 ) -> Found {
     for &index in &program.used[ruleset] {
         let (table, at) = db.indexes[index.index()];
@@ -343,12 +354,15 @@ pub(crate) fn search_colors(
     };
     let (ctx, indexes, colors) = db.parts();
     let mut by_color = vec![0; colors.len()];
-    for (&c, &last) in level.iter().zip(last) {
-        by_color[c.index()] = last;
+    if let Some(last) = last {
+        for (&c, &last) in level.iter().zip(last) {
+            by_color[c.index()] = last;
+        }
     }
     let reads = CopyRead {
         colors,
         last: by_color,
+        full: last.is_none(),
         mirrors,
         own,
     };
@@ -365,6 +379,7 @@ fn run<'a, R: Reads<'a>>(
     root: &Batch,
 ) -> Found {
     let decl = &program.file.rulesets[ruleset];
+    let full = reads.full(last);
     let mut exec = Exec {
         reads,
         ctx,
@@ -378,7 +393,7 @@ fn run<'a, R: Reads<'a>>(
     };
     // Before a ruleset first ran every row is new: its naive trie finds
     // each match once, where each seminaive variant would find it again.
-    let roots = if last == 0 && !R::COLORED && !decl.first.is_empty() {
+    let roots = if full && !decl.first.is_empty() {
         &decl.first
     } else {
         &decl.roots

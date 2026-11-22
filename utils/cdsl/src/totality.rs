@@ -258,6 +258,7 @@ fn children(expr: &Expr, f: &mut impl FnMut(&Expr) -> Result<(), Error>) -> Resu
             }
             f(clause)?;
         }
+        Expression::LocalTable(ty) | Expression::Run(ty) => f(ty)?,
         Expression::Block(b) => block(b, f)?,
         Expression::Function(fun) => {
             for binder in fun.generics.iter().chain(&fun.parameters) {

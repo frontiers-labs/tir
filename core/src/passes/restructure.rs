@@ -1,6 +1,6 @@
 //! RVSDG Control Tree Translation pass (Reissmann §5.1.2 Algorithm III).
 //!
-//! All analysis runs in CDSL via `AnalysisManager` (`core/defs/analysis/cfg.cdsl`).
+//! CFG analysis runs in `core/defs/analysis/cfg.cdsl`.
 //! All restructuring lowering, dataflow resolution, switch folding, synthetic op
 //! ordering, and erasure sets run in CDSL/Egglog (`core/defs/passes/restructure.cdsl`).
 //! This module executes the Egglog schedule and materializes the indexed `Out*`
@@ -13,8 +13,8 @@ use crate::ptr::{self, PtrType};
 use crate::scf::nodes::{ForOpBuilder, LoopOpBuilder, SwitchOpBuilder};
 use crate::state::ops as state_ops;
 use crate::{
-    AnalysisManager, BlockId, CaseGuard, Context, OpId, Operation, OperationRef, Pass, PassError,
-    RegionId, TypeId, Value, ValueId,
+    BlockId, CaseGuard, Context, OpId, Operation, OperationRef, Pass, PassError, RegionId, TypeId,
+    Value, ValueId,
 };
 
 #[allow(dead_code)]
@@ -42,15 +42,18 @@ impl Pass for RestructureNodesPass {
         "restructure-nodes"
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        ctx: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
-        cfg::refresh(ctx, op)?;
-        let mut db = ctx.eqsat_database().map_err(rule_err)?;
-        let mut program = generated::Program::load(&mut db).map_err(rule_err)?;
+    fn run(&mut self, op: OpId, ctx: &Context) -> Result<(), PassError> {
+        let facts = cfg::scope(ctx, op)?;
+        let bindings = facts.bindings();
+        let tables = bindings.iter().map(|&(_, table)| table).collect::<Vec<_>>();
+        let (mut db, tables) = ctx.eqsat_database_with_tables(&tables).map_err(rule_err)?;
+        let inputs = bindings
+            .iter()
+            .zip(&tables)
+            .map(|(&(name, _), table)| (name, table))
+            .collect::<Vec<_>>();
+        let mut program =
+            generated::Program::load_with_tables(&mut db, &inputs).map_err(rule_err)?;
         program.transform().map_err(rule_err)?;
         program.rebuild().map_err(rule_err)?;
         commit(ctx, &mut program)
