@@ -1,0 +1,138 @@
+use std::ir::BlockId;
+use std::ir::ValueId;
+use std::ir::RegionId;
+use std::ir::OperandIndex;
+use std::ir::OperandRange;
+use std::ir::ResourceEffect;
+use std::ir::ExitTarget;
+use std::ir::ExitScopeKind;
+use std::Bits;
+use std::El;
+use std::List;
+use std::Option;
+
+pub enum Visibility {
+    Public,
+    Private,
+}
+pub interface Symbol {
+    symbol_name: () -> String,
+    symbol_signature: () -> Option<List<std::ir::Ty>>,
+    symbol_result_type: () -> Option<std::ir::Ty>,
+    symbol_visibility: () -> Visibility,
+    is_definition: () -> Bool,
+}
+
+pub interface Terminator {
+    successors: fn () -> List<std::ir::BlockId> { List::Nil<std::ir::BlockId> },
+}
+
+pub interface ConstantLike<w: Nat> { constant_value: () -> El<Bits<w>> }
+
+pub interface PureInterface {}
+
+pub interface Additive {}
+
+pub interface Subtractive {}
+
+pub interface IntegerArithmetic {}
+
+pub interface SameOperandAndResultType {}
+
+pub interface Congruent {}
+
+pub interface Commutative { is_commutative: fn () -> Bool { true } }
+
+pub interface Speculatable { is_speculatable: fn () -> Bool { true } }
+
+pub interface OpCost { cost: fn () -> El<Bits<32>> { std::bits::literal<32>(1) } }
+
+pub interface BranchTerminator {
+    successor_operands: () -> List<(BlockId, List<ValueId>)>,
+    successor_operand_slots: () -> List<(BlockId, List<OperandIndex>)>,
+}
+
+pub interface BranchGuard { guarded_successors: () -> List<(BlockId, ValueId, Bool)> }
+
+pub interface CaseGuard {
+    selector: () -> ValueId,
+    cases: () -> List<El<Bits<64>>>,
+}
+
+pub interface PromotableAllocation { promoted_location: () -> ValueId }
+
+pub interface MemoryRead {
+    read_location: () -> ValueId,
+    read_value: () -> ValueId,
+}
+
+pub interface MemoryWrite {
+    write_location: () -> ValueId,
+    written_value: () -> ValueId,
+}
+
+pub interface ResourceEffects { resource_effects: () -> List<ResourceEffect> }
+
+pub interface CountedLoop {
+    lower_bound: () -> ValueId,
+    upper_bound: () -> ValueId,
+    step: () -> ValueId,
+    induction: fn () -> Option<OperandIndex> { std::option::none<OperandIndex> },
+}
+
+pub interface Callable {
+    body: () -> Option<RegionId>,
+    value: () -> ValueId,
+    params: () -> List<std::ir::Ty>,
+    result: () -> std::ir::Ty,
+}
+
+pub interface Apply {
+    callee: () -> ValueId,
+    args: () -> OperandRange,
+}
+
+pub interface Global {
+    address: () -> ValueId,
+    initializer: () -> Option<List<El<Bits<8>>>>,
+}
+
+pub interface NonLocalExit {
+    target: () -> ExitTarget,
+    values: () -> List<ValueId>,
+}
+
+pub interface ExitScope {
+    exit_scope: () -> ExitScopeKind,
+    label: fn () -> Option<String> { std::option::none<String> },
+}
+
+pub interface RegionBinding {
+    region: () -> RegionId,
+    binding: () -> std::ir::Binding,
+}
+
+pub interface Theta {
+    predicate_slot: () -> OperandIndex,
+    body: () -> RegionId,
+    binding: () -> std::ir::Binding,
+    predicate: () -> ValueId,
+}
+
+pub interface Gamma {
+    predicate_slot: () -> OperandIndex,
+    predicate: () -> ValueId,
+    arms: () -> List<RegionId>,
+    binding: () -> std::ir::Binding,
+    cases: () -> List<El<Bits<64>>>,
+    indexes_arms: fn () -> Bool {
+        std::list::all_indexed(self.cases(), fn (index: Nat, case: El<Bits<64>>) -> Bool {
+            std::bits::eq(std::bits::literal<64>(index), case)
+        })
+    },
+    arm_for: fn (bits: El<Bits<64>>) -> OperandIndex {
+        std::ir::operand_index(std::list::first_index_or_length(self.cases(), fn (case: El<Bits<64>>) -> Bool {
+            std::bits::eq(case, bits)
+        }))
+    },
+}

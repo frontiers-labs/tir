@@ -73,7 +73,7 @@ pub fn generate_rust_modules<'a>(
         },
         &mut root_cdsl,
     )?;
-    let rust = render_operation_cdsl(writer, &root_cdsl, dialect)?;
+    let rust = render_operation_cdsl(writer, &mut root_cdsl, dialect)?;
     let instructions = quote! { #rust #instructions };
     let mut cdsl = vec![(format!("{dialect}.ops.cdsl"), root_cdsl)];
 
@@ -126,7 +126,7 @@ pub fn generate_rust_modules<'a>(
             },
             &mut module_cdsl,
         )?;
-        let rust = render_operation_cdsl(writer, &module_cdsl, dialect)?;
+        let rust = render_operation_cdsl(writer, &mut module_cdsl, dialect)?;
         cdsl.push((format!("{stem}.ops.cdsl"), module_cdsl));
         let child = format_rust(quote! {
             use super::*;
@@ -194,12 +194,13 @@ pub fn generate_rust_modules<'a>(
 
 fn render_operation_cdsl(
     writer: &crate::compiler::RustWriter<'_>,
-    source: &str,
+    source: &mut String,
     dialect: &str,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     if source.is_empty() {
         return Ok(proc_macro2::TokenStream::new());
     }
+    source.insert_str(0, "use std::ir::interfaces::*;\n\n");
     let rust = writer(source, dialect).map_err(|error| TMDLError::Codegen(error.to_string()))?;
     rust.parse()
         .map_err(|error: proc_macro2::LexError| TMDLError::Codegen(error.to_string()))

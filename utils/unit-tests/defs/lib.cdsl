@@ -1,9 +1,10 @@
+use std::ir::interfaces::*;
+
 pub let def_reg = {
     rust_name: "DefOp",
     name: "def",
     dialect: "dep",
     results: { regs: "*backend.reg<_, _>" },
-    interfaces: "tir::backend::MachineInstruction",
     state: "none",
 };
 
@@ -13,7 +14,6 @@ pub let update_param = {
     dialect: "dep",
     operands: { rs: "?backend.reg<_, _>" },
     results: { regs: "*backend.reg<_, _>" },
-    interfaces: "tir::backend::MachineInstruction",
     state: "none",
 };
 
@@ -23,7 +23,6 @@ pub let set_flags = {
     dialect: "dep",
     operands: { rs: "?backend.reg<_, _>" },
     results: { regs: "*backend.reg<_, _>" },
-    interfaces: "tir::backend::MachineInstruction",
     state: "none",
 };
 
@@ -33,7 +32,6 @@ pub let read_flags = {
     dialect: "dep",
     operands: { rs: "?backend.reg<_, _>" },
     results: { regs: "*backend.reg<_, _>" },
-    interfaces: "tir::backend::MachineInstruction",
     state: "none",
 };
 
@@ -43,7 +41,6 @@ pub let add = {
     dialect: "test",
     operands: { rs: "backend.reg<_, _>" },
     results: { rd: "backend.reg<_, _>" },
-    interfaces: "tir::backend::MachineInstruction",
     state: "none",
 };
 
@@ -52,7 +49,7 @@ pub let exit = {
     name: "exit",
     dialect: "test",
     operands: { values: "*_" },
-    interfaces: ("tir::Terminator", "tir::NonLocalExit"),
+    interfaces: (Terminator, NonLocalExit),
     state: "none",
 };
 
