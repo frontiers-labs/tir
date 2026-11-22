@@ -37,13 +37,6 @@ pub let integer_facts: std::List<Prop> = {
         (EqSatBinary(owner, dialects::builtin::divui.typed_kind, out, ty, x, y, home),
          EqSatScalar(y, ty, b), b == Scalar::Literal(ty, std::bigint::bigint(1)))
         -> EqSatIdentity(owner, out, x);
-    let redundant_mask<owner, out, ty, input, mask, home, a, b, kept, zero, all>:
-        (EqSatBinary(owner, dialects::builtin::andi.typed_kind, out, ty, input, mask, home),
-         EqSatScalar(input, ty, a), EqSatScalar(mask, ty, b), b == Scalar::Literal(ty, kept),
-         EqSatZeros(a, ty, zero), EqSatAllBits(ty, all),
-         std::bigint::bit_or(kept, zero) == all)
-        -> EqSatIdentity(owner, out, input);
-
     let congruent_cfg<a, b, ak, bk, block, ap, bp, ad, bd, al, bl, x, y, ty, term, xd, yd>:
         (ir::Operation{ id: a, kind: ak, placement: "block", container: block, position: ap, display: ad, location: al }(), ir::Operation{ id: b, kind: bk, placement: "block", container: block, position: bp, display: bd, location: bl }(),
          std::int::less(ap,bp) == true, EqSatBinaryKey(a), EqSatBinaryKey(b),
@@ -64,8 +57,8 @@ pub let integer_facts: std::List<Prop> = {
         EqSatIdentity(owner, out, input) -> (EqSatReplace(owner, out, input), EqSatErase(owner));
     cons(add, cons(or, cons(xor, cons(sub, cons(shl, cons(lshr, cons(ashr, cons(and_dup,
         cons(or_dup, cons(right_zero, cons(idempotent, cons(multiply_one, cons(and_all,
-        cons(unsigned_divide_one, cons(redundant_mask, cons(congruent_cfg, cons(congruent_graph,
-        cons(equal, cons(candidate, nil)))))))))))))))))))
+        cons(unsigned_divide_one, cons(congruent_cfg, cons(congruent_graph,
+        cons(equal, cons(candidate, nil))))))))))))))))))
 };
 
 pub let EqSatPowerForm: (std::ir::BinaryIntegerOperation, std::ir::BinaryIntegerOperation) -> Prop;

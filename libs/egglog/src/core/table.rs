@@ -35,6 +35,7 @@ pub(crate) struct Table {
     // and the cells left since the log last took them.
     pub(crate) retire: Option<(usize, TableId)>,
     pub(crate) retired: Vec<u32>,
+    pub(super) changes: Option<Vec<Box<[Value]>>>,
 }
 
 // A clone rebuilds its key map, copies its kept indexes, and builds the
@@ -61,6 +62,7 @@ impl Clone for Table {
             keeps_indexes: self.keeps_indexes,
             retire: self.retire,
             retired: self.retired.clone(),
+            changes: None,
         };
         table.rebuild_keys();
         table.renumbered = self.renumbered;
@@ -84,6 +86,7 @@ impl Table {
             keeps_indexes: false,
             retire: None,
             retired: Vec::new(),
+            changes: None,
             schema,
         }
     }
@@ -182,6 +185,7 @@ impl Table {
         self.keys
             .insert(&row[..self.schema.keys], hash, id, &self.columns);
         self.version += 1;
+        self.record_change(id);
         self.group_new_row(id);
         self.keep_indexes();
         id
@@ -196,6 +200,7 @@ impl Table {
 
     // Kills a row whose key the key map has moved to a newer row.
     pub(crate) fn kill(&mut self, row: u32) {
+        self.record_change(row);
         if self.keeps_indexes {
             for index in &mut self.indexes {
                 if index.is_grouped() {
@@ -215,6 +220,7 @@ impl Table {
         if !self.is_subsumed(row) {
             set_bit(&mut self.subsumed, row, true);
             self.version += 1;
+            self.record_change(row);
         }
     }
 
@@ -232,6 +238,13 @@ impl Table {
     }
 
     pub(crate) fn clear(&mut self) {
+        if self.changes.is_some() {
+            for row in 0..self.len() as u32 {
+                if self.is_live(row) {
+                    self.record_change(row);
+                }
+            }
+        }
         self.columns.iter_mut().for_each(Vec::clear);
         self.ts.clear();
         self.live.clear();
@@ -244,6 +257,16 @@ impl Table {
             index.group(&[], 0, |_| false, dense);
         }
         self.keep_indexes();
+    }
+
+    fn record_change(&mut self, row: u32) {
+        if let Some(changes) = &mut self.changes {
+            let cells = self
+                .columns
+                .iter()
+                .map(|column| Value::new(column[row as usize]));
+            changes.push(cells.collect());
+        }
     }
 
     // Indexes pick their layout from the shapes when built.

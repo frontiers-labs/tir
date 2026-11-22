@@ -17,7 +17,8 @@ pub(crate) use file::{
 use crate::ast::{Fact, Literal, Schedule};
 use crate::report::{IterationReport, ReportLevel, RuleReport, RuleSetReport};
 use crate::{
-    BaseValues, Color, Database, Error, ExternId, IndexId, PrimFn, RunReport, TableId, Value,
+    BaseValues, Color, Database, Error, ExternId, IndexId, LocalTable, PrimFn, RunReport, TableId,
+    Value,
 };
 
 #[derive(Clone)]
@@ -40,6 +41,7 @@ pub struct Program {
     code: Arc<file::Code>,
     // The database ids of the tables and primitives of the file.
     tables: Vec<TableId>,
+    local_tables: Vec<LocalTable>,
     externs: Vec<BoundExtern>,
     // Set by the first run: indexes, constants and the indexes each ruleset
     // reads.
@@ -129,6 +131,7 @@ impl Program {
             file: Arc::new(file),
             code: Arc::new(code),
             tables,
+            local_tables: Vec::new(),
             externs,
             prepared: false,
             indexes: Vec::new(),
@@ -159,7 +162,7 @@ impl Program {
     /// are declared.
     pub fn from_bytes(bytes: &[u8], db: &mut Database) -> Result<Self, LoadError> {
         let (file, code) = file::decode(bytes)?;
-        Self::bound(file, code, db)
+        Self::bound(file, code, db, &[], &[]).map(|(program, _)| program)
     }
 
     /// Loads a program like [`Program::from_bytes`] from bytes that live
@@ -168,15 +171,55 @@ impl Program {
     /// place, and the load copies nothing of its code.
     pub fn from_static(bytes: &'static [u8], db: &mut Database) -> Result<Self, LoadError> {
         let (file, code) = file::decode_static(bytes)?;
-        Self::bound(file, code, db)
+        Self::bound(file, code, db, &[], &[]).map(|(program, _)| program)
     }
 
-    fn bound(file: ProgramFile, code: file::Code, db: &mut Database) -> Result<Self, LoadError> {
-        let (tables, externs) = file::bind(&file, db)?;
+    /// Load a compiled program with fresh anonymous tables in place of its local templates.
+    pub fn from_bytes_with_local_tables(
+        bytes: &[u8],
+        db: &mut Database,
+        locals: &[&str],
+    ) -> Result<(Self, Vec<LocalTable>), LoadError> {
+        let (file, code) = file::decode(bytes)?;
+        let result = Self::bound(file, code, db, locals, &[]);
+        if result.is_err() {
+            db.collect_local_tables();
+        }
+        result
+    }
+
+    /// Loads a static program with anonymous tables in place of the named
+    /// declarations in `locals` and `inputs`. The new handles follow the order
+    /// in `locals`. Unused inputs are allowed. The program keeps every bound
+    /// local table alive.
+    pub fn from_static_with_tables(
+        bytes: &'static [u8],
+        db: &mut Database,
+        locals: &[&str],
+        inputs: &[(&str, &LocalTable)],
+    ) -> Result<(Self, Vec<LocalTable>), LoadError> {
+        let (file, code) = file::decode_static(bytes)?;
+        let result = Self::bound(file, code, db, locals, inputs);
+        if result.is_err() {
+            db.collect_local_tables();
+        }
+        result
+    }
+
+    fn bound(
+        file: ProgramFile,
+        code: file::Code,
+        db: &mut Database,
+        locals: &[&str],
+        inputs: &[(&str, &LocalTable)],
+    ) -> Result<(Self, Vec<LocalTable>), LoadError> {
+        let bound = file::bind(&file, db, locals, inputs)?;
         let last_run = vec![None; file.rulesets.len()];
-        let program = Self::loaded(file, code, tables, externs, last_run, db);
+        let mut program = Self::loaded(file, code, bound.tables, bound.externs, last_run, db);
         program.check_permissions(db)?;
-        Ok(program)
+        program.local_tables.extend(bound.locals.iter().cloned());
+        program.local_tables.extend(bound.inputs);
+        Ok((program, bound.locals))
     }
 
     fn check_permissions(&self, db: &Database) -> Result<(), LoadError> {
@@ -225,6 +268,22 @@ impl Program {
         extra_at: &str,
         extras: &mut [(&mut Program, &str)],
     ) -> Result<RunReport, Error> {
+        self.run_with_after(db, schedule, args, extra_at, extras, |_| {
+            Ok(RunReport::default())
+        })
+    }
+
+    /// Run a dependent phase after each iteration of the selected ruleset.
+    /// Its updates participate in the enclosing schedule's convergence test.
+    pub fn run_with_after(
+        &mut self,
+        db: &mut Database,
+        schedule: &Schedule,
+        args: &[Value],
+        selected: &str,
+        extras: &mut [(&mut Program, &str)],
+        mut after: impl FnMut(&mut Database) -> Result<RunReport, Error>,
+    ) -> Result<RunReport, Error> {
         self.prepare(db, Some(args))?;
         for (program, _) in &mut *extras {
             program.prepare(db, Some(args))?;
@@ -236,13 +295,133 @@ impl Program {
             {
                 return Ok(RunReport::default());
             }
-            let extras = if config.ruleset == extra_at {
+            let extras = if config.ruleset == selected {
                 &mut *extras
             } else {
                 &mut []
             };
             let iteration = self.step_with(db, &[&config.ruleset], true, extras)?;
-            Ok(RunReport::of(&config.ruleset, iteration, self.level))
+            let mut report = RunReport::of(&config.ruleset, iteration, self.level);
+            if config.ruleset == selected {
+                report.union(after(db)?);
+            }
+            Ok(report)
+        })
+    }
+
+    /// Runs the schedule in one color. The first iteration reads every visible
+    /// row, including those inherited from the base and parent colors.
+    pub fn run_in(
+        &mut self,
+        db: &mut Database,
+        color: Color,
+        schedule: &Schedule,
+        args: &[Value],
+    ) -> Result<RunReport, Error> {
+        if !db.colors.contains(color) {
+            return Err(Error::Unsupported(
+                "cannot run in a dropped color".to_owned(),
+            ));
+        }
+        self.prepare(db, Some(args))?;
+        db.rebuild()?;
+        let report_level = self.level;
+        if color == Color::BASE {
+            return schedule.execute(&mut |_, config| {
+                if let Some(facts) = &config.until
+                    && self.matches(db, &until_name(facts))?
+                {
+                    return Ok(RunReport::default());
+                }
+                let round = self.round(db, &[&config.ruleset])?;
+                let iteration = Self::step_rounds(db, true, false, report_level, &mut [round])?;
+                Ok(RunReport::of(&config.ruleset, iteration, report_level))
+            });
+        }
+        self.color_last.resize(self.file.rulesets.len(), Vec::new());
+        let mut last = vec![None; self.file.rulesets.len()];
+        let report = schedule.execute(&mut |_, config| {
+            if let Some(facts) = &config.until
+                && self.matches_color(db, color, &until_name(facts))?
+            {
+                return Ok(RunReport::default());
+            }
+            let iteration = self.step_color(db, color, &config.ruleset, &mut last)?;
+            Ok(RunReport::of(&config.ruleset, iteration, report_level))
+        })?;
+        db.rebuild()?;
+        Ok(report)
+    }
+
+    fn matches_color(
+        &mut self,
+        db: &mut Database,
+        color: Color,
+        name: &str,
+    ) -> Result<bool, Error> {
+        let mut decls = Vec::new();
+        self.decls(name, &mut decls)?;
+        self.check_arguments(&decls)?;
+        for decl in decls {
+            let (_, matches, result) = exec::search_colors(self, db, decl, &[color], None);
+            result?;
+            if matches.iter().any(|&n| n > 0) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn step_color(
+        &mut self,
+        db: &mut Database,
+        color: Color,
+        name: &str,
+        last: &mut [Option<u32>],
+    ) -> Result<IterationReport, Error> {
+        let mut decls = Vec::new();
+        self.decls(name, &mut decls)?;
+        self.check_arguments(&decls)?;
+        let (now, before) = (db.colors.timestamp(), db.colors.changes());
+        let start = Instant::now();
+        let mut rule_reports = Reports::default();
+        let mut writes = Vec::new();
+        let mut failed = Ok(());
+        for decl in decls {
+            let color_last = &self.color_last[decl];
+            if !self.naive
+                && self.file.rulesets[decl].once
+                && color_last.get(color.index()).is_some_and(|&last| last != 0)
+            {
+                continue;
+            }
+            let since = last[decl].filter(|_| !self.naive).map(|at| [at]);
+            let (found, matches, result) =
+                exec::search_colors(self, db, decl, &[color], since.as_ref().map(|at| &at[..]));
+            writes.push(found);
+            self.report(self.level, decl, matches, &mut rule_reports);
+            failed = result;
+            if failed.is_err() {
+                break;
+            }
+            last[decl] = Some(now);
+            let color_last = &mut self.color_last[decl];
+            color_last.resize(db.colors.len(), 0);
+            color_last[color.index()] = now;
+        }
+        let searched = Instant::now();
+        exec::Writes::apply_colors(writes, db)?;
+        let applied = Instant::now();
+        db.rebuild_colors()?;
+        failed?;
+        Ok(IterationReport {
+            rule_set_report: RuleSetReport {
+                changed: db.colors.changes() != before,
+                rule_reports,
+                search_and_apply_time: searched - start,
+                merge_time: applied - searched,
+            },
+            rebuild_time: applied.elapsed(),
         })
     }
 
@@ -270,6 +449,9 @@ impl Program {
     }
 
     fn prepare(&mut self, db: &mut Database, args: Option<&[Value]>) -> Result<(), Error> {
+        if let Some(table) = self.local_tables.first() {
+            table.id(db)?;
+        }
         self.check_permissions(db)
             .map_err(|error| Error::Unsupported(error.to_string()))?;
         let changed = self.bindings_changed(db);
@@ -416,14 +598,14 @@ impl Program {
         let report_level = self.level;
         let primary = self.round(db, names)?;
         if extras.is_empty() {
-            return Self::step_rounds(db, rebuild, report_level, &mut [primary]);
+            return Self::step_rounds(db, rebuild, true, report_level, &mut [primary]);
         }
         let mut rounds = Vec::with_capacity(1 + extras.len());
         rounds.push(primary);
         for (program, name) in extras {
             rounds.push(program.round(db, &[*name])?);
         }
-        Self::step_rounds(db, rebuild, report_level, &mut rounds)
+        Self::step_rounds(db, rebuild, true, report_level, &mut rounds)
     }
 
     fn round(&mut self, db: &mut Database, names: &[&str]) -> Result<Round<'_>, Error> {
@@ -446,11 +628,12 @@ impl Program {
     fn step_rounds(
         db: &mut Database,
         rebuild: bool,
+        all_colors: bool,
         report_level: ReportLevel,
         rounds: &mut [Round<'_>],
     ) -> Result<IterationReport, Error> {
         let (now, before) = (db.timestamp(), db.changes());
-        let colored = (rebuild && !db.colors.is_empty()).then(|| db.colors.changes());
+        let colored = (rebuild && all_colors && !db.colors.is_empty()).then(|| db.colors.changes());
         let start = Instant::now();
         let mut rule_reports = Reports::default();
         let mut writes = Vec::new();
@@ -524,7 +707,7 @@ impl Program {
                         .map(|&c| program.color_last(db, decl, c))
                         .collect();
                     let (found, matches, result) =
-                        exec::search_colors(program, db, decl, &level, &last);
+                        exec::search_colors(program, db, decl, &level, Some(&last));
                     writes.push(found);
                     program.report(report_level, decl, matches, rule_reports);
                     failed = result;

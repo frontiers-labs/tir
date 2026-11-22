@@ -1,4 +1,4 @@
-use tir::{AnalysisManager, Context, OpId, Pass, PassError};
+use tir::{Context, OpId, Pass, PassError};
 #[derive(Clone, Default)]
 pub struct RaiseLoopsPass;
 impl RaiseLoopsPass {
@@ -11,12 +11,7 @@ impl Pass for RaiseLoopsPass {
     fn name(&self) -> &'static str {
         "raise-loops"
     }
-    fn run(
-        &mut self,
-        _op: OpId,
-        _context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, _op: OpId, _context: &Context) -> Result<(), PassError> {
         Ok(())
     }
 }

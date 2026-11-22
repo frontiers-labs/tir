@@ -45,3 +45,17 @@ pub let eqsat_shift_amount: BigInt -> Int;
 pub let eqsat_attr_int: Int -> BigInt;
 let eqsat_bool_bit: Bool -> BigInt;
 let eqsat_pick_case: (String, String, Bool, Bool) -> Bool;
+
+
+// Kept separate from the main program so the consumer binds the completed
+// function-local table instead of creating a named analysis table.
+pub mod masks {
+    let redundant_mask<owner, out, ty, input, mask, home, a, b, kept, zero, all>:
+        (EqSatBinary(owner, dialects::builtin::andi.typed_kind, out, ty, input, mask, home),
+         EqSatScalar(input, ty, a), EqSatScalar(mask, ty, b), b == Scalar::Literal(ty, kept),
+         EqSatZeros(a, ty, zero), EqSatAllBits(ty, all),
+         std::bigint::bit_or(kept, zero) == all)
+        -> integer::EqSatIdentity(owner, out, input);
+
+    pub let apply = || { std::schedule::Schedule::Rules(redundant_mask) };
+}

@@ -76,7 +76,7 @@ pub let congruence: std::List<Prop> = {
 };
 
 pub let EqSatZeros: (Scalar, Int, BigInt) -> Prop;
-pub let known_bits: std::List<Prop> = {
+let known_bits: std::List<Prop> = {
     let constant<value, ty, bits, term, width>:
         (EqSatScalar(value, ty, term), term == Scalar::Literal(ty, bits), EqSatAllBits(ty, width))
         -> EqSatZeros(term, ty, std::bigint::bit_and(std::bigint::bit_not(bits), width));
@@ -105,13 +105,19 @@ pub let commute: std::List<Prop> = {
     cons(add, cons(mul, cons(and, cons(or, cons(xor, cons(swap, nil))))))
 };
 
-pub let shift_bits: std::List<Prop> = {
+let shift_bits: std::List<Prop> = {
     let left_zeroes<node,value,ty,x,y,home,shift,amount,term,ctor,args,width>:
         (EqSatBinary(node,dialects::builtin::shli.typed_kind,value,ty,x,y,home), EqSatFolded(y,shift),
          EqSatScalar(value,ty,term), ir::TypeTerm(ty,ctor,args), width == std::ir::integer_width(args),
          amount == eqsat_shift_amount(shift), std::int::less(amount,width) == true)
         -> EqSatZeros(term,ty,(std::bigint::shl(std::bigint::bigint(1),amount) - std::bigint::bigint(1)));
     cons(left_zeroes, nil)
+};
+
+// The EqSat database is already scoped to its selected IR root.
+pub let known_zeros = memo || {
+    std::schedule::saturate((known_bits, shift_bits))?;
+    |term: Scalar, ty: Int, mask: BigInt| { EqSatZeros(term, ty, mask) }
 };
 
 pub let EqSatIntegerWidth: (Int, Int) -> Prop;

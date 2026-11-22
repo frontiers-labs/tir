@@ -1,6 +1,6 @@
 use tir_cdsl::{
     Error,
-    OutputKind::{OpDef, Producers, Program},
+    OutputKind::{OpDef, Program},
 };
 
 fn main() -> Result<(), Error> {
@@ -19,6 +19,7 @@ fn main() -> Result<(), Error> {
         ("core::dialects::type_def::*", OpDef("type_def_ops.rs")),
         ("core::dialects::vector::*", OpDef("vector_ops.rs")),
         ("core::eqsat::*", Program("eqsat.rs")),
-        ("core::analysis::cfg::*", Producers("cfg_analysis.rs")),
+        ("core::eqsat::masks::*", Program("eqsat_masks.rs")),
+        ("core::analysis::*", Program("analyses.rs")),
     ])
 }
