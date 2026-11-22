@@ -307,13 +307,13 @@ fn instruction_values(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> proc_mac
             .filter(|(_, d)| *d == def)
             .map(|(name, _)| format_ident!("{name}"))
             .collect();
-        let types = "_?, ".repeat(names.len()) + "son.control?";
+        let types = vec!["_?"; names.len()].join(", ");
         (names, types)
     };
     let (uses, slots) = fields(false);
     let (defs, results) = fields(true);
     let scheme = format!("({slots}) -> ({results})");
-    quote! { scheme: #scheme, operands: O { #(#uses,)* control }, results: R { #(#defs,)* control }, }
+    quote! { scheme: #scheme, operands: O { #(#uses),* }, results: R { #(#defs),* }, }
 }
 fn instruction_program_ts(
     inst: &ast::Instruction,
