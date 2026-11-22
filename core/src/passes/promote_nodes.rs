@@ -1,4 +1,4 @@
-use crate::{AnalysisManager, Context, OpId, Pass, PassError};
+use crate::{Context, OpId, Pass, PassError};
 
 #[derive(Clone, Default)]
 pub struct PromoteNodesPass;
@@ -15,12 +15,7 @@ impl Pass for PromoteNodesPass {
     fn name(&self) -> &'static str {
         "promote-nodes"
     }
-    fn run(
-        &mut self,
-        _op: OpId,
-        _context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, _op: OpId, _context: &Context) -> Result<(), PassError> {
         Ok(())
     }
 }

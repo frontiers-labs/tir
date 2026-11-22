@@ -16,8 +16,8 @@ use super::table::Table;
 use super::uf::UnionFind;
 use super::value::as_value;
 use super::{
-    BaseValue, ContainerValue, Error, ExternId, IndexId, Merge, Schema, Shape, Signature, SortId,
-    SortKind, TableId, TableKind, Value,
+    BaseValue, ContainerValue, Error, ExternId, IndexId, LocalTables, Merge, Schema, Shape,
+    Signature, SortId, SortKind, TableId, TableKind, Value,
 };
 use crate::ArcSort;
 use crate::Context;
@@ -77,7 +77,6 @@ impl Clone for DatabaseIdentity {
 ///
 /// A write applies at once. A union makes rows stale until [`Database::rebuild`]
 /// canonicalizes them.
-#[derive(Clone)]
 pub struct Database {
     identity: DatabaseIdentity,
     pub(crate) sorts: Vec<SortSchema>,
@@ -86,6 +85,7 @@ pub struct Database {
     pub(crate) table_names: Names<TableId>,
     pub(crate) prims: Vec<Prim>,
     pub(crate) indexes: Vec<(TableId, usize)>,
+    pub(crate) locals: LocalTables,
     pub(crate) uf: UnionFind,
     pub(crate) base: BaseValues,
     pub(crate) containers: ContainerValues,
@@ -104,6 +104,14 @@ pub struct Database {
     pub(crate) written_groups: Vec<(usize, u32)>,
 }
 
+impl Clone for Database {
+    fn clone(&self) -> Self {
+        let mut db = self.clone_storage();
+        db.collect_local_tables();
+        db
+    }
+}
+
 impl Default for Database {
     fn default() -> Self {
         Self::new()
@@ -111,6 +119,29 @@ impl Default for Database {
 }
 
 impl Database {
+    pub(crate) fn clone_storage(&self) -> Self {
+        Self {
+            identity: self.identity.clone(),
+            sorts: self.sorts.clone(),
+            sort_names: self.sort_names.clone(),
+            tables: self.tables.clone(),
+            table_names: self.table_names.clone(),
+            prims: self.prims.clone(),
+            indexes: self.indexes.clone(),
+            locals: self.locals.clone(),
+            uf: self.uf.clone(),
+            base: self.base.clone(),
+            containers: self.containers.clone(),
+            pending: self.pending.clone(),
+            predicted: self.predicted.clone(),
+            now: self.now,
+            colors: self.colors.clone(),
+            groups: self.groups.clone(),
+            group_of_table: self.group_of_table.clone(),
+            written_groups: self.written_groups.clone(),
+        }
+    }
+
     /// A database with the base sorts `i64`, `f64` (as [`F64`](crate::F64)), `bool`,
     /// `String` and `Unit` (as `()`).
     pub fn new() -> Self {
@@ -122,6 +153,7 @@ impl Database {
             table_names: HashMap::default(),
             prims: Vec::new(),
             indexes: Vec::new(),
+            locals: LocalTables::default(),
             uf: UnionFind::default(),
             base: BaseValues::default(),
             containers: ContainerValues::default(),
@@ -177,6 +209,9 @@ impl Database {
         self.add_table(name, TableKind::Relation, columns, None, None)
     }
 
+    /// # Panics
+    ///
+    /// If the merge refers to a local table.
     pub fn add_function(
         &mut self,
         name: &str,
@@ -184,7 +219,22 @@ impl Database {
         out: SortId,
         merge: Merge,
     ) -> TableId {
+        assert!(
+            !self.merge_reads_local(&merge),
+            "a named function cannot read a local table in its merge"
+        );
         self.add_table(name, TableKind::Function, keys, Some(out), Some(merge))
+    }
+
+    fn merge_reads_local(&self, merge: &Merge) -> bool {
+        match merge {
+            Merge::Function(table, args) => {
+                self.locals.contains(*table)
+                    || args.iter().any(|merge| self.merge_reads_local(merge))
+            }
+            Merge::Prim(_, args) => args.iter().any(|merge| self.merge_reads_local(merge)),
+            _ => false,
+        }
     }
 
     /// # Panics
@@ -218,7 +268,25 @@ impl Database {
             self.table_names.insert(name.to_owned(), id).is_none(),
             "table `{name}` exists"
         );
-        let columns: Vec<SortId> = keys.iter().copied().chain(out).collect();
+        let schema = self.table_schema(
+            name,
+            kind,
+            keys.iter().copied().chain(out).collect(),
+            keys.len(),
+            merge,
+        );
+        self.tables.push(Table::new(schema));
+        id
+    }
+
+    pub(crate) fn table_schema(
+        &self,
+        name: &str,
+        kind: TableKind,
+        columns: Vec<SortId>,
+        keys: usize,
+        merge: Option<Merge>,
+    ) -> TableSchema {
         let kind_of = |sort: &SortId| self.sorts[sort.index()].kind;
         let shapes = columns.iter().map(|sort| match kind_of(sort) {
             SortKind::Eq => Shape::Dense,
@@ -232,12 +300,12 @@ impl Database {
                 kind_of(&columns[column]) == SortKind::base::<crate::NativeIdentity>()
             })
             .collect();
-        self.tables.push(Table::new(TableSchema {
+        TableSchema {
             name: name.to_owned(),
             kind,
             shapes: shapes.collect(),
             columns,
-            keys: keys.len(),
+            keys,
             merge,
             ids,
             native,
@@ -245,8 +313,7 @@ impl Database {
             cost: None,
             unextractable: false,
             default: None,
-        }));
-        id
+        }
     }
 
     /// The cost of one row of `table` in extraction.
@@ -505,7 +572,7 @@ impl Database {
 
     /// How many tables the database declares.
     pub fn table_count(&self) -> usize {
-        self.tables.len()
+        self.tables.len() - self.locals.vacant_tables.len()
     }
 
     /// Generation of the live rows of one table, including removals.
@@ -516,12 +583,6 @@ impl Database {
     /// Number of live rows, including subsumed rows.
     pub fn row_count(&self, table: TableId) -> usize {
         self.tables[table.index()].live_len()
-    }
-
-    /// A count that grows with every write to the first `tables` tables, so
-    /// equal counts mean none of them changed in between.
-    pub fn writes_to_first(&self, tables: usize) -> u64 {
-        self.tables[..tables].iter().map(Table::version).sum()
     }
 
     /// The timestamp writes get now. Each rebuild starts a new one.
@@ -540,7 +601,12 @@ impl Database {
     /// Every row of `table` a write removes or replaces leaves its cell of
     /// `column` as a row of the one-column relation `log`, which the next
     /// rebuild writes: rules then match what a table no longer holds.
+    ///
+    /// # Panics
+    ///
+    /// If either table is local.
     pub fn log_retired(&mut self, table: TableId, column: usize, log: TableId) {
+        assert!(!self.locals.contains(table) && !self.locals.contains(log));
         self.tables[table.index()].retire = Some((column, log));
     }
 
@@ -588,10 +654,16 @@ impl Database {
 
     fn index_id(&mut self, table: TableId, at: usize) -> IndexId {
         let found = self.indexes.iter().position(|&entry| entry == (table, at));
-        IndexId::new(found.unwrap_or_else(|| {
-            self.indexes.push((table, at));
-            self.indexes.len() - 1
-        }))
+        if let Some(found) = found {
+            return IndexId::new(found);
+        }
+        if let Some(id) = self.locals.vacant_indexes.pop() {
+            self.indexes[id.index()] = (table, at);
+            return id;
+        }
+        let id = IndexId::new(self.indexes.len());
+        self.indexes.push((table, at));
+        id
     }
 
     // A context over the whole database, for primitives, merges and

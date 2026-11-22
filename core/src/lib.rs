@@ -99,7 +99,6 @@ pub mod helpers {
 }
 pub mod parse;
 
-pub use analysis::AnalysisManager;
 pub use block::{BlockHandle, BlockId};
 pub use context::{Context, ContextIterator, GetFromContext, Names};
 pub use diagnostics::{print_error_range, print_parse_error};

@@ -20,14 +20,15 @@ use crate::{
 };
 
 /// Reusable schema and host bindings, shared by independently compiled programs.
+#[derive(Clone)]
 pub struct Schema {
     engine: EGraph,
     hosts: BTreeSet<Path>,
     functions: BTreeSet<Path>,
     constructors: BTreeSet<Path>,
     named_relations: BTreeMap<String, Vec<String>>,
+    local_types: BTreeMap<Path, Expr>,
     operation_imports: BTreeMap<Path, OperationImport>,
-    producers_only: bool,
 }
 
 fn error(error: impl std::fmt::Display) -> Error {
@@ -73,7 +74,7 @@ fn arrow(expr: &Expr) -> Option<(&Expr, &Expr)> {
         _ => None,
     }
 }
-fn table_type(ty: &Expr) -> Option<&[Expr]> {
+pub(crate) fn table_type(ty: &Expr) -> Option<&[Expr]> {
     match &ty.value {
         Expression::Generic { value, arguments }
             if path(value).is_ok_and(|path| path == &["std", "table", "Table"]) =>
@@ -83,6 +84,10 @@ fn table_type(ty: &Expr) -> Option<&[Expr]> {
         _ => None,
     }
 }
+fn table_parameter(ty: &Expr) -> bool {
+    table_type(ty).is_some() || arrow(ty).is_some_and(|(_, output)| proposition(output))
+}
+
 fn proposition(expr: &Expr) -> bool {
     matches!(&expr.value, Expression::Path(path) if path == &["Prop"])
 }
@@ -155,27 +160,9 @@ impl Schema {
             functions: BTreeSet::new(),
             constructors: BTreeSet::new(),
             named_relations: BTreeMap::new(),
+            local_types: BTreeMap::new(),
             operation_imports: BTreeMap::new(),
-            producers_only: false,
         }
-    }
-
-    /// Check and compile producers with the IR table ABI already installed.
-    pub fn compile_producers(
-        engine: EGraph,
-        source: &str,
-        catalog: &str,
-    ) -> Result<(EGraph, tir_egglog::Program, Vec<tir_egglog::Producer>), Error> {
-        let source = format!("pub mod ir {{\n{catalog}\n}}\npub mod producers {{\n{source}\n}}");
-        let selected = vec!["producers".to_owned()];
-        let checked = crate::compile_source(&source)?.select(&selected)?.lower()?;
-        let dependencies = Dependencies::collect(&checked, &selected, Selection::Program);
-        let mut schema = Self::from_engine(engine);
-        schema.producers_only = true;
-        schema.install(&dependencies, false)?;
-        let lowered = schema.lower_dependencies(&checked, &dependencies)?;
-        let (program, producers) = lowered.compile_producers(schema.database(), &selected)?;
-        Ok((schema.engine, program, producers))
     }
 
     /// Install each relation and table under its declared name.
@@ -318,62 +305,7 @@ impl Schema {
             if let Declaration::Axiom { ty, .. } = declaration
                 && let Some(arguments) = table_type(ty)
             {
-                let [key, out, merge] = arguments else {
-                    return Err(Error("Table requires key, value and merge".into()));
-                };
-                let keys = parts(key)
-                    .iter()
-                    .map(|ty| self.sort(ty))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let out = self.sort(out)?;
-                let merge = match path(merge)?.last().map(String::as_str) {
-                    Some("Unique") => Merge::AssertEq,
-                    Some("Union") => {
-                        if matches!(self.database().schema().sort(out).kind(), SortKind::Base(_)) {
-                            return Err(Error(
-                                "Union merge requires values with equivalence identities".into(),
-                            ));
-                        }
-                        Merge::Union
-                    }
-                    Some(kind @ ("Min" | "Max" | "SetUnion")) => {
-                        let name = match kind {
-                            "Min" => "min",
-                            "Max" => "max",
-                            _ => "set-union",
-                        };
-                        let schema = self.database().schema();
-                        let prim = schema
-                            .primitives(name)
-                            .find(|&id| {
-                                let sig = schema.primitive(id).1;
-                                sig.inputs == [out, out] && sig.output == out
-                            })
-                            .ok_or_else(|| {
-                                Error(format!("invalid output sort for {kind} merge"))
-                            })?;
-                        Merge::Prim(prim, vec![Merge::Old, Merge::New])
-                    }
-                    _ => return Err(Error("unsupported executable table merge".into())),
-                };
-                let name = self.name(full);
-                if let Some(id) = self.database().schema().table_named(&name) {
-                    let table = self.database().schema().table(id);
-                    let mut columns = keys.clone();
-                    columns.push(out);
-                    if table.kind() != TableKind::Function
-                        || table.columns() != columns
-                        || table.key_arity() != keys.len()
-                        || table.merge() != Some(&merge)
-                    {
-                        return Err(Error(format!("incompatible function {name}")));
-                    }
-                } else {
-                    self.engine
-                        .database_mut()
-                        .add_function(&name, &keys, out, merge);
-                }
-                self.functions.insert(full.clone());
+                self.install_keyed_table(full.clone(), arguments)?;
             }
         }
         for (full, declaration) in declarations {
@@ -388,6 +320,92 @@ impl Schema {
         }
         if generate_hosts {
             self.declare_hosts(dependencies)?;
+        }
+        Ok(())
+    }
+
+    fn install_keyed_table(&mut self, full: Path, arguments: &[Expr]) -> Result<(), Error> {
+        let [key, out, merge] = arguments else {
+            return Err(Error("Table requires key, value and merge".into()));
+        };
+        let keys = parts(key)
+            .iter()
+            .map(|ty| self.sort(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let out = self.sort(out)?;
+        let merge = match path(merge)?.last().map(String::as_str) {
+            Some("Unique") => Merge::AssertEq,
+            Some("Union") => {
+                if matches!(self.database().schema().sort(out).kind(), SortKind::Base(_)) {
+                    return Err(Error(
+                        "Union merge requires values with equivalence identities".into(),
+                    ));
+                }
+                Merge::Union
+            }
+            Some(kind @ ("Min" | "Max" | "SetUnion")) => {
+                let name = match kind {
+                    "Min" => "min",
+                    "Max" => "max",
+                    _ => "set-union",
+                };
+                let schema = self.database().schema();
+                let prim = schema
+                    .primitives(name)
+                    .find(|&id| {
+                        let sig = schema.primitive(id).1;
+                        sig.inputs == [out, out] && sig.output == out
+                    })
+                    .ok_or_else(|| Error(format!("invalid output sort for {kind} merge")))?;
+                Merge::Prim(prim, vec![Merge::Old, Merge::New])
+            }
+            _ => return Err(Error("unsupported executable table merge".into())),
+        };
+        let name = self.name(&full);
+        if let Some(id) = self.database().schema().table_named(&name) {
+            let table = self.database().schema().table(id);
+            let mut columns = keys.clone();
+            columns.push(out);
+            if table.kind() != TableKind::Function
+                || table.columns() != columns
+                || table.key_arity() != keys.len()
+                || table.merge() != Some(&merge)
+            {
+                return Err(Error(format!("incompatible function {name}")));
+            }
+        } else {
+            self.engine
+                .database_mut()
+                .add_function(&name, &keys, out, merge);
+        }
+        self.functions.insert(full);
+        Ok(())
+    }
+
+    fn install_local_tables(&mut self, dependencies: &Dependencies<'_>) -> Result<(), Error> {
+        for owner in &dependencies.ordered {
+            let Declaration::Let { binding, .. } = dependencies.declarations[owner] else {
+                continue;
+            };
+            crate::totality::visit(&binding.value, &mut |expression| {
+                let Expression::LocalTable(ty) = &expression.value else {
+                    return Ok(());
+                };
+                let name = local_table_path(owner, expression.range.start);
+                if let Some(args) = table_type(ty) {
+                    self.install_keyed_table(name.clone(), args)?;
+                } else if let Some((args, result)) = arrow(ty)
+                    && proposition(result)
+                {
+                    self.install_relation(name.clone(), args)?;
+                } else {
+                    return Err(Error(
+                        "local table requires a relation or Table schema".into(),
+                    ));
+                }
+                self.local_types.insert(name, (**ty).clone());
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -560,13 +578,75 @@ impl Schema {
         self.lower_dependencies(
             program,
             &Dependencies::collect(program, selected, Selection::Program),
+            false,
         )
+    }
+
+    /// Run a named, nullary schedule with function-local tables.
+    /// A script consumes its effects and releases any returned tables.
+    pub fn run_local_schedule(
+        &self,
+        program: &CheckedProgram,
+        name: &[String],
+        db: &mut Database,
+    ) -> Result<Option<tir_egglog::RunReport>, Error> {
+        let dependencies = Dependencies::collect(program, &[], Selection::Program);
+        let Some(Declaration::Let { binding, .. }) = dependencies.declarations.get(name) else {
+            return Ok(None);
+        };
+        let Expression::Function(function) = &binding.value.value else {
+            return Ok(None);
+        };
+        if !function.has_frame() {
+            return Ok(None);
+        }
+        if !function.parameters.is_empty() {
+            return Err(Error("a script schedule must take no arguments".into()));
+        }
+        let mut compiler = self.clone();
+        compiler.install_local_tables(&dependencies)?;
+        let lowered = compiler.lower_dependencies(program, &dependencies, true)?;
+        let frame = lowered
+            .scoped
+            .get(name)
+            .ok_or_else(|| Error("function does not have an executable schedule".into()))?;
+        let templates = compiler.table_templates(&dependencies, &name[..name.len() - 1]);
+        let compiled = frame.compile(compiler.database(), &lowered.rules, &templates)?;
+        let locals = compiled
+            .locals
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let result = (|| {
+            let (mut code, _locals) =
+                tir_egglog::Program::from_bytes_with_local_tables(&compiled.bytes, db, &locals)
+                    .map_err(error)?;
+            code.run_in(db, tir_egglog::Color::BASE, &frame.schedule, &[])
+                .map_err(error)
+        })();
+        db.collect_local_tables();
+        result.map(Some)
+    }
+
+    fn table_templates(
+        &self,
+        dependencies: &Dependencies<'_>,
+        selected: &[String],
+    ) -> BTreeSet<String> {
+        dependencies
+            .ordered
+            .iter()
+            .filter(|path| path.starts_with(selected))
+            .filter_map(|path| storage_name(dependencies.declarations[path]))
+            .map(str::to_owned)
+            .collect()
     }
 
     fn lower_dependencies(
         &self,
         program: &CheckedProgram,
         dependencies: &Dependencies<'_>,
+        include_frames: bool,
     ) -> Result<LoweredProgram, Error> {
         let operations = dependencies.operation_imports(program);
         let mut rules = Rules::new();
@@ -629,12 +709,13 @@ impl Schema {
                 binders: generics,
                 operation_matches: program.operation_matches.get(full),
                 captures: &BTreeMap::new(),
+                tables: &BTreeMap::new(),
             }
             .install(&mut rules, &ruleset, ty, None)
             .map_err(|error| Error(format!("{ruleset}::{name}: {error}")))?;
         }
         let mut schedules = BTreeMap::new();
-        let mut memos = BTreeMap::new();
+        let mut scoped = BTreeMap::new();
         let mut collections = BTreeMap::new();
         let values = dependencies
             .declarations
@@ -684,6 +765,7 @@ impl Schema {
             active: BTreeSet::new(),
             global: BTreeMap::new(),
             bundles: BTreeMap::new(),
+            next_bundle: 0,
             rules: &mut rules,
         };
         for (path, expression) in &definitions {
@@ -720,6 +802,7 @@ impl Schema {
                         binders,
                         operation_matches: program.operation_matches.get(owner),
                         captures: &BTreeMap::new(),
+                        tables: &BTreeMap::new(),
                     }
                     .install(lowering.rules, &label, clause, Some(&policy))?;
                     members.push(label);
@@ -739,40 +822,47 @@ impl Schema {
                 continue;
             }
             lowering.active.insert(path.clone());
-            let schedule = if let Some((function, outputs)) = memo_definition(expression)? {
-                memos.insert(path.clone(), outputs);
-                lowering.function(
-                    &function,
-                    vec![tir_egglog::prelude::exprs::arg(0)],
-                    &name,
-                    path,
-                )?
+            let Expression::Function(function) = &expression.value else {
+                return Err(Error(format!("unsupported executable definition {name}")));
+            };
+            if function
+                .parameters
+                .iter()
+                .any(|parameter| table_parameter(&parameter.ty))
+            {
+                lowering.active.remove(path);
+                continue;
+            }
+            let args = function
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    Ok(ScheduleArgument::Value(tir_egglog::prelude::exprs::arg(
+                        u32::try_from(index).map_err(error)?,
+                    )))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            if function.has_frame() {
+                if include_frames {
+                    let frame = lowering.scoped(function, args, &name, path, is_schedule)?;
+                    scoped.insert(path.clone(), frame);
+                }
             } else {
-                let Expression::Function(function) = &expression.value else {
-                    return Err(Error(format!("unsupported executable definition {name}")));
-                };
                 if !is_schedule {
                     return Err(Error(format!("unsupported executable definition {name}")));
                 }
-                let args = function
-                    .parameters
-                    .iter()
-                    .enumerate()
-                    .map(|(index, _)| {
-                        Ok(tir_egglog::prelude::exprs::arg(
-                            u32::try_from(index).map_err(error)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, Error>>()?;
-                lowering.call_schedule(function, args, &name, path)?
-            };
+                schedules.insert(
+                    path.clone(),
+                    lowering.call_schedule(function, args, &name, path)?,
+                );
+            }
             lowering.active.remove(path);
-            schedules.insert(path.clone(), schedule);
         }
         Ok(LoweredProgram {
             rules,
             schedules,
-            memos,
+            scoped,
             collections,
         })
     }
@@ -784,9 +874,7 @@ impl Schema {
         {
             return Ok(());
         }
-        if !self.producers_only
-            && let Some((inputs, output)) = arrow(ty)
-        {
+        if let Some((inputs, output)) = arrow(ty) {
             let inputs = parts(inputs)
                 .iter()
                 .map(|ty| self.sort(ty))
@@ -807,10 +895,33 @@ impl Schema {
     }
 }
 
+impl Function {
+    fn has_frame(&self) -> bool {
+        self.memo
+            || self.body.bindings.iter().any(|binding| {
+                matches!(
+                    binding.value.value,
+                    Expression::LocalTable(_) | Expression::Run(_)
+                )
+            })
+    }
+}
+
+fn local_table_path(owner: &[String], position: usize) -> Path {
+    vec![format!("@local::{}::{position}", path_name(owner))]
+}
+
+enum ScheduleArgument {
+    Value(ast::Expr),
+    Table(Path),
+}
+
 struct ScheduleScope<'a> {
     owner: &'a Path,
     captures: BTreeMap<Path, ast::Expr>,
     rules: BTreeMap<Path, Vec<String>>,
+    tables: BTreeMap<Path, Path>,
+    values: BTreeMap<Path, Expr>,
 }
 
 struct ScheduleLowering<'a, 'program> {
@@ -824,10 +935,188 @@ struct ScheduleLowering<'a, 'program> {
     active: BTreeSet<Path>,
     global: BTreeMap<Path, Schedule>,
     bundles: BTreeMap<Path, Vec<String>>,
+    next_bundle: usize,
     rules: &'a mut Rules,
 }
 
 impl ScheduleLowering<'_, '_> {
+    fn argument_scope<'a>(
+        function: &Function,
+        arguments: Vec<ScheduleArgument>,
+        owner: &'a Path,
+    ) -> Result<ScheduleScope<'a>, Error> {
+        if function.parameters.len() != arguments.len() || !function.generics.is_empty() {
+            return Err(Error(format!(
+                "unsupported executable signature for {}",
+                path_name(owner)
+            )));
+        }
+        let mut captures = BTreeMap::new();
+        let mut tables = BTreeMap::new();
+        for (parameter, argument) in function.parameters.iter().zip(arguments) {
+            let name = vec![parameter.name.clone()];
+            match argument {
+                ScheduleArgument::Value(value) => {
+                    captures.insert(name, value);
+                }
+                ScheduleArgument::Table(table) => {
+                    tables.insert(name, table);
+                }
+            }
+        }
+        Ok(ScheduleScope {
+            owner,
+            captures,
+            tables,
+            rules: BTreeMap::new(),
+            values: BTreeMap::new(),
+        })
+    }
+
+    fn call_arguments(
+        &self,
+        function: &Function,
+        arguments: &[Expr],
+        scope: &ScheduleScope<'_>,
+    ) -> Result<Vec<ScheduleArgument>, Error> {
+        if function.parameters.len() != arguments.len() {
+            return Err(Error("wrong number of executable arguments".into()));
+        }
+        let lowering = RuleLowering {
+            schema: self.schema,
+            operations: self.operations,
+            declarations: &self.dependencies.declarations,
+            binders: &[],
+            operation_matches: None,
+            captures: &scope.captures,
+            tables: &scope.tables,
+        };
+        function
+            .parameters
+            .iter()
+            .zip(arguments)
+            .map(|(parameter, argument)| {
+                if table_parameter(&parameter.ty) {
+                    let path = path(argument)?;
+                    let table = scope.tables.get(path).unwrap_or(path);
+                    self.schema
+                        .database()
+                        .table(&self.schema.name(table))
+                        .map_err(error)?;
+                    Ok(ScheduleArgument::Table(table.clone()))
+                } else {
+                    Ok(ScheduleArgument::Value(lowering.term(argument)?))
+                }
+            })
+            .collect()
+    }
+
+    fn scoped(
+        &mut self,
+        function: &Function,
+        args: Vec<ScheduleArgument>,
+        name: &str,
+        owner: &Path,
+        is_schedule: bool,
+    ) -> Result<ScopedFunction, Error> {
+        // Root declarations and lexical bindings can have the same source path.
+        let renamed = crate::normalize::substitute(
+            &Expr {
+                value: Expression::Function(Box::new(function.clone())),
+                range: function.body.value.range.clone(),
+            },
+            &BTreeMap::new(),
+        )?;
+        let Expression::Function(function) = renamed.value else {
+            return Err(Error("expected a renamed scoped function".into()));
+        };
+        let function = function.as_ref();
+        let scope = Self::argument_scope(function, args, owner)?;
+        let (scope, mut effects) = self.bind_block(&function.body, name, scope)?;
+        let mut fields = Vec::new();
+        let mut query = None;
+        let mut value = None;
+        let table = |expr: &Expr| -> Result<Path, Error> {
+            let path = path(expr)?;
+            Ok(scope.tables.get(path).unwrap_or(path).clone())
+        };
+        let result = if scope.values.is_empty() {
+            (*function.body.value).clone()
+        } else {
+            crate::normalize::substitute(&function.body.value, &scope.values)?
+        };
+        match &result.value {
+            Expression::Function(closure) => {
+                let body = Expr {
+                    value: Expression::Block(closure.body.clone()),
+                    range: result.range.clone(),
+                };
+                let body = crate::normalize::head(&body, &BTreeMap::new(), &BTreeSet::new())?;
+                let mut tables = BTreeMap::new();
+                let mut captured = BTreeSet::new();
+                crate::totality::visit(&body, &mut |expr| {
+                    let Expression::Path(alias) = &expr.value else {
+                        return Ok(());
+                    };
+                    let table = scope.tables.get(alias).or_else(|| {
+                        self.dependencies
+                            .declarations
+                            .get(alias)
+                            .and_then(|declaration| storage_name(declaration))
+                            .map(|_| alias)
+                    });
+                    if let Some(table) = table {
+                        tables.insert(alias.clone(), table.clone());
+                        if captured.insert(table.clone()) {
+                            let field = if fields.is_empty() {
+                                "rows".into()
+                            } else {
+                                format!("rows_{}", fields.len() + 1)
+                            };
+                            fields.push((field, table.clone()));
+                        }
+                    }
+                    Ok(())
+                })?;
+                if tables.is_empty() {
+                    return Err(Error("an escaping query must capture a table".into()));
+                }
+                query = Some(ScopedQuery {
+                    parameters: closure.parameters.clone(),
+                    body,
+                    tables,
+                });
+            }
+            Expression::Record(outputs)
+                if outputs.iter().all(|(_, value)| {
+                    table(value)
+                        .is_ok_and(|p| self.schema.database().table(&self.schema.name(&p)).is_ok())
+                }) =>
+            {
+                for (name, expr) in outputs {
+                    fields.push((name.clone(), table(expr)?));
+                }
+            }
+            Expression::Unit => {}
+            _ if is_schedule => effects.push(self.schedule(&function.body.value, name, &scope)?),
+            _ => value = Some(result),
+        }
+        let locals = scope
+            .tables
+            .values()
+            .map(|path| self.schema.name(path))
+            .collect();
+        Ok(ScopedFunction {
+            parameters: function.parameters.clone(),
+            schedule: Schedule::seq(effects),
+            locals,
+            fields,
+            query,
+            value,
+            memo: function.memo,
+        })
+    }
+
     fn bundle(
         &mut self,
         expression: &Expr,
@@ -837,6 +1126,9 @@ impl ScheduleLowering<'_, '_> {
             Expression::Path(path) => {
                 if let Some(names) = scope.rules.get(path) {
                     return Ok(names.clone());
+                }
+                if let Some(value) = scope.values.get(path) {
+                    return self.bundle(value, scope);
                 }
                 if let Some(name) = self.members.get(path) {
                     return Ok(vec![name.clone()]);
@@ -860,10 +1152,12 @@ impl ScheduleLowering<'_, '_> {
                     owner: path,
                     captures: BTreeMap::new(),
                     rules: BTreeMap::new(),
+                    values: BTreeMap::new(),
+                    tables: BTreeMap::new(),
                 };
                 let result = if let Expression::Block(block) = &definition.value {
-                    self.bind_rules(block, &path_name(path), global)
-                        .and_then(|scope| self.bundle(&block.value, &scope))
+                    self.bind_block(block, &path_name(path), global)
+                        .and_then(|(scope, _)| self.bundle(&block.value, &scope))
                 } else {
                     self.bundle(definition, &global)
                 };
@@ -887,6 +1181,33 @@ impl ScheduleLowering<'_, '_> {
             }
             Expression::Call { value, arguments } if self.is_constructor(value) => {
                 self.bundle_items(arguments, scope)
+            }
+            Expression::Call { value, arguments } => {
+                let owner = path(value)?;
+                let Some(Expr {
+                    value: Expression::Function(function),
+                    ..
+                }) = self.definitions.get(owner)
+                else {
+                    return Err(Error(format!(
+                        "{} is not a rule function",
+                        path_name(owner)
+                    )));
+                };
+                if function.has_frame() {
+                    return Err(Error("a rule function cannot execute a schedule".into()));
+                }
+                if !self.active.insert(owner.clone()) {
+                    return Err(Error("cyclic executable rule function".into()));
+                }
+                let args = self.call_arguments(function, arguments, scope)?;
+                let scope = Self::argument_scope(function, args, owner)?;
+                let name = format!("{}::bundle::{}", path_name(owner), self.next_bundle);
+                self.next_bundle += 1;
+                let (scope, _) = self.bind_block(&function.body, &name, scope)?;
+                let result = self.bundle(&function.body.value, &scope);
+                self.active.remove(owner);
+                result
             }
             Expression::Generic { .. } if self.is_constructor(expression) => Ok(Vec::new()),
             Expression::Tuple(items) => self.bundle_items(items, scope),
@@ -920,7 +1241,7 @@ impl ScheduleLowering<'_, '_> {
     fn call_schedule(
         &mut self,
         function: &Function,
-        args: Vec<ast::Expr>,
+        args: Vec<ScheduleArgument>,
         name: &str,
         owner: &Path,
     ) -> Result<Schedule, Error> {
@@ -938,30 +1259,12 @@ impl ScheduleLowering<'_, '_> {
     fn function(
         &mut self,
         function: &Function,
-        args: Vec<ast::Expr>,
+        args: Vec<ScheduleArgument>,
         name: &str,
         owner: &Path,
     ) -> Result<Schedule, Error> {
-        if function.parameters.len() != args.len() || !function.generics.is_empty() {
-            return Err(Error(format!(
-                "unsupported executable function signature for {name}"
-            )));
-        }
-        let captures = function
-            .parameters
-            .iter()
-            .zip(args)
-            .map(|(parameter, value)| (vec![parameter.name.clone()], value))
-            .collect();
-        self.block(
-            &function.body,
-            name,
-            ScheduleScope {
-                owner,
-                captures,
-                rules: BTreeMap::new(),
-            },
-        )
+        let scope = Self::argument_scope(function, args, owner)?;
+        self.block(&function.body, name, scope)
     }
 
     fn block(
@@ -970,18 +1273,38 @@ impl ScheduleLowering<'_, '_> {
         name: &str,
         scope: ScheduleScope<'_>,
     ) -> Result<Schedule, Error> {
-        let scope = self.bind_rules(block, name, scope)?;
-        self.schedule(&block.value, name, &scope)
+        let (scope, mut effects) = self.bind_block(block, name, scope)?;
+        effects.push(self.schedule(&block.value, name, &scope)?);
+        if let [only] = effects.as_slice() {
+            return Ok(only.clone());
+        }
+        Ok(Schedule::seq(effects))
     }
 
-    fn bind_rules<'a>(
+    fn bind_block<'a>(
         &mut self,
         block: &Block,
         name: &str,
         mut scope: ScheduleScope<'a>,
-    ) -> Result<ScheduleScope<'a>, Error> {
+    ) -> Result<(ScheduleScope<'a>, Vec<Schedule>), Error> {
+        let mut effects = Vec::new();
         for (index, binding) in block.bindings.iter().enumerate() {
-            let names = if let Expression::Rule { binders, clause } = &binding.value.value {
+            match &binding.value.value {
+                Expression::LocalTable(_) => {
+                    scope.tables.insert(
+                        binding.path.clone(),
+                        local_table_path(scope.owner, binding.value.range.start),
+                    );
+                    continue;
+                }
+                Expression::Run(schedule) => {
+                    let label = format!("@cdsl::{name}::run::{index}");
+                    effects.push(self.schedule(schedule, &label, &scope)?);
+                    continue;
+                }
+                _ => {}
+            }
+            if let Expression::Rule { binders, clause } = &binding.value.value {
                 let label = format!("@cdsl::{name}::rule::{index}");
                 RuleLowering {
                     schema: self.schema,
@@ -990,15 +1313,32 @@ impl ScheduleLowering<'_, '_> {
                     binders,
                     operation_matches: self.program.operation_matches.get(scope.owner),
                     captures: &scope.captures,
+                    tables: &scope.tables,
                 }
                 .install(self.rules, &label, clause, None)?;
-                vec![label]
+                scope.values.remove(&binding.path);
+                scope.rules.insert(binding.path.clone(), vec![label]);
             } else {
-                self.bundle(&binding.value, &scope)?
-            };
-            scope.rules.insert(binding.path.clone(), names);
+                let value = crate::normalize::substitute(&binding.value, &scope.values)?;
+                let lowering = RuleLowering {
+                    schema: self.schema,
+                    operations: self.operations,
+                    declarations: &self.dependencies.declarations,
+                    binders: &[],
+                    operation_matches: None,
+                    captures: &scope.captures,
+                    tables: &scope.tables,
+                };
+                let term = lowering.term(&value).ok();
+                scope.captures.remove(&binding.path);
+                if let Some(term) = term {
+                    scope.captures.insert(binding.path.clone(), term);
+                }
+                scope.rules.remove(&binding.path);
+                scope.values.insert(binding.path.clone(), value);
+            }
         }
-        Ok(scope)
+        Ok((scope, effects))
     }
 
     fn schedule(
@@ -1008,6 +1348,9 @@ impl ScheduleLowering<'_, '_> {
         scope: &ScheduleScope<'_>,
     ) -> Result<Schedule, Error> {
         if let Expression::Path(path) = &expression.value {
+            if let Some(value) = scope.values.get(path) {
+                return self.schedule(value, name, scope);
+            }
             if let Some(schedule) = self.global.get(path) {
                 return Ok(schedule.clone());
             }
@@ -1021,6 +1364,8 @@ impl ScheduleLowering<'_, '_> {
                 owner: path,
                 captures: BTreeMap::new(),
                 rules: BTreeMap::new(),
+                values: BTreeMap::new(),
+                tables: BTreeMap::new(),
             };
             let result = self.schedule(expression, &path_name(path), &global);
             self.active.remove(path);
@@ -1036,6 +1381,8 @@ impl ScheduleLowering<'_, '_> {
                     owner: scope.owner,
                     captures: scope.captures.clone(),
                     rules: scope.rules.clone(),
+                    values: scope.values.clone(),
+                    tables: scope.tables.clone(),
                 },
             );
         }
@@ -1096,18 +1443,7 @@ impl ScheduleLowering<'_, '_> {
                 if !self.active.insert(path.clone()) {
                     return Err(Error("cyclic executable schedule function".into()));
                 }
-                let lowering = RuleLowering {
-                    schema: self.schema,
-                    operations: self.operations,
-                    declarations: &self.dependencies.declarations,
-                    binders: &[],
-                    operation_matches: None,
-                    captures: &scope.captures,
-                };
-                let args = arguments
-                    .iter()
-                    .map(|argument| lowering.term(argument))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let args = self.call_arguments(function, arguments, scope)?;
                 let result = self.call_schedule(function, args, name, path);
                 self.active.remove(path);
                 result
@@ -1130,62 +1466,13 @@ impl ScheduleLowering<'_, '_> {
     }
 }
 
-type MemoOutputs = Vec<(String, Path)>;
-
-fn memo_definition(expression: &Expr) -> Result<Option<(Function, MemoOutputs)>, Error> {
-    let Expression::Call { value, arguments } = &expression.value else {
-        return Ok(None);
-    };
-    if !matches!(&value.value, Expression::Path(path) if path == &["std", "analysis", "memo"]) {
-        return Ok(None);
-    }
-    let [
-        Expr {
-            value: Expression::Function(function),
-            ..
-        },
-    ] = arguments.as_slice()
-    else {
-        return Err(Error("memo requires a producer function".into()));
-    };
-    let Expression::Record(fields) = &function.body.value.value else {
-        return Err(Error(
-            "memo must return a schedule and named outputs".into(),
-        ));
-    };
-    let [(_, schedule), (_, outputs)] = fields.as_slice() else {
-        return Err(Error(
-            "memo must return a schedule and named outputs".into(),
-        ));
-    };
-    let (schedule, outputs) = if fields[0].0 == "schedule" {
-        (schedule, outputs)
-    } else {
-        (outputs, schedule)
-    };
-    let Expression::Record(outputs) = &outputs.value else {
-        return Err(Error("memo requires a record of output relations".into()));
-    };
-    if outputs.is_empty() {
-        return Err(Error(
-            "memo requires at least one named output relation".into(),
-        ));
-    }
-    let outputs = outputs
-        .iter()
-        .map(|(name, relation)| Ok((name.clone(), path(relation)?.clone())))
-        .collect::<Result<Vec<_>, Error>>()?;
-    let mut function = (**function).clone();
-    function.body.value = Box::new(schedule.clone());
-    Ok(Some((function, outputs)))
-}
-
 struct RuleLowering<'a> {
     schema: &'a Schema,
     operations: &'a BTreeMap<Path, OperationImport>,
     declarations: &'a BTreeMap<Path, &'a Declaration>,
     binders: &'a [RuleBinder],
     captures: &'a BTreeMap<Path, ast::Expr>,
+    tables: &'a BTreeMap<Path, Path>,
     operation_matches: Option<&'a BTreeMap<usize, CheckedMatch>>,
 }
 
@@ -1358,6 +1645,14 @@ impl<'a> MatchPorts<'a> {
 }
 
 impl RuleLowering<'_> {
+    fn table_path<'a>(&'a self, path: &'a Path) -> &'a Path {
+        self.tables.get(path).unwrap_or(path)
+    }
+
+    fn name(&self, path: &Path) -> String {
+        self.schema.name(self.table_path(path))
+    }
+
     fn local<'a>(&self, path: &'a Path) -> Option<&'a str> {
         let [name] = path.as_slice() else {
             return None;
@@ -1448,7 +1743,7 @@ impl RuleLowering<'_> {
                 self.schema
                     .database()
                     .schema()
-                    .table_named(&self.schema.name(path))
+                    .table_named(&self.name(path))
                     .is_some()
             })
         };
@@ -1569,7 +1864,7 @@ impl RuleLowering<'_> {
         let span = tir_egglog::span!();
         Ok(match &expr.value {
             Expression::Path(path) if self.schema.constructors.contains(path) => {
-                ast::Expr::Call(span, self.schema.name(path), vec![])
+                ast::Expr::Call(span, self.name(path), vec![])
             }
             Expression::Path(path)
                 if !self
@@ -1625,7 +1920,7 @@ impl RuleLowering<'_> {
             }
             Expression::Call { value, arguments } => ast::Expr::Call(
                 span,
-                self.schema.name(path(value)?),
+                self.name(path(value)?),
                 arguments
                     .iter()
                     .map(|arg| self.term(arg))
@@ -1637,7 +1932,7 @@ impl RuleLowering<'_> {
                 arguments,
             } if arguments.is_empty() => {
                 let relation = path(value)?;
-                let name = self.schema.name(relation);
+                let name = self.name(relation);
                 let columns =
                     self.schema.named_relations.get(&name).ok_or_else(|| {
                         Error(format!("{name} does not have named relation columns"))
@@ -1721,7 +2016,7 @@ impl RuleLowering<'_> {
             }
         } else if let Expression::Call { value, arguments } = &expr.value
             && let Expression::Path(function) = &value.value
-            && self.schema.functions.contains(function)
+            && self.schema.functions.contains(self.table_path(function))
         {
             let (last, keys) = arguments
                 .split_last()
@@ -1730,7 +2025,7 @@ impl RuleLowering<'_> {
                 span,
                 ast::Expr::Call(
                     span,
-                    self.schema.name(function),
+                    self.name(function),
                     keys.iter()
                         .map(|arg| self.term(arg))
                         .collect::<Result<_, _>>()?,
@@ -1843,14 +2138,14 @@ impl RuleLowering<'_> {
         }
         if let Expression::Call { value, arguments } = &expr.value
             && let Expression::Path(function) = &value.value
-            && self.schema.functions.contains(function)
+            && self.schema.functions.contains(self.table_path(function))
         {
             let (last, keys) = arguments
                 .split_last()
                 .ok_or_else(|| Error("function row requires output".into()))?;
             return Ok(ast::Action::Set(
                 span,
-                self.schema.name(function),
+                self.name(function),
                 keys.iter()
                     .map(|arg| self.term(arg))
                     .collect::<Result<_, _>>()?,
@@ -1861,11 +2156,105 @@ impl RuleLowering<'_> {
     }
 }
 
+struct FrameCode {
+    bytes: Vec<u8>,
+    locals: BTreeSet<String>,
+    reads: Vec<String>,
+}
+
+impl ScopedFunction {
+    fn compile(
+        &self,
+        db: &Database,
+        rules: &Rules,
+        templates: &BTreeSet<String>,
+    ) -> Result<FrameCode, Error> {
+        let rules = rules.select(std::slice::from_ref(&self.schedule), &[]);
+        let mut stages = Vec::new();
+        let mut pending = vec![&self.schedule];
+        while let Some(schedule) = pending.pop() {
+            match schedule {
+                Schedule::Sequence(_, children) => pending.extend(children.iter().rev()),
+                Schedule::Repeat(_, _, child) | Schedule::Saturate(_, child) => pending.push(child),
+                Schedule::Run(..) => stages.push(schedule.clone()),
+            }
+        }
+        let footprints = if self.memo {
+            rules
+                .materialization_footprints(db, stages.iter())
+                .map_err(error)?
+        } else {
+            Vec::new()
+        };
+        let table_name = |table| db.schema().table(table).name();
+        let mut locals = self.locals.iter().cloned().collect::<BTreeSet<_>>();
+        for footprint in &footprints {
+            for &table in &footprint.writes {
+                let name = table_name(table);
+                if templates.contains(name) {
+                    locals.insert(name.to_owned());
+                }
+                if self.memo && !locals.contains(name) {
+                    return Err(Error(format!(
+                        "memo function writes outside its local tables: {name}"
+                    )));
+                }
+            }
+        }
+        let mut reads = BTreeSet::new();
+        let mut completed = BTreeSet::<tir_egglog::TableId>::new();
+        for footprint in footprints {
+            completed.extend(footprint.writes.iter().copied());
+            for table in footprint.reads {
+                let name = table_name(table);
+                if locals.contains(name) {
+                    if !completed.contains(&table) && !name.starts_with("@local::") {
+                        return Err(Error(format!(
+                            "schedule reads local table {name} before its producer"
+                        )));
+                    }
+                } else {
+                    reads.insert(name.to_owned());
+                }
+            }
+        }
+        let tables = locals
+            .iter()
+            .map(|name| db.table(name).map_err(error))
+            .collect::<Result<_, _>>()?;
+        let bytes = rules
+            .compile_with_tables(db, &tables)
+            .map_err(error)?
+            .to_bytes();
+        Ok(FrameCode {
+            bytes,
+            locals,
+            reads: reads.into_iter().collect(),
+        })
+    }
+}
+
+struct ScopedQuery {
+    parameters: Vec<crate::ast::Binder>,
+    body: Expr,
+    tables: BTreeMap<Path, Path>,
+}
+
+struct ScopedFunction {
+    parameters: Vec<crate::ast::Binder>,
+    schedule: Schedule,
+    locals: Vec<String>,
+    fields: Vec<(String, Path)>,
+    query: Option<ScopedQuery>,
+    value: Option<Expr>,
+    memo: bool,
+}
+
 /// Typed rules ready for engine planning against the installed schema.
 pub struct LoweredProgram {
     rules: Rules,
     schedules: BTreeMap<Path, Schedule>,
-    memos: BTreeMap<Path, MemoOutputs>,
+    scoped: BTreeMap<Path, ScopedFunction>,
     collections: BTreeMap<Path, String>,
 }
 impl LoweredProgram {
@@ -1873,48 +2262,20 @@ impl LoweredProgram {
     pub fn schedules(&self) -> &BTreeMap<Path, Schedule> {
         &self.schedules
     }
-    fn compile_producers(
-        &self,
-        database: &Database,
-        selected: &[String],
-    ) -> Result<(tir_egglog::Program, Vec<tir_egglog::Producer>), Error> {
-        let schedules = self
-            .schedules
-            .iter()
-            .filter(|(path, _)| path.starts_with(selected))
-            .collect::<Vec<_>>();
-        let (program, producers) = self
-            .rules
-            .compile_producers(
-                database,
-                schedules.iter().map(|(_, schedule)| (*schedule).clone()),
-            )
-            .map_err(error)?;
-        for ((path, _), producer) in schedules.into_iter().zip(&producers) {
-            if let Some(outputs) = self.memos.get(path) {
-                for (_, output) in outputs {
-                    let table = database
-                        .table(
-                            output
-                                .last()
-                                .ok_or_else(|| Error("missing output name".into()))?,
-                        )
-                        .map_err(error)?;
-                    if !producer.writes.contains(&table) {
-                        return Err(Error(format!(
-                            "{} does not write output {}",
-                            path_name(path),
-                            path_name(output)
-                        )));
-                    }
-                }
-            }
-        }
-        Ok((program, producers))
-    }
-
     /// Plan executable instructions against a database without replacing it.
     pub fn compile(&self, database: &Database) -> Result<tir_egglog::Program, Error> {
-        self.rules.compile(database).map_err(error)
+        if self.scoped.is_empty() {
+            return self.rules.compile(database).map_err(error);
+        }
+        let schedules = self.schedules.values().cloned().collect::<Vec<_>>();
+        let collections = self
+            .collections
+            .values()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        self.rules
+            .select(&schedules, &collections)
+            .compile(database)
+            .map_err(error)
     }
 }

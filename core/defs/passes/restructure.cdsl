@@ -1,5 +1,5 @@
 // RVSDG Control Tree Translation pass (Reissmann §5.1.2 Algorithm III) in CDSL/Egglog.
-// Reads IR + AnalysisManager tables (core/defs/analysis/cfg.cdsl) and computes the complete
+// Reads IR and the completed CFG tables (core/defs/analysis/cfg.cdsl) and computes the complete
 // restructured Nodes region tree, value/state dataflow, switch folding, and emission plan.
 
 use std::bigint::BigInt;

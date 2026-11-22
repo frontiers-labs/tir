@@ -12,8 +12,6 @@ pub enum OutputKind<'a> {
     OpDef(&'a str),
     /// Rust API and private bytecode for the selected program.
     Program(&'a str),
-    /// Rust API and dependency metadata for restartable analysis producers.
-    Producers(&'a str),
     /// Rust interface for a catalog owned by a workspace package.
     Catalog(&'a str),
 }
@@ -60,7 +58,6 @@ pub fn compile<'a>(
         let language = match kind {
             OutputKind::OpDef(_) => "Rust",
             OutputKind::Program(_) => "program",
-            OutputKind::Producers(_) => "producers",
             OutputKind::Catalog(_) => "catalog",
         };
         let invalid_filter = || {
@@ -103,15 +100,12 @@ pub fn compile<'a>(
                     bytes: rust.into_bytes(),
                 });
             }
-            OutputKind::OpDef(destination)
-            | OutputKind::Program(destination)
-            | OutputKind::Producers(destination) => {
+            OutputKind::OpDef(destination) | OutputKind::Program(destination) => {
                 let checked = checked
                     .as_ref()
                     .ok_or_else(|| Error("missing checked package".into()))?;
                 let rust = match kind {
                     OutputKind::Program(_) => checked.render_program(&module),
-                    OutputKind::Producers(_) => checked.render_producers(&module),
                     _ => checked.artifact().render_rust_module(&module),
                 }
                 .map_err(|error| Error(format!("{language} filter {filter:?}: {error}")))?;

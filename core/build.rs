@@ -1,4 +1,4 @@
-use tir_cdsl::OutputKind::{OpDef, Producers, Program};
+use tir_cdsl::OutputKind::{OpDef, Program};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tir_cdsl::compile([
@@ -18,7 +18,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("core::dialects::type_def::*", OpDef("type_def_ops.rs")),
         ("core::dialects::vector::*", OpDef("vector_ops.rs")),
         ("core::eqsat::*", Program("eqsat.rs")),
-        ("core::analysis::*", Producers("analyses.rs")),
+        ("core::eqsat::masks::*", Program("eqsat_masks.rs")),
+        ("core::analysis::*", Program("analyses.rs")),
         ("core::passes::restructure::*", Program("restructure.rs")),
     ])?;
     Ok(())

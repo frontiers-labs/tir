@@ -15,7 +15,6 @@ doctest = false
 interp = []
 
 [dependencies]
-tir-cdsl.workspace = true
 tir-macros.workspace = true
 tir-egglog.workspace = true
 tir-symbolic.workspace = true

@@ -129,10 +129,6 @@ const SOURCES: &[(&str, &str)] = &[
         include_str!("../stdlib/std/schedule.cdsl"),
     ),
     (
-        "std/analysis.cdsl",
-        include_str!("../stdlib/std/analysis.cdsl"),
-    ),
-    (
         "std/rewrite.cdsl",
         include_str!("../stdlib/std/rewrite.cdsl"),
     ),
