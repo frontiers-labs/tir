@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, fmt::Write};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write,
+};
 
 use crate::{
     Error, Program,
@@ -12,7 +15,7 @@ pub(super) fn emit(
     binding: &Binding,
     fields: &[Node<OpField>],
     output: &mut String,
-) -> Result<(), Error> {
+) -> Result<BTreeSet<Path>, Error> {
     emit_fixed_operation(program, export, module, binding, fields, output)
         .map_err(|error| Error(error.to_string()))
 }
@@ -24,7 +27,7 @@ fn emit_fixed_operation(
     binding: &Binding,
     fields: &[Node<OpField>],
     output: &mut String,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<BTreeSet<Path>, Box<dyn std::error::Error>> {
     let identity = binding
         .operation_name(module)
         .ok_or("operation has no name")?;
@@ -50,17 +53,6 @@ fn emit_fixed_operation(
             option(name).map(|expr| &expr.value),
             Some(Expression::Literal(Literal::Bool(true)))
         )
-    };
-    let inherited = match option("interfaces").map(|expr| &expr.value) {
-        Some(Expression::Record(fields)) => fields
-            .iter()
-            .map(|(name, value)| match value.value {
-                Expression::Literal(Literal::Bool(true)) => Ok(name.as_str()),
-                _ => Err("a Rust interface must name an existing implementation"),
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        None => Vec::new(),
-        _ => return Err("Rust interfaces must be a record".into()),
     };
     let (parameters, result, results) = fields
         .iter()
@@ -170,41 +162,18 @@ fn emit_fixed_operation(
     if matches!(result.value, Expression::Tuple(_)) || results.len() > 1 {
         return Err("expected one fixed result".into());
     }
-    let entries = fields
-        .iter()
-        .find_map(|field| match &field.value {
-            OpField::Interfaces { entries, .. } => Some(entries),
-            _ => None,
-        })
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    let mut interfaces = Vec::new();
-    for (name, path, methods) in entries {
-        let Expression::Record(methods) = &methods.value else {
-            return Err("expected an interface method record".into());
+    let Interfaces {
+        mut implementations,
+        method_types,
+        mut dependencies,
+    } = operation_interfaces(program, module, binding, fields)?;
+    for expression in super::interface_entries(option("interfaces")) {
+        let Expression::Path(path) = &expression.value else {
+            return Err("expected a declared interface".into());
         };
-        let canonical = path.last().ok_or("interface has no declaration name")?;
-        if let Some(native) = rust_trait(program, path)? {
-            let implementation = if inherited.contains(&native) {
-                None
-            } else {
-                Some(native_methods(native, methods)?)
-            };
-            interfaces.push((native, format!("tir::{native}"), implementation));
-        } else if methods.is_empty() {
-            interfaces.push((
-                name.as_str(),
-                format!("super::__cdsl_values::r#{canonical}"),
-                Some(String::new()),
-            ));
-        } else {
-            return Err("generated interface methods require Rust lowering".into());
-        }
-    }
-    for interface in inherited {
-        if !interfaces.iter().any(|(name, _, _)| *name == interface) {
-            interfaces.push((interface, format!("tir::{interface}"), None));
-        }
+        let name = path.last().ok_or("interface has no declaration name")?;
+        let reference = super::interface_path(program, module, path, "super", &mut dependencies)?;
+        implementations.push((name, reference, None));
     }
 
     let rust_name = operation_name(name);
@@ -220,88 +189,74 @@ fn emit_fixed_operation(
             .as_deref()
             .map(|ty| (results.first().map_or("result", String::as_str), ty)),
         &attributes,
-        &interfaces,
+        &implementations,
         (region, enabled("format")),
     )?;
-    writeln!(output, "mod __cdsl_{name} {{\n{generated}}}")?;
+    writeln!(output, "mod __cdsl_{name} {{")?;
+    if !method_types.is_empty() {
+        writeln!(output, "use super::__cdsl_values::*;")?;
+        dependencies.extend(method_types);
+    }
+    writeln!(output, "{generated}}}")?;
     writeln!(
         output,
         "pub use __cdsl_{name}::{{{name} as r#{export}, {rust_name}, {rust_name}Builder}};"
     )?;
-    Ok(())
+    Ok(dependencies)
 }
 
-pub(super) fn rust_trait<'a>(
-    program: &'a Program,
-    path: &[String],
-) -> Result<Option<&'a str>, Error> {
-    let (name, module) = path
-        .split_last()
-        .ok_or_else(|| Error("interface has no declaration name".into()))?;
-    let bindings: Path = module
-        .iter()
-        .cloned()
-        .chain(["rust_interfaces".into()])
-        .collect();
-    let Some(Declaration::Let { binding, .. }) = program.find_rust_export(&bindings) else {
-        return Ok(None);
-    };
-    let Expression::Record(fields) = &binding.value.value else {
-        return Err(Error("Rust interface bindings must be a record".into()));
-    };
-    let Some((_, bound)) = fields.iter().find(|(interface, _)| interface == name) else {
-        return Ok(None);
-    };
-    let Expression::Literal(Literal::String(rust_name)) = &bound.value else {
-        return Err(Error(format!(
-            "Rust interface binding for {name} must name a trait"
-        )));
-    };
-    let mut chars = rust_name.chars();
-    if !chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-        || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
-        return Err(Error(format!(
-            "invalid Rust trait identifier {rust_name:?}"
-        )));
-    }
-    Ok(Some(rust_name))
+type InterfaceImplementation<'a> = (&'a str, String, Option<String>);
+
+#[derive(Default)]
+struct Interfaces<'a> {
+    implementations: Vec<InterfaceImplementation<'a>>,
+    method_types: BTreeSet<Path>,
+    dependencies: BTreeSet<Path>,
 }
 
-fn native_methods(interface: &str, methods: &[(String, Expr)]) -> Result<String, &'static str> {
-    let unsupported = "interface methods require a native implementation";
-    let mut implementation = String::new();
-    for (method, expression) in methods {
-        let Expression::Function(function) = &expression.value else {
-            return Err(unsupported);
+fn operation_interfaces<'a>(
+    program: &Program,
+    module: &[String],
+    binding: &Binding,
+    fields: &'a [Node<OpField>],
+) -> Result<Interfaces<'a>, Box<dyn std::error::Error>> {
+    let mut interfaces = Interfaces::default();
+    for field in fields {
+        let OpField::Interfaces { receiver, entries } = &field.value else {
+            continue;
         };
-        if !function.parameters.is_empty() || !function.body.bindings.is_empty() {
-            return Err(unsupported);
-        }
-        let body = &function.body.value.value;
-        match ((interface, method.as_str()), body) {
-            (
-                ("Commutative", "is_commutative") | ("Speculatable", "is_speculatable"),
-                Expression::Literal(Literal::Bool(true)),
-            ) => {}
-            (("OpCost", "cost"), Expression::Call { value, arguments })
-                if type_argument(value, &["std", "bits", "literal"]).is_some_and(|width| {
-                    matches!(&width.value, Expression::Literal(Literal::Natural(width)) if width == "32")
-                }) =>
-            {
-                let [argument] = arguments.as_slice() else {
-                    return Err(unsupported);
-                };
-                let Expression::Literal(Literal::Natural(cost)) = &argument.value else {
-                    return Err(unsupported);
-                };
-                let cost = cost.parse::<u32>().map_err(|_| "operation cost exceeds u32")?;
-                implementation = format!("fn cost(&self) -> u32 {{ {cost} }}");
+        for (_, path, methods) in entries {
+            let name = path.last().ok_or("interface has no declaration name")?;
+            let trait_path = super::interface_path(
+                program,
+                module,
+                path,
+                "super",
+                &mut interfaces.dependencies,
+            )?;
+            let Expression::Record(methods) = &methods.value else {
+                return Err("expected an interface method record".into());
+            };
+            let mut captures_receiver = false;
+            for (_, method) in methods {
+                captures_receiver |=
+                    crate::totality::free_paths(method)?.contains(std::slice::from_ref(receiver));
             }
-            _ => return Err(unsupported),
+            // Methods using live attributes need a Rust impl over the operation handle.
+            let implementation = if captures_receiver {
+                None
+            } else {
+                let (methods, types) =
+                    super::value::interface_methods(program, module, methods, &binding.generics)?;
+                interfaces.method_types.extend(types);
+                Some(methods)
+            };
+            interfaces
+                .implementations
+                .push((name.as_str(), trait_path, implementation));
         }
     }
-    Ok(implementation)
+    Ok(interfaces)
 }
 
 fn attributes<'a>(

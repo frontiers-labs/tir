@@ -815,7 +815,7 @@ impl Checker {
             && self.syntactic_type(&binding.value, definitions, &types);
         let ty = if self.interfaces.contains(path) {
             let (types, generics) = self.generics(definitions, &binding.generics, &types)?;
-            let target = self.annotation(definitions, &binding.value, &types)?;
+            let target = self.interface_type(definitions, binding, &types)?;
             if self.universe_level(&target) != 0 {
                 return Err(Error("interface contract must be a small Type".into()));
             }

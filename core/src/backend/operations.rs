@@ -64,7 +64,7 @@ __cdsl_asm_BlockEndOp!();
 
 impl Terminator for BlockEndOp {}
 
-__cdsl_asm_VirtualReturnOp!();
+__cdsl_asm_VirtualReturnOp!(tir::backend::MachineInstruction);
 
 impl VirtualReturnOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
@@ -98,7 +98,7 @@ impl MachineInstruction for VirtualReturnOp {
     }
 }
 
-__cdsl_asm_VirtualBranchOp!();
+__cdsl_asm_VirtualBranchOp!(tir::backend::MachineInstruction);
 
 impl MachineInstruction for VirtualBranchOp {
     fn info(&self) -> &'static InstrInfo {
@@ -133,7 +133,7 @@ impl VirtualBranchOp {
 // A parallel copy: every result takes its source at once, as one point. The
 // register allocator splits the live ranges at a constrained instruction with
 // one (Hack's thesis, paper § 4) and sequences it on the assigned registers.
-__cdsl_asm_ParallelCopyOp!();
+__cdsl_asm_ParallelCopyOp!(tir::backend::MachineInstruction);
 
 impl MachineInstruction for ParallelCopyOp {
     fn info(&self) -> &'static InstrInfo {
@@ -146,7 +146,7 @@ impl MachineInstruction for ParallelCopyOp {
     }
 }
 
-__cdsl_asm_VirtualCallOp!();
+__cdsl_asm_VirtualCallOp!(tir::backend::MachineInstruction);
 
 impl MachineInstruction for VirtualCallOp {
     fn info(&self) -> &'static InstrInfo {
@@ -159,7 +159,7 @@ impl MachineInstruction for VirtualCallOp {
     }
 }
 
-__cdsl_asm_VirtualIndirectCallOp!();
+__cdsl_asm_VirtualIndirectCallOp!(tir::backend::MachineInstruction);
 
 impl MachineInstruction for VirtualIndirectCallOp {
     fn info(&self) -> &'static InstrInfo {

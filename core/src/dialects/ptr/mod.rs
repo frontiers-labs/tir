@@ -184,9 +184,9 @@ __cdsl_ptr_StoreOp!();
 
 // Copy exactly `size` bytes between non-overlapping ranges. A zero-sized copy
 // accesses neither pointer. This operation has no volatile or atomic semantics.
-__cdsl_ptr_MemcpyOp!();
+__cdsl_ptr_MemcpyOp!(crate::Intrinsic);
 
-__cdsl_ptr_MemsetOp!();
+__cdsl_ptr_MemsetOp!(crate::Intrinsic);
 
 // The address of field `field` of the `ty` that `base` points at: a field by
 // name, never a byte offset, which the layout in scope gives.

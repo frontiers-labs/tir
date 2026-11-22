@@ -48,51 +48,8 @@ pub enum DifferenceSet<Kind: Nat, Size: Nat> {
     Zero<Size: Nat>(List<SymbolDifference<Size>>): DifferenceSet<2, Size>,
 }
 
-pub enum Visibility {
-    Public,
-    Private,
-}
-pub interface SymbolInterface<Ty: Type> {
-    symbol_name: () -> String,
-    symbol_signature: () -> Option<List<Ty>>,
-    symbol_result_type: () -> Option<Ty>,
-    symbol_visibility: () -> Visibility,
-    is_definition: () -> Bool,
-}
-
-use SymbolInterface as Symbol;
+pub use std::ir::interfaces::*;
 use PureInterface as Pure;
-
-pub interface Terminator<Block: Type> { successors: () -> List<Block> }
-
-pub interface ConstantLike<w: Nat> { constant_value: () -> El<Bits<w>> }
-
-pub interface PureInterface {}
-
-pub interface Additive {}
-
-pub interface Subtractive {}
-
-pub interface IntegerArithmetic {}
-
-pub interface SameOperandAndResultType {}
-
-pub interface Congruent {}
-
-pub interface Commutative { is_commutative: () -> Bool }
-
-pub interface Speculatable { is_speculatable: () -> Bool }
-
-pub interface OpCost { cost: () -> El<Bits<32>> }
-
-let rust_interfaces = {
-    Commutative: "Commutative",
-    ConstantLike: "ConstantLike",
-    OpCost: "OpCost",
-    Speculatable: "Speculatable",
-    SymbolInterface: "Symbol",
-    Terminator: "Terminator",
-};
 
 pub enum StateResource {
     Memory,
@@ -105,7 +62,6 @@ pub enum AggregateKind {
 }
 
 let ConstantAttributes: Type = { value: Int };
-let constant_rust = { interfaces: { ConstantLike: true } };
 
 pub let constant<w: Nat> = op {
     signature: () -> El<Bits<w>>,
@@ -346,12 +302,10 @@ pub let refine<T: Type> = op {
     },
 };
 
-let module_end_rust = { interfaces: { Terminator: true } };
-
-pub let module_end<Block: Type> = op {
+pub let module_end = op {
     signature: () -> (),
     interfaces: {
-        Terminator: { successors: fn () -> List<Block> { List::Nil<Block> } },
+        Terminator: { successors: fn () -> List<std::ir::BlockId> { List::Nil<std::ir::BlockId> } },
     },
 };
 
@@ -399,10 +353,10 @@ pub let module<Params: Type, Results: Type, Input: Type, Trace: Type>: ModuleOpe
 let global_rust = {
     attributes: { sym_name: String },
     format: true,
-    interfaces: { Symbol: true, Global: true },
+    interfaces: Global,
 };
 
-pub let global<P: IrTy, Ty: Type> = op {
+pub let global<P: IrTy> = op {
     signature: () -> Ptr<P>,
     attributes: {
         sym_name: String,
@@ -418,8 +372,8 @@ pub let global<P: IrTy, Ty: Type> = op {
     interfaces: {
         Symbol: {
                 symbol_name: fn () -> String { self.sym_name },
-                symbol_signature: fn () -> Option<List<Ty>> { option::none<List<Ty>> },
-                symbol_result_type: fn () -> Option<Ty> { option::none<Ty> },
+                symbol_signature: fn () -> Option<List<IrTy>> { option::none<List<IrTy>> },
+                symbol_result_type: fn () -> Option<IrTy> { option::none<IrTy> },
                 symbol_visibility: fn () -> Visibility {
                     if option::get_or(self.sym_visibility, "") == "private" {
                         Visibility::Private
@@ -449,10 +403,6 @@ pub let ptr_to_fn<Args: List<IrTy>, Ret: IrTy, E: EffectSet, P: IrTy> = op {
 };
 
 
-pub let GlobalInterface<Addr: Type> = {
-    address: () -> Addr,
-    initializer: () -> Option<List<El<Bits<8>>>>,
-};
 
 pub let InterpInterface<V: Type, S: Type, R: Type> = {
     evaluate: (List<V>, S) -> (R, S),
@@ -466,7 +416,7 @@ pub let make_tuple = {
     dialect: "builtin",
     operands: { elements: "*_" },
     results: { result: "tuple<_>" },
-    interfaces: "crate::Speculatable",
+    interfaces: Speculatable,
     state: "none",
 };
 
@@ -477,6 +427,6 @@ pub let tuple_get = {
     operands: { tuple: "tuple<_>" },
     results: { result: "_" },
     attributes: { index: "UInt" },
-    interfaces: "crate::Speculatable",
+    interfaces: Speculatable,
     state: "none",
 };

@@ -336,17 +336,13 @@ fn operation_cdsl(
     let attrs = attrs.join(", ");
     let assembly_attrs = assembly_attrs.join(", ");
     let immediates = immediates.join(", ");
-    let terminator = if terminator {
-        ", \"tir::Terminator\""
-    } else {
-        ""
-    };
+    let terminator = if terminator { ", Terminator" } else { "" };
     format!(
         "pub let {rust_name} = {{ rust_name: \"{rust_name}\", name: {name:?}, dialect: {dialect:?}, \
          operands: {{ {uses} }}, results: {{ {results} }}, attributes: {{ {attrs} }}, \
          machine: true, assembly: {{ attributes: {{ {assembly_attrs} }} }}, \
          immediates: {{ {immediates} }}, \
-         interfaces: (\"tir::backend::MachineInstruction\", \"tir::ResourceEffects\"{terminator}), \
+         interfaces: (ResourceEffects{terminator}), \
          state: \"in_out\", custom_format: true }};\n"
     )
 }
@@ -990,7 +986,7 @@ fn emit_instruction(
     let touches_memory = reads_memory || writes_memory;
     let define = format_ident!("__cdsl_{dialect}_{name_ident}");
     out.instruction_defs.push(quote! {
-        #define!();
+        #define!(tir::backend::MachineInstruction);
         #terminator_impl
     });
 
