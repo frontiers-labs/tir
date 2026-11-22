@@ -3,6 +3,8 @@
 
 use crate::{AnalysisManager, Context, OpId, PassError};
 
+pub use super::generated::{CfgScopeFacts as ScopeFacts, cfg_scope as scope};
+
 /// Ensure the CDSL CFG + Reissmann §5.1.2 analysis catalog is installed on `context`.
 pub fn ensure_installed(context: &Context) -> Result<(), PassError> {
     AnalysisManager::ensure_default(context)

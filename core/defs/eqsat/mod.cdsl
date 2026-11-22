@@ -8,6 +8,7 @@ mod loops;
 mod fp;
 mod layout;
 mod schedule;
+mod rewrites;
 
 pub use bits::*;
 pub use context::*;
@@ -17,6 +18,7 @@ pub use loops::*;
 pub use fp::*;
 pub use layout::*;
 pub use schedule::*;
+pub use rewrites::*;
 
 pub enum Scalar {
     Read(Int, std::ir::ValueId),
@@ -29,6 +31,7 @@ pub enum Form {
     Read(std::ir::IntegerRef),
     Bits(BigInt),
     Bin(std::ir::BinaryIntegerOperation, Form, Form),
+    Constant(std::ir::OperationKind, String, BigInt),
 }
 
 pub enum UseOwner {

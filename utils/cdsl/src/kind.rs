@@ -1,6 +1,9 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use crate::ast::{Binding, Expr, Expression, Literal, OpField};
+use crate::{
+    ast::{Binding, Expr, Expression, Literal, OpField},
+    compiler::CARGO_PACKAGE_ROOT_PREFIX,
+};
 
 /// The serialized link and the fixed-port arity of its owning declaration.
 #[derive(Clone)]
@@ -10,7 +13,12 @@ pub(crate) struct OperationImport {
     pub ports: Option<(usize, usize)>,
 }
 
-fn hash_contract(ty: &Expr, binders: &[crate::ast::Binder], hash: &mut impl Hasher) {
+fn hash_contract(
+    ty: &Expr,
+    binders: &[crate::ast::Binder],
+    package_root: &[String],
+    hash: &mut impl Hasher,
+) {
     match &ty.value {
         Expression::Path(path) => {
             0u8.hash(hash);
@@ -19,7 +27,7 @@ fn hash_contract(ty: &Expr, binders: &[crate::ast::Binder], hash: &mut impl Hash
             {
                 index.hash(hash);
             } else {
-                path.hash(hash);
+                path.strip_prefix(package_root).unwrap_or(path).hash(hash);
             }
         }
         Expression::Literal(literal) => {
@@ -35,15 +43,15 @@ fn hash_contract(ty: &Expr, binders: &[crate::ast::Binder], hash: &mut impl Hash
             3u8.hash(hash);
             args.len().hash(hash);
             for arg in args {
-                hash_contract(arg, binders, hash);
+                hash_contract(arg, binders, package_root, hash);
             }
         }
         Expression::Generic { value, arguments } => {
             4u8.hash(hash);
-            hash_contract(value, binders, hash);
+            hash_contract(value, binders, package_root, hash);
             arguments.len().hash(hash);
             for arg in arguments {
-                hash_contract(arg, binders, hash);
+                hash_contract(arg, binders, package_root, hash);
             }
         }
         Expression::Record(fields) => {
@@ -51,7 +59,7 @@ fn hash_contract(ty: &Expr, binders: &[crate::ast::Binder], hash: &mut impl Hash
             fields.len().hash(hash);
             for (field, value) in fields {
                 field.hash(hash);
-                hash_contract(value, binders, hash);
+                hash_contract(value, binders, package_root, hash);
             }
         }
         _ => 6u8.hash(hash),
@@ -75,15 +83,19 @@ impl Binding {
                 _ => None,
             })
         });
+        let package_root = module
+            .first()
+            .filter(|name| name.starts_with(CARGO_PACKAGE_ROOT_PREFIX))
+            .map_or(&[][..], std::slice::from_ref);
         let mut contract = DefaultHasher::new();
         for binder in &self.generics {
-            hash_contract(&binder.ty, &self.generics, &mut contract);
+            hash_contract(&binder.ty, &self.generics, package_root, &mut contract);
         }
         let ports = if let Some((parameters, result, results)) = signature {
             for parameter in parameters {
-                hash_contract(&parameter.ty, &self.generics, &mut contract);
+                hash_contract(&parameter.ty, &self.generics, package_root, &mut contract);
             }
-            hash_contract(result, &self.generics, &mut contract);
+            hash_contract(result, &self.generics, package_root, &mut contract);
             let outputs = if matches!(result.value, Expression::Unit) {
                 0
             } else {
@@ -91,12 +103,14 @@ impl Binding {
             };
             Some((parameters.len(), outputs))
         } else {
-            hash_contract(&self.value, &self.generics, &mut contract);
+            hash_contract(&self.value, &self.generics, package_root, &mut contract);
             self.native_ports()
                 .map(|(inputs, outputs)| (inputs.len(), outputs.len()))
         };
         ports.hash(&mut contract);
-        let owner = [module, self.path.as_slice()].concat().join("::");
+        let owner = [module.strip_prefix(package_root)?, self.path.as_slice()]
+            .concat()
+            .join("::");
         Some(OperationImport {
             symbol: format!("@cdsl:decl:{source}:{owner}:{:016x}", contract.finish()),
             name,

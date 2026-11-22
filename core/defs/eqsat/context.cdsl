@@ -1,16 +1,19 @@
 use std::bigint::BigInt;
+use std::list::List::Cons as cons;
+use std::list::List::Nil as nil;
 
 pub let EqSatRoot: std::ir::OperationId -> Prop;
 pub let EqSatLive: std::ir::OperationId -> Prop;
 
-pub mod select {
-    pub let root<node>: EqSatRoot(node) -> EqSatLive(node);
-    pub let within<root, region, mode, slot, entry, node, representative>:
+pub let select: std::List<Prop> = {
+    let root<node>: EqSatRoot(node) -> EqSatLive(node);
+    let within<root, region, mode, slot, entry, node, representative>:
         (EqSatRoot(root), ir::Region(region, mode, root, slot, entry), ir::ReaderAt(node, region, representative))
         -> EqSatLive(node);
-}
+    cons(root, cons(within, nil))
+};
 
-pub let execute = std::schedule::saturate(select);
+pub let execute = || { std::schedule::saturate(select) };
 
 pub let EqSatReplace: (std::ir::OperationId, std::ir::ValueId, std::ir::ValueId) -> Prop;
 pub let EqSatErase: std::ir::OperationId -> Prop;
@@ -18,29 +21,33 @@ pub let EqSatPath: (std::ir::ValueId, std::ir::ValueId) -> Prop;
 pub let EqSatRedirect: (std::ir::ValueId, std::ir::ValueId) -> Prop;
 pub let EqSatAliasEdit: (UseOwner, Int, std::ir::ValueId, std::ir::ValueId) -> Prop;
 
-pub mod paths {
-    pub let direct<owner, old, new>: (EqSatReplace(owner, old, new), !EqSatPinned(old)) -> EqSatPath(old, new);
-    pub let through<old, next, new>: (EqSatPath(old, next), EqSatPath(next, new)) -> EqSatPath(old, new);
-}
+pub let paths: std::List<Prop> = {
+    let direct<owner, old, new>: (EqSatReplace(owner, old, new), !EqSatPinned(old)) -> EqSatPath(old, new);
+    let through<old, next, new>: (EqSatPath(old, next), EqSatPath(next, new)) -> EqSatPath(old, new);
+    cons(direct, cons(through, nil))
+};
 
 pub let outgoing: std::ir::ValueId -> Prop;
-pub mod used {
-    pub let from<old, new>: EqSatPath(old, new) -> outgoing(old);
-}
+pub let used: std::List<Prop> = {
+    let from<old, new>: EqSatPath(old, new) -> outgoing(old);
+    cons(from, nil)
+};
 
-pub mod edits {
-    pub let terminal<old, new>: (EqSatPath(old, new), !outgoing(new)) -> EqSatRedirect(old, new);
-    pub let operand<user, slot, old, new>: (EqSatRedirect(old, new), ir::Operand(user, slot, old))
+pub let edits: std::List<Prop> = {
+    let terminal<old, new>: (EqSatPath(old, new), !outgoing(new)) -> EqSatRedirect(old, new);
+    let operand<user, slot, old, new>: (EqSatRedirect(old, new), ir::Operand(user, slot, old))
         -> EqSatAliasEdit(UseOwner::Operand(user), slot, old, new);
-    pub let yield_value<region, slot, old, new>: (EqSatRedirect(old, new), ir::Yield(region, slot, old))
+    let yield_value<region, slot, old, new>: (EqSatRedirect(old, new), ir::Yield(region, slot, old))
         -> EqSatAliasEdit(UseOwner::Yield(region), slot, old, new);
-}
+    cons(terminal, cons(operand, cons(yield_value, nil)))
+};
 
 pub let EqSatHasAttr: (std::ir::OperationId, String) -> Prop;
-pub mod attributes {
-    pub let present<node, name, attr>:
+pub let attributes: std::List<Prop> = {
+    let present<node, name, attr>:
         (EqSatLive(node), ir::operation_attribute(node, name, attr)) -> EqSatHasAttr(node, name);
-}
+    cons(present, nil)
+};
 
 pub let EqSatMultipleEdges: Int -> Prop;
 pub let EqSatEntryBlock: Int -> Prop;
@@ -53,50 +60,52 @@ pub let EqSatDefinedLiteral: std::ir::ValueId -> Prop;
 pub let EqSatScopedEdit: (UseOwner, Int, std::ir::ValueId, BigInt) -> Prop;
 
 pub let EqSatUntaken: (std::ir::OperationId, Int) -> Prop;
-pub mod incoming {
-    pub let untaken<node,home,pos,display,loc,pred,edge,target,bit,known>:
+pub let incoming: std::List<Prop> = {
+    let untaken<node,home,pos,display,loc,pred,edge,target,bit,known>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::cfg::cond_br.kind, placement: "block", container: home, position: pos, display: display, location: loc }(),
          ir::Operand(node,0,pred), ir::Successor(node,edge,target), EqSatEdgeTruth(edge,bit),
          EqSatFolded(pred,known), known != std::bigint::bigint(bit))
         -> EqSatUntaken(node,edge);
-    pub let sources<a, x, b, y, target>:
+    let sources<a, x, b, y, target>:
         (ir::Successor(a, x, target), ir::Successor(b, y, target), a != b)
         -> EqSatMultipleEdges(target);
-    pub let slots<a, x, y, target>:
+    let slots<a, x, y, target>:
         (ir::Successor(a, x, target), ir::Successor(a, y, target), x != y)
         -> EqSatMultipleEdges(target);
-    pub let entry<region, mode, node, slot, block>:
+    let entry<region, mode, node, slot, block>:
         ir::Region(region, mode, node, slot, block) -> EqSatEntryBlock(block);
-    pub let literal<value, bits>: EqSatFolded(value, bits) -> EqSatDefinedLiteral(value);
-    pub let true_edge: EqSatEdgeTruth(0, 1);
-    pub let false_edge: EqSatEdgeTruth(1, 0);
-}
+    let literal<value, bits>: EqSatFolded(value, bits) -> EqSatDefinedLiteral(value);
+    let true_edge: EqSatEdgeTruth(0, 1);
+    let false_edge: EqSatEdgeTruth(1, 0);
+    cons(untaken, cons(sources, cons(slots, cons(entry, cons(literal, cons(true_edge,
+        cons(false_edge, nil)))))))
+};
 
-pub mod assumptions {
-    pub let cfg<node, block, pos, display, loc, selector, edge, target, bit>:
+pub let assumptions: std::List<Prop> = {
+    let cfg<node, block, pos, display, loc, selector, edge, target, bit>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::cfg::cond_br.kind, placement: "block", container: block, position: pos, display: display, location: loc }(),
          ir::Operand(node, 0, selector), ir::Successor(node, edge, target), EqSatEdgeTruth(edge, bit),
          !EqSatMultipleEdges(target), !EqSatEntryBlock(target), block != target)
         -> EqSatAssumption(target, selector, bit);
 
-    pub let explicit_arm<node, selector_slot, body, pred, polarity, selector, bits, region, bit>:
+    let explicit_arm<node, selector_slot, body, pred, polarity, selector, bits, region, bit>:
         (EqSatLive(node), ir::Control(node, true, selector_slot, false, body, pred, polarity),
          ir::Operand(node, selector_slot, selector), ir::Arm(node, false, bits, region),
          EqSatCaseBit(bits, bit)) -> EqSatAssumption(region, selector, bit);
-    pub let literal_false: EqSatCaseBit("0", 0);
-    pub let literal_true: EqSatCaseBit("1", 1);
+    let literal_false: EqSatCaseBit("0", 0);
+    let literal_true: EqSatCaseBit("1", 1);
 
-    pub let boolean_default<node, selector_slot, body, pred, polarity, selector, case_region, region, ty, term>:
+    let boolean_default<node, selector_slot, body, pred, polarity, selector, case_region, region, ty, term>:
         (EqSatLive(node), ir::Control(node, true, selector_slot, false, body, pred, polarity),
          ir::Operand(node, selector_slot, selector), EqSatScalar(selector, ty, term),
          EqSatAllBits(ty, std::bigint::bigint(1)), ir::Arm(node, false, "0", case_region),
          ir::Arm(node, true, "", region)) -> EqSatAssumption(region, selector, 1);
 
-    pub let forwarded<node, region, index, port, selector, bit>:
+    let forwarded<node, region, index, port, selector, bit>:
         (EqSatAssumption(region, selector, bit), EqSatPort(node, region, index, port, selector))
         -> EqSatAssumption(region, port, bit);
 
-    pub let low_bit<scope, selector: std::ir::ValueRef<std::El<std::Bits<1>>>, bit, ty, trunc, declared,
+    let low_bit<scope, selector: std::ir::ValueRef<std::El<std::Bits<1>>>, bit, ty, trunc, declared,
                     masked, mt, result, x, y, home, mask>:
         (EqSatAssumption(scope, selector, bit),
          dialects::builtin::trunci.matches(trunc, (masked,), (selector,)),
@@ -106,65 +115,71 @@ pub mod assumptions {
          EqSatScalar(y, mt, mask), mask == Scalar::Literal(mt, std::bigint::bigint(1)))
         -> EqSatAssumption(scope, masked, bit);
 
-    pub let unconditional<scope,value,bit,node,p,d,l,target>:
+    let unconditional<scope,value,bit,node,p,d,l,target>:
         (EqSatAssumption(scope,value,bit), EqSatLive(node), ir::Operation{ id: node, kind: dialects::cfg::br.kind, placement: "block", container: scope, position: p, display: d, location: l }(),
          ir::Successor(node,0,target), !EqSatMultipleEdges(target), !EqSatEntryBlock(target))
         -> EqSatAssumption(target,value,bit);
 
-    pub let graph_child<scope,value,bit,node,k,p,d,l,region,mode,slot,entry>:
+    let graph_child<scope,value,bit,node,k,p,d,l,region,mode,slot,entry>:
         (EqSatAssumption(scope,value,bit), EqSatLive(node), ir::Operation{ id: node, kind: k, placement: "graph", container: scope, position: p, display: d, location: l }(),
          ir::Region(region,mode,node,slot,entry)) -> EqSatAssumption(region,value,bit);
 
-    pub let predicate_complement<scope,value,bit,other,flipped,ty,term,comparison,k,opposite,a,b>:
+    let predicate_complement<scope,value,bit,other,flipped,ty,term,comparison,k,opposite,a,b>:
         (EqSatAssumption(scope,value,bit), EqSatScalar(value,ty,term), EqSatScalar(other,ty,comparison),
          term == Scalar::Compare(k,ty,a,b), comparison == Scalar::Compare(opposite,ty,a,b),
          EqSatPredicateComplement(k,opposite), EqSatEdgeTruth(bit,flipped))
         -> EqSatAssumption(scope,other,flipped);
 
-    pub let equal_difference<scope,selector,result,owner,k,ty,bit_ty,term,x,y,lhs,rhs,home,predicate,bit>:
+    let equal_difference<scope,selector,result,owner,k,ty,bit_ty,term,x,y,lhs,rhs,home,predicate,bit>:
         (EqSatAssumption(scope,selector,bit), EqSatScalar(selector,bit_ty,term),
          term == Scalar::Compare(predicate,bit_ty,lhs,rhs), EqSatEqualityCondition(predicate,bit),
          EqSatBinary(owner,k,result,ty,x,y,home), EqSatEqualDifference(k),
          EqSatScalar(x,ty,lhs), EqSatScalar(y,ty,rhs))
         -> EqSatAssumption(scope,result,0);
-    pub let equality_literal<scope,selector,known,ty,bit_ty,term,input,predicate,bit,left,right>:
+    let equality_literal<scope,selector,known,ty,bit_ty,term,input,predicate,bit,left,right>:
         (EqSatAssumption(scope,selector,bit), EqSatScalar(selector,bit_ty,term),
          EqSatEqualityCondition(predicate,bit), term == Scalar::Compare(predicate,bit_ty,left,right),
          EqSatScalar(input,ty,left), right == Scalar::Literal(ty,known), !EqSatDefinedLiteral(input))
         -> EqSatColorSeed(scope,left,Scalar::Literal(ty,known));
-    pub let eq_true: EqSatEqualityCondition("eq",1);
-    pub let ne_false: EqSatEqualityCondition("ne",0);
-    pub let subtract: EqSatEqualDifference(dialects::builtin::subi.typed_kind);
-    pub let exclusive_or: EqSatEqualDifference(dialects::builtin::xori.typed_kind);
-    pub let eq_ne: EqSatPredicateComplement("eq","ne");
-    pub let slt_sge: EqSatPredicateComplement("slt","sge");
-    pub let sgt_sle: EqSatPredicateComplement("sgt","sle");
-    pub let ult_uge: EqSatPredicateComplement("ult","uge");
-    pub let ugt_ule: EqSatPredicateComplement("ugt","ule");
-    pub let inverse<a,b>: EqSatPredicateComplement(a,b) -> EqSatPredicateComplement(b,a);
+    let eq_true: EqSatEqualityCondition("eq",1);
+    let ne_false: EqSatEqualityCondition("ne",0);
+    let subtract: EqSatEqualDifference(dialects::builtin::subi.typed_kind);
+    let exclusive_or: EqSatEqualDifference(dialects::builtin::xori.typed_kind);
+    let eq_ne: EqSatPredicateComplement("eq","ne");
+    let slt_sge: EqSatPredicateComplement("slt","sge");
+    let sgt_sle: EqSatPredicateComplement("sgt","sle");
+    let ult_uge: EqSatPredicateComplement("ult","uge");
+    let ugt_ule: EqSatPredicateComplement("ugt","ule");
+    let inverse<a,b>: EqSatPredicateComplement(a,b) -> EqSatPredicateComplement(b,a);
 
-    pub let seed<scope, value, bit, ty, term>:
+    let seed<scope, value, bit, ty, term>:
         (EqSatAssumption(scope, value, bit), EqSatScalar(value, ty, term),
          !EqSatDefinedLiteral(value))
         -> EqSatColorSeed(scope, term, Scalar::Literal(ty, std::bigint::bigint(bit)));
-}
+    cons(cfg, cons(explicit_arm, cons(literal_false, cons(literal_true, cons(boolean_default,
+        cons(forwarded, cons(low_bit, cons(unconditional, cons(graph_child,
+        cons(predicate_complement, cons(equal_difference, cons(equality_literal, cons(eq_true,
+        cons(ne_false, cons(subtract, cons(exclusive_or, cons(eq_ne, cons(slt_sge, cons(sgt_sle,
+        cons(ult_uge, cons(ugt_ule, cons(inverse, cons(seed, nil)))))))))))))))))))))))
+};
 pub let EqSatEqualityCondition: (String, Int) -> Prop;
 pub let EqSatEqualDifference: std::ir::BinaryIntegerOperation -> Prop;
 pub let EqSatPredicateComplement: (String, String) -> Prop;
 pub let EqSatCaseBit: (String, Int) -> Prop;
 
-pub mod branch_local {
-    pub let rewrite<scope, user, kind, place, pos, display, location, slot, value, ty, term, bits>:
+pub let branch_local: std::List<Prop> = {
+    let rewrite<scope, user, kind, place, pos, display, location, slot, value, ty, term, bits>:
         (EqSatColorSite(scope), EqSatColorSubject(term), EqSatLive(user),
          ir::Operation{ id: user, kind: kind, placement: place, container: scope, position: pos, display: display, location: location }(), ir::Operand(user, slot, value),
          EqSatScalar(value, ty, term), !EqSatDefinedLiteral(value), !EqSatPinned(value), term == Scalar::Literal(ty, bits))
         -> EqSatScopedEdit(UseOwner::Operand(user), slot, value, bits);
-    pub let yield_value<scope, slot, value, ty, term, bits>:
+    let yield_value<scope, slot, value, ty, term, bits>:
         (EqSatColorSite(scope), EqSatColorSubject(term), ir::Yield(scope, slot, value),
          EqSatScalar(value, ty, term), !EqSatDefinedLiteral(value), !EqSatPinned(value), term == Scalar::Literal(ty, bits))
         -> EqSatScopedEdit(UseOwner::Yield(scope), slot, value, bits);
 
-}
+    cons(rewrite, cons(yield_value, nil))
+};
 
 pub let EqSatDropKind: std::ir::OperationKind -> Prop;
 pub let EqSatRemovable: (std::ir::OperationId, std::ir::ValueId) -> Prop;
@@ -172,57 +187,65 @@ pub let EqSatRemovableNode: std::ir::OperationId -> Prop;
 pub let EqSatDemand: std::ir::ValueId -> Prop;
 pub let EqSatDead: std::ir::OperationId -> Prop;
 
-pub mod removable {
-    pub let frozen_argument<node,result>:
+pub let removable: std::List<Prop> = {
+    let frozen_argument<node,result>:
         (EqSatArgumentFreeze(node,result), !EqSatPinnedOp(node), !EqSatPinned(result))
         -> (EqSatRemovable(node,result), EqSatRemovableNode(node));
-    pub let constant: EqSatDropKind(dialects::builtin::constant.kind);
-    pub let add: EqSatDropKind(dialects::builtin::addi.kind);
-    pub let sub: EqSatDropKind(dialects::builtin::subi.kind);
-    pub let comparison: EqSatDropKind(dialects::builtin::cmpi.kind);
-    pub let unary<k>: EqSatUnaryKind(k) -> EqSatDropKind(std::ir::operation_kind(k));
-    pub let binary<k>: EqSatPureBinary(k) -> EqSatDropKind(std::ir::operation_kind(k));
-    pub let candidate<node,k,place,home,pos,display,loc,result,ty,decl>:
+    let constant: EqSatDropKind(dialects::builtin::constant.kind);
+    let add: EqSatDropKind(dialects::builtin::addi.kind);
+    let sub: EqSatDropKind(dialects::builtin::subi.kind);
+    let comparison: EqSatDropKind(dialects::builtin::cmpi.kind);
+    let unary<k>: EqSatUnaryKind(k) -> EqSatDropKind(std::ir::operation_kind(k));
+    let binary<k>: EqSatPureBinary(k) -> EqSatDropKind(std::ir::operation_kind(k));
+    let candidate<node,k,place,home,pos,display,loc,result,ty,decl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: k, placement: place, container: home, position: pos, display: display, location: loc }(), EqSatDropKind(k),
          ir::result(result, ty, node,0,decl), !EqSatPinnedOp(node), !EqSatPinned(result))
         -> (EqSatRemovable(node,result), EqSatRemovableNode(node));
-}
-pub mod demand {
-    pub let root<user,slot,value>: (ir::Operand(user,slot,value), !EqSatRemovableNode(user), !EqSatDead(user)) -> EqSatDemand(value);
-    pub let yielded<region,slot,value>: ir::Yield(region,slot,value) -> EqSatDemand(value);
-    pub let input<node,result,slot,value>:
+    cons(frozen_argument, cons(constant, cons(add, cons(sub, cons(comparison, cons(unary,
+        cons(binary, cons(candidate, nil))))))))
+};
+pub let demand: std::List<Prop> = {
+    let root<user,slot,value>: (ir::Operand(user,slot,value), !EqSatRemovableNode(user), !EqSatDead(user)) -> EqSatDemand(value);
+    let yielded<region,slot,value>: ir::Yield(region,slot,value) -> EqSatDemand(value);
+    let input<node,result,slot,value>:
         (EqSatRemovable(node,result), EqSatDemand(result), ir::Operand(node,slot,value)) -> EqSatDemand(value);
-}
-pub mod dead {
-    pub let unused<node,result>: (EqSatRemovable(node,result), !EqSatDemand(result)) -> EqSatDead(node);
-}
+    cons(root, cons(yielded, cons(input, nil)))
+};
+pub let dead: std::List<Prop> = {
+    let unused<node,result>: (EqSatRemovable(node,result), !EqSatDemand(result)) -> EqSatDead(node);
+    cons(unused, nil)
+};
 
 pub let EqSatEdgeBits: (std::ir::OperationId, Int, Int, Int, BigInt) -> Prop;
 pub let EqSatPhiDisagrees: (Int, Int, BigInt) -> Prop;
 pub let EqSatPhiLiteral: (std::ir::ValueId, BigInt) -> Prop;
 
-pub mod phi_candidates {
-    pub let edge<node,edge,block,param,slot,value,bits>:
+pub let phi_candidates: std::List<Prop> = {
+    let edge<node,edge,block,param,slot,value,bits>:
         (EqSatLive(node), ir::Successor(node,edge,block), ir::SuccessorArgument(node,edge,param,slot),
          ir::Operand(node,slot,value), EqSatFolded(value,bits), !EqSatEntryBlock(block), !EqSatUntaken(node,edge))
         -> EqSatEdgeBits(node,edge,block,param,bits);
-}
-pub mod phi_disagreement {
-    pub let missing<block,param,bits,witness,incoming,node,edge>:
+    cons(edge, nil)
+};
+pub let phi_disagreement: std::List<Prop> = {
+    let missing<block,param,bits,witness,incoming,node,edge>:
         (EqSatEdgeBits(witness,incoming,block,param,bits), ir::Successor(node,edge,block),
          !EqSatEdgeBits(node,edge,block,param,bits), !EqSatUntaken(node,edge)) -> EqSatPhiDisagrees(block,param,bits);
-}
-pub mod phi_literals {
-    pub let agreed<block,param,bits,witness,incoming,value,ty,decl>:
+    cons(missing, nil)
+};
+pub let phi_literals: std::List<Prop> = {
+    let agreed<block,param,bits,witness,incoming,value,ty,decl>:
         (EqSatEdgeBits(witness,incoming,block,param,bits), !EqSatPhiDisagrees(block,param,bits),
          ir::Value(value,ty,"block",block,param,decl), EqSatInteger(ty), !EqSatPinned(value))
         -> (EqSatPhiLiteral(value,bits), EqSatFolded(value,bits));
-}
-pub mod phi_uses {
-    pub let yielded<region,slot,value,bits,node,mode,region_slot,entry>:
+    cons(agreed, nil)
+};
+pub let phi_uses: std::List<Prop> = {
+    let yielded<region,slot,value,bits,node,mode,region_slot,entry>:
         (EqSatPhiLiteral(value,bits), ir::Yield(region,slot,value), ir::Region(region,mode,node,region_slot,entry),
          EqSatLive(node)) -> EqSatScopedEdit(UseOwner::Yield(region),slot,value,bits);
-    pub let operand<user,slot,value,bits>:
+    let operand<user,slot,value,bits>:
         (EqSatPhiLiteral(value,bits), EqSatLive(user), ir::Operand(user,slot,value))
         -> EqSatScopedEdit(UseOwner::Operand(user),slot,value,bits);
-}
+    cons(yielded, cons(operand, nil))
+};

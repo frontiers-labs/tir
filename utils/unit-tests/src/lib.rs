@@ -113,6 +113,7 @@ mod core {
     mod dialects;
     mod edits;
     mod encodings;
+    mod eqsat;
     mod fixtures;
     mod idmap;
     mod instcombine;

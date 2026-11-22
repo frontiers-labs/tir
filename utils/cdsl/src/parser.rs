@@ -139,8 +139,35 @@ fn binding<'a>(ctx: &'a Context<'a>, name: P<'a, Path>, expr: P<'a, Expr>) -> P<
         .boxed()
 }
 
+fn rule_binding<'a>(
+    ctx: &'a Context<'a>,
+    expr: P<'a, Expr>,
+) -> P<'a, (String, Vec<RuleBinder>, Expr)> {
+    just(Token::Let)
+        .ignore_then(identifier(ctx))
+        .then(identifier(ctx)
+            .then(just(Token::Colon).ignore_then(expr.clone()).or_not())
+            .map(|(name, ty)| RuleBinder { name, ty })
+            .separated_by(just(Token::Comma)).at_least(1).allow_trailing().collect()
+            .delimited_by(just(Token::Less), just(Token::Greater))
+            .or_not().map(Option::unwrap_or_default))
+        .then_ignore(just(Token::Colon))
+        .then(expr)
+        .then_ignore(just(Token::Semi))
+        .map(|((name, binders), clause)| (name, binders, clause))
+        .boxed()
+}
+
 fn block<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Block> {
+    let rule = rule_binding(ctx, expr.clone())
+        .map_with(move |(name, binders, clause), extra| Binding {
+            path: vec![name],
+            generics: Vec::new(),
+            ty: None,
+            value: finish(ctx, Expression::Rule { binders, clause: Box::new(clause) }, extra.span().into_range()),
+        });
     binding(ctx, identifier(ctx).map(move |name| vec![name]).boxed(), expr.clone())
+        .or(rule)
         .repeated()
         .collect()
         .then(expr)
@@ -164,21 +191,19 @@ fn record<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Record> {
 }
 
 fn function<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Function> {
-    just(Token::Fn)
-        .ignore_then(generics(ctx, expr.clone()))
-        .then(binders(ctx, expr.clone()).delimited_by(just(Token::LParen), just(Token::RParen)))
+    just(Token::Or)
+        .to(Vec::new())
+        .or(binders(ctx, expr.clone()).delimited_by(just(Token::Pipe), just(Token::Pipe)))
         .then(just(Token::Arrow).ignore_then(expr.clone()).or_not())
         .then(just(Token::Decreases).ignore_then(expr.clone()).or_not())
         .then(block(ctx, expr))
-        .map(
-            |((((generics, parameters), result), decreases), body)| Function {
-                generics,
-                parameters,
-                result,
-                decreases,
-                body,
-            },
-        )
+        .map(|(((parameters, result), decreases), body)| Function {
+            generics: Vec::new(),
+            parameters,
+            result,
+            decreases,
+            body,
+        })
         .boxed()
 }
 
@@ -527,18 +552,8 @@ pub(super) fn module<'a>(ctx: &'a Context<'a>) -> P<'a, Vec<DeclNode>> {
             generics,
             variants,
         });
-    let axiom = just(Token::Let)
-        .ignore_then(identifier(ctx))
-        .then(identifier(ctx)
-            .then(just(Token::Colon).ignore_then(expr.clone()).or_not())
-            .map(|(name, ty)| RuleBinder { name, ty })
-            .separated_by(just(Token::Comma)).at_least(1).allow_trailing().collect()
-            .delimited_by(just(Token::Less), just(Token::Greater))
-            .or_not().map(Option::unwrap_or_default))
-        .then_ignore(just(Token::Colon))
-        .then(expr)
-        .then_ignore(just(Token::Semi))
-        .map(|((name, generics), ty)| Declaration::Axiom { public: false, name, generics, ty });
+    let axiom = rule_binding(ctx, expr)
+        .map(|(name, generics, ty)| Declaration::Axiom { public: false, name, generics, ty });
     let declaration = just(Token::Pub).or_not()
         .then(choice((use_decl, mod_decl, let_decl, interface, enumeration, axiom)))
         .map(move |(visibility, mut declaration)| {
