@@ -250,6 +250,14 @@ fn children(expr: &Expr, f: &mut impl FnMut(&Expr) -> Result<(), Error>) -> Resu
                 f(e)?;
             }
         }
+        Expression::Rule { binders, clause } => {
+            for binder in binders {
+                if let Some(ty) = &binder.ty {
+                    f(ty)?;
+                }
+            }
+            f(clause)?;
+        }
         Expression::Block(b) => block(b, f)?,
         Expression::Function(fun) => {
             for binder in fun.generics.iter().chain(&fun.parameters) {
@@ -372,6 +380,16 @@ fn free(expr: &Expr, shadowed: &BTreeSet<String>, paths: &mut BTreeSet<Path>) ->
                 free(result, &scope, paths)?;
             }
             free_block(&function.body, &scope, paths)
+        }
+        Expression::Rule { binders, clause } => {
+            let mut scope = shadowed.clone();
+            for binder in binders {
+                if let Some(ty) = &binder.ty {
+                    free(ty, &scope, paths)?;
+                }
+                scope.insert(binder.name.clone());
+            }
+            free(clause, &scope, paths)
         }
         Expression::Block(body) => free_block(body, shadowed, paths),
         Expression::Op(fields) => {

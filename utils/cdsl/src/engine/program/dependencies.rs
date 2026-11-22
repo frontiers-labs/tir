@@ -23,6 +23,16 @@ impl<'a> Dependencies<'a> {
             .iter()
             .map(|module| module.path.as_slice())
             .collect::<BTreeSet<_>>();
+        let owned_packages = artifact
+            .modules
+            .iter()
+            .map(|module| module.package.as_str())
+            .collect::<BTreeSet<_>>();
+        let owned_packages = artifact
+            .modules
+            .iter()
+            .map(|module| module.package.as_str())
+            .collect::<BTreeSet<_>>();
         let mut declarations = BTreeMap::new();
         let mut references = BTreeMap::new();
         let mut active = BTreeSet::new();
@@ -53,6 +63,7 @@ impl<'a> Dependencies<'a> {
                     active.insert(path.clone());
                 }
                 if matches!(mode, Selection::FullSchema)
+                    && owned_packages.contains(module.package.as_str())
                     && !executable
                     && module.package != "<embedded std>"
                 {
@@ -68,19 +79,8 @@ impl<'a> Dependencies<'a> {
         if roots.contains(selected) {
             pending.extend(rust::exported_members(program, selected).into_values());
         }
-        let mut expanded_modules = BTreeSet::new();
         let mut needed = BTreeSet::new();
         while let Some(path) = pending.pop() {
-            if artifact.module_exports.contains_key(&path) {
-                if !expanded_modules.insert(path.clone()) {
-                    continue;
-                }
-                pending.extend(declarations.range(path.clone()..)
-                    .take_while(|(member, _)| member.starts_with(&path))
-                    .filter(|(_, declaration)| matches!(declaration, Declaration::Axiom { ty, .. } if clause(ty)))
-                    .map(|(member, _)| member.clone()));
-                continue;
-            }
             let owner = if declarations.contains_key(&path) {
                 path
             } else if path.len() > 1

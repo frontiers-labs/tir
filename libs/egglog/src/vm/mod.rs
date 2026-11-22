@@ -234,23 +234,6 @@ impl Program {
     }
 
     fn prepare(&mut self, db: &mut Database, args: Option<&[Value]>) -> Result<(), Error> {
-        let missing = self
-            .file
-            .rulesets
-            .iter()
-            .flat_map(|decl| &decl.consts)
-            .find_map(|literal| match *literal {
-                Literal::Arg(n)
-                    if args.is_some_and(|args| n as usize >= args.len())
-                        || (args.is_none() && !self.prepared) =>
-                {
-                    Some(n)
-                }
-                _ => None,
-            });
-        if let Some(n) = missing {
-            return Err(Error::Unsupported(format!("the run gives no argument {n}")));
-        }
         self.check_permissions(db)
             .map_err(|error| Error::Unsupported(error.to_string()))?;
         let changed = self.bindings_changed(db);
@@ -299,7 +282,8 @@ impl Program {
             if let Some(args) = args {
                 for (literal, register) in ruleset.consts.iter().zip(consts.iter_mut()) {
                     if let Literal::Arg(n) = *literal {
-                        rebound |= register.replace(args[n as usize]) != Some(args[n as usize]);
+                        let value = args.get(n as usize).copied();
+                        rebound |= std::mem::replace(register, value) != value;
                     }
                 }
             }
@@ -354,11 +338,29 @@ impl Program {
             .ok_or_else(|| Error::UnknownName(name.to_owned()))
     }
 
+    fn check_arguments(&self, decls: &[usize]) -> Result<(), Error> {
+        for &decl in decls {
+            for (literal, value) in self.file.rulesets[decl]
+                .consts
+                .iter()
+                .zip(&self.consts[decl])
+            {
+                if let Literal::Arg(n) = literal
+                    && value.is_none()
+                {
+                    return Err(Error::Unsupported(format!("the run gives no argument {n}")));
+                }
+            }
+        }
+        Ok(())
+    }
+
     // Whether the query ruleset `name` matches anything.
     pub(crate) fn matches(&mut self, db: &mut Database, name: &str) -> Result<bool, Error> {
         self.prepare(db, None)?;
         let mut decls = Vec::new();
         self.decls(name, &mut decls)?;
+        self.check_arguments(&decls)?;
         for decl in decls {
             let (_, matches, result) = exec::search(self, db, decl, 0);
             result?;
@@ -385,6 +387,7 @@ impl Program {
         for name in names {
             self.decls(name, &mut decls)?;
         }
+        self.check_arguments(&decls)?;
         let (now, before) = (db.timestamp(), db.changes());
         let colored = (rebuild && !db.colors.is_empty()).then(|| db.colors.changes());
         let start = Instant::now();

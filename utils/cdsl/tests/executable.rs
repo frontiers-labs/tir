@@ -170,7 +170,7 @@ let guarded = {
     op {
         signature: () -> Bool,
         attributes: { flag: Bool },
-        interfaces: { ReadFlag: { read: fn () -> Bool { self.flag } } },
+        interfaces: { ReadFlag: { read: || -> Bool { self.flag } } },
     }
 };
 "#,
@@ -197,8 +197,8 @@ fn inferring_an_interface_operation_checks_exec_against_its_signature() {
     let error = compile_source(
         r#"
 interface Tag {}
-let make = fn () {
-    op { signature: () -> Bool, interfaces: { Tag: {} }, exec: fn () -> Int { 1 } }
+let make = || {
+    op { signature: () -> Bool, interfaces: { Tag: {} }, exec: || -> Int { 1 } }
 };
 "#,
     )
@@ -260,7 +260,7 @@ fn a_shared_named_relation_preserves_its_column_order() {
 fn separately_compiled_programs_share_populated_tables_and_keep_incremental_state() {
     let sources = Sources::new();
     sources.write("schema.cdsl", "pub let Input: Int -> Prop; pub let Middle: Int -> Prop; pub let Sentinel: Int -> Prop; pub mod unrelated { pub let poison<x>: Input(x) -> Sentinel(x); }");
-    let root = sources.write("lib.cdsl", "pub mod schema; pub mod first { pub mod rules { use schema::*; pub let step<x>: Input(x) -> Middle(x + 1); } pub let execute = std::schedule::saturate(rules); } pub mod second { pub mod rules { use schema::*; pub let step<x>: Middle(x) -> Input(x + 1); } pub let execute = std::schedule::seq(std::schedule::Schedule::Rules(rules), std::schedule::saturate(rules)); }");
+    let root = sources.write("lib.cdsl", "pub mod schema; pub mod first { pub mod rules { use schema::*; pub let step<x>: Input(x) -> Middle(x + 1); } pub let execute = || { std::schedule::saturate(rules::step) }; } pub mod second { pub mod rules { use schema::*; pub let step<x>: Middle(x) -> Input(x + 1); } pub let execute = || { std::schedule::seq(std::schedule::Schedule::Rules(rules::step), std::schedule::saturate(rules::step)) }; }");
     let first = compile_file(&root)
         .unwrap()
         .select(&["first".into()])
@@ -316,7 +316,7 @@ fn separately_compiled_programs_share_populated_tables_and_keep_incremental_stat
 #[test]
 fn cli_emits_the_executable_library_program_to_file_and_stdout() {
     let sources = Sources::new();
-    let source = sources.write("cli.cdsl", "pub let Input: Int -> Prop; pub let Output: Int -> Prop; pub mod copy { pub let seeds: (Output(99), (Output(100), Output(101))); pub let rule<x>: Input(x) -> (Output(x + 7), (Output(x + 8), Output(x + 9))); }");
+    let source = sources.write("cli.cdsl", "pub let Input: Int -> Prop; pub let Output: Int -> Prop; pub mod copying { pub let seeds: (Output(99), (Output(100), Output(101))); pub let rule<x>: Input(x) -> (Output(x + 7), (Output(x + 8), Output(x + 9))); } pub let copy = || { std::schedule::Schedule::Rules((copying::seeds, copying::rule)) };");
     let checked = compile_file(&source).unwrap().lower().unwrap();
     let schema = Schema::new(&checked).unwrap();
     let expected = schema
@@ -393,7 +393,7 @@ fn declaration_names_do_not_capture_local_rule_variables() {
     let sources = Sources::new();
     let source = sources.write(
         "locals.cdsl",
-        "pub let x: Int -> Prop; pub let Input: (Int, Int) -> Prop; pub let Output: (Int, Int) -> Prop; pub mod rules { pub let copy<x, y>: Input(x, y) -> Output(x, y); }",
+        "pub let x: Int -> Prop; pub let Input: (Int, Int) -> Prop; pub let Output: (Int, Int) -> Prop; pub mod rules { pub let copy<x, y>: Input(x, y) -> Output(x, y); } pub let execute = || { std::schedule::Schedule::Rules(rules::copy) };",
     );
     let checked = compile_file(&source).unwrap().lower().unwrap();
     let schema = Schema::new(&checked).unwrap();
@@ -410,7 +410,7 @@ fn declaration_names_do_not_capture_local_rule_variables() {
     let one = db.base(1i64);
     let two = db.base(2i64);
     db.insert(db.table("Input").unwrap(), &[one, two]).unwrap();
-    program.run(db, &Schedule::run("rules"), &[]).unwrap();
+    program.run(db, &Schedule::run("execute"), &[]).unwrap();
     let rows = db
         .rows(db.table("Output").unwrap())
         .map(|row| row.values().collect::<Vec<_>>())
@@ -423,7 +423,7 @@ fn unsupported_executable_computations_and_invalid_merges_fail() {
     let sources = Sources::new();
     let source = sources.write(
         "function.cdsl",
-        "pub let identity = fn (x: Int) -> Int { x }; ",
+        "pub let identity = |x: Int| -> Int { x }; ",
     );
     let checked = compile_file(&source).unwrap().lower().unwrap();
     assert!(
@@ -440,4 +440,71 @@ fn unsupported_executable_computations_and_invalid_merges_fail() {
     );
     let checked = compile_file(&source).unwrap().lower().unwrap();
     assert!(Schema::new(&checked).is_err());
+}
+
+#[test]
+fn local_rules_run_only_the_selected_members_with_each_calls_arguments() {
+    let checked = compile_source(
+        r#"
+pub let Edge: (Int, Int) -> Prop;
+pub let Reach: (Int, Int) -> Prop;
+pub let unselected<x, y>: Edge(x, y) -> Reach(y, x);
+
+pub let selected: std::List<Prop> = {
+    let direct<x, y>: Edge(x, y) -> Reach(x, y);
+    let indirect<x, y, z>: (Reach(x, y), Edge(y, z)) -> Reach(x, z);
+    std::List::Cons(direct, std::List::Cons(indirect, std::List::Nil))
+};
+pub let data = std::schedule::saturate(selected);
+pub let closure = || { data };
+
+pub let reach_from = |start: Int| {
+    let direct<y>: Edge(start, y) -> Reach(start, y);
+    let indirect<y, z>: (Reach(start, y), Edge(y, z)) -> Reach(start, z);
+    std::schedule::saturate((direct, indirect))
+};
+
+pub let reach_from_both = |first: Int, second: Int| {
+    std::schedule::seq(reach_from(first), reach_from(second))
+};
+"#,
+    )
+    .unwrap()
+    .lower()
+    .unwrap();
+    let schema = Schema::new(&checked).unwrap();
+    let lowered = schema.lower(&checked).unwrap();
+    assert_eq!(lowered.schedules().len(), 3);
+    let mut db = schema.database().clone();
+    let mut program = lowered.compile(&db).unwrap();
+    let edge = db.table("Edge").unwrap();
+    let reach = db.table("Reach").unwrap();
+    for (from, to) in [(10_i64, 11_i64), (11, 12), (20, 21), (30, 31)] {
+        let row = [db.base(from), db.base(to)];
+        db.insert(edge, &row).unwrap();
+    }
+    let rows = |db: &tir_egglog::Database| {
+        let mut rows = db
+            .rows(reach)
+            .map(|row| (db.base_value::<i64>(row[0]), db.base_value::<i64>(row[1])))
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        rows
+    };
+    let schedule = |name: &str| &lowered.schedules()[&vec![name.into()]];
+    let first = db.base(10_i64);
+    program
+        .run(&mut db, schedule("reach_from"), &[first])
+        .unwrap();
+    assert_eq!(rows(&db), [(10, 11), (10, 12)]);
+    let both = [db.base(20_i64), db.base(10_i64)];
+    program
+        .run(&mut db, schedule("reach_from_both"), &both)
+        .unwrap();
+    assert_eq!(rows(&db), [(10, 11), (10, 12), (20, 21)]);
+    program.run(&mut db, schedule("closure"), &[]).unwrap();
+    assert_eq!(
+        rows(&db),
+        [(10, 11), (10, 12), (11, 12), (20, 21), (30, 31)]
+    );
 }

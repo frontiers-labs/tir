@@ -50,7 +50,7 @@ pub fn compile<'a>(
     let checked = outputs
         .iter()
         .any(|(_, kind)| !matches!(kind, OutputKind::Catalog(_)))
-        .then(|| compiler::check_file(&root))
+        .then(|| check_package(&root))
         .transpose()?;
 
     let mut files = Vec::new();
@@ -93,7 +93,7 @@ pub fn compile<'a>(
                 if let Some(defs) = root.parent() {
                     println!("cargo:rerun-if-changed={}", defs.display());
                 }
-                let checked = compiler::check_file(&root)?;
+                let checked = check_package(&root)?;
                 let rust = checked.render_catalog(&module)?;
                 files.push(OutputFile {
                     destination,
@@ -154,6 +154,14 @@ pub fn compile<'a>(
         fs::write(&path, bytes).map_err(|error| path_error(&path, error))?;
     }
     Ok(())
+}
+
+fn check_package(root: &Path) -> Result<crate::CheckedProgram, Error> {
+    let (checked, inputs) = compiler::check_package(root)?;
+    for input in inputs {
+        println!("cargo:rerun-if-changed={}", input.display());
+    }
+    Ok(checked)
 }
 
 fn canonical_destination(path: &Path) -> Result<PathBuf, Error> {

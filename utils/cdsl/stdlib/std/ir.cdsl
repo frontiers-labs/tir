@@ -11,7 +11,7 @@ pub let operation_named: String -> OperationKind;
 pub let BlockId: Type;
 pub let RegionId: Type;
 pub let OperandIndex: Type = Nat;
-pub let operand_index = fn (index: Nat) -> OperandIndex { index };
+pub let operand_index = |index: Nat| -> OperandIndex { index };
 pub let OperandRange: Type;
 pub let Binding: Type;
 pub let ResourceEffect: Type;
@@ -47,7 +47,7 @@ pub let Pure: EffectSet;
 pub use std::option;
 pub let Unit: Type;
 pub enum Default<T: Type, value: T> { Default, Explicit(T), }
-pub let default_value<T: Type, value: T> = fn (field: Default<T, value>) -> T {
+pub let default_value<T: Type, value: T> = |field: Default<T, value>| -> T {
     match field {
         Default::Default => value,
         Default::Explicit(actual) => actual,

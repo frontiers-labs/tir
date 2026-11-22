@@ -29,6 +29,6 @@ pub mod integer {
         -> (Attribute("operation", std::ir::raw_operation_id(node), "probe", 1), Attribute("operation", std::ir::raw_operation_id(node), "probe", 2));
 }
 
-pub let pointer = std::schedule::saturate(pointer_i8);
-pub let different_pointer = std::schedule::saturate(pointer_i32);
-pub let same_integer_width = std::schedule::saturate(integer);
+pub let pointer = || { std::schedule::saturate(pointer_i8::recognize) };
+pub let different_pointer = || { std::schedule::saturate(pointer_i32::recognize) };
+pub let same_integer_width = || { std::schedule::saturate((integer::freeze, integer::truncate, integer::recognize)) };

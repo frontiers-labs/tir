@@ -13,5 +13,5 @@ pub mod conflict {
         (Attribute("operation", id, "probe", 1), Attribute("operation", id, "probe", 2));
 }
 
-pub let execute = std::schedule::saturate(success);
-pub let reject = std::schedule::saturate(conflict);
+pub let execute = || { std::schedule::saturate(success::seed) };
+pub let reject = || { std::schedule::saturate(conflict::write) };

@@ -750,6 +750,69 @@ pub(super) fn exported_members(
     members
 }
 
+fn schedule_api(
+    name: &Ident,
+    schedule: &Schedule,
+    (declaration, ty): (Option<&Declaration>, &Ty),
+    signature: &mut Signature,
+    schema: &Schema,
+    selected: &[String],
+) -> Result<(Option<TokenStream>, TokenStream), Error> {
+    let schedule = schedule_tokens(schedule);
+    let parameters = match declaration {
+        Some(Declaration::Let { binding, .. }) => match &binding.value.value {
+            Expression::Function(function) => function.parameters.as_slice(),
+            _ => &[],
+        },
+        _ => &[],
+    };
+    let checked = function_inputs(ty);
+    let codecs = codecs(
+        parameters.iter().map(|binder| &binder.ty),
+        &checked,
+        signature,
+        schema,
+        selected,
+    )?;
+    let arguments = parameters
+        .iter()
+        .map(|binder| format_ident!("r#{}", binder.name))
+        .collect::<Vec<_>>();
+    let types = codecs.iter().map(Codec::ty);
+    let values = codecs
+        .iter()
+        .zip(&arguments)
+        .map(|(codec, arg)| codec.encode(quote!(self.db), quote!(#arg)));
+    let (attached, invocation) = if parameters.is_empty() {
+        let accessor = format_ident!("schedule_{name}");
+        let run_on = format_ident!("run_{name}");
+        (
+            Some(quote! {
+                /// Construct the declared CDSL schedule.
+                pub fn #accessor() -> ::tir_egglog::Schedule {
+                    #schedule
+                }
+
+                /// Run this program's attached schedule.
+                pub fn #run_on(engine: &mut ::tir_egglog::EGraph) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
+                    engine.run_schedule(&#accessor())
+                }
+            }),
+            quote!(#accessor()),
+        )
+    } else {
+        (None, schedule)
+    };
+    let methods = quote! {
+        /// Run the declared CDSL schedule.
+        pub fn #name(&mut self, #(#arguments: #types),*) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
+            let args = [#(#values),*];
+            self.code.run(self.db, &#invocation, &args)
+        }
+    };
+    Ok((attached, methods))
+}
+
 pub(super) fn emit(
     program: &CheckedProgram,
     selected: &[String],
@@ -770,13 +833,13 @@ pub(super) fn emit(
         .flat_map(|module| {
             module.ast.declarations.iter().filter_map(|declaration| {
                 let name = match &declaration.value {
-                    Declaration::Axiom { name, .. } | Declaration::Enum { name, .. } => name,
+                    Declaration::Axiom { name, .. } | Declaration::Enum { name, .. } => {
+                        std::slice::from_ref(name)
+                    }
+                    Declaration::Let { binding, .. } => binding.path.as_slice(),
                     _ => return None,
                 };
-                Some((
-                    [module.path.as_slice(), std::slice::from_ref(name)].concat(),
-                    &declaration.value,
-                ))
+                Some(([module.path.as_slice(), name].concat(), &declaration.value))
             })
         })
         .collect::<BTreeMap<_, _>>();
@@ -823,20 +886,16 @@ pub(super) fn emit(
                 enums.push(quote!(pub use #enum_name as #alias;));
             }
         } else if let Some(schedule) = schedules.get(&path) {
-            let schedule = schedule_tokens(schedule);
-            let run_on = format_ident!("run_{name}");
-            accessors.push(quote! {
-                /// Run this program's attached schedule.
-                pub fn #run_on(engine: &mut ::tir_egglog::EGraph) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
-                    engine.run_schedule(&#schedule)
-                }
-            });
-            methods.push(quote! {
-                /// Run the declared CDSL schedule.
-                pub fn #name(&mut self) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
-                    self.code.run(self.db, &#schedule, &[])
-                }
-            });
+            let (accessor, method) = schedule_api(
+                &name,
+                schedule,
+                (declarations.get(&path).copied(), &program.types()[&path].ty),
+                &mut signature,
+                schema,
+                selected,
+            )?;
+            accessors.extend(accessor);
+            methods.push(method);
         } else if let Some(Declaration::Axiom { ty, .. }) = declarations.get(&path)
             && let Some(types) = relation_types(ty)
             && schema
