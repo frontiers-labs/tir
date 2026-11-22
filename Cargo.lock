@@ -2044,6 +2044,8 @@ dependencies = [
  "chumsky",
  "criterion",
  "logos",
+ "serde",
+ "serde_json",
  "tir-bench",
  "tir-cst",
 ]

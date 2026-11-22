@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 chumsky.workspace = true
 logos.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 tir-cst.workspace = true
 
 [lints]

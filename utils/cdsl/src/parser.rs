@@ -164,21 +164,19 @@ fn record<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Record> {
 }
 
 fn function<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Function> {
-    just(Token::Fn)
-        .ignore_then(generics(ctx, expr.clone()))
-        .then(binders(ctx, expr.clone()).delimited_by(just(Token::LParen), just(Token::RParen)))
+    just(Token::Or)
+        .to(Vec::new())
+        .or(binders(ctx, expr.clone()).delimited_by(just(Token::Pipe), just(Token::Pipe)))
         .then(just(Token::Arrow).ignore_then(expr.clone()).or_not())
         .then(just(Token::Decreases).ignore_then(expr.clone()).or_not())
         .then(block(ctx, expr))
-        .map(
-            |((((generics, parameters), result), decreases), body)| Function {
-                generics,
-                parameters,
-                result,
-                decreases,
-                body,
-            },
-        )
+        .map(|(((parameters, result), decreases), body)| Function {
+            generics: Vec::new(),
+            parameters,
+            result,
+            decreases,
+            body,
+        })
         .boxed()
 }
 

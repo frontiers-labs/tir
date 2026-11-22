@@ -1,6 +1,7 @@
 // RUN: cdslc --input %S/Inputs/local.cdsl --emit ast --output - | filecheck %s --check-prefix=LOCAL
 // RUN: not cdslc --input %S/Inputs/unknown.cdsl --emit ast --output - 2>&1 | filecheck %s --check-prefix=UNKNOWN
 // RUN: not cdslc --input %S/Inputs/external.cdsl --emit ast --output - 2>&1 | filecheck %s --check-prefix=EXTERNAL
+// RUN: not cdslc --input %S/Inputs/removed-function.cdsl --emit typed --output /dev/null 2>&1 | filecheck %s --check-prefix=REMOVED
 // LOCAL: module :: file local.cdsl
 // LOCAL: name: "Choice"
 // LOCAL: "selected"
@@ -8,3 +9,4 @@
 // LOCAL-NEXT: "Left"
 // UNKNOWN: cdslc: unknown.cdsl:{{[0-9]+}}: unresolved name missing
 // EXTERNAL: cdslc: missing module outside declared in {{.*}}external.cdsl
+// REMOVED: cdslc: removed-function.cdsl:{{[0-9]+}}: unexpected
