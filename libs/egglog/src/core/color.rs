@@ -7,6 +7,7 @@ use tir_adt::simd::hash_row;
 use super::database::{PrimCtx, Row};
 use super::rebuild::take_moved;
 use super::table::Table;
+use super::uf::ClassRoots;
 use super::{Database, Error, Merge, Shape, SortId, TableId, TableKind, TableSchema, Value};
 use crate::Context;
 
@@ -65,7 +66,9 @@ pub(crate) struct Colors {
     // The live rows of each color in each table of `rows`, and its entries
     // in `classes`, so a color with none skips the probe.
     held: Vec<Vec<u32>>,
+    row_revision: Vec<Vec<u64>>,
     entries: Vec<u32>,
+    equality_revision: Vec<u64>,
     // Per base table: (color, base key...) of each base row a color removed,
     // and the count of them per color.
     removed: Vec<Table>,
@@ -110,7 +113,9 @@ impl Colors {
             classes: Table::new(schema),
             rows: Vec::new(),
             held: Vec::new(),
+            row_revision: Vec::new(),
             entries: Vec::new(),
+            equality_revision: Vec::new(),
             removed: Vec::new(),
             removals: Vec::new(),
             unions: Vec::new(),
@@ -121,6 +126,10 @@ impl Colors {
     // Whether no color is live.
     pub(crate) fn is_empty(&self) -> bool {
         self.alive.is_empty()
+    }
+
+    pub(crate) fn contains(&self, color: Color) -> bool {
+        color == Color::BASE || self.is_live(color.0)
     }
 
     fn is_live(&self, c: u32) -> bool {
@@ -175,6 +184,17 @@ impl Colors {
         let key = [c, x];
         let row = self.classes.find(&key, hash_row(&key));
         row.map_or(x, |row| self.classes.cell(row, 2))
+    }
+
+    pub(crate) fn capture_classes(&self, color: Color) -> ClassRoots {
+        if self.entries.get(color.index()).is_none_or(|&n| n == 0) {
+            return ClassRoots::default();
+        }
+        let classes = &self.classes;
+        (0..classes.len() as u32)
+            .filter(|&row| classes.is_live(row) && classes.cell(row, 0) == color.0)
+            .map(|row| (classes.cell(row, 1), classes.cell(row, 2)))
+            .collect()
     }
 
     // Whether a cell of the base row `row` is no root in `c`.
@@ -234,6 +254,7 @@ impl Colors {
             self.rows.push(Table::new(colored(&table.schema)));
             self.removed.push(Table::new(removal(&table.schema)));
             self.held.push(Vec::new());
+            self.row_revision.push(Vec::new());
         }
         for (rows, table) in self.rows.iter_mut().zip(tables) {
             if rows.schema.symmetries.len() != table.schema.symmetries.len() {
@@ -242,6 +263,24 @@ impl Colors {
         }
         for held in &mut self.held {
             held.resize(self.level.len(), 0);
+        }
+        for revision in &mut self.row_revision {
+            revision.resize(self.level.len(), 0);
+        }
+    }
+
+    pub(crate) fn reset_table(&mut self, id: TableId, schema: &TableSchema) {
+        let t = id.index();
+        if t < self.rows.len() {
+            self.rows[t] = Table::new(colored(schema));
+            let previous = std::mem::replace(&mut self.removed[t], Table::new(removal(schema)));
+            for row in 0..previous.len() as u32 {
+                if previous.is_live(row) {
+                    self.removals[previous.cell(row, 0) as usize] -= 1;
+                }
+            }
+            self.held[t].fill(0);
+            self.row_revision[t].fill(0);
         }
     }
 
@@ -253,6 +292,7 @@ impl Colors {
             self.last_base.push(0);
             self.imported.push(0);
             self.entries.push(0);
+            self.equality_revision.push(0);
             self.removals.push(0);
         }
         let mut parents: Vec<Color> = (below.iter().copied())
@@ -278,6 +318,7 @@ impl Colors {
         self.imported.push(0);
         self.entries.push(0);
         self.removals.push(0);
+        self.equality_revision.push(0);
         Color(id)
     }
 
@@ -471,6 +512,7 @@ impl Database {
             table.maybe_compact();
         }
         colors.unions.retain(|&(c, ..)| !gone[c as usize]);
+        self.locals.forget_colors(&gone);
     }
 
     /// Make the base show what `color` shows: its rows and unions go to the
@@ -675,6 +717,30 @@ impl Database {
         self.uf.len()
     }
 
+    /// Changes when an equality visible in `color` is established.
+    /// Colored unions become visible during rebuild.
+    pub fn equality_revision(&self, color: Color) -> u64 {
+        let own = self
+            .colors
+            .equality_revision
+            .get(color.index())
+            .copied()
+            .unwrap_or(0);
+        self.uf.revision() + own
+    }
+
+    /// A version of `table` that includes base changes and changes in `color`.
+    pub fn table_version_in(&self, color: Color, table: TableId) -> u64 {
+        let revision = self
+            .colors
+            .row_revision
+            .get(table.index())
+            .and_then(|revisions| revisions.get(color.index()))
+            .copied()
+            .unwrap_or(0);
+        self.table_version(table) + revision
+    }
+
     /// Unite `a` and `b` in `color`. Rows become canonical in the color at the
     /// next [`Database::rebuild`], as after [`Database::union`].
     pub fn union_in(&mut self, color: Color, a: Value, b: Value) {
@@ -728,12 +794,14 @@ impl Database {
             if let Some(row) = self.colors.color_row(c, table, &cells) {
                 Colors::remove(&mut self.colors.rows[table.index()], row);
                 self.colors.held[table.index()][c as usize] -= 1;
+                self.colors.row_revision[table.index()][c as usize] += 1;
             }
             let removed = &mut self.colors.removed[table.index()];
             let hash = hash_row(&cells);
             if t.find(&key, hash_row(&key)).is_some() && removed.find(&cells, hash).is_none() {
                 removed.push(&cells, hash, self.colors.now, false);
                 self.colors.removals[c as usize] += 1;
+                self.colors.row_revision[table.index()][c as usize] += 1;
             }
         }
     }
@@ -888,12 +956,14 @@ impl Database {
                 }
             }
             let rows = &mut self.colors.rows[t];
+            let before = rows.version();
             if touch || (functional && row[keys] != rows.cell(at, keys)) {
                 rows.kill(at);
                 rows.push(&row, hash, now, subsumed);
             } else if subsumed {
                 rows.subsume(at);
             }
+            self.colors.row_revision[t][c as usize] += rows.version() - before;
             return Ok(());
         }
         let base = &self.tables[t];
@@ -917,6 +987,7 @@ impl Database {
         }
         self.colors.rows[t].push(&row, hash, now, subsumed);
         self.colors.held[t][c as usize] += 1;
+        self.colors.row_revision[t][c as usize] += 1;
         Ok(())
     }
 
@@ -1037,6 +1108,7 @@ impl Database {
             classes.push(&entry, hash_row(&entry[..2]), now, false);
         }
         self.colors.entries[c as usize] += losers.len() as u32;
+        self.colors.equality_revision[c as usize] += 1;
         self.map_containers_in(c, &changed.into_iter().collect());
         for (table, row, subsumed) in copies {
             self.write_in_at(table, row, subsumed, true)?;
@@ -1083,6 +1155,7 @@ impl Database {
                 Colors::remove(rows, row);
             }
             self.colors.held[t][c as usize] -= found.len() as u32;
+            self.colors.row_revision[t][c as usize] += found.len() as u64;
         }
         copies
     }

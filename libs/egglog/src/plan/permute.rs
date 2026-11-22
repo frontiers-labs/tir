@@ -16,8 +16,10 @@ impl Symmetries {
     pub(crate) fn new(schema: Schema<'_>) -> Self {
         Self(
             schema
-                .tables()
-                .map(|(_, table)| table.symmetries().to_vec())
+                .db
+                .tables
+                .iter()
+                .map(|table| table.schema.symmetries().to_vec())
                 .collect(),
         )
     }

@@ -1003,6 +1003,7 @@ fn resolve_expr(
             }
             resolve_expr(clause, scope, &local)?;
         }
+        Expression::LocalTable(ty) | Expression::Run(ty) => resolve_expr(ty, scope, locals)?,
         Expression::Block(block) => resolve_block(block, scope, locals)?,
         Expression::Function(function) => resolve_function(function, scope, locals)?,
         Expression::If {
