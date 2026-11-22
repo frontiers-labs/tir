@@ -992,6 +992,7 @@ fn emit_instruction(
 
     // One shared printer: what a slot is called, what class it admits and
     // whether it is a result are fields of the opcode's `InstrInfo`.
+    let info_ident = info_ident(&inst.name);
     out.instruction_custom_format_impls.push(quote! {
         impl #name_ident {
             fn custom_print<'a, 'b: 'a>(
@@ -1003,9 +1004,9 @@ fn emit_instruction(
 
             fn custom_parse<'src>(
                 parser: &mut tir::parse::text::Parser<'src>,
-                _context: &tir::Context,
+                context: &tir::Context,
             ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-                Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+                tir::backend::parse_machine_op::<Self>(parser, context, &#info_ident)
             }
         }
     });
@@ -1047,7 +1048,6 @@ fn emit_instruction(
         (false, false) => quote! { tir::backend::ControlFlow::None },
     };
 
-    let info_ident = info_ident(&inst.name);
     // Filled in below when this instruction has an assembly syntax, a binary
     // encoding, or a patchable immediate; each becomes a field of its
     // `InstrInfo` rather than an entry in a string-keyed side table.
