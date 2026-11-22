@@ -79,6 +79,10 @@ pub enum Token {
     Limit,
     #[token("decreases")]
     Decreases,
+    #[token("memo")]
+    Memo,
+    #[token("?")]
+    Question,
     #[token("true")]
     True,
     #[token("false")]

@@ -55,6 +55,13 @@ fn execute(
     let start = Instant::now();
     let checked = source.lower()?;
     let schema = Schema::with_engine(&checked, EGraph::from_database(egraph.database().clone()))?;
+    if schema
+        .run_local_schedule(&checked, schedule, egraph.database_mut())?
+        .is_some()
+    {
+        eprintln!("egglog: total={:.6}s", start.elapsed().as_secs_f64());
+        return Ok(());
+    }
     let lowered = schema.lower(&checked)?;
     let Some(selected) = lowered.schedules().get(schedule) else {
         if allow_missing_schedule {

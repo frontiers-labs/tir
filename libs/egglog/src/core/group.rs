@@ -184,6 +184,13 @@ impl Database {
     ) -> Result<(), Error> {
         let schema = |table: &TableId| &self.tables[table.index()].schema;
         let unsupported = |what: &str| Err(Error::Unsupported(what.to_owned()));
+        if tables
+            .iter()
+            .chain([&keyed])
+            .any(|&table| self.locals.contains(table))
+        {
+            return unsupported("a group cannot contain a local table");
+        }
         if self.sorts[sort.index()].kind != SortKind::Eq {
             return unsupported("a group sort is an Eq sort");
         }

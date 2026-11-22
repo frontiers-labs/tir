@@ -157,6 +157,8 @@ pub enum Expression {
     Record(Record),
     Block(Block),
     Function(Box<Function>),
+    LocalTable(Box<Expr>),
+    Run(Box<Expr>),
     Rule {
         binders: Vec<RuleBinder>,
         clause: Box<Expr>,
@@ -212,6 +214,7 @@ pub struct Block {
 
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub memo: bool,
     pub generics: Vec<Binder>,
     pub parameters: Vec<Binder>,
     pub result: Option<Expr>,
