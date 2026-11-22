@@ -52,7 +52,7 @@ use extract::DefaultCost;
 pub use extract::Extractor;
 use prelude::BaseSort;
 pub use report::{IterationReport, ReportLevel, RuleReport, RuleSetReport, RunReport};
-pub use rules::{Mode, Producer, RuleCollection, Rules};
+pub use rules::{Mode, RuleCollection, Rules, TableFootprint};
 use scheduler::SchedulerRecord;
 pub use sort::Sort;
 use sort::{EqSort, MkSort, PROBE, Presort};

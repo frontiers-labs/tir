@@ -1,4 +1,4 @@
-use crate::{AnalysisManager, Context, OpId, Pass, PassError};
+use crate::{Context, OpId, Pass, PassError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InlineBudget {
@@ -41,12 +41,7 @@ impl Pass for InlinePass {
     fn name(&self) -> &'static str {
         "inline"
     }
-    fn run(
-        &mut self,
-        _op: OpId,
-        _context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, _op: OpId, _context: &Context) -> Result<(), PassError> {
         Ok(())
     }
 }

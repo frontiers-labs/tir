@@ -2,7 +2,7 @@ use tir::{
     builtin::{ops, ModuleOp},
     func::FuncOp,
     passes::{eqsat::add_zero_rewrites, EqSatPass},
-    AnalysisManager, Context, OpId, Operation, OperationRef, Pass, PassError, PassManager, Symbol,
+    Context, OpId, Operation, OperationRef, Pass, PassError, PassManager, Symbol,
 };
 
 use super::fixtures::{module_ops, parse_in};
@@ -34,7 +34,7 @@ impl Pass for LowerTestArithmetic {
         "lower-test-arithmetic"
     }
 
-    fn run(&mut self, root: OpId, context: &Context, _: &AnalysisManager) -> Result<(), PassError> {
+    fn run(&mut self, root: OpId, context: &Context) -> Result<(), PassError> {
         let function = context.get_op(root).as_op::<FuncOp>().unwrap();
         for id in function.body_region().op_ids() {
             let op = context.get_op(id);
@@ -126,4 +126,58 @@ fn lowering_separates_additive_and_exclusive_rewrite_collections() {
     defaults.nest::<FuncOp>().add_pass(EqSatPass::new());
     defaults.run(&context, module.id()).unwrap();
     assert_eq!(count::<ops::XOrIOp>(&context, &module, "late"), 0);
+}
+
+#[test]
+fn scoped_values_and_queries_use_their_captured_inputs() {
+    use tir_egglog::Color;
+
+    let context = Context::new();
+    let mut engine = context.egraph();
+    let db = engine.database_mut();
+    rules::install_schema(db).unwrap();
+    let table_count = db.table_count();
+    assert_eq!(rules::scoped_value(db, 7).unwrap(), 8);
+    assert_eq!(rules::scoped_value(db, 2).unwrap(), 4);
+    assert_eq!(rules::scoped_value(db, 7).unwrap(), 8);
+    assert_eq!(rules::scoped_pair(db, 7).unwrap(), (8, 2));
+    assert_eq!(rules::scoped_projection(db, 7, true).unwrap(), 2);
+    assert_eq!(rules::scoped_projection(db, 7, false).unwrap(), 4);
+    assert_eq!(db.table_count(), table_count);
+    let offset = rules::scoped_offset(db, 7).unwrap();
+    assert!(offset.contains(db, 4, true).unwrap());
+    assert!(!offset.contains(db, 4, false).unwrap());
+    assert!(offset.contains(db, 7, false).unwrap());
+    assert!(!offset.contains(db, 7, true).unwrap());
+    assert!(!offset.contains(db, i64::MAX, false).unwrap());
+
+    rules::bind_eqsat_attr_int(db, |_, _| None).unwrap();
+    for term in ["ProbeTerm::Original", "ProbeTerm::Input"] {
+        let constructor = db.table(term).unwrap();
+        db.entry(constructor, &[]).unwrap();
+    }
+    let mut program = rules::Program::load(db).unwrap();
+    let original = program.lookup_probe_term_original().unwrap().unwrap();
+    let input = program.lookup_probe_term_input().unwrap().unwrap();
+    program.insert_probe_seen((original,)).unwrap();
+    program.insert_probe_alternate((input,)).unwrap();
+    let color = program.color(&[Color::BASE]);
+
+    let held = rules::scoped_query_in(db, color).unwrap();
+    assert!(held.contains(db, original, true).unwrap());
+    assert!(!held.contains(db, original, false).unwrap());
+    assert!(!held.contains(db, input, true).unwrap());
+    assert!(held.contains(db, input, false).unwrap());
+    let mut program = rules::Program::load(db).unwrap();
+    program.union_in(color, original, input).unwrap();
+
+    let fresh = rules::scoped_query_in(db, color).unwrap();
+    assert!(fresh.contains(db, input, true).unwrap());
+    assert!(fresh.contains(db, original, false).unwrap());
+    assert!(!held.contains(db, input, true).unwrap());
+    assert!(!held.contains(db, original, false).unwrap());
+    assert!(held.contains(db, original, true).unwrap());
+    assert!(held.contains(db, input, false).unwrap());
+    let (retained,) = held.rows(db).unwrap().next().unwrap().unwrap();
+    assert!(matches!(retained, rules::ProbeTerm::Original));
 }

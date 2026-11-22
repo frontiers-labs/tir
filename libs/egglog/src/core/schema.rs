@@ -235,7 +235,9 @@ impl<'a> Schema<'a> {
 
     pub fn tables(self) -> impl Iterator<Item = (TableId, &'a TableSchema)> {
         let tables = self.db.tables.iter().enumerate();
-        tables.map(|(i, table)| (TableId::new(i), &table.schema))
+        tables
+            .map(|(i, table)| (TableId::new(i), &table.schema))
+            .filter(move |&(id, _)| !self.db.locals.contains(id))
     }
 
     /// The name and signature of a primitive.
@@ -290,6 +292,8 @@ pub enum Error {
     },
     /// A typed e-class handle belongs to a different database.
     ForeignClass,
+    /// A local table handle belongs to a different database.
+    ForeignLocalTable,
     /// `set_shapes` got the wrong number of shapes.
     Shape {
         table: String,
@@ -356,6 +360,7 @@ impl fmt::Display for Error {
             } => {
                 write!(f, "column {column} of `{table}` holds ids, got {value:?}")
             }
+            Self::ForeignLocalTable => write!(f, "local table belongs to a different database"),
             Self::ForeignClass => write!(f, "e-class belongs to a different database"),
             Self::Shape {
                 table,

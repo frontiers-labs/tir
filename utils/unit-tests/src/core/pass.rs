@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use tir::{
     builtin::{ops, AddIOp, IntegerType},
     func::FuncOp,
-    AnalysisManager, Context, OpId, Operation, OperationRef, Pass, PassError, PassManager,
-    PassTarget, Symbol,
+    Context, OpId, Operation, OperationRef, Pass, PassError, PassManager, PassTarget, Symbol,
 };
 
 use super::fixtures;
@@ -23,12 +22,7 @@ impl Pass for AddToSubPass {
         PassTarget::operation::<AddIOp>()
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError> {
         let add = context
             .get_op(op)
             .as_op::<AddIOp>()
@@ -54,12 +48,7 @@ impl Pass for BreakIRPass {
         PassTarget::operation::<AddIOp>()
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError> {
         context.erase_op(&OperationRef::new(context.get_op(op)))
     }
 }
@@ -78,12 +67,7 @@ impl Pass for ReplaceThenErasePass {
         PassTarget::operation::<AddIOp>()
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError> {
         let add = context
             .get_op(op)
             .as_op::<AddIOp>()
@@ -105,12 +89,7 @@ impl Pass for ReadOnlyPass {
         "read-only"
     }
 
-    fn run(
-        &mut self,
-        _op: OpId,
-        _context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, _op: OpId, _context: &Context) -> Result<(), PassError> {
         Ok(())
     }
 }
@@ -674,12 +653,7 @@ impl Pass for CountingPass {
         PassTarget::operation::<FuncOp>()
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError> {
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if run <= self.edits {
             let func = context
@@ -738,12 +712,7 @@ impl Pass for PeerCountPass {
         PassTarget::operation::<FuncOp>()
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError> {
         let id = op;
         let module = context.parent_op(id).expect("a function sits in a module");
         let peers: i64 = context
@@ -841,12 +810,7 @@ impl Pass for SlowFirstPass {
         PassTarget::operation::<FuncOp>()
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError> {
         let func = context
             .get_op(op)
             .as_op::<FuncOp>()
@@ -900,12 +864,7 @@ impl Pass for ThreeRoundsPass {
         PassTarget::operation::<FuncOp>()
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError> {
         self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let body = context
             .get_op(op)

@@ -1,4 +1,4 @@
-use tir::{AnalysisManager, Context, OpId, Pass, PassError};
+use tir::{Context, OpId, Pass, PassError};
 
 #[derive(Default)]
 pub struct InstructionSelectPass;
@@ -12,12 +12,7 @@ impl Pass for InstructionSelectPass {
     fn name(&self) -> &'static str {
         "instruction-select"
     }
-    fn run(
-        &mut self,
-        _op: OpId,
-        _context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, _op: OpId, _context: &Context) -> Result<(), PassError> {
         Ok(())
     }
 }
