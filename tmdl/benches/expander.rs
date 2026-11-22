@@ -1,20 +1,23 @@
 use tir_bench::{Criterion, Throughput, criterion_group, criterion_main};
 use tmdl::{MacroTable, StringArena, collect_macros, expand, lex};
 
-// The real macro-heavy x86_64 defs, concatenated in build.rs order so every
-// macro definition precedes its invocations (collect_macros is order-free, but
-// this mirrors the shipped input). Included at compile time to stay in sync.
+// These x86-64 sources contain cross-file macro definitions and invocations.
 const DEFS: &[&str] = &[
-    include_str!("../../backends/x86_64/defs/main.tmdl"),
-    include_str!("../../backends/x86_64/defs/base.tmdl"),
-    include_str!("../../backends/x86_64/defs/arith_ext.tmdl"),
-    include_str!("../../backends/x86_64/defs/conditional.tmdl"),
-    include_str!("../../backends/x86_64/defs/memory_ext.tmdl"),
-    include_str!("../../backends/x86_64/defs/float.tmdl"),
+    include_str!("../../backends/x86_64/isa_defs/main.tmdl"),
+    include_str!("../../backends/x86_64/isa_defs/base.tmdl"),
+    include_str!("../../backends/x86_64/isa_defs/arith_ext.tmdl"),
+    include_str!("../../backends/x86_64/isa_defs/conditional.tmdl"),
+    include_str!("../../backends/x86_64/isa_defs/memory_ext.tmdl"),
+    include_str!("../../backends/x86_64/isa_defs/float.tmdl"),
 ];
 
 fn x86_defs(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
-    let input = DEFS.join("\n");
+    let defs = DEFS.join("\n");
+    // Keep module loading outside the flat macro workload.
+    let input: String = defs
+        .split_inclusive('\n')
+        .filter(|line| !line.starts_with("use "))
+        .collect();
     let mut group = c.benchmark_group("x86_defs");
     group.throughput(Throughput::Bytes(input.len() as u64));
     group.bench_function("collect_and_expand", |b| {

@@ -1,0 +1,12 @@
+register_class GPR for [crate::Demo64] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+    registers { y0..y31 => {}, }
+}
+
+instruction Nop for [crate::Demo64] {
+    param MNEMONIC: String = "nop";
+    encoding { 0xffffffff }
+    asm { "{self.MNEMONIC}" }
+    behavior { GPR::y0 = GPR::y0; }
+}

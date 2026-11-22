@@ -4,7 +4,7 @@
 // through to the imm32 form instead of the imm8 form winning and failing later.
 // OpWide (imm32) is declared first, yet OpNarrow (imm8) must register first.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa SortIsa {
     param XLEN: Integer = 32;

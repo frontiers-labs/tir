@@ -1,0 +1,10 @@
+mod main;
+mod versions;
+mod float;
+mod advsimd;
+mod data_processing;
+mod loads_stores;
+mod atomics;
+mod branches;
+mod perf;
+mod cpu;

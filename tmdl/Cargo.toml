@@ -16,6 +16,7 @@ schemars = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tir-cdsl = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
 tir-adt.workspace = true
 tir-symbolic.workspace = true
 
@@ -23,7 +24,7 @@ tir-symbolic.workspace = true
 # backend build scripts compile tmdl without them.
 [features]
 default = ["json", "rust-cli"]
-rust-cli = ["dep:tir-cdsl"]
+rust-cli = ["dep:tir-cdsl", "dep:toml"]
 json = ["dep:schemars"]
 
 [lib]
@@ -33,7 +34,7 @@ doctest = false
 
 [[bin]]
 bench = false
-name = "tmdlc"
+name = "tmdl"
 path = "bin.rs"
 required-features = ["rust-cli"]
 

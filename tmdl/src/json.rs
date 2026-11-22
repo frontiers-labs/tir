@@ -45,11 +45,75 @@ pub(crate) fn schema() -> Schema {
         .into_root_schema_for::<Document>()
 }
 
+#[cfg(feature = "rust-cli")]
+/// Checked module graph with canonical declaration references.
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct PackageDocument {
+    #[schemars(extend("const" = 3))]
+    version: u8,
+    files: Vec<PackageFile>,
+}
+
+#[cfg(feature = "rust-cli")]
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct PackageFile {
+    path: String,
+    module: String,
+    items: Vec<PackageItem>,
+}
+
+#[cfg(feature = "rust-cli")]
+#[derive(Serialize, JsonSchema)]
+struct PackageItem {
+    id: String,
+    #[serde(flatten)]
+    item: Item,
+}
+
+#[cfg(feature = "rust-cli")]
+impl PackageDocument {
+    pub fn from_ast(files: &[ast::File], tree: &crate::module_tree::ModuleTree) -> Self {
+        let cache = crate::sema::build_item_cache(files);
+        Self {
+            version: 3,
+            files: files
+                .iter()
+                .zip(tree.modules())
+                .map(|(file, module)| PackageFile {
+                    path: file.file_name.clone(),
+                    module: module.path.to_string(),
+                    items: file
+                        .items
+                        .iter()
+                        .filter_map(|decl| {
+                            let id = decl.name();
+                            let name = id.rsplit("::").next().unwrap_or(id);
+                            Some(PackageItem {
+                                id: id.into(),
+                                item: Item::from_ast(decl, &cache, name)?,
+                            })
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn schema() -> Schema {
+        SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<Self>()
+    }
+}
+
 #[derive(Serialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 /// One checked input file.
 struct File {
-    /// Input path exactly as passed to `tmdlc`.
+    /// Input path exactly as passed to `tmdl compile`.
     path: String,
     /// Top-level declarations in source order after macro expansion.
     items: Vec<Item>,
@@ -62,7 +126,7 @@ impl File {
             items: file
                 .items
                 .iter()
-                .filter_map(|item| Item::from_ast(item, item_cache))
+                .filter_map(|item| Item::from_ast(item, item_cache, item.name()))
                 .collect(),
         }
     }
@@ -227,16 +291,20 @@ enum Item {
 }
 
 impl Item {
-    fn from_ast(item: &ast::Item, item_cache: &HashMap<&str, &ast::Item>) -> Option<Self> {
+    fn from_ast(
+        item: &ast::Item,
+        item_cache: &HashMap<&str, &ast::Item>,
+        name: &str,
+    ) -> Option<Self> {
         Some(match item {
             ast::Item::Isa(isa) => Self::Isa {
-                name: isa.name.clone(),
+                name: name.to_owned(),
                 requires: isa.requires.as_ref().map(IsaRequirement::from),
                 parameters: parameters(&isa.parameters),
                 trap_handler: isa.trap_handler.as_ref().map(TrapHandler::from),
             },
             ast::Item::Abi(abi) => Self::Abi {
-                name: abi.name.clone(),
+                name: name.to_owned(),
                 alias: abi.alias.clone(),
                 isas: abi.for_isas.clone(),
                 base: abi.base.clone(),
@@ -262,7 +330,7 @@ impl Item {
                 classifier: abi.classifier.clone(),
             },
             ast::Item::RegisterClass(class) => Self::RegisterClass {
-                name: class.name.clone(),
+                name: name.to_owned(),
                 isas: class.for_isas.clone(),
                 base: class.base.clone(),
                 file: class.file.clone(),
@@ -270,7 +338,7 @@ impl Item {
                 registers: class.registers.iter().map(RegisterDef::from).collect(),
             },
             ast::Item::Template(template) => Self::Template {
-                name: template.name.clone(),
+                name: name.to_owned(),
                 isas: template.for_isas.clone(),
                 template: template.parent_template.clone(),
                 parameters: parameters(&template.params),
@@ -280,7 +348,7 @@ impl Item {
                 schedule: schedule_classes(&template.schedule),
             },
             ast::Item::Instruction(instruction) => Self::Instruction {
-                name: instruction.name.clone(),
+                name: name.to_owned(),
                 isas: instruction.for_isas.clone(),
                 template: instruction.parent_template.clone(),
                 parameters: parameters(&instruction.params),
@@ -292,12 +360,12 @@ impl Item {
                 schedule: schedule_classes(&instruction.schedule),
             },
             ast::Item::Unit(class) => Self::SchedClass {
-                name: class.name.clone(),
+                name: name.to_owned(),
                 default_latency: class.default_latency,
                 default_throughput: class.default_throughput,
             },
             ast::Item::Machine(machine) => Self::Machine {
-                name: machine.name.clone(),
+                name: name.to_owned(),
                 alias: machine.alias.clone(),
                 isas: machine.for_isas.clone(),
                 issue_width: machine.issue_width,

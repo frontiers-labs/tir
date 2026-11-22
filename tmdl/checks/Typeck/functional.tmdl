@@ -2,7 +2,7 @@
 // split/map/zip/reduce/iota/concat, unary/binary/ternary lambdas, lambda
 // captures of outer operands, and iota zipped with split.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 isa RV32I { param XLEN: Integer = 32; }
 isa RVV requires [RV32I] {

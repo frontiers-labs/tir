@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 // The mnemonic selector expands to both cmp operations; the recipe carries
 // the explicit front-end costs and fused execution operation.

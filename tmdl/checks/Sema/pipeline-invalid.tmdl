@@ -1,7 +1,7 @@
 // Phase references in binds must name a phase of the machine's pipeline; a
 // machine without a pipeline has no phases at all.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 sched_class W;
 sched_class V;

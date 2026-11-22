@@ -2,7 +2,7 @@
 // do. A low-first slice is rejected at parse time, so the AST invariant
 // `hi >= lo` holds everywhere downstream.
 
-// RUN: not tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-ast --text-only --output=- %s | filecheck %s
 
 isa TestIsa { param XLEN: Integer = 64; }
 

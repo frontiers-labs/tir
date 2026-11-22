@@ -2,9 +2,9 @@
 // widths taken from the use site, implicit widening, `let` annotations,
 // register-operand projections and `width(x)`.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
-// RUN: tmdlc --action=emit-markdown --dialect=test --output=- %s | filecheck %s --check-prefix=MD
-// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=Test --output=- %s | filecheck %s --check-prefix=SMT
+// RUN: tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-markdown --dialect=test --output=- %s | filecheck %s --check-prefix=MD
+// RUN: tmdl compile --action=emit-smtlib --dialect=test --isa=Test --output=- %s | filecheck %s --check-prefix=SMT
 
 isa Test { param XLEN: Integer = 32; }
 

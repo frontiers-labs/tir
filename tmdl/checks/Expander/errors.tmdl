@@ -1,4 +1,4 @@
-// RUN: not tmdlc --action=emit-expanded-tokens --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-expanded-tokens --output=- %s | filecheck %s
 
 macro one { ($x:ident) => { $x }; }
 macro meta { ($x:ident) => { $y }; }

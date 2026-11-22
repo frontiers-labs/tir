@@ -821,7 +821,7 @@
           }
         },
         "path": {
-          "description": "Input path exactly as passed to `tmdlc`.",
+          "description": "Input path exactly as passed to `tmdl compile`.",
           "type": "string"
         }
       },

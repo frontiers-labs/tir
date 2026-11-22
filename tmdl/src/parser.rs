@@ -97,7 +97,7 @@ where
         .ignore_then(ident)
         .then(alias)
         .then(for_isas())
-        .then(just(Token::Colon).ignore_then(ident).or_not())
+        .then(just(Token::Colon).ignore_then(reference()).or_not())
         .then(
             choice((
                 parameter().map(AbiBody::Param),
@@ -228,15 +228,16 @@ fn abi_register<'src, I>()
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Identifier(ident) => ident.to_string() };
-    ident
-        .then_ignore(just(Token::Colon).then(just(Token::Colon)))
-        .then(ident)
-        .map_with(|(class, name), e| AbiRegister {
-            class,
+    name_parts().try_map_with(|(base, mut members), e| {
+        let name = members
+            .pop()
+            .ok_or_else(|| Rich::custom(e.span(), "expected a qualified register name"))?;
+        Ok(AbiRegister {
+            class: join_path(base, members),
             name,
             span: e.span(),
         })
+    })
 }
 
 fn abi_register_sequence<'src, I>()
@@ -414,7 +415,7 @@ where
     just(Token::KwRegClass)
         .ignore_then(ident)
         .then(for_isas())
-        .then(just(Token::Colon).ignore_then(ident).or_not())
+        .then(just(Token::Colon).ignore_then(reference()).or_not())
         .then(
             choice((
                 register_class_file().map(RegClassBody::File),
@@ -482,10 +483,9 @@ fn register_class_file<'src, I>()
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Identifier(ident) => ident.to_string() };
     just(Token::Identifier("file"))
         .then_ignore(just(Token::Equals))
-        .ignore_then(ident)
+        .ignore_then(reference())
         .then_ignore(just(Token::Semicolon))
         .labelled("register class file")
 }
@@ -565,7 +565,7 @@ where
     just(keyword)
         .ignore_then(ident)
         .then(for_isas().or_not())
-        .then(just(Token::Colon).ignore_then(ident).or_not())
+        .then(just(Token::Colon).ignore_then(reference()).or_not())
         .then(
             body.repeated()
                 .collect::<Vec<_>>()
@@ -690,7 +690,13 @@ where
         .ignore_then(
             just(Token::Identifier("units"))
                 .ignore_then(just(Token::Equals))
-                .ignore_then(ident_list())
+                .ignore_then(
+                    reference()
+                        .separated_by(just(Token::Comma))
+                        .allow_trailing()
+                        .collect()
+                        .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+                )
                 .then_ignore(just(Token::Semicolon))
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
@@ -1065,7 +1071,13 @@ where
         .then_ignore(just(Token::Colon))
         .then(choice((
             just(Token::KwInstruction)
-                .ignore_then(names.clone())
+                .ignore_then(
+                    reference()
+                        .separated_by(just(Token::Comma))
+                        .at_least(1)
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+                )
                 .map(|names| (names, Vec::new())),
             just(Token::Identifier("mnemonic"))
                 .ignore_then(names)
@@ -1544,7 +1556,7 @@ where
 
     // `reg_file { GPR { count = 128; } FPR { count = 96; } }` — physical register
     // file sizes for renaming, keyed by physical-file name.
-    let reg_file_entry = ident
+    let reg_file_entry = reference()
         .then(
             kv_int_pair()
                 .repeated()
@@ -1569,7 +1581,7 @@ where
         .map(MachineBody::RegFiles);
 
     let bind = just(Token::KwBind)
-        .ignore_then(ident)
+        .ignore_then(reference())
         .then(bind_body())
         .map_with(|(unit, fields), e| {
             let f = aggregate_bind_fields(fields);
@@ -1591,7 +1603,7 @@ where
         });
 
     let r#override = just(Token::KwOverride)
-        .ignore_then(ident)
+        .ignore_then(reference())
         .then(override_body())
         .map_with(|(instruction, (fields, latency_cases)), e| {
             let f = aggregate_bind_fields(fields);
@@ -1835,15 +1847,13 @@ fn isa_requirements<'src, I>()
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Identifier(ident) => ident.to_string() };
-    let single_isa =
-        select! { Token::Identifier(ident) => IsaRequirement::Single(ident.to_string()) };
-    let any = ident
+    let single_isa = reference().map(IsaRequirement::Single);
+    let any = reference()
         .separated_by(just(Token::Pipe))
         .collect::<Vec<_>>()
         .delimited_by(just(Token::LBracket), just(Token::RBracket))
         .map(IsaRequirement::Any);
-    let all = ident
+    let all = reference()
         .separated_by(just(Token::Comma))
         .collect::<Vec<_>>()
         .delimited_by(just(Token::LBracket), just(Token::RBracket))
@@ -1860,11 +1870,10 @@ fn for_isas<'src, I>()
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Identifier(ident) => ident.to_string() };
     just(Token::KwFor)
         .ignored()
         .then(
-            ident
+            reference()
                 .separated_by(just(Token::Comma))
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBracket), just(Token::RBracket)),
@@ -1945,6 +1954,35 @@ where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     any().filter(is_ident).map(|t| t.as_ident().to_string())
+}
+
+fn name_parts<'src, I>()
+-> impl Parser<'src, I, (String, Vec<String>), extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    ident().then(
+        just(Token::Colon)
+            .ignore_then(just(Token::Colon))
+            .ignore_then(ident())
+            .repeated()
+            .collect(),
+    )
+}
+
+fn join_path(base: String, remainder: Vec<String>) -> String {
+    if remainder.is_empty() {
+        base
+    } else {
+        format!("{base}::{}", remainder.join("::"))
+    }
+}
+
+fn reference<'src, I>() -> impl Parser<'src, I, String, extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    name_parts().map(|(base, remainder)| join_path(base, remainder))
 }
 
 fn fn_def<'src, I>() -> impl Parser<'src, I, FnDef, extra::Err<Rich<'src, Token<'src>, Span>>>
@@ -2104,25 +2142,19 @@ where
             }
         }
 
-        let ident = select! { Token::Identifier(i) => i.to_string() };
-        let scope = just(Token::Colon).then(just(Token::Colon));
-
-        let ident_or_path =
-            ident
-                .then(scope.ignore_then(ident).or_not())
-                .map_with(|(base, member), e| {
-                    if let Some(member) = member {
-                        Expr::Path(Path {
-                            base,
-                            remainder: vec![member],
-                            span: e.span(),
-                        })
-                    } else if let Some(b) = builtin_from_ident(&base) {
-                        Expr::BuiltinFunction(b)
-                    } else {
-                        Ident::new(base, e.span()).into()
-                    }
-                });
+        let ident_or_path = name_parts().map_with(|(base, remainder), e| {
+            if !remainder.is_empty() {
+                Expr::Path(Path {
+                    base,
+                    remainder,
+                    span: e.span(),
+                })
+            } else if let Some(builtin) = builtin_from_ident(&base) {
+                Expr::BuiltinFunction(builtin)
+            } else {
+                Ident::new(base, e.span()).into()
+            }
+        });
 
         let literal_or_ident = choice((
             ident_or_path,
@@ -2400,18 +2432,16 @@ where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     let ident = select! { Token::Identifier(i) => i.to_string() };
-    let scope = just(Token::Colon).then(just(Token::Colon));
-    let assign_target = ident
-        .then(scope.ignore_then(ident).or_not())
-        .map_with(|(base, member), e| {
-            if let Some(member) = member {
+    let assign_target = name_parts()
+        .map_with(|(base, remainder), e| {
+            if remainder.is_empty() {
+                Expr::Ident(Ident::new(base, e.span()))
+            } else {
                 Expr::Path(Path {
                     base,
-                    remainder: vec![member],
+                    remainder,
                     span: e.span(),
                 })
-            } else {
-                Expr::Ident(Ident::new(base, e.span()))
             }
         })
         .boxed();
@@ -2547,8 +2577,6 @@ where
 {
     let num = select! { Token::Number(n) => n };
 
-    let ident = select! { Token::Identifier(i) => i.to_string() };
-
     let width = num
         .try_map_with(|n, e| {
             digits(n)
@@ -2569,7 +2597,7 @@ where
         just(Token::Identifier("String")).to(Type::String),
         just(Token::Identifier("Integer")).to(Type::Integer),
         bits,
-        ident.map(Type::Struct),
+        reference().map(Type::Struct),
     ))
 }
 

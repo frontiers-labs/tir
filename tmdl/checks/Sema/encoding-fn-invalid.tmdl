@@ -2,7 +2,7 @@
 // call to a helper that does not exist or takes a different number of arguments
 // is caught there, ahead of every shape.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa Arch {
     param XLEN: Integer = 64;

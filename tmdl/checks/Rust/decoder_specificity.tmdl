@@ -5,7 +5,7 @@
 // its word is a strict subset of OpGeneral's. Without specificity ordering the
 // earlier, more-general OpGeneral would shadow OpSpecific.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa DecIsa {
     param XLEN: Integer = 32;

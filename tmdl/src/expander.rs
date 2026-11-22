@@ -3,11 +3,13 @@
 //! Runs between `lex()` and `parse()`, rewriting `Vec<Spanned<Token>>` in place.
 //! Everything downstream (parser, sema, typeck, codegen) is untouched.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chumsky::error::Rich;
 
 use crate::lexer::Token;
+use crate::module_names::SymbolId;
+use crate::module_tree::{ModulePath, ModuleTree};
 use crate::{Span, Spanned};
 
 /// Diagnostic shape shared with sema/typeck: (file name, rich error).
@@ -90,7 +92,7 @@ impl Delim {
 
 #[derive(Clone, Debug)]
 enum TokenTree<'s> {
-    Leaf(Spanned<Token<'s>>),
+    Leaf(Spanned<Token<'s>>, Option<usize>),
     Group {
         delim: Delim,
         open: Span,
@@ -102,7 +104,7 @@ enum TokenTree<'s> {
 impl<'s> TokenTree<'s> {
     fn span(&self) -> Span {
         match self {
-            TokenTree::Leaf((_, s)) => *s,
+            TokenTree::Leaf((_, s), _) => *s,
             TokenTree::Group { open, close, .. } => (open.start..close.end).into(),
         }
     }
@@ -110,14 +112,14 @@ impl<'s> TokenTree<'s> {
 
 fn build_trees<'s>(
     file: &str,
-    tokens: Vec<Spanned<Token<'s>>>,
+    tokens: impl IntoIterator<Item = ScopedToken<'s>>,
     diags: &mut Vec<Diag>,
 ) -> Option<Vec<TokenTree<'s>>> {
     // Stack of (delim, open span, accumulated children).
     let mut stack: Vec<(Delim, Span, Vec<TokenTree<'s>>)> = vec![];
     let mut top: Vec<TokenTree<'s>> = vec![];
 
-    for (tok, span) in tokens {
+    for ((tok, span), scope) in tokens {
         if let Some(d) = Delim::from_open(&tok) {
             if stack.len() >= NESTING_LIMIT {
                 diags.push(diag(file, span, "delimiter nesting too deep"));
@@ -142,7 +144,7 @@ fn build_trees<'s>(
             };
             top.push(group);
         } else {
-            top.push(TokenTree::Leaf((tok, span)));
+            top.push(TokenTree::Leaf((tok, span), scope));
         }
     }
 
@@ -153,19 +155,21 @@ fn build_trees<'s>(
     Some(top)
 }
 
-fn flatten<'s>(trees: &[TokenTree<'s>], out: &mut Vec<Spanned<Token<'s>>>) {
+type ScopedToken<'s> = (Spanned<Token<'s>>, Option<usize>);
+
+fn flatten<'s>(trees: &[TokenTree<'s>], out: &mut impl FnMut(ScopedToken<'s>)) {
     for t in trees {
         match t {
-            TokenTree::Leaf(l) => out.push(l.clone()),
+            TokenTree::Leaf(l, scope) => out((l.clone(), *scope)),
             TokenTree::Group {
                 delim,
                 open,
                 close,
                 trees,
             } => {
-                out.push((delim.open(), *open));
+                out(((delim.open(), *open), None));
                 flatten(trees, out);
-                out.push((delim.close(), *close));
+                out(((delim.close(), *close), None));
             }
         }
     }
@@ -175,7 +179,7 @@ fn count_tokens(trees: &[TokenTree]) -> usize {
     trees
         .iter()
         .map(|t| match t {
-            TokenTree::Leaf(_) => 1,
+            TokenTree::Leaf(..) => 1,
             TokenTree::Group { trees, .. } => 2 + count_tokens(trees),
         })
         .sum()
@@ -257,17 +261,17 @@ pub fn collect_macros<'s>(
     table: &mut MacroTable<'s>,
     diags: &mut Vec<Diag>,
 ) -> Vec<Spanned<Token<'s>>> {
-    let Some(trees) = build_trees(file, tokens, diags) else {
+    let Some(trees) = build_trees(file, tokens.into_iter().map(|t| (t, None)), diags) else {
         return vec![];
     };
 
     let mut kept: Vec<TokenTree<'s>> = vec![];
     let mut i = 0;
     while i < trees.len() {
-        if matches!(&trees[i], TokenTree::Leaf((Token::KwMacro, _))) {
+        if matches!(&trees[i], TokenTree::Leaf((Token::KwMacro, _), _)) {
             let def_span = trees[i].span();
             let name = match trees.get(i + 1) {
-                Some(TokenTree::Leaf((Token::Identifier(n), _))) => n.to_string(),
+                Some(TokenTree::Leaf((Token::Identifier(n), _), _)) => n.to_string(),
                 _ => {
                     diags.push(diag(file, def_span, "expected macro name after `macro`"));
                     return vec![];
@@ -309,7 +313,7 @@ pub fn collect_macros<'s>(
     }
 
     let mut out = vec![];
-    flatten(&kept, &mut out);
+    flatten(&kept, &mut |(token, _)| out.push(token));
     out
 }
 
@@ -333,7 +337,10 @@ fn parse_macro_def<'s>(
                 return None;
             }
         };
-        if !matches!(body.get(i + 1), Some(TokenTree::Leaf((Token::FatArrow, _)))) {
+        if !matches!(
+            body.get(i + 1),
+            Some(TokenTree::Leaf((Token::FatArrow, _), _))
+        ) {
             diags.push(diag(file, def_span, "expected `=>` in macro arm"));
             return None;
         }
@@ -354,7 +361,7 @@ fn parse_macro_def<'s>(
 
         i += 3;
         // Optional arm separator.
-        if matches!(body.get(i), Some(TokenTree::Leaf((Token::Semicolon, _)))) {
+        if matches!(body.get(i), Some(TokenTree::Leaf((Token::Semicolon, _), _))) {
             i += 1;
         }
     }
@@ -380,7 +387,7 @@ fn parse_matcher<'s>(
     let mut i = 0;
     while i < trees.len() {
         match &trees[i] {
-            TokenTree::Leaf((Token::Dollar, span)) => match trees.get(i + 1) {
+            TokenTree::Leaf((Token::Dollar, span), _) => match trees.get(i + 1) {
                 Some(TokenTree::Group {
                     delim: Delim::Paren,
                     trees: sub_trees,
@@ -391,14 +398,17 @@ fn parse_matcher<'s>(
                     out.push(MatcherNode::Repeat { sub, sep, plus });
                     i += consumed;
                 }
-                Some(TokenTree::Leaf((Token::Identifier(name), _))) => {
+                Some(TokenTree::Leaf((Token::Identifier(name), _), _)) => {
                     // `$name : kind`
-                    if !matches!(trees.get(i + 2), Some(TokenTree::Leaf((Token::Colon, _)))) {
+                    if !matches!(
+                        trees.get(i + 2),
+                        Some(TokenTree::Leaf((Token::Colon, _), _))
+                    ) {
                         diags.push(diag(file, *span, "expected `:` after `$` metavariable"));
                         return None;
                     }
                     let kind = match trees.get(i + 3) {
-                        Some(TokenTree::Leaf((Token::Identifier(k), _))) => match *k {
+                        Some(TokenTree::Leaf((Token::Identifier(k), _), _)) => match *k {
                             "ident" => FragKind::Ident,
                             "literal" => FragKind::Literal,
                             "tt" => FragKind::Tt,
@@ -431,7 +441,7 @@ fn parse_matcher<'s>(
                     return None;
                 }
             },
-            TokenTree::Leaf((tok, _)) => {
+            TokenTree::Leaf((tok, _), _) => {
                 out.push(MatcherNode::Token(tok.clone()));
                 i += 1;
             }
@@ -453,8 +463,8 @@ fn parse_rep_tail<'s>(
 ) -> Option<(Option<Token<'s>>, bool, usize)> {
     // `consumed` counts trees from the `$` position: `$` + group = 2, plus tail.
     let rep_kind = |t: &TokenTree<'s>| match t {
-        TokenTree::Leaf((Token::Asterisk, _)) => Some(false),
-        TokenTree::Leaf((Token::Plus, _)) => Some(true),
+        TokenTree::Leaf((Token::Asterisk, _), _) => Some(false),
+        TokenTree::Leaf((Token::Plus, _), _) => Some(true),
         _ => None,
     };
 
@@ -463,7 +473,7 @@ fn parse_rep_tail<'s>(
             return Some((None, plus, 3));
         }
         // Separator then `*`/`+`.
-        if let TokenTree::Leaf((sep, sep_span)) = t {
+        if let TokenTree::Leaf((sep, sep_span), _) = t {
             match trees.get(start + 1).and_then(rep_kind) {
                 Some(plus) => return Some((Some(sep.clone()), plus, 4)),
                 None => {
@@ -493,7 +503,7 @@ fn parse_transcription<'s>(
     let mut i = 0;
     while i < trees.len() {
         match &trees[i] {
-            TokenTree::Leaf((Token::Dollar, span)) => match trees.get(i + 1) {
+            TokenTree::Leaf((Token::Dollar, span), _) => match trees.get(i + 1) {
                 Some(TokenTree::Group {
                     delim: Delim::Paren,
                     trees: sub_trees,
@@ -513,7 +523,7 @@ fn parse_transcription<'s>(
                     out.push(concat);
                     i += 2;
                 }
-                Some(TokenTree::Leaf((Token::Identifier(name), _))) => {
+                Some(TokenTree::Leaf((Token::Identifier(name), _), _)) => {
                     out.push(TransNode::Var(name.to_string()));
                     i += 2;
                 }
@@ -526,7 +536,7 @@ fn parse_transcription<'s>(
                     return None;
                 }
             },
-            TokenTree::Leaf((tok, _)) => {
+            TokenTree::Leaf((tok, _), _) => {
                 out.push(TransNode::Token(tok.clone()));
                 i += 1;
             }
@@ -548,7 +558,7 @@ fn parse_concat<'s>(
 ) -> Option<TransNode<'s>> {
     let ok = matches!(
         trees.first(),
-        Some(TokenTree::Leaf((Token::Identifier("concat"), _)))
+        Some(TokenTree::Leaf((Token::Identifier("concat"), _), _))
     );
     let args_group = match (ok, trees.get(1)) {
         (
@@ -567,7 +577,7 @@ fn parse_concat<'s>(
 
     // Comma-separated argument list, each a single transcription node.
     let mut args = vec![];
-    for chunk in args_group.split(|t| matches!(t, TokenTree::Leaf((Token::Comma, _)))) {
+    for chunk in args_group.split(|t| matches!(t, TokenTree::Leaf((Token::Comma, _), _))) {
         if chunk.is_empty() {
             continue;
         }
@@ -629,7 +639,7 @@ fn frag_names<'s>(nodes: &[MatcherNode<'s>], out: &mut Vec<String>) {
 
 fn leaf_tok<'a, 's>(t: &'a TokenTree<'s>) -> Option<&'a Token<'s>> {
     match t {
-        TokenTree::Leaf((tok, _)) => Some(tok),
+        TokenTree::Leaf((tok, _), _) => Some(tok),
         _ => None,
     }
 }
@@ -775,6 +785,7 @@ struct Transcriber<'a, 's> {
     file: &'a str,
     arena: &'s StringArena,
     inv_span: Span,
+    scope: Option<usize>,
     diags: Vec<Diag>,
 }
 
@@ -821,23 +832,21 @@ impl<'a, 's> Transcriber<'a, 's> {
         &mut self,
         nodes: &[TransNode<'s>],
         bindings: &Bindings<'s>,
-        out: &mut Vec<Spanned<Token<'s>>>,
+        out: &mut Vec<ScopedToken<'s>>,
     ) {
         for n in nodes {
             match n {
-                TransNode::Token(tok) => out.push((tok.clone(), self.inv_span)),
+                TransNode::Token(tok) => out.push(((tok.clone(), self.inv_span), self.scope)),
                 TransNode::Group { delim, sub } => {
-                    out.push((delim.open(), self.inv_span));
+                    out.push(((delim.open(), self.inv_span), self.scope));
                     self.transcribe(sub, bindings, out);
-                    out.push((delim.close(), self.inv_span));
+                    out.push(((delim.close(), self.inv_span), self.scope));
                 }
                 TransNode::Var(name) => match bindings.get(name) {
                     Some(Binding::Leaf(trees)) => {
-                        let mut flat = vec![];
-                        flatten(trees, &mut flat);
-                        for (t, _) in flat {
-                            out.push((t, self.inv_span));
-                        }
+                        flatten(trees, &mut |((token, _), scope)| {
+                            out.push(((token, self.inv_span), scope));
+                        });
                     }
                     Some(Binding::Seq(_)) => self.diags.push(diag(
                         self.file,
@@ -863,7 +872,7 @@ impl<'a, 's> Transcriber<'a, 's> {
                         let narrowed = narrow(bindings, i);
                         self.transcribe(sub, &narrowed, out);
                         if let (true, Some(s)) = (i + 1 < len, sep) {
-                            out.push((s.clone(), self.inv_span));
+                            out.push(((s.clone(), self.inv_span), self.scope));
                         }
                     }
                 }
@@ -876,7 +885,7 @@ impl<'a, 's> Transcriber<'a, 's> {
         &mut self,
         args: &[TransNode<'s>],
         bindings: &Bindings<'s>,
-        out: &mut Vec<Spanned<Token<'s>>>,
+        out: &mut Vec<ScopedToken<'s>>,
     ) {
         let mut text = String::new();
         let mut first_kind = None;
@@ -895,7 +904,7 @@ impl<'a, 's> Transcriber<'a, 's> {
             Some(ConcatKind::Num) => Token::Number(s),
             _ => Token::Identifier(s),
         };
-        out.push((tok, self.inv_span));
+        out.push(((tok, self.inv_span), self.scope));
     }
 
     fn concat_arg(
@@ -907,7 +916,7 @@ impl<'a, 's> Transcriber<'a, 's> {
             TransNode::Token(t) => t.clone(),
             TransNode::Var(name) => match bindings.get(name) {
                 Some(Binding::Leaf(trees)) if trees.len() == 1 => match &trees[0] {
-                    TokenTree::Leaf((t, _)) => t.clone(),
+                    TokenTree::Leaf((t, _), _) => t.clone(),
                     _ => {
                         self.bad_concat();
                         return None;
@@ -972,8 +981,130 @@ pub fn expand<'s>(
     table: &MacroTable<'s>,
     arena: &'s StringArena,
 ) -> (Vec<Spanned<Token<'s>>>, Vec<Diag>) {
+    expand_in(file, tokens, MacroEnvironment::Flat(table), arena)
+}
+
+/// Literal macro calls in a transcription resolve in the defining module.
+/// Substituted macro arguments retain their original module. The parser
+/// resolves emitted TMDL declarations and references in the invoking module.
+/// Use `crate::` in shared macros to name a declaration independent of the caller.
+pub(crate) struct ScopedMacros<'s> {
+    modules: BTreeMap<ModulePath, usize>,
+    scopes: Vec<MacroScope<'s>>,
+}
+
+struct MacroScope<'s> {
+    module: ModulePath,
+    imports: BTreeMap<String, SymbolId>,
+    table: MacroTable<'s>,
+}
+
+impl<'s> ScopedMacros<'s> {
+    pub fn new(tree: &ModuleTree, tables: Vec<MacroTable<'s>>) -> Self {
+        let modules: BTreeMap<_, _> = tree
+            .modules()
+            .enumerate()
+            .map(|(idx, module)| (module.path.clone(), idx))
+            .collect();
+        let imports = tree
+            .modules()
+            .map(|module| {
+                module
+                    .imports
+                    .iter()
+                    .filter_map(|(name, _)| SymbolId::resolve(&module.path, name))
+                    .filter(|id| {
+                        modules
+                            .get(&id.module)
+                            .is_some_and(|&idx| tables[idx].macros.contains_key(&id.name))
+                    })
+                    .map(|id| (id.name.clone(), id))
+                    .collect()
+            })
+            .collect::<Vec<_>>();
+        let scopes = tree
+            .modules()
+            .zip(tables)
+            .zip(imports)
+            .map(|((module, table), imports)| MacroScope {
+                module: module.path.clone(),
+                imports,
+                table,
+            })
+            .collect();
+        Self { modules, scopes }
+    }
+
+    pub fn names(&self) -> impl Iterator<Item = SymbolId> + '_ {
+        self.scopes.iter().flat_map(|scope| {
+            scope
+                .table
+                .macros
+                .keys()
+                .map(|name| SymbolId::new(&scope.module, name))
+        })
+    }
+
+    pub fn expand(
+        &self,
+        scope: usize,
+        file: &str,
+        tokens: Vec<Spanned<Token<'s>>>,
+        arena: &'s StringArena,
+    ) -> (Vec<Spanned<Token<'s>>>, Vec<Diag>) {
+        expand_in(file, tokens, MacroEnvironment::Scoped(self, scope), arena)
+    }
+
+    fn lookup(&self, index: usize, reference: &str) -> Option<(&MacroDef<'s>, Option<usize>)> {
+        let scope = &self.scopes[index];
+        let id = if reference.contains("::") {
+            SymbolId::resolve(&scope.module, reference)?
+        } else {
+            if let Some(def) = scope.table.macros.get(reference) {
+                return Some((def, Some(index)));
+            }
+            scope.imports.get(reference)?.clone()
+        };
+        let target = *self.modules.get(&id.module)?;
+        let def = self.scopes[target].table.macros.get(&id.name)?;
+        Some((def, Some(target)))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MacroEnvironment<'a, 's> {
+    Flat(&'a MacroTable<'s>),
+    Scoped(&'a ScopedMacros<'s>, usize),
+}
+
+impl<'a, 's> MacroEnvironment<'a, 's> {
+    fn scope(self) -> Option<usize> {
+        match self {
+            Self::Flat(_) => None,
+            Self::Scoped(_, scope) => Some(scope),
+        }
+    }
+
+    fn lookup(self, site: Option<usize>, name: &str) -> Option<(&'a MacroDef<'s>, Option<usize>)> {
+        match self {
+            Self::Flat(table) => table.macros.get(name).map(|def| (def, None)),
+            Self::Scoped(macros, scope) => macros.lookup(site.unwrap_or(scope), name),
+        }
+    }
+}
+
+fn expand_in<'s>(
+    file: &str,
+    tokens: Vec<Spanned<Token<'s>>>,
+    macros: MacroEnvironment<'_, 's>,
+    arena: &'s StringArena,
+) -> (Vec<Spanned<Token<'s>>>, Vec<Diag>) {
     let mut diags = vec![];
-    let Some(mut trees) = build_trees(file, tokens, &mut diags) else {
+    let Some(mut trees) = build_trees(
+        file,
+        tokens.into_iter().map(|t| (t, macros.scope())),
+        &mut diags,
+    ) else {
         return (vec![], diags);
     };
 
@@ -984,7 +1115,7 @@ pub fn expand<'s>(
             changed: false,
             had_error: false,
         };
-        let next = expand_trees(file, &trees, table, arena, &mut ctx);
+        let next = expand_trees(file, &trees, macros, arena, &mut ctx);
         let changed = ctx.changed;
         let had_error = ctx.had_error;
         trees = next;
@@ -1010,7 +1141,7 @@ pub fn expand<'s>(
     }
 
     let mut out = vec![];
-    flatten(&trees, &mut out);
+    flatten(&trees, &mut |(token, _)| out.push(token));
     (out, diags)
 }
 
@@ -1024,39 +1155,66 @@ struct ExpandCtx<'a> {
 fn expand_trees<'s>(
     file: &str,
     trees: &[TokenTree<'s>],
-    table: &MacroTable<'s>,
+    macros: MacroEnvironment<'_, 's>,
     arena: &'s StringArena,
     ctx: &mut ExpandCtx,
 ) -> Vec<TokenTree<'s>> {
     let mut out = vec![];
     let mut i = 0;
     while i < trees.len() {
-        // Invocation shape: `ident ! group`.
-        if let (
-            TokenTree::Leaf((Token::Identifier(name), name_span)),
-            Some(TokenTree::Leaf((Token::Bang, _))),
-            Some(TokenTree::Group {
-                trees: args, close, ..
-            }),
-        ) = (&trees[i], trees.get(i + 1), trees.get(i + 2))
-        {
-            let inv_span: Span = (name_span.start..close.end).into();
-            if let Some(def) = table.macros.get(*name) {
-                match expand_one(file, def, args, inv_span, arena, ctx.diags) {
-                    Some(rep) => out.extend(rep),
-                    None => ctx.had_error = true,
+        if let TokenTree::Leaf((Token::Identifier(name), name_span), scope) = &trees[i] {
+            let mut end = i + 1;
+            let mut qualified = None;
+            if matches!(macros, MacroEnvironment::Scoped(..)) {
+                while let [
+                    TokenTree::Leaf((Token::Colon, _), _),
+                    TokenTree::Leaf((Token::Colon, _), _),
+                    TokenTree::Leaf((Token::Identifier(part), _), _),
+                    ..,
+                ] = &trees[end..]
+                {
+                    let name = qualified.get_or_insert_with(|| (*name).to_string());
+                    name.push_str("::");
+                    name.push_str(part);
+                    end += 3;
+                }
+            }
+            if let [
+                TokenTree::Leaf((Token::Bang, _), _),
+                TokenTree::Group {
+                    trees: args, close, ..
+                },
+                ..,
+            ] = &trees[end..]
+            {
+                let name = qualified.as_deref().unwrap_or(name);
+                let inv_span: Span = (name_span.start..close.end).into();
+                match macros.lookup(*scope, name) {
+                    Some((def, def_scope)) => {
+                        let mut tr = Transcriber {
+                            file,
+                            arena,
+                            inv_span,
+                            scope: def_scope,
+                            diags: Vec::new(),
+                        };
+                        match expand_one(def, args, &mut tr) {
+                            Some(rep) => out.extend(rep),
+                            None => ctx.had_error = true,
+                        }
+                        ctx.diags.extend(tr.diags);
+                    }
+                    None => {
+                        ctx.diags.push(diag(
+                            file,
+                            inv_span,
+                            format!("invocation of unknown macro `{name}`"),
+                        ));
+                        ctx.had_error = true;
+                    }
                 }
                 ctx.changed = true;
-                i += 3;
-                continue;
-            } else {
-                ctx.diags.push(diag(
-                    file,
-                    inv_span,
-                    format!("invocation of unknown macro `{}`", name),
-                ));
-                ctx.had_error = true;
-                i += 3;
+                i = end + 2;
                 continue;
             }
         }
@@ -1068,7 +1226,7 @@ fn expand_trees<'s>(
                 close,
                 trees: sub,
             } => {
-                let new_sub = expand_trees(file, sub, table, arena, ctx);
+                let new_sub = expand_trees(file, sub, macros, arena, ctx);
                 out.push(TokenTree::Group {
                     delim: *delim,
                     open: *open,
@@ -1084,51 +1242,37 @@ fn expand_trees<'s>(
 }
 
 fn expand_one<'s>(
-    file: &str,
     def: &MacroDef<'s>,
     args: &[TokenTree<'s>],
-    inv_span: Span,
-    arena: &'s StringArena,
-    diags: &mut Vec<Diag>,
+    tr: &mut Transcriber<'_, 's>,
 ) -> Option<Vec<TokenTree<'s>>> {
     let mut ctx = MatchCtx { steps: 0 };
     for arm in &def.arms {
         let mut bindings = Bindings::new();
         let matched = match_nodes(&arm.matcher, args, 0, &mut bindings, &mut ctx);
         if ctx.exhausted() {
-            diags.push(diag(file, inv_span, "macro match step budget exceeded"));
+            tr.diags.push(diag(
+                tr.file,
+                tr.inv_span,
+                "macro match step budget exceeded",
+            ));
             return None;
         }
-        if let Some(end) = matched {
-            if end != args.len() {
-                continue;
-            }
-            let mut tr = Transcriber {
-                file,
-                arena,
-                inv_span,
-                diags: vec![],
-            };
-            let mut flat = vec![];
-            tr.transcribe(&arm.transcription, &bindings, &mut flat);
+        if matched == Some(args.len()) {
+            let mut tokens = vec![];
+            tr.transcribe(&arm.transcription, &bindings, &mut tokens);
             if !tr.diags.is_empty() {
-                diags.extend(tr.diags);
                 return None;
             }
-            let mut tree_diags = vec![];
-            let Some(trees) = build_trees(file, flat, &mut tree_diags) else {
-                diags.extend(tree_diags);
-                return None;
-            };
-            return Some(trees);
+            return build_trees(tr.file, tokens, &mut tr.diags);
         }
     }
-    diags.push(diag(
+    tr.diags.push(diag(
         &def.def_file,
         def.def_span,
         "no macro arm matched the invocation",
     ));
-    // Report at invocation site too so the error points at the caller's file.
-    diags.push(diag(file, inv_span, "no matching macro arm"));
+    tr.diags
+        .push(diag(tr.file, tr.inv_span, "no matching macro arm"));
     None
 }

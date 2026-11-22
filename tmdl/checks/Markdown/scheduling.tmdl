@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-markdown --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-markdown --dialect=test --output=- %s | filecheck %s
 
 isa TestIsa {}
 sched_class ALU { latency = 1; }

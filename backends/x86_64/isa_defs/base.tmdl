@@ -1,0 +1,1110 @@
+//! Base scalar integer arithmetic, movement, memory, and control-flow instructions.
+
+use crate::encoding_helpers::modrm_base;
+use crate::encoding_helpers::modrm_ext;
+use crate::encoding_helpers::rex;
+use crate::encoding_helpers::rex_rm;
+use crate::main::EFLAGS;
+use crate::main::GPR32;
+use crate::main::GPR;
+use crate::main::JccRel32;
+use crate::main::JccRel32Legacy;
+use crate::main::PC;
+use crate::main::RegImm16;
+use crate::main::RegImm32;
+use crate::main::RegImm8;
+use crate::main::RegImm8H;
+use crate::main::RegImm;
+use crate::main::RegReg16;
+use crate::main::RegReg32;
+use crate::main::RegReg8;
+use crate::main::RegReg8H;
+use crate::main::RegReg8HL;
+use crate::main::RegReg8LH;
+use crate::main::RegReg;
+use crate::main::RegRegExt32;
+use crate::main::RegRegExt;
+use crate::main::RegRegImm32;
+use crate::main::RegRegImm;
+use crate::main::RegShift16;
+use crate::main::RegShift32;
+use crate::main::RegShift8;
+use crate::main::RegShift8H;
+use crate::main::RegShift;
+use crate::main::RegShiftCl16;
+use crate::main::RegShiftCl32;
+use crate::main::RegShiftCl8;
+use crate::main::RegShiftCl;
+use crate::main::RegShiftOne32;
+use crate::main::RegShiftOne;
+use crate::main::X86;
+use crate::main::X86_64;
+use crate::main::add_flags;
+use crate::main::alu_ri;
+use crate::main::alu_rr;
+use crate::main::imul_flags;
+use crate::main::jcc_ops;
+use crate::main::logic_flags;
+use crate::main::parity_flag;
+use crate::main::reg_ext;
+use crate::main::shift_cl;
+use crate::main::shift_imm;
+use crate::main::sub_flags;
+use crate::main::test_flags;
+use crate::perf::WriteIALU3B;
+use crate::perf::WriteIALU;
+use crate::perf::WriteIALUImm16;
+use crate::perf::WriteIHighByte;
+use crate::perf::WriteIMove3B;
+use crate::perf::WriteIMoveImmediate16;
+use crate::perf::WriteIMoveImmediate;
+use crate::perf::WriteIMoveWide;
+use crate::perf::WriteIMul;
+use crate::perf::WriteIShift;
+use crate::perf::WriteJcc;
+use crate::perf::WriteJump;
+
+// Reg/reg and reg/imm forms share a mnemonic; the assembler tries forms in
+// declaration order, so register forms precede the matching immediate forms.
+
+alu_rr!(RegReg, WriteIALU3B,
+    (Add, "add", 0x01, { add_flags!({ dst }, { src }, { self.XLEN }, { self.XLEN - 1 }) dst = dst + src; }),
+    (Sub, "sub", 0x29, { sub_flags!({ src }, { self.XLEN - 1 }) dst = dst - src; }),
+    (And, "and", 0x21, { logic_flags!({ dst & src }, { self.XLEN }, { self.XLEN - 1 }) dst = dst & src; }),
+    (Or,  "or",  0x09, { logic_flags!({ dst | src }, { self.XLEN }, { self.XLEN - 1 }) dst = dst | src; }),
+    (Xor, "xor", 0x31, { logic_flags!({ dst ^ src }, { self.XLEN }, { self.XLEN - 1 }) dst = dst ^ src; })
+)
+
+alu_rr!(RegReg, WriteIMove3B,
+    (Mov, "mov", 0x89, { dst = src; })
+)
+
+// Compare: subtraction driving EFLAGS only (0x39: cmp r/m64, r64). The ALU
+// forms above do not model their flag writes yet — nothing reads flags between
+// a compare and its jump, so only the dedicated definers set them.
+instruction Cmp for [X86_64] : RegReg {
+    param MNEMONIC: String = "cmp";
+    param OPCODE: bits<8> = 0x39;
+
+    schedule { units = [WriteIALU3B]; }
+
+    behavior {
+        // Signed overflow of dst - src: operands differ in sign and the
+        // result's sign differs from dst's.
+        sub_flags!({ src }, { self.XLEN - 1 })
+    }
+}
+
+// Logical compare (0x85: test r/m64, r64): flags from dst & src; cf/of clear.
+instruction Test for [X86_64] : RegReg {
+    param MNEMONIC: String = "test";
+    param OPCODE: bits<8> = 0x85;
+
+    schedule { units = [WriteIALU3B]; }
+
+    behavior {
+        test_flags!({ src }, { self.XLEN }, { self.XLEN - 1 })
+    }
+}
+
+// Two-operand imul (0F AF): unlike the group-1 ALU ops, ModR/M.reg carries the
+// destination.
+
+instruction Imul for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0xAF;
+
+    schedule { units = [WriteIMul]; }
+
+    behavior {
+        imul_flags!({ dst }, { src }, { self.XLEN })
+        dst = dst * src;
+    }
+}
+
+instruction Imul32 for [X86_64] : RegRegExt32 {
+    param OPNAME: String = "imul32";
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0xAF;
+
+    schedule { units = [WriteIMul]; }
+
+    behavior {
+        imul_flags!({ dst }, { src }, { 32 })
+        dst = dst * src;
+    }
+}
+
+// Immediate multiply: `imul dst, src, imm` folds a constant factor. Unlike the
+// group-1 immediate ops it is non-destructive (dst = src * imm), so it selects
+// `muli` against a constant without first materializing the constant.
+instruction ImulImm for [X86_64] : RegRegImm {
+    param OPNAME: String = "imul_imm";
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0x69;
+
+    schedule { units = [WriteIMul]; }
+
+    behavior {
+        imul_flags!({ src }, { sext(imm, self.XLEN) }, { self.XLEN })
+        dst = src * sext(imm, self.XLEN);
+    }
+}
+
+instruction ImulImm32 for [X86_64] : RegRegImm32 {
+    param OPNAME: String = "imul_imm32";
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0x69;
+
+    schedule { units = [WriteIMul]; }
+
+    behavior {
+        imul_flags!({ src }, { sext(imm, 32) }, { 32 })
+        dst = src * sext(imm, 32);
+    }
+}
+
+// Group-1 ops share opcode 0x81 and select via the ModR/M EXT (/digit); mov
+// uses 0xC7.
+
+alu_ri!(RegImm, WriteIALU,
+    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ dst }, { sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst + sext(imm, self.XLEN); }),
+    (OrImm,  "or_imm",  "or",  0x81, 0b001, { logic_flags!({ dst | sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst | sext(imm, self.XLEN); }),
+    (AndImm, "and_imm", "and", 0x81, 0b100, { logic_flags!({ dst & sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst & sext(imm, self.XLEN); }),
+    (XorImm, "xor_imm", "xor", 0x81, 0b110, { logic_flags!({ dst ^ sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst ^ sext(imm, self.XLEN); })
+)
+
+alu_ri!(RegImm, WriteIMoveImmediate,
+    (MovImm, "mov_imm", "mov", 0xC7, 0b000, { dst = sext(imm, self.XLEN); })
+)
+
+// Shift count masked to 6 bits for a 64-bit operand. The cl-count forms come
+// first so the immediate forms don't parse `cl` as a symbol immediate.
+
+shift_cl!(RegShiftCl,
+    (ShlCl, "shl_cl", "shl", 0b100, {
+        let c = extract(GPR::rcx, 5, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
+        dst = res;
+    }),
+    // The `sal` mnemonic is a pure alias; without a mnemonic-alias mechanism
+    // the same shift behavior is spelled again under the sal name.
+    (SalCl, "sal_cl", "sal", 0b100, {
+        let c = extract(GPR::rcx, 5, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
+        dst = res;
+    }),
+    (ShrCl, "shr_cl", "shr", 0b101, {
+        let c = extract(GPR::rcx, 5, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 6)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(dst, self.XLEN - 1, self.XLEN - 1) };
+        dst = res;
+    }),
+    (SarCl, "sar_cl", "sar", 0b111, {
+        let c = extract(GPR::rcx, 5, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 6)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
+)
+
+shift_imm!(RegShift,
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 5, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
+        dst = res;
+    }),
+    // Pure `sal` alias, same duplication reason as the cl form above.
+    (SalImm, "sal", 0b100, {
+        let c = extract(imm, 5, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 5, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 6)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(dst, self.XLEN - 1, self.XLEN - 1) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 5, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 6)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
+)
+
+// The 0xD1 forms shift by exactly one, so their flags are fully defined: no
+// count==0 preservation branch, and the count==1 overflow rules apply.
+shift_imm!("One", "_one", RegShiftOne,
+    (Shl, "shl", 0b100, {
+        let res = dst << zext(0b1, self.XLEN);
+        let carry = extract(dst, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::cf = carry;
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::pf = parity_flag(res);
+        EFLAGS::of = extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry;
+        dst = res;
+    }),
+    (Sal, "sal", 0b100, {
+        let res = dst << zext(0b1, self.XLEN);
+        let carry = extract(dst, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::cf = carry;
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::pf = parity_flag(res);
+        EFLAGS::of = extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry;
+        dst = res;
+    }),
+    (Shr, "shr", 0b101, {
+        let res = dst >> zext(0b1, self.XLEN);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::pf = parity_flag(res);
+        EFLAGS::of = extract(dst, self.XLEN - 1, self.XLEN - 1);
+        dst = res;
+    }),
+    (Sar, "sar", 0b111, {
+        let res = dst >>> zext(0b1, self.XLEN);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::pf = parity_flag(res);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }),
+    (Ror, "ror", 0b001, {
+        let res = (dst >> zext(0b1, self.XLEN)) | (dst << zext(0b111111, self.XLEN));
+        EFLAGS::cf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = extract(res, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 2, self.XLEN - 2);
+        dst = res;
+    })
+)
+
+// Relative control transfers: rel32 is measured from the end of the
+// instruction (RIP points past it), and `PC::pc` in behaviors is the
+// instruction's own address — hence the explicit instruction-length addends.
+
+instruction Jmp for [X86_64] {
+    param MNEMONIC: String = "jmp";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<32>,
+    }
+
+    encoding {
+        0xE9,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
+    }
+}
+
+instruction JmpLegacy for [X86] {
+    param OPNAME: String = "jmp_legacy";
+    param MNEMONIC: String = "jmp";
+    schedule { units = [WriteJump]; }
+    operands { imm: bits<32>, }
+    encoding { 0xE9, imm }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior {
+        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
+    }
+}
+
+// Conditional jumps: EFLAGS-guarded PC writes. Selection derives cmp/test +
+// jcc branch rules from these guards composed with the flag definers above.
+
+jcc_ops!(
+    (JumpEq,        "je",  0x84, { EFLAGS::zf == zext(0b1, 1) }),
+    (JumpNotEq,     "jne", 0x85, { EFLAGS::zf == zext(0b0, 1) }),
+    (JumpLess,      "jl",  0x8C, { EFLAGS::sf != EFLAGS::of }),
+    (JumpGreaterEq, "jge", 0x8D, { EFLAGS::sf == EFLAGS::of }),
+    (JumpBelow,     "jb",  0x82, { EFLAGS::cf == zext(0b1, 1) }),
+    (JumpAboveEq,   "jae", 0x83, { EFLAGS::cf == zext(0b0, 1) })
+)
+
+// Counted control transfers: `loop` decrements rcx (the 16/32-bit address-size
+// counter views are not modeled) and branches on the counter; `jrcxz` branches
+// without touching it. Both are rel32-less: rel8 from a 2-byte instruction.
+
+instruction Loop for [X86_64] {
+    param MNEMONIC: String = "loop";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<8>,
+    }
+
+    encoding {
+        0xE2,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        let counter = extract(GPR::rcx - zext(0b1, self.XLEN), self.XLEN - 1, 0);
+        GPR::rcx = counter;
+        if counter != zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b10, self.XLEN);
+        }
+    }
+}
+
+instruction LoopEq for [X86_64] {
+    param OPNAME: String = "loope";
+    param MNEMONIC: String = "loope";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<8>,
+    }
+
+    encoding {
+        0xE1,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        let counter = extract(GPR::rcx - zext(0b1, self.XLEN), self.XLEN - 1, 0);
+        GPR::rcx = counter;
+        if (counter != zext(0b0, self.XLEN)) & (EFLAGS::zf == zext(0b1, 1)) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b10, self.XLEN);
+        }
+    }
+}
+
+instruction LoopNotEq for [X86_64] {
+    param OPNAME: String = "loopne";
+    param MNEMONIC: String = "loopne";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<8>,
+    }
+
+    encoding {
+        0xE0,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        let counter = extract(GPR::rcx - zext(0b1, self.XLEN), self.XLEN - 1, 0);
+        GPR::rcx = counter;
+        if (counter != zext(0b0, self.XLEN)) & (EFLAGS::zf == zext(0b0, 1)) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b10, self.XLEN);
+        }
+    }
+}
+
+instruction Jrcxz for [X86_64] {
+    param MNEMONIC: String = "jrcxz";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<8>,
+    }
+
+    encoding {
+        0xE3,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        if GPR::rcx == zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b10, self.XLEN);
+        }
+    }
+}
+
+// Encoding-only: 0x90 does nothing and everything passes through it.
+instruction Nop for [X86_64] {
+    param MNEMONIC: String = "nop";
+    encoding { 0x90 }
+    asm { "{self.MNEMONIC}" }
+    behavior {}
+}
+
+instruction Call for [X86_64] {
+    param MNEMONIC: String = "call";
+    operands {
+        imm: bits<32>,
+    }
+
+    encoding {
+        0xE8,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
+        store(GPR::rsp, 8, PC::pc + zext(0b101, self.XLEN));
+        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
+    }
+}
+
+instruction CallLegacy for [X86] {
+    param OPNAME: String = "call_legacy";
+    param MNEMONIC: String = "call";
+    operands { imm: bits<32>, }
+    encoding { 0xE8, imm }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior {
+        GPR::rsp = GPR::rsp - zext(0b100, self.XLEN);
+        store(GPR::rsp, 4, PC::pc + zext(0b101, self.XLEN));
+        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
+    }
+}
+
+instruction Ret for [X86_64] {
+    param MNEMONIC: String = "ret";
+
+    encoding {
+        0xC3,
+    }
+
+    asm {
+        "{self.MNEMONIC}"
+    }
+
+    behavior {
+        PC::pc = load(GPR::rsp, 8, 0b0);
+        GPR::rsp = GPR::rsp + zext(0b1000, self.XLEN);
+    }
+}
+
+instruction RetLegacy for [X86] {
+    param OPNAME: String = "ret_legacy";
+    param MNEMONIC: String = "ret";
+    encoding { 0xC3 }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        PC::pc = load(GPR::rsp, 4, 0b0);
+        GPR::rsp = GPR::rsp + zext(0b100, self.XLEN);
+    }
+}
+
+
+
+
+instruction MovLoad for [X86_64] {
+    param OPNAME: String = "mov_load";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR,
+        base: GPR,
+    }
+
+    encoding {
+        rex(0b1, dst, base, 0b0),
+        0x8B,
+        modrm_base(dst, base),
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base}]"
+    }
+
+    behavior {
+        dst = load(base, 8, 0b0);
+    }
+}
+
+instruction MovStore for [X86_64] {
+    param OPNAME: String = "mov_store";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        base: GPR,
+        src: GPR,
+    }
+
+    encoding {
+        rex(0b1, src, base, 0b0),
+        0x89,
+        modrm_base(src, base),
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base}], {src}"
+    }
+
+    behavior {
+        store(base, 8, src);
+    }
+}
+
+instruction JmpIndirect for [X86_64] {
+    param OPNAME: String = "jmp_indirect";
+    param MNEMONIC: String = "jmp";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        target: GPR,
+    }
+
+    encoding {
+        rex_rm(0b0, target, 0b0),
+        0xFF,
+        modrm_ext(0b100, target),
+    }
+
+    asm {
+        "{self.MNEMONIC} *{target}"
+    }
+
+    behavior {
+        PC::pc = target;
+    }
+}
+
+instruction CallIndirect for [X86_64] {
+    param OPNAME: String = "call_indirect";
+    param MNEMONIC: String = "call";
+
+    operands {
+        target: GPR,
+    }
+
+    encoding {
+        // The REX byte is spelled even when no register needs it, so this
+        // instruction has one shape and one length. The return address it
+        // pushes is its own end, and a behavior cannot see which shape the
+        // encoder picked; an assembler would write two bytes here.
+        rex_rm(0b0, target, 0b1),
+        0xFF,
+        modrm_ext(0b010, target),
+    }
+
+    asm {
+        "{self.MNEMONIC} *{target}"
+    }
+
+    behavior {
+        // The pushed return address is the next instruction (3 encoded bytes).
+        // Parallel assignment: name `rsp - 8` in the store rather than read
+        // `rsp` after its own decrement.
+        store(GPR::rsp - zext(0b1000, self.XLEN), 8, PC::pc + zext(0b11, self.XLEN));
+        GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
+        PC::pc = target;
+    }
+}
+
+
+
+alu_rr!("32", "32", RegReg32, WriteIALU3B,
+    (Add, "add", 0x01, { add_flags!({ dst }, { src }, { 32 }, { 31 }) dst = dst + src; }),
+    (Sub, "sub", 0x29, { sub_flags!({ src }, { 31 }) dst = dst - src; }),
+    (And, "and", 0x21, { logic_flags!({ dst & src }, { 32 }, { 31 }) dst = dst & src; }),
+    (Or,  "or",  0x09, { logic_flags!({ dst | src }, { 32 }, { 31 }) dst = dst | src; }),
+    (Xor, "xor", 0x31, { logic_flags!({ dst ^ src }, { 32 }, { 31 }) dst = dst ^ src; })
+)
+
+alu_rr!("32", "32", RegReg32, WriteIMove3B,
+    (Mov, "mov", 0x89, { dst = src; })
+)
+
+alu_ri!("32", "32", RegImm32, WriteIALU,
+    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ dst }, { sext(imm, 32) }, { 32 }, { 31 }) dst = dst + sext(imm, 32); }),
+    (OrImm,  "or_imm",  "or",  0x81, 0b001, { logic_flags!({ dst | sext(imm, 32) }, { 32 }, { 31 }) dst = dst | sext(imm, 32); }),
+    (AndImm, "and_imm", "and", 0x81, 0b100, { logic_flags!({ dst & sext(imm, 32) }, { 32 }, { 31 }) dst = dst & sext(imm, 32); }),
+    (XorImm, "xor_imm", "xor", 0x81, 0b110, { logic_flags!({ dst ^ sext(imm, 32) }, { 32 }, { 31 }) dst = dst ^ sext(imm, 32); })
+)
+
+// `mov r32, imm32` (0xB8+rd id): the register number rides in the opcode byte,
+// so no ModR/M is needed and the form is one byte shorter than the 0xC7 group
+// encoding. Assemblers select it universally, so the byte stream a measured
+// binary presents to the front end is this one.
+instruction MovImm32 for [X86_64] {
+    param MNEMONIC: String = "mov";
+    param OPNAME: String = "mov_imm32";
+
+    schedule { units = [WriteIMoveImmediate]; }
+
+    operands {
+        dst: GPR32,
+        imm: bits<32>,
+    }
+
+    encoding {
+        rex_rm(0b0, dst, 0b0),
+        0b10111,
+        dst[2..0],
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+
+    behavior {
+        dst = sext(imm, 32);
+    }
+}
+
+shift_cl!("32", "32", RegShiftCl32,
+    (ShlCl, "shl_cl", "shl", 0b100, {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 31, 31);
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 31, 31) ^ carry };
+        dst = res;
+    }),
+    (ShrCl, "shr_cl", "shr", 0b101, {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 31, 31) };
+        dst = res;
+    }),
+    (SarCl, "sar_cl", "sar", 0b111, {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
+)
+
+shift_imm!("32", "32", RegShift32,
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 31, 31);
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 31, 31) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 31, 31) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
+)
+
+shift_imm!("One32", "_one32", RegShiftOne32,
+    (Shl, "shl", 0b100, {
+        let res = dst << zext(0b1, 32);
+        let carry = extract(dst, 31, 31);
+        EFLAGS::cf = carry;
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::pf = parity_flag(res);
+        EFLAGS::of = extract(res, 31, 31) ^ carry;
+        dst = res;
+    }),
+    (Shr, "shr", 0b101, {
+        let res = dst >> zext(0b1, 32);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::pf = parity_flag(res);
+        EFLAGS::of = extract(dst, 31, 31);
+        dst = res;
+    }),
+    (Sar, "sar", 0b111, {
+        let res = dst >>> zext(0b1, 32);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::pf = parity_flag(res);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }),
+    (Ror, "ror", 0b001, {
+        let res = (dst >> zext(0b1, 32)) | (dst << zext(0b11111, 32));
+        EFLAGS::cf = extract(res, 31, 31);
+        EFLAGS::of = extract(res, 31, 31) ^ extract(res, 30, 30);
+        dst = res;
+    })
+)
+
+
+alu_rr!("16", "16", RegReg16, WriteIALU,
+    (Add, "add", 0x01, { add_flags!({ dst }, { src }, { 16 }, { 15 }) dst = dst + src; }),
+    (Sub, "sub", 0x29, { sub_flags!({ src }, { 15 }) dst = dst - src; }),
+    (And, "and", 0x21, { logic_flags!({ dst & src }, { 16 }, { 15 }) dst = dst & src; }),
+    (Or,  "or",  0x09, { logic_flags!({ dst | src }, { 16 }, { 15 }) dst = dst | src; }),
+    (Xor, "xor", 0x31, { logic_flags!({ dst ^ src }, { 16 }, { 15 }) dst = dst ^ src; }),
+    (Cmp, "cmp", 0x39, { sub_flags!({ src }, { 15 }) })
+)
+
+alu_rr!("16", "16", RegReg16, WriteIMoveWide,
+    (Mov, "mov", 0x89, { dst = src; })
+)
+
+alu_ri!("16", "16", RegImm16, WriteIALUImm16,
+    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ dst }, { sext(imm, 16) }, { 16 }, { 15 }) dst = dst + sext(imm, 16); }),
+    (OrImm,  "or_imm",  "or",  0x81, 0b001, { logic_flags!({ dst | sext(imm, 16) }, { 16 }, { 15 }) dst = dst | sext(imm, 16); }),
+    (AndImm, "and_imm", "and", 0x81, 0b100, { logic_flags!({ dst & sext(imm, 16) }, { 16 }, { 15 }) dst = dst & sext(imm, 16); }),
+    (XorImm, "xor_imm", "xor", 0x81, 0b110, { logic_flags!({ dst ^ sext(imm, 16) }, { 16 }, { 15 }) dst = dst ^ sext(imm, 16); }),
+    (CmpImm, "cmp_imm", "cmp", 0x81, 0b111, { sub_flags!({ sext(imm, 16) }, { 15 }) })
+)
+
+alu_ri!("16", "16", RegImm16, WriteIMoveImmediate16,
+    (MovImm, "mov_imm", "mov", 0xC7, 0b000, { dst = sext(imm, 16); })
+)
+
+shift_imm!("16", "16", RegShift16,
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 15, 15);
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b10000, 5) { carry } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 15, 15) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b10000, 5) { extract(dst >> (c - zext(0b1, 5)), 0, 0) } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 15, 15) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
+)
+
+alu_rr!("8", "8", RegReg8, WriteIALU3B,
+    (Add, "add", 0x00, { add_flags!({ dst }, { src }, { 8 }, { 7 }) dst = dst + src; }),
+    (Sub, "sub", 0x28, { sub_flags!({ src }, { 7 }) dst = dst - src; }),
+    (And, "and", 0x20, { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }),
+    (Or,  "or",  0x08, { logic_flags!({ dst | src }, { 8 }, { 7 }) dst = dst | src; }),
+    (Xor, "xor", 0x30, { logic_flags!({ dst ^ src }, { 8 }, { 7 }) dst = dst ^ src; }),
+    (Cmp, "cmp", 0x38, { sub_flags!({ src }, { 7 }) })
+)
+
+alu_rr!("8", "8", RegReg8, WriteIMove3B,
+    (Mov, "mov", 0x88, { dst = src; })
+)
+
+alu_ri!("8", "8", RegImm8, WriteIALU,
+    (AddImm, "add_imm", "add", 0x80, 0b000, { add_flags!({ dst }, { sext(imm, 8) }, { 8 }, { 7 }) dst = dst + sext(imm, 8); }),
+    (OrImm,  "or_imm",  "or",  0x80, 0b001, { logic_flags!({ dst | sext(imm, 8) }, { 8 }, { 7 }) dst = dst | sext(imm, 8); }),
+    (AndImm, "and_imm", "and", 0x80, 0b100, { logic_flags!({ dst & sext(imm, 8) }, { 8 }, { 7 }) dst = dst & sext(imm, 8); }),
+    (XorImm, "xor_imm", "xor", 0x80, 0b110, { logic_flags!({ dst ^ sext(imm, 8) }, { 8 }, { 7 }) dst = dst ^ sext(imm, 8); }),
+    (CmpImm, "cmp_imm", "cmp", 0x80, 0b111, { sub_flags!({ sext(imm, 8) }, { 7 }) }),
+    (TestImm, "test_imm", "test", 0xF6, 0b000, { test_flags!({ sext(imm, 8) }, { 8 }, { 7 }) })
+)
+
+alu_ri!("8", "8", RegImm8, WriteIMoveImmediate,
+    (MovImm, "mov_imm", "mov", 0xC6, 0b000, { dst = sext(imm, 8); })
+)
+
+shift_imm!("8", "8", RegShift8,
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 7, 7);
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b1000, 5) { carry } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b1000, 5) { extract(dst >> (c - zext(0b1, 5)), 0, 0) } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
+)
+
+macro alu_high8 {
+    ( $nsuf:literal, $osuf:literal, $tmpl:ident ) => {
+        alu_rr!(X86, $nsuf, $osuf, $tmpl, WriteIHighByte,
+            (Add, "add", 0x00, { add_flags!({ dst }, { src }, { 8 }, { 7 }) dst = dst + src; }),
+            (Sub, "sub", 0x28, { sub_flags!({ src }, { 7 }) dst = dst - src; }),
+            (And, "and", 0x20, { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }),
+            (Or,  "or",  0x08, { logic_flags!({ dst | src }, { 8 }, { 7 }) dst = dst | src; }),
+            (Xor, "xor", 0x30, { logic_flags!({ dst ^ src }, { 8 }, { 7 }) dst = dst ^ src; }),
+            (Mov, "mov", 0x88, { dst = src; })
+        )
+    };
+}
+
+alu_high8!("8H", "8h", RegReg8H)
+alu_high8!("8HL", "8hl", RegReg8HL)
+alu_high8!("8LH", "8lh", RegReg8LH)
+
+reg_ext!(RegShiftCl16, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 15, 15);
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b10000, 5) { carry } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 15, 15) ^ carry };
+        dst = res;
+    },
+    (ShlCl16, "shl_cl16", "shl", 0b100))
+reg_ext!(RegShiftCl16, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b10000, 5) { extract(dst >> (c - zext(0b1, 5)), 0, 0) } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 15, 15) };
+        dst = res;
+    },
+    (ShrCl16, "shr_cl16", "shr", 0b101))
+reg_ext!(RegShiftCl16, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    },
+    (SarCl16, "sar_cl16", "sar", 0b111))
+
+reg_ext!(RegShiftCl8, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 7, 7);
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b1000, 5) { carry } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
+        dst = res;
+    },
+    (ShlCl8, "shl_cl8", "shl", 0b100))
+reg_ext!(RegShiftCl8, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b1000, 5) { extract(dst >> (c - zext(0b1, 5)), 0, 0) } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
+        dst = res;
+    },
+    (ShrCl8, "shr_cl8", "shr", 0b101))
+reg_ext!(RegShiftCl8, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    },
+    (SarCl8, "sar_cl8", "sar", 0b111))
+
+alu_ri!(X86, "8H", "8h", RegImm8H, WriteIHighByte,
+    (AddImm, "add_imm", "add", 0x80, 0b000, { add_flags!({ dst }, { sext(imm, 8) }, { 8 }, { 7 }) dst = dst + sext(imm, 8); }),
+    (OrImm,  "or_imm",  "or",  0x80, 0b001, { logic_flags!({ dst | sext(imm, 8) }, { 8 }, { 7 }) dst = dst | sext(imm, 8); }),
+    (AndImm, "and_imm", "and", 0x80, 0b100, { logic_flags!({ dst & sext(imm, 8) }, { 8 }, { 7 }) dst = dst & sext(imm, 8); }),
+    (XorImm, "xor_imm", "xor", 0x80, 0b110, { logic_flags!({ dst ^ sext(imm, 8) }, { 8 }, { 7 }) dst = dst ^ sext(imm, 8); })
+)
+
+alu_ri!(X86, "8H", "8h", RegImm8H, WriteIHighByte,
+    (MovImm, "mov_imm", "mov", 0xC6, 0b000, { dst = sext(imm, 8); })
+)
+
+shift_imm!(X86, "8H", "8h", RegShift8H,
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 7, 7);
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b1000, 5) { carry } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else if c ~< zext(0b1000, 5) { extract(dst >> (c - zext(0b1, 5)), 0, 0) } else { undefined(1) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
+)

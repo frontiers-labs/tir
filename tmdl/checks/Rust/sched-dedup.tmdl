@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 // Instructions resolving to the same class share one emitted constant, and each
 // instruction indexes its class by machine id rather than being looked up by

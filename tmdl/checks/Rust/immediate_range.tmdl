@@ -7,7 +7,7 @@
 // [-128, 255], i.e. the half-open `-128i64..256i64`. So 255 and -128 parse, but
 // 256 and -129 make the candidate fail cleanly.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa ImmIsa {
     param XLEN: Integer = 32;

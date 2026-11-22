@@ -62,7 +62,7 @@ lives under a crate's `checks/` directory and contains one or more `RUN:`
 lines that pipe a tool's output into `filecheck`, e.g.:
 
 ```
-// RUN: tmdlc --action=emit-ast --output=- %S/../Inputs/simple.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-ast --output=- %S/../Inputs/simple.tmdl | filecheck %s
 // CHECK: File {
 // CHECK-NEXT:     items: [
 ```

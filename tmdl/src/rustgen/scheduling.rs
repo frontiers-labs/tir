@@ -1219,7 +1219,7 @@ fn clamp_u32(v: i64) -> u32 {
     v.clamp(0, u32::MAX as i64) as u32
 }
 
-fn to_snake_case(s: &str) -> String {
+pub(crate) fn to_snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
         if ch.is_uppercase() {

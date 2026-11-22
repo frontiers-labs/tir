@@ -1,6 +1,6 @@
 // This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
 
-// RUN: tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast --text-only --output=- %s | filecheck %s
 
 // Operator parsing inside behaviors: `<=`, `!=`, unary `~` and the unsigned
 // comparison `~<=` each map to their AST operator.
@@ -57,7 +57,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "32",
-// CHECK-NEXT:                                         span: 335..337,
+// CHECK-NEXT:                                         span: 342..344,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -65,7 +65,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 trap_handler: None,
-// CHECK-NEXT:                 span: 0..342,
+// CHECK-NEXT:                 span: 0..349,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         RegisterClass(
@@ -86,7 +86,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "5",
-// CHECK-NEXT:                                         span: 408..409,
+// CHECK-NEXT:                                         span: 415..416,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -100,11 +100,11 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     base: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "self",
-// CHECK-NEXT:                                             span: 438..442,
+// CHECK-NEXT:                                             span: 445..449,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     member: "XLEN",
-// CHECK-NEXT:                                     span: 442..447,
+// CHECK-NEXT:                                     span: 449..454,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ),
@@ -117,11 +117,11 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                             end: "r31",
 // CHECK-NEXT:                             alias_pattern: None,
 // CHECK-NEXT:                             traits: [],
-// CHECK-NEXT:                             span: 465..478,
+// CHECK-NEXT:                             span: 472..485,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 span: 342..485,
+// CHECK-NEXT:                 span: 349..492,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -140,7 +140,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "le",
-// CHECK-NEXT:                                         span: 549..553,
+// CHECK-NEXT:                                         span: 556..560,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -182,13 +182,13 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}, {rs2}",
-// CHECK-NEXT:                                             span: 611..648,
+// CHECK-NEXT:                                             span: 618..655,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 609..654,
+// CHECK-NEXT:                             span: 616..661,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
@@ -200,7 +200,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 665..668,
+// CHECK-NEXT:                                             span: 672..675,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: If(
@@ -210,17 +210,17 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                     lhs: Ident(
 // CHECK-NEXT:                                                         Ident {
 // CHECK-NEXT:                                                             name: "rs1",
-// CHECK-NEXT:                                                             span: 673..677,
+// CHECK-NEXT:                                                             span: 680..684,
 // CHECK-NEXT:                                                         },
 // CHECK-NEXT:                                                     ),
 // CHECK-NEXT:                                                     rhs: Ident(
 // CHECK-NEXT:                                                         Ident {
 // CHECK-NEXT:                                                             name: "rs2",
-// CHECK-NEXT:                                                             span: 680..684,
+// CHECK-NEXT:                                                             span: 687..691,
 // CHECK-NEXT:                                                         },
 // CHECK-NEXT:                                                     ),
 // CHECK-NEXT:                                                     op: LessThenEqual,
-// CHECK-NEXT:                                                     span: 673..684,
+// CHECK-NEXT:                                                     span: 680..691,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             then: Block(
@@ -229,12 +229,12 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                         Ident(
 // CHECK-NEXT:                                                             Ident {
 // CHECK-NEXT:                                                                 name: "rs1",
-// CHECK-NEXT:                                                                 span: 686..690,
+// CHECK-NEXT:                                                                 span: 693..697,
 // CHECK-NEXT:                                                             },
 // CHECK-NEXT:                                                         ),
 // CHECK-NEXT:                                                     ],
 // CHECK-NEXT:                                                     last_expr_return: true,
-// CHECK-NEXT:                                                     span: 684..692,
+// CHECK-NEXT:                                                     span: 691..699,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             else_: Some(
@@ -244,28 +244,28 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                             Ident(
 // CHECK-NEXT:                                                                 Ident {
 // CHECK-NEXT:                                                                     name: "rs2",
-// CHECK-NEXT:                                                                     span: 699..703,
+// CHECK-NEXT:                                                                     span: 706..710,
 // CHECK-NEXT:                                                                 },
 // CHECK-NEXT:                                                             ),
 // CHECK-NEXT:                                                         ],
 // CHECK-NEXT:                                                         last_expr_return: true,
-// CHECK-NEXT:                                                         span: 697..704,
+// CHECK-NEXT:                                                         span: 704..711,
 // CHECK-NEXT:                                                     },
 // CHECK-NEXT:                                                 ),
 // CHECK-NEXT:                                             ),
-// CHECK-NEXT:                                             span: 670..704,
+// CHECK-NEXT:                                             span: 677..711,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 665..704,
+// CHECK-NEXT:                                     span: 672..711,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 663..708,
+// CHECK-NEXT:                         span: 670..715,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 485..711,
+// CHECK-NEXT:                 span: 492..718,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -284,7 +284,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "ne",
-// CHECK-NEXT:                                         span: 774..778,
+// CHECK-NEXT:                                         span: 781..785,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -326,13 +326,13 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}, {rs2}",
-// CHECK-NEXT:                                             span: 836..873,
+// CHECK-NEXT:                                             span: 843..880,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 834..879,
+// CHECK-NEXT:                             span: 841..886,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
@@ -344,7 +344,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 890..893,
+// CHECK-NEXT:                                             span: 897..900,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: If(
@@ -354,17 +354,17 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                     lhs: Ident(
 // CHECK-NEXT:                                                         Ident {
 // CHECK-NEXT:                                                             name: "rs1",
-// CHECK-NEXT:                                                             span: 898..902,
+// CHECK-NEXT:                                                             span: 905..909,
 // CHECK-NEXT:                                                         },
 // CHECK-NEXT:                                                     ),
 // CHECK-NEXT:                                                     rhs: Ident(
 // CHECK-NEXT:                                                         Ident {
 // CHECK-NEXT:                                                             name: "rs2",
-// CHECK-NEXT:                                                             span: 905..909,
+// CHECK-NEXT:                                                             span: 912..916,
 // CHECK-NEXT:                                                         },
 // CHECK-NEXT:                                                     ),
 // CHECK-NEXT:                                                     op: NotEqual,
-// CHECK-NEXT:                                                     span: 898..909,
+// CHECK-NEXT:                                                     span: 905..916,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             then: Block(
@@ -373,12 +373,12 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                         Ident(
 // CHECK-NEXT:                                                             Ident {
 // CHECK-NEXT:                                                                 name: "rs1",
-// CHECK-NEXT:                                                                 span: 911..915,
+// CHECK-NEXT:                                                                 span: 918..922,
 // CHECK-NEXT:                                                             },
 // CHECK-NEXT:                                                         ),
 // CHECK-NEXT:                                                     ],
 // CHECK-NEXT:                                                     last_expr_return: true,
-// CHECK-NEXT:                                                     span: 909..917,
+// CHECK-NEXT:                                                     span: 916..924,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             else_: Some(
@@ -388,28 +388,28 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                             Ident(
 // CHECK-NEXT:                                                                 Ident {
 // CHECK-NEXT:                                                                     name: "rs2",
-// CHECK-NEXT:                                                                     span: 924..928,
+// CHECK-NEXT:                                                                     span: 931..935,
 // CHECK-NEXT:                                                                 },
 // CHECK-NEXT:                                                             ),
 // CHECK-NEXT:                                                         ],
 // CHECK-NEXT:                                                         last_expr_return: true,
-// CHECK-NEXT:                                                         span: 922..929,
+// CHECK-NEXT:                                                         span: 929..936,
 // CHECK-NEXT:                                                     },
 // CHECK-NEXT:                                                 ),
 // CHECK-NEXT:                                             ),
-// CHECK-NEXT:                                             span: 895..929,
+// CHECK-NEXT:                                             span: 902..936,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 890..929,
+// CHECK-NEXT:                                     span: 897..936,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 888..933,
+// CHECK-NEXT:                         span: 895..940,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 711..936,
+// CHECK-NEXT:                 span: 718..943,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -428,7 +428,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "bnot",
-// CHECK-NEXT:                                         span: 1001..1007,
+// CHECK-NEXT:                                         span: 1008..1014,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -462,13 +462,13 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}",
-// CHECK-NEXT:                                             span: 1055..1085,
+// CHECK-NEXT:                                             span: 1062..1092,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 1053..1091,
+// CHECK-NEXT:                             span: 1060..1098,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
@@ -480,7 +480,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1102..1105,
+// CHECK-NEXT:                                             span: 1109..1112,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Binary(
@@ -488,7 +488,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                             lhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs1",
-// CHECK-NEXT:                                                     span: 1107..1111,
+// CHECK-NEXT:                                                     span: 1114..1118,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             rhs: Unary(
@@ -497,28 +497,28 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                         Int(
 // CHECK-NEXT:                                                             LitInt {
 // CHECK-NEXT:                                                                 value: "1",
-// CHECK-NEXT:                                                                 span: 1114..1115,
+// CHECK-NEXT:                                                                 span: 1121..1122,
 // CHECK-NEXT:                                                             },
 // CHECK-NEXT:                                                         ),
 // CHECK-NEXT:                                                     ),
 // CHECK-NEXT:                                                     op: BitwiseNot,
-// CHECK-NEXT:                                                     span: 1113..1115,
+// CHECK-NEXT:                                                     span: 1120..1122,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             op: BitwiseAnd,
-// CHECK-NEXT:                                             span: 1107..1115,
+// CHECK-NEXT:                                             span: 1114..1122,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1102..1115,
+// CHECK-NEXT:                                     span: 1109..1122,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1100..1119,
+// CHECK-NEXT:                         span: 1107..1126,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 936..1122,
+// CHECK-NEXT:                 span: 943..1129,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -537,7 +537,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "uleu",
-// CHECK-NEXT:                                         span: 1194..1200,
+// CHECK-NEXT:                                         span: 1201..1207,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -579,13 +579,13 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}, {rs2}",
-// CHECK-NEXT:                                             span: 1258..1295,
+// CHECK-NEXT:                                             span: 1265..1302,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 1256..1301,
+// CHECK-NEXT:                             span: 1263..1308,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
@@ -597,7 +597,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1312..1315,
+// CHECK-NEXT:                                             span: 1319..1322,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: If(
@@ -607,17 +607,17 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                     lhs: Ident(
 // CHECK-NEXT:                                                         Ident {
 // CHECK-NEXT:                                                             name: "rs1",
-// CHECK-NEXT:                                                             span: 1320..1324,
+// CHECK-NEXT:                                                             span: 1327..1331,
 // CHECK-NEXT:                                                         },
 // CHECK-NEXT:                                                     ),
 // CHECK-NEXT:                                                     rhs: Ident(
 // CHECK-NEXT:                                                         Ident {
 // CHECK-NEXT:                                                             name: "rs2",
-// CHECK-NEXT:                                                             span: 1328..1332,
+// CHECK-NEXT:                                                             span: 1335..1339,
 // CHECK-NEXT:                                                         },
 // CHECK-NEXT:                                                     ),
 // CHECK-NEXT:                                                     op: UnsignedLessThenEqual,
-// CHECK-NEXT:                                                     span: 1320..1332,
+// CHECK-NEXT:                                                     span: 1327..1339,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             then: Block(
@@ -626,12 +626,12 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                         Ident(
 // CHECK-NEXT:                                                             Ident {
 // CHECK-NEXT:                                                                 name: "rs1",
-// CHECK-NEXT:                                                                 span: 1334..1338,
+// CHECK-NEXT:                                                                 span: 1341..1345,
 // CHECK-NEXT:                                                             },
 // CHECK-NEXT:                                                         ),
 // CHECK-NEXT:                                                     ],
 // CHECK-NEXT:                                                     last_expr_return: true,
-// CHECK-NEXT:                                                     span: 1332..1340,
+// CHECK-NEXT:                                                     span: 1339..1347,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             else_: Some(
@@ -641,28 +641,28 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                                                             Ident(
 // CHECK-NEXT:                                                                 Ident {
 // CHECK-NEXT:                                                                     name: "rs2",
-// CHECK-NEXT:                                                                     span: 1347..1351,
+// CHECK-NEXT:                                                                     span: 1354..1358,
 // CHECK-NEXT:                                                                 },
 // CHECK-NEXT:                                                             ),
 // CHECK-NEXT:                                                         ],
 // CHECK-NEXT:                                                         last_expr_return: true,
-// CHECK-NEXT:                                                         span: 1345..1352,
+// CHECK-NEXT:                                                         span: 1352..1359,
 // CHECK-NEXT:                                                     },
 // CHECK-NEXT:                                                 ),
 // CHECK-NEXT:                                             ),
-// CHECK-NEXT:                                             span: 1317..1352,
+// CHECK-NEXT:                                             span: 1324..1359,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1312..1352,
+// CHECK-NEXT:                                     span: 1319..1359,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1310..1356,
+// CHECK-NEXT:                         span: 1317..1363,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1122..37315,
+// CHECK-NEXT:                 span: 1129..37322,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

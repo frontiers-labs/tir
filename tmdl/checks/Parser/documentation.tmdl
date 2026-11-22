@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-ast --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast --output=- %s | filecheck %s
 
 //! Test ISA reference.
 

@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 // CHECK-DAG: fn parse_add_inst
 // CHECK-DAG: fn parse_add_alias_1_inst
 // CHECK-DAG: Keyword("dyn")

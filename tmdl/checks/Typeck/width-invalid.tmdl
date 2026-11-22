@@ -1,7 +1,7 @@
 // `width(x)` is spec-time information: it comes from a declared type, never
 // from a computed value.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 isa Test { param XLEN: Integer = 32; }
 

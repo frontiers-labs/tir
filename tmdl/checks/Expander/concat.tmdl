@@ -1,6 +1,6 @@
 // This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
 
-// RUN: tmdlc --action=emit-ast --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast --output=- %s | filecheck %s
 
 isa TestIsa32 {
     param WIDTH: Integer = 32;
@@ -81,7 +81,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "32",
-// CHECK-NEXT:                                         span: 203..205,
+// CHECK-NEXT:                                         span: 210..212,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -89,7 +89,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 trap_handler: None,
-// CHECK-NEXT:                 span: 0..210,
+// CHECK-NEXT:                 span: 0..217,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         RegisterClass(
@@ -110,7 +110,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "5",
-// CHECK-NEXT:                                         span: 281..282,
+// CHECK-NEXT:                                         span: 288..289,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -124,11 +124,11 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                     base: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "self",
-// CHECK-NEXT:                                             span: 311..315,
+// CHECK-NEXT:                                             span: 318..322,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     member: "WIDTH",
-// CHECK-NEXT:                                     span: 315..321,
+// CHECK-NEXT:                                     span: 322..328,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ),
@@ -143,11 +143,11 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 "r{}",
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                             traits: [],
-// CHECK-NEXT:                             span: 347..392,
+// CHECK-NEXT:                             span: 354..399,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 span: 210..403,
+// CHECK-NEXT:                 span: 217..410,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Template(
@@ -204,38 +204,38 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                     Int(
 // CHECK-NEXT:                                         LitInt {
 // CHECK-NEXT:                                             value: "0x0000",
-// CHECK-NEXT:                                             span: 589..595,
+// CHECK-NEXT:                                             span: 596..602,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                                 Ident(
 // CHECK-NEXT:                                     Ident {
 // CHECK-NEXT:                                         name: "rd",
-// CHECK-NEXT:                                         span: 605..607,
+// CHECK-NEXT:                                         span: 612..614,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                                 Ident(
 // CHECK-NEXT:                                     Ident {
 // CHECK-NEXT:                                         name: "rs2",
-// CHECK-NEXT:                                         span: 617..620,
+// CHECK-NEXT:                                         span: 624..627,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                                 Ident(
 // CHECK-NEXT:                                     Ident {
 // CHECK-NEXT:                                         name: "rs1",
-// CHECK-NEXT:                                         span: 630..633,
+// CHECK-NEXT:                                         span: 637..640,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                                 Lit(
 // CHECK-NEXT:                                     Int(
 // CHECK-NEXT:                                         LitInt {
 // CHECK-NEXT:                                             value: "0b1",
-// CHECK-NEXT:                                             span: 643..646,
+// CHECK-NEXT:                                             span: 650..653,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
-// CHECK-NEXT:                             span: 570..659,
+// CHECK-NEXT:                             span: 577..666,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
@@ -247,18 +247,18 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}, {rs2}",
-// CHECK-NEXT:                                             span: 673..714,
+// CHECK-NEXT:                                             span: 680..721,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 663..716,
+// CHECK-NEXT:                             span: 670..723,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 403..719,
+// CHECK-NEXT:                 span: 410..726,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -279,7 +279,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "add",
-// CHECK-NEXT:                                         span: 1560..1588,
+// CHECK-NEXT:                                         span: 1567..1595,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -294,7 +294,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "0b0000001",
-// CHECK-NEXT:                                         span: 1560..1588,
+// CHECK-NEXT:                                         span: 1567..1595,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -312,7 +312,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1560..1588,
+// CHECK-NEXT:                                             span: 1567..1595,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Binary(
@@ -320,29 +320,29 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                             lhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs1",
-// CHECK-NEXT:                                                     span: 1560..1588,
+// CHECK-NEXT:                                                     span: 1567..1595,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             rhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs2",
-// CHECK-NEXT:                                                     span: 1560..1588,
+// CHECK-NEXT:                                                     span: 1567..1595,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             op: Add,
-// CHECK-NEXT:                                             span: 1560..1588,
+// CHECK-NEXT:                                             span: 1567..1595,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1560..1588,
+// CHECK-NEXT:                                     span: 1567..1595,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1560..1588,
+// CHECK-NEXT:                         span: 1567..1595,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1560..1588,
+// CHECK-NEXT:                 span: 1567..1595,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -363,7 +363,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "sub",
-// CHECK-NEXT:                                         span: 1588..1616,
+// CHECK-NEXT:                                         span: 1595..1623,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -378,7 +378,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "0b0000010",
-// CHECK-NEXT:                                         span: 1588..1616,
+// CHECK-NEXT:                                         span: 1595..1623,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -396,7 +396,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1588..1616,
+// CHECK-NEXT:                                             span: 1595..1623,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Binary(
@@ -404,29 +404,29 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                             lhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs1",
-// CHECK-NEXT:                                                     span: 1588..1616,
+// CHECK-NEXT:                                                     span: 1595..1623,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             rhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs2",
-// CHECK-NEXT:                                                     span: 1588..1616,
+// CHECK-NEXT:                                                     span: 1595..1623,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             op: Add,
-// CHECK-NEXT:                                             span: 1588..1616,
+// CHECK-NEXT:                                             span: 1595..1623,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1588..1616,
+// CHECK-NEXT:                                     span: 1595..1623,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1588..1616,
+// CHECK-NEXT:                         span: 1595..1623,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1588..1616,
+// CHECK-NEXT:                 span: 1595..1623,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -447,7 +447,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "mul64",
-// CHECK-NEXT:                                         span: 1616..24981,
+// CHECK-NEXT:                                         span: 1623..24988,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -462,7 +462,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "16",
-// CHECK-NEXT:                                         span: 1616..24981,
+// CHECK-NEXT:                                         span: 1623..24988,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -480,7 +480,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1616..24981,
+// CHECK-NEXT:                                             span: 1623..24988,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Binary(
@@ -488,29 +488,29 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                             lhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs1",
-// CHECK-NEXT:                                                     span: 1616..24981,
+// CHECK-NEXT:                                                     span: 1623..24988,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             rhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs2",
-// CHECK-NEXT:                                                     span: 1616..24981,
+// CHECK-NEXT:                                                     span: 1623..24988,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             op: Add,
-// CHECK-NEXT:                                             span: 1616..24981,
+// CHECK-NEXT:                                             span: 1623..24988,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1616..24981,
+// CHECK-NEXT:                                     span: 1623..24988,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1616..24981,
+// CHECK-NEXT:                         span: 1623..24988,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1616..24981,
+// CHECK-NEXT:                 span: 1623..24988,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

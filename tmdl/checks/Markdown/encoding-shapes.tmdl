@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-markdown --dialect=test --output=- %S/../Json/encoding-shapes.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-markdown --dialect=test --output=- %S/../Json/encoding-shapes.tmdl | filecheck %s
 
 // CHECK: #### `MovRR`
 // CHECK: **Encoding 1 (2 bytes), when

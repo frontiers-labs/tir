@@ -2,8 +2,8 @@
 // requires any of RV32/RV64, `C64` requires all of C and RV64, so the C64
 // instruction exists only when targeting RV64.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=RV64 --output=- %s | filecheck %s --check-prefix=RV64
-// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=RV32 --output=- %s | filecheck %s --check-prefix=RV32
+// RUN: tmdl compile --action=emit-smtlib --dialect=test --isa=RV64 --output=- %s | filecheck %s --check-prefix=RV64
+// RUN: tmdl compile --action=emit-smtlib --dialect=test --isa=RV32 --output=- %s | filecheck %s --check-prefix=RV32
 
 isa RV32 { param XLEN: Integer = 32; }
 isa RV64 { param XLEN: Integer = 64; }

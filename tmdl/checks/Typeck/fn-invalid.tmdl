@@ -1,6 +1,6 @@
 // `fn` misuse rejected during inlining: recursion and arity mismatches.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 isa Test { param XLEN: Integer = 32; }
 

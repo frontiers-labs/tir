@@ -4,8 +4,8 @@
 // it of the operand at encode time. A value still waiting for a fixup answers
 // no, so a relocation always takes the wide shape.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
-// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=ByteIsa --output=- %s | filecheck %s --check-prefix=SMT
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=test --isa=ByteIsa --output=- %s | filecheck %s --check-prefix=SMT
 
 isa ByteIsa {
     param XLEN: Integer = 64;

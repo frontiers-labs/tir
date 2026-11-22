@@ -1,6 +1,6 @@
 // Fusion declarations must name mnemonics of known instructions.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 sched_class W;
 

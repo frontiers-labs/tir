@@ -1,6 +1,6 @@
 // This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
 
-// RUN: tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast --text-only --output=- %s | filecheck %s
 
 // Expression parsing: `map` with a unary lambda, `reduce` with a binary
 // lambda, and an operand width given by an expression (BitsExpr).
@@ -50,7 +50,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "32",
-// CHECK-NEXT:                                         span: 346..348,
+// CHECK-NEXT:                                         span: 353..355,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -58,7 +58,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 trap_handler: None,
-// CHECK-NEXT:                 span: 0..353,
+// CHECK-NEXT:                 span: 0..360,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         RegisterClass(
@@ -79,7 +79,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "5",
-// CHECK-NEXT:                                         span: 418..419,
+// CHECK-NEXT:                                         span: 425..426,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -92,7 +92,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "128",
-// CHECK-NEXT:                                         span: 448..451,
+// CHECK-NEXT:                                         span: 455..458,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -106,11 +106,11 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                             end: "v31",
 // CHECK-NEXT:                             alias_pattern: None,
 // CHECK-NEXT:                             traits: [],
-// CHECK-NEXT:                             span: 469..482,
+// CHECK-NEXT:                             span: 476..489,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 span: 353..489,
+// CHECK-NEXT:                 span: 360..496,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -129,7 +129,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "maplambda",
-// CHECK-NEXT:                                         span: 553..564,
+// CHECK-NEXT:                                         span: 560..571,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -163,13 +163,13 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {vd}, {vs2}",
-// CHECK-NEXT:                                             span: 610..640,
+// CHECK-NEXT:                                             span: 617..647,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 608..646,
+// CHECK-NEXT:                             span: 615..653,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
@@ -181,7 +181,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "vd",
-// CHECK-NEXT:                                             span: 657..660,
+// CHECK-NEXT:                                             span: 664..667,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Call(
@@ -205,19 +205,19 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                                                         Ident(
 // CHECK-NEXT:                                                                             Ident {
 // CHECK-NEXT:                                                                                 name: "vs2",
-// CHECK-NEXT:                                                                                 span: 679..682,
+// CHECK-NEXT:                                                                                 span: 686..689,
 // CHECK-NEXT:                                                                             },
 // CHECK-NEXT:                                                                         ),
 // CHECK-NEXT:                                                                         Lit(
 // CHECK-NEXT:                                                                             Int(
 // CHECK-NEXT:                                                                                 LitInt {
 // CHECK-NEXT:                                                                                     value: "4",
-// CHECK-NEXT:                                                                                     span: 684..685,
+// CHECK-NEXT:                                                                                     span: 691..692,
 // CHECK-NEXT:                                                                                 },
 // CHECK-NEXT:                                                                             ),
 // CHECK-NEXT:                                                                         ),
 // CHECK-NEXT:                                                                     ],
-// CHECK-NEXT:                                                                     span: 678..686,
+// CHECK-NEXT:                                                                     span: 685..693,
 // CHECK-NEXT:                                                                 },
 // CHECK-NEXT:                                                             ),
 // CHECK-NEXT:                                                             Lambda(
@@ -230,40 +230,40 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                                                             lhs: Ident(
 // CHECK-NEXT:                                                                                 Ident {
 // CHECK-NEXT:                                                                                     name: "x",
-// CHECK-NEXT:                                                                                     span: 692..694,
+// CHECK-NEXT:                                                                                     span: 699..701,
 // CHECK-NEXT:                                                                                 },
 // CHECK-NEXT:                                                                             ),
 // CHECK-NEXT:                                                                             rhs: Ident(
 // CHECK-NEXT:                                                                                 Ident {
 // CHECK-NEXT:                                                                                     name: "x",
-// CHECK-NEXT:                                                                                     span: 696..697,
+// CHECK-NEXT:                                                                                     span: 703..704,
 // CHECK-NEXT:                                                                                 },
 // CHECK-NEXT:                                                                             ),
 // CHECK-NEXT:                                                                             op: Add,
-// CHECK-NEXT:                                                                             span: 692..697,
+// CHECK-NEXT:                                                                             span: 699..704,
 // CHECK-NEXT:                                                                         },
 // CHECK-NEXT:                                                                     ),
-// CHECK-NEXT:                                                                     span: 688..697,
+// CHECK-NEXT:                                                                     span: 695..704,
 // CHECK-NEXT:                                                                 },
 // CHECK-NEXT:                                                             ),
 // CHECK-NEXT:                                                         ],
-// CHECK-NEXT:                                                         span: 672..698,
+// CHECK-NEXT:                                                         span: 679..705,
 // CHECK-NEXT:                                                     },
 // CHECK-NEXT:                                                 ),
 // CHECK-NEXT:                                             ],
-// CHECK-NEXT:                                             span: 668..699,
+// CHECK-NEXT:                                             span: 675..706,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 657..699,
+// CHECK-NEXT:                                     span: 664..706,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 655..703,
+// CHECK-NEXT:                         span: 662..710,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 489..706,
+// CHECK-NEXT:                 span: 496..713,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -282,7 +282,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "reducelambda",
-// CHECK-NEXT:                                         span: 773..787,
+// CHECK-NEXT:                                         span: 780..794,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -316,13 +316,13 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {vd}, {vs2}",
-// CHECK-NEXT:                                             span: 833..863,
+// CHECK-NEXT:                                             span: 840..870,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 831..869,
+// CHECK-NEXT:                             span: 838..876,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
@@ -334,7 +334,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "vd",
-// CHECK-NEXT:                                             span: 880..883,
+// CHECK-NEXT:                                             span: 887..890,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Call(
@@ -352,19 +352,19 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                                             Ident(
 // CHECK-NEXT:                                                                 Ident {
 // CHECK-NEXT:                                                                     name: "vs2",
-// CHECK-NEXT:                                                                     span: 898..901,
+// CHECK-NEXT:                                                                     span: 905..908,
 // CHECK-NEXT:                                                                 },
 // CHECK-NEXT:                                                             ),
 // CHECK-NEXT:                                                             Lit(
 // CHECK-NEXT:                                                                 Int(
 // CHECK-NEXT:                                                                     LitInt {
 // CHECK-NEXT:                                                                         value: "4",
-// CHECK-NEXT:                                                                         span: 903..904,
+// CHECK-NEXT:                                                                         span: 910..911,
 // CHECK-NEXT:                                                                     },
 // CHECK-NEXT:                                                                 ),
 // CHECK-NEXT:                                                             ),
 // CHECK-NEXT:                                                         ],
-// CHECK-NEXT:                                                         span: 897..905,
+// CHECK-NEXT:                                                         span: 904..912,
 // CHECK-NEXT:                                                     },
 // CHECK-NEXT:                                                 ),
 // CHECK-NEXT:                                                 Lambda(
@@ -378,36 +378,36 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                                                 lhs: Ident(
 // CHECK-NEXT:                                                                     Ident {
 // CHECK-NEXT:                                                                         name: "acc",
-// CHECK-NEXT:                                                                         span: 916..920,
+// CHECK-NEXT:                                                                         span: 923..927,
 // CHECK-NEXT:                                                                     },
 // CHECK-NEXT:                                                                 ),
 // CHECK-NEXT:                                                                 rhs: Ident(
 // CHECK-NEXT:                                                                     Ident {
 // CHECK-NEXT:                                                                         name: "x",
-// CHECK-NEXT:                                                                         span: 922..923,
+// CHECK-NEXT:                                                                         span: 929..930,
 // CHECK-NEXT:                                                                     },
 // CHECK-NEXT:                                                                 ),
 // CHECK-NEXT:                                                                 op: Add,
-// CHECK-NEXT:                                                                 span: 916..923,
+// CHECK-NEXT:                                                                 span: 923..930,
 // CHECK-NEXT:                                                             },
 // CHECK-NEXT:                                                         ),
-// CHECK-NEXT:                                                         span: 907..923,
+// CHECK-NEXT:                                                         span: 914..930,
 // CHECK-NEXT:                                                     },
 // CHECK-NEXT:                                                 ),
 // CHECK-NEXT:                                             ],
-// CHECK-NEXT:                                             span: 891..924,
+// CHECK-NEXT:                                             span: 898..931,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 880..924,
+// CHECK-NEXT:                                     span: 887..931,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 878..928,
+// CHECK-NEXT:                         span: 885..935,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 706..931,
+// CHECK-NEXT:                 span: 713..938,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -426,7 +426,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "widthexpr",
-// CHECK-NEXT:                                         span: 995..1006,
+// CHECK-NEXT:                                         span: 1002..1013,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -456,15 +456,15 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                                 base: Ident(
 // CHECK-NEXT:                                                     Ident {
 // CHECK-NEXT:                                                         name: "self",
-// CHECK-NEXT:                                                         span: 1052..1056,
+// CHECK-NEXT:                                                         span: 1059..1063,
 // CHECK-NEXT:                                                     },
 // CHECK-NEXT:                                                 ),
 // CHECK-NEXT:                                                 member: "XLEN",
-// CHECK-NEXT:                                                 span: 1056..1061,
+// CHECK-NEXT:                                                 span: 1063..1068,
 // CHECK-NEXT:                                             },
 // CHECK-NEXT:                                         ),
 // CHECK-NEXT:                                     ],
-// CHECK-NEXT:                                     span: 1051..1062,
+// CHECK-NEXT:                                     span: 1058..1069,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ),
@@ -481,13 +481,13 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {a}, {b}",
-// CHECK-NEXT:                                             span: 1077..1104,
+// CHECK-NEXT:                                             span: 1084..1111,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 1075..1110,
+// CHECK-NEXT:                             span: 1082..1117,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
@@ -499,25 +499,25 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "tmp",
-// CHECK-NEXT:                                             span: 1121..1125,
+// CHECK-NEXT:                                             span: 1128..1132,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "b",
-// CHECK-NEXT:                                             span: 1127..1128,
+// CHECK-NEXT:                                             span: 1134..1135,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1121..1128,
+// CHECK-NEXT:                                     span: 1128..1135,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1119..1132,
+// CHECK-NEXT:                         span: 1126..1139,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 931..30334,
+// CHECK-NEXT:                 span: 938..30342,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

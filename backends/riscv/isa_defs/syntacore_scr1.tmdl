@@ -1,0 +1,63 @@
+use crate::main::RV32I;
+use crate::perf::WriteBranch;
+use crate::perf::WriteFPLoad;
+use crate::perf::WriteIALU;
+use crate::perf::WriteLoad;
+use crate::perf::WritePCRelative;
+use crate::perf::WriteStore;
+
+// Syntacore SCR1 3-stage performance model.
+//
+// Target: three-stage Syntacore SCR1 (IF / ID / EX), RV32I only.
+//
+// Mappings and simplifications:
+// - The core is single-issue in-order with no ROB; modeled as such.
+// - EX stage merges execute, LSU and write-back (the default TMDL
+//   behavior when only IF/ID/EX are declared).
+// - ALU ops are single-cycle (reads ID, writes EX).
+// - Loads are bound with scalar latency = 2 to capture the LSU request /
+//   response overhead for a best-case TCM hit. Real SCR1 load latency is
+//   variable (determined by DMEM response time), which TMDL cannot express.
+// - Forwarding matches the distributed-logic MPRF: ALU result is
+//   available to the next dependent ALU op back-to-back (0-cycle).
+//   Load result feeds a dependent ALU op with a 1-cycle bubble.
+// - Branches / jumps / FENCE.I cause pipeline flushes in real silicon;
+//   TMDL does not model control-flow bubbles, so this is not expressed.
+// - CSR instructions are part of RV32I but are not yet defined in the
+//   TMDL ISA model, therefore their latency is not modeled.
+// - The RVM and RVC extensions are present in some SCR1 configs but are
+//   omitted here per the request to restrict the model to RV32I.
+
+machine SCR1_3Stage ("scr1-3stage") for [RV32I] {
+    issue_width = 1;
+
+    pipeline {
+        IF;
+        ID;
+        EX: protected;
+    }
+
+    // No ROB. A tiny store buffer is present for LSU decoupling.
+    buffers {
+        sb = 1;
+    }
+
+    unit ALU { count = 1; }
+    unit LSU { count = 1; }
+
+    // ALU ops: single cycle.
+    bind WriteIALU { reads = ID; writes = EX; uses = [ALU]; }
+    bind WritePCRelative { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteBranch { reads = ID; writes = EX; uses = [ALU]; }
+
+    // Loads: best-case 2-cycle latency (address generation + memory response).
+    bind WriteLoad { latency = 2; uses = [LSU]; }
+    bind WriteFPLoad { latency = 2; uses = [LSU]; }
+
+    // Stores occupy the LSU; the value they write is never a register dependency.
+    bind WriteStore { reads = ID; writes = EX; uses = [LSU]; }
+
+    // Bypass network.
+    forward ALU => ALU { latency = 0; }
+    forward LSU => ALU { latency = 1; }
+}

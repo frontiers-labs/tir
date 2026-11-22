@@ -1,0 +1,704 @@
+//! Base integer instructions shared by RV32I and RV64I.
+
+use crate::main::BType;
+use crate::main::GPR;
+use crate::main::IType;
+use crate::main::ITypeWord;
+use crate::main::JType;
+use crate::main::LoadInst;
+use crate::main::PC;
+use crate::main::RType;
+use crate::main::RTypeWord;
+use crate::main::RV32I;
+use crate::main::RV64I;
+use crate::main::StoreInst;
+use crate::main::UType;
+use crate::perf::WriteBranch;
+use crate::perf::WriteIALU;
+use crate::perf::WritePCRelative;
+
+// RISC-V Base ISA instructions
+
+template ALUOp for [RV32I, RV64I] : RType {
+    param OPCODE: bits<7> = 0b0110011;
+    param FUNCT7: bits<7> = 0b0000000;
+    schedule { units = [WriteIALU]; }
+}
+
+template IALUOp for [RV32I, RV64I] : IType {
+    param OPCODE: bits<7> = 0b0010011;
+    schedule { units = [WriteIALU]; }
+}
+
+template ALUOpWord for [RV64I] : RTypeWord {
+    param OPCODE: bits<7> = 0b0111011;
+    param FUNCT7: bits<7> = 0b0000000;
+    schedule { units = [WriteIALU]; }
+}
+
+template IALUOpWord for [RV64I] : ITypeWord {
+    param OPCODE: bits<7> = 0b0011011;
+    schedule { units = [WriteIALU]; }
+}
+
+instruction LoadUpperImm for [RV32I, RV64I] : UType {
+    param MNEMONIC: String = "lui";
+    param OPCODE: bits<7> = 0b0110111;
+
+    behavior {
+        rd = sext(imm, self.XLEN) << 12;
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction AddUpperImmToPC for [RV32I, RV64I] : UType {
+    param MNEMONIC: String = "auipc";
+    param OPCODE: bits<7> = 0b0010111;
+
+    behavior {
+        rd = PC::pc + (sext(imm, self.XLEN) << 12);
+    }
+
+    schedule { units = [WritePCRelative]; }
+}
+
+instruction JumpAndLink for [RV32I, RV64I] : JType {
+    param MNEMONIC: String = "jal";
+    param OPCODE: bits<7> = 0b1101111;
+
+    behavior {
+        rd = PC::pc + zext(0b100, self.XLEN);
+        PC::pc = PC::pc + sext(imm, self.XLEN);
+    }
+
+    schedule { units = [WriteBranch]; }
+}
+
+instruction JumpAndLinkReg for [RV32I, RV64I] : IType {
+    param MNEMONIC: String = "jalr";
+    param OPCODE: bits<7> = 0b1100111;
+    param FUNCT3: bits<3> = 0b000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}({rs1})"
+    }
+
+    behavior {
+        rd = PC::pc + zext(0b100, self.XLEN);
+        PC::pc = (rs1 + sext(imm, self.XLEN)) & ~1;
+    }
+
+    schedule { units = [WriteBranch]; }
+}
+
+template BranchOp for [RV32I, RV64I] : BType {
+    param OPCODE: bits<7> = 0b1100011;
+    schedule { units = [WriteBranch]; }
+}
+
+instruction BranchEq for [RV32I, RV64I] : BranchOp {
+    param MNEMONIC: String = "beq";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        if rs1 == rs2 {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction BranchNotEq for [RV32I, RV64I] : BranchOp {
+    param MNEMONIC: String = "bne";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        if rs1 != rs2 {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction BranchLt for [RV32I, RV64I] : BranchOp {
+    param MNEMONIC: String = "blt";
+    param FUNCT3: bits<3> = 0b100;
+
+    behavior {
+        if rs1 < rs2 {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction BranchGe for [RV32I, RV64I] : BranchOp {
+    param MNEMONIC: String = "bge";
+    param FUNCT3: bits<3> = 0b101;
+
+    behavior {
+        if rs1 >= rs2 {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction BranchLtUnsigned for [RV32I, RV64I] : BranchOp {
+    param MNEMONIC: String = "bltu";
+    param FUNCT3: bits<3> = 0b110;
+
+    behavior {
+        if rs1 ~< rs2 {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction BranchGeUnsigned for [RV32I, RV64I] : BranchOp {
+    param MNEMONIC: String = "bgeu";
+    param FUNCT3: bits<3> = 0b111;
+
+    behavior {
+        if rs1 ~>= rs2 {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction LoadByte for [RV32I, RV64I] : LoadInst {
+    param MNEMONIC: String = "lb";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        rd = sext(load(rs1 + sext(imm, self.XLEN), 1, 0b1), self.XLEN);
+    }
+}
+
+// Misaligned loads and stores trap (no hardware misaligned-access support):
+// mcause 4 (load) / 6 (store), mtval holds the faulting address, and control
+// transfers to the mtvec base (synchronous exceptions ignore vectored mode).
+
+instruction LoadHalfWord for [RV32I, RV64I] : LoadInst {
+    param MNEMONIC: String = "lh";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        try {
+            rd = sext(load(rs1 + sext(imm, self.XLEN), 2, 0b1), self.XLEN);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+}
+
+instruction LoadWord for [RV32I, RV64I] : LoadInst {
+    param MNEMONIC: String = "lw";
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        try {
+            rd = sext(load(rs1 + sext(imm, self.XLEN), 4, 0b1), self.XLEN);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+}
+
+instruction LoadByteUnsigned for [RV32I, RV64I] : LoadInst {
+    param MNEMONIC: String = "lbu";
+    param FUNCT3: bits<3> = 0b100;
+
+    behavior {
+        rd = zext(load(rs1 + sext(imm, self.XLEN), 1, 0b0), self.XLEN);
+    }
+}
+
+instruction LoadHalfWordUnsigned for [RV32I, RV64I] : LoadInst {
+    param MNEMONIC: String = "lhu";
+    param FUNCT3: bits<3> = 0b101;
+
+    behavior {
+        try {
+            rd = zext(load(rs1 + sext(imm, self.XLEN), 2, 0b0), self.XLEN);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+}
+
+instruction LoadWordUnsigned for [RV64I] : LoadInst {
+    param MNEMONIC: String = "lwu";
+    param FUNCT3: bits<3> = 0b110;
+
+    behavior {
+        try {
+            rd = zext(load(rs1 + sext(imm, self.XLEN), 4, 0b0), self.XLEN);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+}
+
+instruction LoadDoubleWord for [RV64I] : LoadInst {
+    param MNEMONIC: String = "ld";
+    param FUNCT3: bits<3> = 0b011;
+
+    behavior {
+        try {
+            rd = load(rs1 + sext(imm, self.XLEN), 8, 0b0);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+}
+
+instruction StoreByte for [RV32I, RV64I] : StoreInst {
+    param MNEMONIC: String = "sb";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        store(rs1 + sext(imm, self.XLEN), 1, extract(rs2, 7, 0));
+    }
+}
+
+instruction StoreHalfWord for [RV32I, RV64I] : StoreInst {
+    param MNEMONIC: String = "sh";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        try {
+            store(rs1 + sext(imm, self.XLEN), 2, extract(rs2, 15, 0));
+        } except misaligned_store(addr) {
+            trap(6, addr);
+        }
+    }
+}
+
+instruction StoreWord for [RV32I, RV64I] : StoreInst {
+    param MNEMONIC: String = "sw";
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        try {
+            store(rs1 + sext(imm, self.XLEN), 4, extract(rs2, 31, 0));
+        } except misaligned_store(addr) {
+            trap(6, addr);
+        }
+    }
+}
+
+instruction StoreDoubleWord for [RV64I] : StoreInst {
+    param MNEMONIC: String = "sd";
+    param FUNCT3: bits<3> = 0b011;
+
+    behavior {
+        try {
+            store(rs1 + sext(imm, self.XLEN), 8, rs2);
+        } except misaligned_store(addr) {
+            trap(6, addr);
+        }
+    }
+}
+
+instruction Add for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "add";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        rd = rs1 + rs2;
+    }
+}
+
+instruction Sub for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "sub";
+    param FUNCT3: bits<3> = 0b000;
+    param FUNCT7: bits<7> = 0b0100000;
+
+    behavior {
+        rd = rs1 - rs2;
+    }
+}
+
+instruction ShiftLeftLogical for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "sll";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        rd = rs1 << extract(rs2, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction SetLessThan for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "slt";
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        rd = if rs1 < rs2 {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        }
+    }
+}
+
+instruction SetLessThanUnsigned for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "sltu";
+    param FUNCT3: bits<3> = 0b011;
+
+    behavior {
+        rd = if rs1 ~< rs2 {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        }
+    }
+}
+
+instruction Xor for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "xor";
+    param FUNCT3: bits<3> = 0b100;
+
+    behavior {
+        rd = rs1 ^ rs2;
+    }
+}
+
+instruction ShiftRightLogical for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "srl";
+    param FUNCT3: bits<3> = 0b101;
+
+    behavior {
+        rd = rs1 >> extract(rs2, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction ShiftRightArithmetic for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "sra";
+    param FUNCT3: bits<3> = 0b101;
+    param FUNCT7: bits<7> = 0b0100000;
+
+    behavior {
+        rd = rs1 >>> extract(rs2, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction Or for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "or";
+    param FUNCT3: bits<3> = 0b110;
+
+    behavior {
+        rd = rs1 | rs2;
+    }
+}
+
+instruction And for [RV32I, RV64I] : ALUOp {
+    param MNEMONIC: String = "and";
+    param FUNCT3: bits<3> = 0b111;
+
+    behavior {
+        rd = rs1 & rs2;
+    }
+}
+
+instruction AddImm for [RV32I, RV64I] : IALUOp {
+    param MNEMONIC: String = "addi";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        rd = rs1 + sext(imm, self.XLEN);
+    }
+}
+
+instruction SetLessThanImm for [RV32I, RV64I] : IALUOp {
+    param MNEMONIC: String = "slti";
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        rd = if rs1 < sext(imm, self.XLEN) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        }
+    }
+}
+
+instruction SetLessThanUnsignedImm for [RV32I, RV64I] : IALUOp {
+    param MNEMONIC: String = "sltiu";
+    param FUNCT3: bits<3> = 0b011;
+
+    behavior {
+        rd = if rs1 ~< sext(imm, self.XLEN) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        }
+    }
+}
+
+instruction XorImm for [RV32I, RV64I] : IALUOp {
+    param MNEMONIC: String = "xori";
+    param FUNCT3: bits<3> = 0b100;
+
+    behavior {
+        rd = rs1 ^ sext(imm, self.XLEN);
+    }
+}
+
+instruction OrImm for [RV32I, RV64I] : IALUOp {
+    param MNEMONIC: String = "ori";
+    param FUNCT3: bits<3> = 0b110;
+
+    behavior {
+        rd = rs1 | sext(imm, self.XLEN);
+    }
+}
+
+instruction AndImm for [RV32I, RV64I] : IALUOp {
+    param MNEMONIC: String = "andi";
+    param FUNCT3: bits<3> = 0b111;
+
+    behavior {
+        rd = rs1 & sext(imm, self.XLEN);
+    }
+}
+
+// Shift immediate forms
+
+template ShiftImm for [RV32I, RV64I] {
+    schedule { units = [WriteIALU]; }
+    param OPCODE: bits<7> = 0b0010011;
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param FUNCT6: bits<6>;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        // 5-bit shamt on RV32, 6-bit on RV64; the spare encoding bit on RV32
+        // stays zero (shamt[5]=1 is a reserved encoding).
+        imm: bits<log2Ceil(self.XLEN)>,
+    }
+
+    encoding {
+        FUNCT6,
+        imm[5..0],
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {imm}"
+    }
+}
+
+template ShiftImmWord64 for [RV64I] {
+    schedule { units = [WriteIALU]; }
+    param OPCODE: bits<7> = 0b0011011;
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param FUNCT7: bits<7>;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        imm: bits<5>,
+    }
+
+    encoding {
+        FUNCT7,
+        imm,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {imm}"
+    }
+}
+
+instruction ShiftLeftLogicalImm for [RV32I, RV64I] : ShiftImm {
+    param MNEMONIC: String = "slli";
+    param FUNCT3: bits<3> = 0b001;
+    param FUNCT6: bits<6> = 0b000000;
+
+    behavior {
+        rd = rs1 << extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction ShiftRightLogicalImm for [RV32I, RV64I] : ShiftImm {
+    param MNEMONIC: String = "srli";
+    param FUNCT3: bits<3> = 0b101;
+    param FUNCT6: bits<6> = 0b000000;
+
+    behavior {
+        rd = rs1 >> extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction ShiftRightArithmeticImm for [RV32I, RV64I] : ShiftImm {
+    param MNEMONIC: String = "srai";
+    param FUNCT3: bits<3> = 0b101;
+    param FUNCT6: bits<6> = 0b010000;
+
+    behavior {
+        rd = rs1 >>> extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction AddImmWord for [RV64I] : IALUOpWord {
+    param MNEMONIC: String = "addiw";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        rd = sext(extract(rs1 + sext(imm, self.XLEN), 31, 0), self.XLEN);
+    }
+}
+
+instruction ShiftLeftLogicalImmWord for [RV64I] : ShiftImmWord64 {
+    param MNEMONIC: String = "slliw";
+    param FUNCT3: bits<3> = 0b001;
+    param FUNCT7: bits<7> = 0b0000000;
+
+    behavior {
+        rd = sext(extract(rs1 << imm, 31, 0), self.XLEN);
+    }
+}
+
+instruction ShiftRightLogicalImmWord for [RV64I] : ShiftImmWord64 {
+    param MNEMONIC: String = "srliw";
+    param FUNCT3: bits<3> = 0b101;
+    param FUNCT7: bits<7> = 0b0000000;
+
+    behavior {
+        rd = sext(extract(rs1, 31, 0) >> imm, self.XLEN);
+    }
+}
+
+instruction ShiftRightArithmeticImmWord for [RV64I] : ShiftImmWord64 {
+    param MNEMONIC: String = "sraiw";
+    param FUNCT3: bits<3> = 0b101;
+    param FUNCT7: bits<7> = 0b0100000;
+
+    behavior {
+        rd = sext(extract(rs1, 31, 0) >>> imm, self.XLEN);
+    }
+}
+
+// SYSTEM instructions without operands; the whole encoding is fixed.
+template SystemNoOperand for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param IMM12: bits<12>;
+    param OPCODE: bits<7> = 0b1110011;
+
+    encoding {
+        IMM12,
+        0b0_0000_0000_0000,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC}"
+    }
+}
+
+// FENCE: order device-I/O and memory accesses. `pred`/`succ` are the 4-bit
+// `iorw` predecessor/successor sets, printed/parsed numerically (no keyword
+// form yet — see docs/tmdl/memory_model.md).
+instruction Fence for [RV32I, RV64I] {
+    param MNEMONIC: String = "fence";
+    param OPCODE: bits<7> = 0b0001111;
+
+    operands {
+        pred: bits<4>,
+        succ: bits<4>,
+    }
+
+    encoding {
+        0b0000,
+        pred,
+        succ,
+        0b00000,
+        0b000,
+        0b00000,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {pred}, {succ}"
+    }
+
+    behavior {
+        fence(pred, succ);
+    }
+}
+
+instruction EnvCall for [RV32I, RV64I] : SystemNoOperand {
+    param MNEMONIC: String = "ecall";
+    param IMM12: bits<12> = 0b000000000000;
+
+    behavior {
+        // mcause 11: environment call from M-mode (the simulator's only mode).
+        trap(11);
+    }
+}
+
+instruction EnvBreak for [RV32I, RV64I] : SystemNoOperand {
+    param MNEMONIC: String = "ebreak";
+    param IMM12: bits<12> = 0b000000000001;
+
+    behavior {
+        // mcause 3: breakpoint; mtval reports the address of the ebreak
+        // instruction itself.
+        trap(3, PC::pc);
+    }
+}
+
+instruction AddWord for [RV64I] : ALUOpWord {
+    param MNEMONIC: String = "addw";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        rd = sext(extract(rs1 + rs2, 31, 0), self.XLEN);
+    }
+}
+
+instruction SubWord for [RV64I] : ALUOpWord {
+    param MNEMONIC: String = "subw";
+    param FUNCT3: bits<3> = 0b000;
+    param FUNCT7: bits<7> = 0b0100000;
+
+    behavior {
+        rd = sext(extract(rs1 - rs2, 31, 0), self.XLEN);
+    }
+}
+
+instruction ShiftLeftLogicalWord for [RV64I] : ALUOpWord {
+    param MNEMONIC: String = "sllw";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        rd = sext(extract(rs1 << extract(rs2, 4, 0), 31, 0), self.XLEN);
+    }
+}
+
+instruction ShiftRightLogicalWord for [RV64I] : ALUOpWord {
+    param MNEMONIC: String = "srlw";
+    param FUNCT3: bits<3> = 0b101;
+
+    behavior {
+        rd = sext(extract(rs1, 31, 0) >> extract(rs2, 4, 0), self.XLEN);
+    }
+}
+
+instruction ShiftRightArithmeticWord for [RV64I] : ALUOpWord {
+    param MNEMONIC: String = "sraw";
+    param FUNCT3: bits<3> = 0b101;
+    param FUNCT7: bits<7> = 0b0100000;
+
+    behavior {
+        rd = sext(extract(rs1, 31, 0) >>> extract(rs2, 4, 0), self.XLEN);
+    }
+}

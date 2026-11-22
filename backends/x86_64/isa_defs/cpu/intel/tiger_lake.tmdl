@@ -1,0 +1,331 @@
+use crate::arith_ext::Cmp32;
+use crate::arith_ext::CmpImm32;
+use crate::arith_ext::CmpImm;
+use crate::arith_ext::SubImm32;
+use crate::arith_ext::SubImm;
+use crate::arith_ext::Test32;
+use crate::arith_ext::Test8;
+use crate::arith_ext::TestImm32;
+use crate::arith_ext::TestImm;
+use crate::base::Add16;
+use crate::base::Add32;
+use crate::base::Add8;
+use crate::base::Add8H;
+use crate::base::Add8HL;
+use crate::base::Add8LH;
+use crate::base::Add;
+use crate::base::AddImm16;
+use crate::base::AddImm32;
+use crate::base::AddImm8;
+use crate::base::AddImm8H;
+use crate::base::AddImm;
+use crate::base::And16;
+use crate::base::And32;
+use crate::base::And8;
+use crate::base::And8H;
+use crate::base::And8HL;
+use crate::base::And8LH;
+use crate::base::And;
+use crate::base::AndImm16;
+use crate::base::AndImm32;
+use crate::base::AndImm8;
+use crate::base::AndImm8H;
+use crate::base::AndImm;
+use crate::base::Cmp16;
+use crate::base::Cmp8;
+use crate::base::Cmp;
+use crate::base::CmpImm16;
+use crate::base::CmpImm8;
+use crate::base::JumpAboveEq;
+use crate::base::JumpAboveEqLegacy;
+use crate::base::JumpBelow;
+use crate::base::JumpBelowLegacy;
+use crate::base::JumpEq;
+use crate::base::JumpEqLegacy;
+use crate::base::JumpGreaterEq;
+use crate::base::JumpGreaterEqLegacy;
+use crate::base::JumpLess;
+use crate::base::JumpLessLegacy;
+use crate::base::JumpNotEq;
+use crate::base::JumpNotEqLegacy;
+use crate::base::Sub16;
+use crate::base::Sub32;
+use crate::base::Sub8;
+use crate::base::Sub8H;
+use crate::base::Sub8HL;
+use crate::base::Sub8LH;
+use crate::base::Sub;
+use crate::base::Test;
+use crate::base::TestImm8;
+use crate::base::Xor32;
+use crate::base::Xor;
+use crate::conditional::JumpAbove;
+use crate::conditional::JumpAboveLegacy;
+use crate::conditional::JumpBelowEq;
+use crate::conditional::JumpBelowEqLegacy;
+use crate::conditional::JumpGreater;
+use crate::conditional::JumpGreaterLegacy;
+use crate::conditional::JumpLessEq;
+use crate::conditional::JumpLessEqLegacy;
+use crate::conditional::JumpNoOverflow;
+use crate::conditional::JumpNoOverflowLegacy;
+use crate::conditional::JumpNoSign;
+use crate::conditional::JumpNoSignLegacy;
+use crate::conditional::JumpOverflow;
+use crate::conditional::JumpOverflowLegacy;
+use crate::conditional::JumpSign;
+use crate::conditional::JumpSignLegacy;
+use crate::main::X86_64;
+use crate::perf::WriteFPAdd;
+use crate::perf::WriteFPCompare;
+use crate::perf::WriteFPConvert;
+use crate::perf::WriteFPDiv;
+use crate::perf::WriteFPMove;
+use crate::perf::WriteFPMul;
+use crate::perf::WriteFPToSI;
+use crate::perf::WriteIALU3B;
+use crate::perf::WriteIALU;
+use crate::perf::WriteIALUImm16;
+use crate::perf::WriteIConditional;
+use crate::perf::WriteIExtend;
+use crate::perf::WriteIHighByte;
+use crate::perf::WriteILeaComplex;
+use crate::perf::WriteILeaRip;
+use crate::perf::WriteILeaSimple;
+use crate::perf::WriteIMove3B;
+use crate::perf::WriteIMoveAbsolute;
+use crate::perf::WriteIMoveByte;
+use crate::perf::WriteIMoveImmediate16;
+use crate::perf::WriteIMoveImmediate;
+use crate::perf::WriteIMoveWide;
+use crate::perf::WriteIMul;
+use crate::perf::WriteIShift;
+use crate::perf::WriteJcc;
+use crate::perf::WriteJump;
+use crate::perf::WriteSIToFP;
+
+macro tiger_lake_fusion {
+    ( $name:ident, [ $($alu:ident),* ], [ $($branch:ident),* ], $latency:literal, $decode_cycles:literal, { $($decoder:tt)* } ) => {
+        fusion $name {
+            match = [alu: instruction[$($alu),*], branch: instruction[$($branch),*]];
+            schedule {
+                decode_uops = 1;
+                decode_cycles = $decode_cycles;
+                $($decoder)*
+                rename_slots = 1;
+                rob_entries = 1;
+                retire_slots = 1;
+                uop fused(inherit = branch) {
+                    inputs = [all_inputs(alu), all_inputs(branch)];
+                    outputs = [all_outputs(alu), all_outputs(branch)];
+                    memory = [alu, branch];
+                    control = [alu, branch];
+                    read_cycle = 0;
+                    write_cycle = $latency;
+                }
+            }
+        }
+    };
+}
+
+machine TigerLake ("tiger-lake") for [X86_64] {
+    issue_width = 5;
+
+    frontend {
+        fetch {
+            bytes_per_cycle = 16;
+            window_bytes = 32;
+            alignment = 8;
+            queue_bytes = 32;
+        }
+        decode {
+            slots = [simple, simple, simple, lcp];
+            uops_per_cycle = 4;
+            queue_uops = 32;
+            decoder simple { max_uops_per_instruction = 1; }
+            decoder lcp { max_uops_per_instruction = 1; }
+        }
+    }
+
+    buffers {
+        // Effective out-of-order window measured on hardware with independent
+        // long-latency chains; the reorder buffer itself is larger, but this is
+        // where dispatch stalls in practice.
+        rob = 230;
+    }
+
+    // Abstract execution units. Per-class capacities are the measured
+    // dependency-free throughput floors (inference split): imul, rip-relative
+    // lea 1/cycle; scaled lea 2; shifts and conditionals 2; 3-byte forms 3
+    // (a predecode effect the front-end model cannot yet express); everything
+    // else sustains the full 4.
+    unit Res0 { count = 1; }
+    unit Res1 { count = 1; }
+    unit Res2 { count = 1; }
+    unit Res3 { count = 1; }
+
+    group Any4 = Res0 | Res1 | Res2 | Res3;
+    group Any3 = Res0 | Res1 | Res2;
+    group Pair03 = Res1 | Res3;
+    group Pair23 = Res2 | Res3;
+    group Pair01 = Res0 | Res1;
+
+    bind WriteIALU {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIALU3B {
+        latency = 1;
+        uop(Any3);
+    }
+    bind WriteIMove3B {
+        latency = 1;
+        uop(Any3);
+    }
+    bind WriteIALUImm16 {
+        latency = 1;
+        uop(Any4);
+        decoder = lcp;
+        decode_cycles = 3;
+    }
+    // High-byte accesses pay the partial-register merge; the forms are 3-byte
+    // encodings, so the 3-byte predecode ceiling applies to them too.
+    bind WriteIHighByte {
+        latency = 3;
+        uop(Any3);
+    }
+    bind WriteIShift {
+        latency = 1;
+        uop(Pair23);
+    }
+    bind WriteIConditional {
+        latency = 1;
+        uop(Pair23);
+    }
+    bind WriteIExtend {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIMoveWide {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIMoveByte {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIMoveImmediate {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIMoveImmediate16 {
+        latency = 1;
+        uop(Any4);
+        decoder = lcp;
+        decode_cycles = 3;
+    }
+    bind WriteIMoveAbsolute {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIMul {
+        latency = 3;
+        uop(Res1);
+    }
+    bind WriteFPAdd {
+        latency = 4;
+        uop(Pair01);
+    }
+    bind WriteFPMul {
+        latency = 4;
+        uop(Pair01);
+    }
+    bind WriteFPDiv {
+        latency = 13;
+        uop(Res0);
+    }
+    bind WriteFPMove {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteFPConvert {
+        latency = 4;
+        uop(Res0);
+    }
+    bind WriteSIToFP {
+        latency = 4;
+        uop(Res0);
+    }
+    bind WriteFPToSI {
+        latency = 1;
+        uop(Res0);
+    }
+    bind WriteFPCompare {
+        latency = 1;
+        uop(Res0);
+    }
+    // Measured floors per address form: unscaled 4/cycle, scaled 2/cycle,
+    // rip-relative 1/cycle.
+    bind WriteILeaSimple {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteILeaComplex {
+        latency = 1;
+        uop(Pair03);
+    }
+    bind WriteILeaRip {
+        latency = 1;
+        uop(Res1);
+    }
+    // Branch binds are structural (branch-capable pair, jump port); the
+    // measurement corpus is branchless, so they are unmeasured priors.
+    bind WriteJcc {
+        latency = 1;
+        uop(Pair23);
+    }
+    bind WriteJump {
+        latency = 1;
+        uop(Res3);
+    }
+
+    // These exact instruction sets preserve the old model's eligible forms.
+    // High-byte forms keep their 3-cycle latency; 16-bit immediate forms keep
+    // the length-changing-prefix decoder and its 3-cycle occupancy.
+    tiger_lake_fusion!(TestBranch, [And, Test, AndImm, And32, AndImm32, And16, And8, AndImm8, TestImm8, TestImm, Test32, Test8, TestImm32],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy, JumpSign, JumpSignLegacy, JumpNoSign, JumpNoSignLegacy, JumpOverflow, JumpOverflowLegacy, JumpNoOverflow, JumpNoOverflowLegacy], 1, 1, {})
+    tiger_lake_fusion!(TestBranchHighByte, [And8H, And8HL, And8LH, AndImm8H],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy, JumpSign, JumpSignLegacy, JumpNoSign, JumpNoSignLegacy, JumpOverflow, JumpOverflowLegacy, JumpNoOverflow, JumpNoOverflowLegacy], 3, 1, {})
+    tiger_lake_fusion!(TestBranchLcp, [AndImm16],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy, JumpSign, JumpSignLegacy, JumpNoSign, JumpNoSignLegacy, JumpOverflow, JumpOverflowLegacy, JumpNoOverflow, JumpNoOverflowLegacy], 1, 3, { decoder = lcp; })
+    tiger_lake_fusion!(CompareBranch, [Add, Sub, Cmp, AddImm, Add32, Sub32, AddImm32, Add16, Sub16, Cmp16, Add8, Sub8, Cmp8, AddImm8, CmpImm8, CmpImm, SubImm, Cmp32, CmpImm32, SubImm32],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy], 1, 1, {})
+    tiger_lake_fusion!(CompareBranchHighByte, [Add8H, Sub8H, Add8HL, Sub8HL, Add8LH, Sub8LH, AddImm8H],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy], 3, 1, {})
+    tiger_lake_fusion!(CompareBranchLcp, [AddImm16, CmpImm16],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy], 1, 3, { decoder = lcp; })
+
+    // Dependency-breaking idioms the renamer recognizes: xor/sub of a register
+    // with itself (64/32-bit forms only; narrower writes merge and stay
+    // dependent).
+    override Xor {
+        latency = 1;
+        uop(Any3);
+        zero_idiom = true;
+    }
+    override Xor32 {
+        latency = 1;
+        uop(Any3);
+        zero_idiom = true;
+    }
+    override Sub {
+        latency = 1;
+        uop(Any3);
+        zero_idiom = true;
+    }
+    override Sub32 {
+        latency = 1;
+        uop(Any3);
+        zero_idiom = true;
+    }
+}

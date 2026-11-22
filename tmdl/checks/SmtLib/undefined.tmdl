@@ -2,7 +2,7 @@
 // instruction's body, so a query decides what "any value" means. Do not
 // regenerate with update_checks.py.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=uisa --isa=UIsa --output=- %S/../Inputs/undefined.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=uisa --isa=UIsa --output=- %S/../Inputs/undefined.tmdl | filecheck %s
 
 // CHECK: (declare-const [[UNDEF:undef_[0-9]+_64]] (_ BitVec 64))
 // CHECK: (define-fun execute_scan

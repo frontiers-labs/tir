@@ -1,0 +1,12 @@
+mod basic;
+mod cpu;
+
+isa Demo64 {
+    param ENCODING_UNIT: Integer = 32;
+}
+
+register_class GPR for [Demo64] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+    registers { x0..x31 => {}, }
+}

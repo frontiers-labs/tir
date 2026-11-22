@@ -5,7 +5,7 @@ This document specifies TMDL's memory-access vocabulary beyond plain
 atomic read-modify-write, and fences. It covers the surface syntax, the
 semantic-IR encoding, and the semantics each consumer (Rust executor codegen,
 SMT-LIB codegen, the simulator) gives to the new constructs. The RISC-V A
-extension (`backends/riscv/defs/atomics.tmdl`) is the reference user.
+extension (`backends/riscv/isa_defs/atomics.tmdl`) is the reference user.
 
 ## Scope and goals
 

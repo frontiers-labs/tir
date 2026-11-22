@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-ast-json --output=- %S/../Inputs/simple.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-ast-json --output=- %S/../Inputs/simple.tmdl | filecheck %s
 
 // CHECK: {
 // CHECK-NEXT:   "version": 2,

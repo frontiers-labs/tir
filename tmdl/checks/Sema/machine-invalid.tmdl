@@ -2,7 +2,7 @@
 // units, resources, instructions and forward targets, plus duplicate
 // declarations.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 sched_class WriteIALU;
 sched_class WriteIMul { latency = 3; }

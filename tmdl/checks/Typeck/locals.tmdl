@@ -1,7 +1,7 @@
 // Positive type-checking coverage for behavior-local bindings and for
 // log2Ceil of a bitvector value mixing with bits arithmetic.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 isa Test { param XLEN: Integer = 32; }
 

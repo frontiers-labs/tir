@@ -3,7 +3,7 @@
 // flag output conditionally preserves its old value is not a complete flag
 // definition, so it never fuses as a definer.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/flag-value-rules.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %S/../Inputs/flag-value-rules.tmdl | filecheck %s
 
 // CHECK-NOT: fn isel_pattern_setcclike(
 // CHECK-NOT: fn isel_pattern_adclike(

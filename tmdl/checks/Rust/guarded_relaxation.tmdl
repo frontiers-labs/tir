@@ -5,7 +5,7 @@
 // semantics alongside the guard-relaxed selection pattern, so pass construction
 // can prove the relaxation sound. A plain unguarded behavior emits no companion.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa GuardIsa {
     param XLEN: Integer = 64;

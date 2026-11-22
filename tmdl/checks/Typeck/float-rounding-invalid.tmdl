@@ -1,4 +1,4 @@
-// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 // CHECK-DAG: rounding mode must be between 0 and 4
 // CHECK-DAG: rounded floating-point format must be binary32 or binary64
 // CHECK-DAG: rounded integer width must be 32 or 64

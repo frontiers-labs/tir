@@ -4,7 +4,7 @@
 // composes with each flag-guarded branch, and the proved composition becomes a
 // CondBranch rule emitting the definer + branch pair.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa FlagIsa {
     param XLEN: Integer = 64;

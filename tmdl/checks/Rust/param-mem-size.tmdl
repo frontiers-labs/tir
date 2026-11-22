@@ -6,7 +6,7 @@
 // The folded size itself lives in the sem blob and is checked by
 // tmdl/tests/sem_blob.rs.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/param-mem-size.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %S/../Inputs/param-mem-size.tmdl | filecheck %s
 
 // The division is folded away, so no program in this dialect divides.
 // CHECK-NOT: SymKind::Div

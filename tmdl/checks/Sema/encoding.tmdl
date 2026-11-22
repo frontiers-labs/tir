@@ -2,7 +2,7 @@
 // (single bits and ranges) and register-operand splices over an indexed
 // register file.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa Arch { param XLEN: Integer = 64; }
 

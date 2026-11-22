@@ -1,6 +1,6 @@
 // This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=TestIsa --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=test --isa=TestIsa --output=- %s | filecheck %s
 
 isa TestIsa {
     param XLEN: Integer = 64;

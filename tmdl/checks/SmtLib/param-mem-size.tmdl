@@ -1,7 +1,7 @@
 // The SMT-LIB encoding resolves an ISA-parameter memory size to the concrete
 // byte count of the ISA being emitted.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=pisa --isa=PIsa --output=- %S/../Inputs/param-mem-size.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=pisa --isa=PIsa --output=- %S/../Inputs/param-mem-size.tmdl | filecheck %s
 
 // CHECK: (define-fun execute_loadword
 // CHECK-NEXT: (write_gpr st rd (read_mem_8 st (read_gpr st rs1))))

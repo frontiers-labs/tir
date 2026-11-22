@@ -1,4 +1,4 @@
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s 2>&1 | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s 2>&1 | filecheck %s
 // CHECK: Asm block must be a literal string or a nonempty tuple of literal strings
 
 isa Test {}

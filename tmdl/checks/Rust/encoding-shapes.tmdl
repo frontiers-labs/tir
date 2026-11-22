@@ -3,9 +3,9 @@
 // range its shapes span, and the encoder picks a shape at encode time instead
 // of the backend picking between hand-written encoding-only twins.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
-// RUN: tmdlc --action=emit-ast-json --output=- %s | filecheck %s --check-prefix=JSON
-// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=ByteIsa --output=- %s | filecheck %s --check-prefix=SMT
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast-json --output=- %s | filecheck %s --check-prefix=JSON
+// RUN: tmdl compile --action=emit-smtlib --dialect=test --isa=ByteIsa --output=- %s | filecheck %s --check-prefix=SMT
 
 isa ByteIsa {
     param XLEN: Integer = 64;

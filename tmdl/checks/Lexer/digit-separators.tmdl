@@ -2,7 +2,7 @@
 // binary field stays readable. They are stripped from the literal, which is
 // what every consumer sees.
 
-// RUN: tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast --text-only --output=- %s | filecheck %s
 
 isa TestIsa { param XLEN: Integer = 64; }
 

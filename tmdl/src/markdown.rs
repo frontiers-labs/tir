@@ -9,6 +9,7 @@ use crate::ast::{
     Expr, Lit, RegisterDef, RegisterTrait, UnOp,
 };
 use crate::error::TMDLError;
+use crate::module_tree::ModuleTree;
 use crate::rustgen::resolve_string;
 use crate::utils::{
     get_encoding_shapes, resolve_effective_asm_for_instruction,
@@ -30,28 +31,49 @@ pub fn generate_markdown_book(
     dialect: &str,
     files: &[ast::File],
     output_dir: &Path,
+    tree: Option<&ModuleTree>,
 ) -> Result<(), TMDLError> {
     fs::create_dir_all(output_dir)?;
+    let pages = tree.map(|tree| {
+        tree.modules()
+            .map(|module| module.path.page())
+            .collect::<Vec<_>>()
+    });
     let instruction_files = files
         .iter()
-        .filter(|file| file.instructions().next().is_some())
-        .collect::<Vec<_>>();
+        .enumerate()
+        .filter(|(_, file)| file.instructions().next().is_some())
+        .map(|(idx, file)| {
+            let raw_stem = file_stem(file)?;
+            let path = pages.as_ref().map_or_else(
+                || format!("{raw_stem}.md").into(),
+                |pages| pages[idx].clone(),
+            );
+            let stem = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or(raw_stem);
+            Ok((file, humanize(stem), path))
+        })
+        .collect::<Result<Vec<_>, TMDLError>>()?;
 
     let mut index = fs::File::create(output_dir.join("index.md"))?;
     write_overview(dialect, files, &mut index)?;
     if !instruction_files.is_empty() {
         writeln!(index, "\n## Instruction families")?;
-        for file in &instruction_files {
-            let stem = file_stem(file)?;
-            writeln!(index, "\n- [{}](./{stem}.md)", humanize(stem))?;
+        for (_, title, path) in &instruction_files {
+            writeln!(index, "\n- [{title}](./{})", path.display())?;
         }
     }
 
     let item_cache = crate::sema::build_item_cache(files);
-    for file in instruction_files {
-        let stem = file_stem(file)?;
-        let mut output = fs::File::create(output_dir.join(format!("{stem}.md")))?;
-        writeln!(output, "# {}", humanize(stem))?;
+    for (file, title, path) in instruction_files {
+        let output = output_dir.join(path);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut output = fs::File::create(output)?;
+        writeln!(output, "# {title}")?;
         if let Some(doc) = &file.doc {
             writeln!(output, "\n{doc}")?;
         }

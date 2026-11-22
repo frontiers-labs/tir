@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-markdown --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-markdown --dialect=test --output=- %s | filecheck %s
 
 isa TestIsa {}
 register_class GPR for [TestIsa] {

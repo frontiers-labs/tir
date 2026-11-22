@@ -2,7 +2,7 @@
 
 tmdl_isa = "ARMv8A64"
 dialect = "arm64"
-defs_dir = "backends/arm64/defs"
+module_root = "backends/arm64/isa_defs"
 snapshot = "armv8p5.ir"
 snapshot_repo = "rems-project/isla-snapshots"
 snapshot_ref = "d8b31014643035a3b11071e56ef30001de3f52ab"

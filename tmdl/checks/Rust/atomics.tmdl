@@ -3,7 +3,7 @@
 // `MachineContext` reservation methods, so the executor reaches the hart's
 // reservation logic.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/atomics.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %S/../Inputs/atomics.tmdl | filecheck %s
 
 // The four atomic constructs each lower to their dedicated kind, and a plain
 // store with an explicit ordering packs the ordering code into its inert

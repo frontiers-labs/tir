@@ -1,4 +1,4 @@
-// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 // CHECK: same_register requires register operands
 // CHECK: fusion rename group needs positive slots and steps

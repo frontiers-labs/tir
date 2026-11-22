@@ -2,7 +2,7 @@
 // capacities, decode slots naming unknown decoders, binds naming unknown or
 // incapable decoders, and inferred micro-op counts exceeding every slot.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 sched_class W;
 

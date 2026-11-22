@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-ast-json --output=- %S/../Inputs/atomics.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-ast-json --output=- %S/../Inputs/atomics.tmdl | filecheck %s
 
 // CHECK:              "name": "LrW",
 // CHECK:              "behavior": {

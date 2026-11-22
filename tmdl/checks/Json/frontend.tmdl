@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast-json --text-only --output=- %s | filecheck %s
 
 // CHECK:              "kind": "machine",
 // CHECK:              "frontend": {

@@ -3,8 +3,8 @@
 // encoding has no room to spell. Both sit on the operand declaration, so the
 // AST holds them next to the type.
 
-// RUN: tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
-// RUN: tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s --check-prefix=JSON
+// RUN: tmdl compile --action=emit-ast --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast-json --text-only --output=- %s | filecheck %s --check-prefix=JSON
 
 isa TestIsa { param XLEN: Integer = 32; }
 

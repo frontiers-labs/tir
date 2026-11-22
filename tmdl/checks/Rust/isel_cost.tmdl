@@ -5,7 +5,7 @@
 // encoding wins a latency tie. Both terms are fields of the emitted
 // instruction's record, which the rule reaches through its emission plan.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/simple.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %S/../Inputs/simple.tmdl | filecheck %s
 
 // `add` is a 32-bit encoding, so its rule pays 4 bytes on top of the latency.
 // CHECK: static INFO_ADD: tir::backend::InstrInfo = tir::backend::InstrInfo {
