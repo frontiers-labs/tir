@@ -5,8 +5,8 @@ use crate::builtin::{IntegerType, ModuleOp, constant};
 use crate::cfg::{BranchOpBuilder, CondBranchOpBuilder, Successor, SwitchOpBuilder};
 use crate::func::{FuncOp, ReturnOpBuilder};
 use crate::{
-    AnalysisManager, BlockHandle, Context, Gamma, OpHandle, OpId, OperationRef, Pass, PassError,
-    RegionHandle, Theta, TypeId, Value, ValueId,
+    BlockHandle, Context, Gamma, OpHandle, OpId, OperationRef, Pass, PassError, RegionHandle,
+    Theta, TypeId, Value, ValueId,
 };
 
 /// Lower a function's graph and structured control flow to CFG blocks.
@@ -26,12 +26,7 @@ impl Pass for DestructurePass {
         "destructure"
     }
 
-    fn run(
-        &mut self,
-        root: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, root: OpId, context: &Context) -> Result<(), PassError> {
         let op = context.get_op(root);
         if op.is::<FuncOp>() {
             return lower_function(context, &op);

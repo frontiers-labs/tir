@@ -1,10 +1,5 @@
-use super::generated::{
-    table_destructure_graph_execution, table_destructure_graph_feedback_capture,
-    table_destructure_graph_live_in_state, table_destructure_graph_needed_port,
-    table_destructure_graph_needed_result, table_destructure_undemanded_graph_effect,
-    table_destructure_unsupported_graph_capture,
-};
-use crate::{AnalysisManager, Context, OpId, PassError, RegionId, ValueId};
+use super::generated::{OperationId, destructure_recover};
+use crate::{Context, OpId, PassError, RegionId, ValueId};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -43,16 +38,15 @@ pub(crate) struct Schedule {
 
 impl Schedule {
     pub(crate) fn load(context: &Context, function: OpId) -> Result<Self, PassError> {
-        AnalysisManager::ensure_default(context)?;
-        let bad = AnalysisManager::require_table(
-            context,
-            function,
-            table_destructure_undemanded_graph_effect,
-        )
-        .map_err(rule_error)?;
-        if let Some(node) = bad.rows().map(|row| bad.base_value::<i64>(row[0])).min() {
-            drop(bad);
-            let op = context.get_op(OpId::from_number(checked_id(node)?));
+        let revision = context.subtree_revision(function);
+        let mut engine = context.egraph();
+        let db = engine.database_mut();
+        let facts = destructure_recover(db, revision, OperationId::from_raw(function.number()))
+            .map_err(rule_error)?;
+        let undemanded = first_operation(facts.undemanded_graph_effect(db).map_err(rule_error)?)?;
+        if let Some(node) = undemanded {
+            drop(engine);
+            let op = context.get_op(OpId::from_number(node));
             return Err(PassError::InvalidIR {
                 pass: "destructure",
                 error: crate::Error::VerificationError(format!(
@@ -62,20 +56,9 @@ impl Schedule {
                 )),
             });
         }
-        drop(bad);
-
-        let unsupported = AnalysisManager::require_table(
-            context,
-            function,
-            table_destructure_unsupported_graph_capture,
-        )
-        .map_err(rule_error)?;
-        if let Some(node) = unsupported
-            .rows()
-            .map(|row| unsupported.base_value::<i64>(row[0]))
-            .min()
+        if let Some(node) =
+            first_operation(facts.unsupported_graph_capture(db).map_err(rule_error)?)?
         {
-            drop(unsupported);
             return Err(PassError::InvalidIR {
                 pass: "destructure",
                 error: crate::Error::VerificationError(format!(
@@ -83,24 +66,20 @@ impl Schedule {
                 )),
             });
         }
-        drop(unsupported);
 
-        let feedback = AnalysisManager::require_table(
-            context,
-            function,
-            table_destructure_graph_feedback_capture,
-        )
-        .map_err(rule_error)?;
-        let mut ordered_captures = feedback
-            .rows()
+        let mut ordered_captures = facts
+            .graph_feedback_capture(db)
+            .map_err(rule_error)?
             .map(|row| {
-                let theta = OpId::from_number(checked_id(feedback.base_value(row[0]))?);
-                let rank = feedback.base_value::<i64>(row[1]);
-                let node = OpId::from_number(checked_id(feedback.base_value(row[2]))?);
-                Ok((theta, rank, node, feedback.base_value::<bool>(row[3])))
+                let (theta, rank, node, replay) = row.map_err(rule_error)?;
+                Ok((
+                    OpId::from_number(theta.raw()),
+                    rank,
+                    OpId::from_number(node.raw()),
+                    replay,
+                ))
             })
             .collect::<Result<Vec<_>, PassError>>()?;
-        drop(feedback);
         ordered_captures.sort_unstable();
         let mut captures = BTreeMap::<_, Vec<_>>::new();
         let mut replays = BTreeMap::<_, Vec<_>>::new();
@@ -108,67 +87,55 @@ impl Schedule {
             let schedule = if replay { &mut replays } else { &mut captures };
             schedule.entry(theta).or_default().push(node);
         }
-
-        let used = AnalysisManager::require_table(
-            context,
-            function,
-            table_destructure_graph_needed_result,
-        )
-        .map_err(rule_error)?;
-        let live_results = used
-            .rows()
+        let live_results = facts
+            .graph_needed_result(db)
+            .map_err(rule_error)?
             .map(|row| {
-                let node = OpId::from_number(checked_id(used.base_value(row[0]))?);
-                let slot = usize::try_from(used.base_value::<i64>(row[1])).map_err(rule_error)?;
-                Ok((node, slot))
+                let (node, slot) = row.map_err(rule_error)?;
+                Ok((
+                    OpId::from_number(node.raw()),
+                    usize::try_from(slot).map_err(rule_error)?,
+                ))
             })
             .collect::<Result<_, PassError>>()?;
-        drop(used);
-
-        let ports =
-            AnalysisManager::require_table(context, function, table_destructure_graph_needed_port)
-                .map_err(rule_error)?;
-        let live_ports = ports
-            .rows()
+        let live_ports = facts
+            .graph_needed_port(db)
+            .map_err(rule_error)?
             .map(|row| {
-                let region = RegionId::from_number(checked_id(ports.base_value(row[0]))?);
-                let port = usize::try_from(ports.base_value::<i64>(row[1])).map_err(rule_error)?;
-                Ok((region, port))
+                let (region, port) = row.map_err(rule_error)?;
+                Ok((
+                    RegionId::from_number(checked_id(region)?),
+                    usize::try_from(port).map_err(rule_error)?,
+                ))
             })
             .collect::<Result<_, PassError>>()?;
-        drop(ports);
-
-        let execution =
-            AnalysisManager::require_table(context, function, table_destructure_graph_execution)
-                .map_err(rule_error)?;
-        let mut ordered = execution
-            .rows()
+        let mut ordered = facts
+            .graph_execution(db)
+            .map_err(rule_error)?
             .map(|row| {
-                let region = RegionId::from_number(checked_id(execution.base_value(row[0]))?);
-                let part = Part::parse(&execution.base_value::<String>(row[1]))?;
-                let rank = execution.base_value::<i64>(row[2]);
-                let op = OpId::from_number(checked_id(execution.base_value(row[3]))?);
-                Ok(((region, part), rank, op))
+                let (region, part, rank, op) = row.map_err(rule_error)?;
+                Ok((
+                    (
+                        RegionId::from_number(checked_id(region)?),
+                        Part::parse(&part)?,
+                    ),
+                    rank,
+                    OpId::from_number(op.raw()),
+                ))
             })
             .collect::<Result<Vec<_>, PassError>>()?;
-        drop(execution);
         ordered.sort_unstable();
         let mut ops = BTreeMap::<_, Vec<_>>::new();
         for (key, _, op) in ordered {
             ops.entry(key).or_default().push(op);
         }
 
-        let live = AnalysisManager::require_table(
-            context,
-            function,
-            table_destructure_graph_live_in_state,
-        )
-        .map_err(rule_error)?;
         let mut state_in = BTreeMap::<_, Vec<_>>::new();
-        for row in live.rows() {
-            let region = RegionId::from_number(checked_id(live.base_value(row[0]))?);
-            let part = Part::parse(&live.base_value::<String>(row[1]))?;
-            let state = ValueId::from_number(checked_id(live.base_value(row[2]))?);
+        for row in facts.graph_live_in_state(db).map_err(rule_error)? {
+            let (region, part, state) = row.map_err(rule_error)?;
+            let region = RegionId::from_number(checked_id(region)?);
+            let part = Part::parse(&part)?;
+            let state = ValueId::from_number(state.raw());
             state_in.entry((region, part)).or_default().push(state);
         }
         for states in state_in.values_mut() {
@@ -210,6 +177,15 @@ impl Schedule {
             .get(&(region, part))
             .map_or(&[], Vec::as_slice)
     }
+}
+
+fn first_operation(
+    mut rows: impl Iterator<Item = Result<(OperationId,), Box<dyn std::error::Error>>>,
+) -> Result<Option<u32>, PassError> {
+    rows.try_fold(None, |first: Option<u32>, row| {
+        let (id,) = row.map_err(rule_error)?;
+        Ok(Some(first.map_or(id.raw(), |first| first.min(id.raw()))))
+    })
 }
 
 fn checked_id(raw: i64) -> Result<u32, PassError> {

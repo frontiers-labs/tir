@@ -1,10 +1,10 @@
-//! AnalysisManager caching, def-use analysis and the monotone fact solver.
+//! CFG memoization and def-use analysis.
 
 use tir::{
     analysis::{cfg, DefUse},
     builtin::{ops, IntegerType, UnitType},
     func::ops as func_ops,
-    AnalysisManager, Context, Operation,
+    Context, Operation,
 };
 
 #[test]
@@ -53,80 +53,25 @@ fn chains_over_ssa_ops() {
 }
 
 #[test]
-fn catalog_producers_publish_complete_current_facts() {
-    let context = Context::with_default_dialects();
-    let root =
-        tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(&context, "module { module_end }")
-            .unwrap()
-            .id();
-    let edit = |f: fn(&mut tir_egglog::Database, tir_egglog::TableId)| {
-        let db = &mut *context.egraph();
-        let input = db.database().table("Operand").unwrap();
-        f(db.database_mut(), input);
-    };
-    edit(|db, input| {
-        for (owner, slot) in [(0_i64, 2_i64), (0, 9), (1, 9)] {
-            let row = [db.base(owner), db.base(slot), db.base(1_i64)];
-            db.insert(input, &row).unwrap();
-        }
-    });
-    AnalysisManager::install(&context, r#"
-        pub let Values: Int -> Prop;
-        pub let Members: std::Table<Int, std::table::IntSet, std::Merge::SetUnion>;
-        pub let Count: (Int, Int) -> Prop;
-        pub let Conflict: std::Table<Int, Int, std::Merge::Unique>;
-
-        pub mod source {
-            pub let input<root, owner, slot, value>:
-                (ir::AnalysisRoot(root), ir::Operand(owner, slot, value), std::int::equal(slot, slot) == true) -> Values(slot);
-            pub let produce = || { std::schedule::saturate((input,)) };
-        }
-        pub mod bounds {
-            pub let collect<v>: Values(v) -> Members(0, std::table::singleton(v));
-            pub let produce = || { std::schedule::saturate((collect,)) };
-        }
-        pub mod answers {
-            pub let count<vs>: Members(0, vs) -> Count(0, std::table::cardinality(vs));
-            pub let empty: !Values(9) -> Count(0, 0);
-            pub let produce = || { std::schedule::saturate((count, empty)) };
-        }
-        pub mod fail {
-            pub let conflict<v>: Values(v) -> Conflict(0, v);
-            pub let produce = || { std::schedule::saturate((conflict,)) };
-        }
-    "#).unwrap();
-    let require = |table| AnalysisManager::require(&context, root, table);
-    let read = |table| {
-        let view = require(table).unwrap();
-        let row = view.rows().next().unwrap();
-        (view.base_value::<i64>(row[1]), row.timestamp())
-    };
-    let count = read("Count");
-    assert_eq!(count.0, 2);
-    assert_eq!(read("Count"), count);
-    assert!(require("Conflict").is_err());
-    edit(|db, input| {
-        assert_eq!(db.row_count(db.table("Conflict").unwrap()), 0);
-        db.clear(input);
-    });
-    assert_eq!(read("Count").0, 0);
-    assert_eq!(require("Conflict").unwrap().rows().count(), 0);
-}
-
-#[test]
-fn cfg_scope_refreshes_for_the_requested_root_and_ir_edits() {
+fn cfg_scope_tracks_moved_operations_without_invalidating_unrelated_functions() {
     use std::collections::BTreeSet;
 
     let context = Context::with_default_dialects();
-    let parse =
-        |source| tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(&context, source).unwrap();
-    let module = parse(
+    let module = tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(
+        &context,
         r#"module {
-  %a = func.func @a(%0: !i32) -> !i32 { func.return %0 }
-  %b = func.func @b(%0: !i32) -> !i32 { func.return %0 }
+  %a = func.func @a(%0: !i32) -> !i32 {
+    %1 = constant {value = 7} : !i32
+    func.return %0
+  }
+  %b = func.func @b(%0: !i32) -> !i32 {
+    %1 = constant {value = 9} : !i32
+    func.return %0
+  }
   module_end
 }"#,
-    );
+    )
+    .unwrap();
     let functions: Vec<_> = module
         .body()
         .op_ids()
@@ -136,38 +81,84 @@ fn cfg_scope_refreshes_for_the_requested_root_and_ir_edits() {
     let [a, b] = functions.as_slice() else {
         panic!("expected two functions");
     };
-    let key = |id: tir::OpId| (i64::from(id.number()),);
-    let read = |function: &tir::func::FuncOp, modules: &[tir::OpId]| {
-        let root = function.id();
-        let ret = function.body().op_ids()[0];
-        let facts = cfg::scope(&context, root).unwrap();
-        assert_eq!(
-            facts.ops().collect::<Result<BTreeSet<_>, _>>().unwrap(),
-            BTreeSet::from([key(root), key(ret)])
-        );
-        assert_eq!(
-            facts.modules().collect::<Result<BTreeSet<_>, _>>().unwrap(),
-            modules.iter().copied().map(key).collect::<BTreeSet<_>>()
-        );
-        drop(facts);
-
-        let facts = AnalysisManager::require(&context, root, "ScopeOp").unwrap();
-        let root_row = facts
-            .rows()
-            .find(|row| facts.base_value::<i64>(row[0]) == key(root).0)
-            .unwrap();
-        root_row.timestamp()
+    let [moved, a_return] = a.body().op_ids()[..] else {
+        panic!("expected a spare constant and a return");
+    };
+    let [b_spare, b_return] = b.body().op_ids()[..] else {
+        panic!("expected a spare constant and a return");
+    };
+    let scope = |op| cfg::scope(&context, op).unwrap();
+    let before_a = scope(a.id());
+    let ops = |facts: &cfg::ScopeFacts, db: &tir_egglog::Database| {
+        facts
+            .ops(db)
+            .unwrap()
+            .collect::<Result<BTreeSet<_>, _>>()
+            .unwrap()
+    };
+    let keys = |ids: &[tir::OpId]| {
+        ids.iter()
+            .map(|id| (i64::from(id.number()),))
+            .collect::<BTreeSet<_>>()
     };
 
-    let modules = [module.id()];
-    let initial = read(a, &modules);
-    assert_eq!(read(a, &modules), initial);
-    read(b, &modules);
-    let refreshed = read(a, &modules);
-    assert_ne!(refreshed, initial);
+    assert!(b.body().remove_op(b_spare));
+    let before_b = scope(b.id());
+    let after_unrelated_edit = scope(a.id());
+    {
+        let engine = context.egraph();
+        let db = engine.database();
+        assert_eq!(
+            before_a.table_ops().id(db).unwrap(),
+            after_unrelated_edit.table_ops().id(db).unwrap()
+        );
+        assert_eq!(ops(&before_a, db), keys(&[a.id(), moved, a_return]));
+        assert_eq!(ops(&before_b, db), keys(&[b.id(), b_return]));
+        assert_eq!(before_a.modules(db).unwrap().count(), 0);
+    }
 
-    let added = parse("module { module_end }");
-    assert_ne!(read(a, &[module.id(), added.id()]), refreshed);
+    context.insert(
+        tir::InsertionPoint::Block {
+            block: b.body().id(),
+            position: 0,
+        },
+        moved,
+    );
+    let after_a = scope(a.id());
+    let after_b = scope(b.id());
+    {
+        let engine = context.egraph();
+        let db = engine.database();
+        assert_eq!(ops(&after_a, db), keys(&[a.id(), a_return]));
+        assert_eq!(ops(&after_b, db), keys(&[b.id(), moved, b_return]));
+        assert_eq!(ops(&before_a, db), keys(&[a.id(), moved, a_return]));
+        assert_eq!(ops(&before_b, db), keys(&[b.id(), b_return]));
+    }
+
+    let destination = a.body().id();
+    {
+        let mut engine = context.egraph();
+        let db = engine.database_mut();
+        let table = db.table("Operation").unwrap();
+        let id = db.base(i64::from(moved.number()));
+        let old: Vec<_> = db
+            .rows(table)
+            .find(|row| row[0] == id)
+            .unwrap()
+            .values()
+            .collect();
+        let mut new = old.clone();
+        new[3] = db.base(i64::from(destination.number()));
+        db.remove(table, &old);
+        db.insert(table, &new).unwrap();
+    }
+
+    let restored_a = scope(a.id());
+    let restored_b = scope(b.id());
+    let engine = context.egraph();
+    let db = engine.database();
+    assert_eq!(ops(&restored_a, db), keys(&[a.id(), moved, a_return]));
+    assert_eq!(ops(&restored_b, db), keys(&[b.id(), b_return]));
 }
 
 #[test]
@@ -224,7 +215,6 @@ fn cfg_analysis_identifies_loops_branches_and_memory_chains() {
 }"#,
     )
     .unwrap();
-    tir::analysis::cfg::ensure_installed(&context).unwrap();
     let funcs: Vec<_> = module
         .body()
         .op_ids()
@@ -234,38 +224,36 @@ fn cfg_analysis_identifies_loops_branches_and_memory_chains() {
     let [irr, gis, mem] = funcs.as_slice() else {
         panic!("expected three functions");
     };
-    let count_for = |root: tir::OpId, table: &str| -> usize {
-        let facts = AnalysisManager::require(&context, root, table).unwrap();
-        facts.rows().count()
+    let irr = cfg::scope(&context, irr.id()).unwrap();
+    let gis = cfg::scope(&context, gis.id()).unwrap();
+    let mem = cfg::scope(&context, mem.id()).unwrap();
+    let engine = context.egraph();
+    let db = engine.database();
+
+    // One two-block irreducible SCC with one exit and no tail-loop witness.
+    assert_eq!(irr.irred_loop(db).unwrap().count(), 1);
+    assert_eq!(irr.irred_scc(db).unwrap().count(), 2);
+    assert_eq!(irr.loop_exit(db).unwrap().count(), 1);
+    assert_eq!(irr.tail_loop(db).unwrap().count(), 0);
+
+    // The goto into the switch forms an unstructured topological hammock.
+    let hammocks = gis
+        .top_hammock(db)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let [(_, _, top_h)] = hammocks.as_slice() else {
+        panic!("expected one top-level hammock");
     };
+    let members = gis
+        .hammock_member(db)
+        .unwrap()
+        .filter(|row| row.as_ref().unwrap().2 == *top_h)
+        .count();
+    assert_eq!(members, 3);
 
-    // Irreducible loop: one 2-block irreducible SCC with 1 exit and no tail-loop witness.
-    assert_eq!(count_for(irr.id(), "IrredLoop"), 1);
-    assert_eq!(count_for(irr.id(), "IrredScc"), 2);
-    assert_eq!(count_for(irr.id(), "LoopExit"), 1);
-    assert_eq!(count_for(irr.id(), "TailLoop"), 0);
-
-    // Goto-into-switch: top-level branch is classified as an unstructured topological hammock.
-    let top_h = {
-        let facts = AnalysisManager::require(&context, gis.id(), "TopHammock").unwrap();
-        let rows: Vec<i64> = facts
-            .rows()
-            .map(|row| facts.base_value::<i64>(row[2]))
-            .collect();
-        assert_eq!(rows.len(), 1);
-        rows[0]
-    };
-    {
-        let facts = AnalysisManager::require(&context, gis.id(), "HammockMember").unwrap();
-        let members = facts
-            .rows()
-            .filter(|row| facts.base_value::<i64>(row[2]) == top_h)
-            .count();
-        assert_eq!(members, 3);
-    }
-
-    // Memory chains: two disjoint private allocas, both demanded across the SESE branch.
-    assert_eq!(count_for(mem.id(), "RegionChain"), 2);
-    assert_eq!(count_for(mem.id(), "SeseBranch"), 1);
-    assert_eq!(count_for(mem.id(), "BranchOutput"), 2);
+    // The SESE branch demands both independent private allocation chains.
+    assert_eq!(mem.region_chain(db).unwrap().count(), 2);
+    assert_eq!(mem.sese_branch(db).unwrap().count(), 1);
+    assert_eq!(mem.branch_output(db).unwrap().count(), 2);
 }

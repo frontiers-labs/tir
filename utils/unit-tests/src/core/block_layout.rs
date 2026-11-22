@@ -3,7 +3,7 @@ use tir::backend::{
     MachineBlockLayoutPass, MachineInstruction, RegAssignment, SectionOp, SymbolOp,
 };
 use tir::builtin::ModuleOp;
-use tir::{AnalysisManager, BlockId, Context, Operation, Pass};
+use tir::{BlockId, Context, Operation, Pass};
 
 struct Assembly {
     context: Context,
@@ -39,7 +39,7 @@ impl Assembly {
 
     fn layout(&self) {
         MachineBlockLayoutPass::new(self.format)
-            .run(self.symbol.id(), &self.context, &AnalysisManager::new())
+            .run(self.symbol.id(), &self.context)
             .unwrap();
     }
 

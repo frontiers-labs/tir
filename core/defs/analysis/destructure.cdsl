@@ -27,7 +27,7 @@ pub let UnsupportedGraphCapture: std::ir::OperationId -> Prop;
 pub let GraphFeedbackCapture: (std::ir::OperationId, Int, std::ir::OperationId, Bool) -> Prop;
 pub let UndemandedGraphEffect: std::ir::OperationId -> Prop;
 
-pub let recovery_scope = std::analysis::memo(|root: std::ir::OperationId| {
+let recovery_scope = |root: std::ir::OperationId| {
     let function_body<r, mode, entry>:
         (ir::Region(r, mode, root, 0, entry)) ->
         RecoveryRegion(r);
@@ -40,13 +40,10 @@ pub let recovery_scope = std::analysis::memo(|root: std::ir::OperationId| {
     let control<r, node, gamma, sel, theta, body, pred, polarity>:
         (RecoveryRegion(r), ir::ReaderAt(node, r, node), ir::Control(node, gamma, sel, theta, body, pred, polarity)) ->
         GraphControlOp(node);
-    {
-        schedule: std::schedule::saturate((function_body, nested, control,)),
-        outputs: { regions: RecoveryRegion, control_ops: GraphControlOp },
-    }
-});
+    std::schedule::saturate((function_body, nested, control,))
+};
 
-pub let dependency_paths = || {
+let dependency_paths = || {
     let member<r, node, kind, pos, display, loc>:
         (
             RecoveryRegion(r),
@@ -58,12 +55,12 @@ pub let dependency_paths = || {
     std::schedule::saturate((member, dependency,))
 };
 
-pub let dependency_depth = || {
+let dependency_depth = || {
     let longest<r, node, d>: GraphPathLength(r, node, d) -> GraphDepth(r, node, d);
     std::schedule::saturate((longest,))
 };
 
-pub let live_result_bindings = std::analysis::memo(|root: std::ir::OperationId| {
+let live_result_bindings = |root: std::ir::OperationId| {
     let function_yield<r, mode, entry, slot, val>:
         (
             ir::Region(r, mode, root, 0, entry),
@@ -127,25 +124,15 @@ pub let live_result_bindings = std::analysis::memo(|root: std::ir::OperationId| 
         ) -> GraphLiveYield(body, index, "exit");
     let yield_value<r, slot, part, val>:
         (GraphLiveYield(r, slot, part), ir::Yield(r, slot, val)) -> GraphNeededValue(val);
-    {
-        schedule: std::schedule::saturate((
-            function_yield, cfg_read, cfg_control, result, operands,
-            graph_control, selector, port, theta_init, strict_operand,
-            gamma_init, arm, predicate, feedback, exit,
-            yield_value,
-        )),
-        outputs: {
-            yields: GraphLiveYield,
-            strict_inputs: GraphStrictInput,
-            active_controls: GraphActiveControl,
-            needed_results: GraphNeededResult,
-            needed_ports: GraphNeededPort,
-            needed_values: GraphNeededValue,
-        },
-    }
-});
+    std::schedule::saturate((
+        function_yield, cfg_read, cfg_control, result, operands,
+        graph_control, selector, port, theta_init, strict_operand,
+        gamma_init, arm, predicate, feedback, exit,
+        yield_value,
+    ))
+};
 
-pub let graph_demand_producer = || {
+let graph_demand_producer = || {
     let yielded<r, slot, part, val, ty, producer, output, declared, d>:
         (
             GraphLiveYield(r, slot, part), ir::Yield(r, slot, val),
@@ -176,7 +163,7 @@ pub let graph_demand_producer = || {
 
 // Dependency edges also order computations whose evaluation is deferred
 // across a region boundary. Only the live read determines the first demand.
-pub let deferred_ops = || {
+let deferred_ops = || {
     let read<r, node, d, pos, display, loc>:
         (
             GraphDepth(r, node, d),
@@ -213,13 +200,13 @@ pub let deferred_ops = || {
     ))
 };
 
-pub let theta_bodies = || {
+let theta_bodies = || {
     let body<node, flag, sel, body, pred, polarity>:
         ir::Control(node, flag, sel, true, body, pred, polarity) -> ThetaBody(body);
     std::schedule::saturate((body,))
 };
 
-pub let deferred_reads = || {
+let deferred_reads = || {
     let read<home, producer, site, reader, operand, value, ty, slot, declared, part>:
         (
             GraphDemand(site, reader, part), part != "yield",
@@ -248,7 +235,7 @@ pub let deferred_reads = || {
     std::schedule::saturate((read, region_read, yielded, dependent,))
 };
 
-pub let capture_sites = || {
+let capture_sites = || {
     let captured<home, node, site, part>:
         (DeferredRead(home, node, site, part), home != site) -> CapturedGraphOp(home, node);
     let feedback<home, node, site, loop>:
@@ -267,7 +254,7 @@ pub let capture_sites = || {
     std::schedule::saturate((captured, feedback, local_yield, local_header, arm_input,))
 };
 
-pub let capture_legality = || {
+let capture_legality = || {
     let no_cut<home, node>:
         (CapturedGraphOp(home, node), !EagerGraphRead(home, node), !FeedbackCapture(home, node)) ->
         UnsupportedGraphCapture(node);
@@ -302,7 +289,7 @@ pub let capture_legality = || {
     ))
 };
 
-pub let feedback_captures = || {
+let feedback_captures = || {
     let delay<home, node, site, loop, rank>:
         (
             FeedbackOwner(home, node, site), ThetaGraph(home, site, loop),
@@ -317,11 +304,11 @@ pub let feedback_captures = || {
 };
 
 pub let DelayedGraphOp: std::ir::OperationId -> Prop;
-pub let delayed_ops = || {
+let delayed_ops = || {
     let delayed<loop, rank, node, replay>: GraphFeedbackCapture(loop, rank, node, replay) -> DelayedGraphOp(node);
     std::schedule::saturate((delayed,))
 };
-pub let execution_parts = || {
+let execution_parts = || {
     let yielded<r, node, d>:
         (GraphDepth(r, node, d), GraphDemand(r, node, "yield"), !DelayedGraphOp(node)) ->
         GraphExecution(r, "yield", d, node);
@@ -348,7 +335,7 @@ pub let execution_parts = || {
     ))
 };
 
-pub let local_state = || {
+let local_state = || {
     let result<r, part, d, member, node, v, ty, slot, declared>:
         (
             GraphExecution(r, part, d, member), ir::ReaderAt(node, r, member),
@@ -369,7 +356,7 @@ pub let local_state = || {
     std::schedule::saturate((result, nested_port, nested_block_arg,))
 };
 
-pub let live_in_state = || {
+let live_in_state = || {
     let read<r, part, d, member, reader, slot, v, ty, definition, owner, port, declared>:
         (
             GraphExecution(r, part, d, member), part != "head", part != "yield",
@@ -400,4 +387,34 @@ pub let live_in_state = || {
             !GraphLocalState(r, part, v)
         ) -> GraphLiveInState(r, part, v);
     std::schedule::saturate((read, forwarded, nested_yield, outgoing,))
+};
+
+pub let recover = memo |root: std::ir::OperationId| {
+    std::schedule::sequence((
+        analysis::cfg::state_types(),
+        recovery_scope(root),
+        dependency_paths(),
+        dependency_depth(),
+        live_result_bindings(root),
+        graph_demand_producer(),
+        deferred_ops(),
+        theta_bodies(),
+        deferred_reads(),
+        capture_sites(),
+        capture_legality(),
+        feedback_captures(),
+        delayed_ops(),
+        execution_parts(),
+        local_state(),
+        live_in_state(),
+    ))?;
+    {
+        GraphExecution: GraphExecution,
+        GraphFeedbackCapture: GraphFeedbackCapture,
+        GraphLiveInState: GraphLiveInState,
+        GraphNeededPort: GraphNeededPort,
+        GraphNeededResult: GraphNeededResult,
+        UndemandedGraphEffect: UndemandedGraphEffect,
+        UnsupportedGraphCapture: UnsupportedGraphCapture,
+    }
 };

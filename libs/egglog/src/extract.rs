@@ -234,19 +234,37 @@ impl<'g> TreeExtractor<'g, DefaultCost> {
     /// The best term of the e-class `value`.
     pub fn best(&self, value: Value) -> Result<(TermDag, TermId), Error> {
         let mut termdag = TermDag::default();
-        let class = self.db.find_in(self.color, value);
-        let missing = || Error::ExtractError(format!("no term for {value:?}"));
-        let (table, _) = self.parent.get(&class).ok_or_else(missing)?;
-        let sort = self
-            .db
-            .schema()
-            .table(*table)
-            .columns()
-            .last()
-            .copied()
-            .expect("an output");
-        let term = self.term(&mut termdag, class, sort, &mut Map::default());
+        let term = self
+            .best_term(&mut termdag, value, &mut Map::default())
+            .ok_or_else(|| Error::ExtractError(format!("no term for {value:?}")))?;
         Ok((termdag, term))
+    }
+
+    pub(crate) fn best_terms(
+        &self,
+        termdag: &mut TermDag,
+        values: impl IntoIterator<Item = Value>,
+    ) -> Map<Value, TermId> {
+        let mut cache = Map::default();
+        values
+            .into_iter()
+            .filter_map(|value| {
+                self.best_term(termdag, value, &mut cache)
+                    .map(|term| (value, term))
+            })
+            .collect()
+    }
+
+    fn best_term(
+        &self,
+        termdag: &mut TermDag,
+        value: Value,
+        cache: &mut Map<(Value, SortId), TermId>,
+    ) -> Option<TermId> {
+        let class = self.db.find_in(self.color, value);
+        let (table, _) = self.parent.get(&class)?;
+        let sort = self.db.schema().table(*table).columns().last().copied()?;
+        Some(self.term(termdag, class, sort, cache))
     }
 }
 

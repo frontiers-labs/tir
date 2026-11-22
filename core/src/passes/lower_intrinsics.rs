@@ -1,4 +1,4 @@
-use crate::{AnalysisManager, Context, OpId, Pass, PassError};
+use crate::{Context, OpId, Pass, PassError};
 
 #[derive(Clone, Default)]
 pub struct LowerIntrinsicsPass;
@@ -18,12 +18,7 @@ impl Pass for LowerIntrinsicsPass {
     fn name(&self) -> &'static str {
         "lower-intrinsics"
     }
-    fn run(
-        &mut self,
-        _op: OpId,
-        _context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, _op: OpId, _context: &Context) -> Result<(), PassError> {
         Ok(())
     }
 }
