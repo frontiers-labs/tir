@@ -1,11 +1,12 @@
 //! Import bindings and public exports refer to canonical declaration paths.
 use std::collections::BTreeMap;
 
-use super::{CompiledModule, Entry};
+use super::{CompiledModule, Entry, NameError, anchored_path};
 use crate::{ast::Declaration, error::Error, lexer::Span};
 
 type Path = Vec<String>;
 type Names = BTreeMap<String, Path>;
+pub(super) type Externs = BTreeMap<Path, Names>;
 
 pub(super) struct Imports {
     pub bindings: BTreeMap<Path, Names>,
@@ -28,6 +29,7 @@ enum State {
 
 struct Resolver<'a> {
     entries: &'a BTreeMap<Path, Entry>,
+    externs: &'a Externs,
     requests: BTreeMap<Path, Vec<Request>>,
     states: BTreeMap<Path, State>,
 }
@@ -37,20 +39,24 @@ impl Resolver<'_> {
         self.entries
             .iter()
             .filter(|(p, e)| {
-                p.len() == module.len() + 1 && p.starts_with(module) && (!public || e.public)
+                p.len() == module.len() + 1
+                    && p.starts_with(module)
+                    && (e.package == self.entries[module].package || e.package == "<embedded std>")
+                    && (!public || e.public)
             })
             .map(|(p, _)| (p.last().unwrap().clone(), p.clone()))
             .collect()
     }
 
-    fn module(&mut self, module: &[String]) -> Result<(), Error> {
+    fn module(&mut self, module: &[String]) -> Result<(), NameError> {
         match self.states.get(module) {
             Some(State::Ready { .. }) => return Ok(()),
             Some(State::Loading) => {
                 return Err(Error(format!(
                     "cyclic module imports involving {}",
                     module.join("::")
-                )));
+                ))
+                .into());
             }
             None => {}
         }
@@ -72,7 +78,8 @@ impl Resolver<'_> {
                             return Err(Error(format!(
                                 "import {} is not a module",
                                 request.path.join("::")
-                            )));
+                            ))
+                            .into());
                         }
                         self.module(&target)?;
                         self.exports(&target)
@@ -102,15 +109,24 @@ impl Resolver<'_> {
                     }
                     Ok(())
                 })();
-                result.map_err(|e: Error| Error(format!("{}: {}", request.location, e)))?;
+                result.map_err(|mut failure: NameError| {
+                    failure.error = Error(format!("{}: {}", request.location, failure.error));
+                    failure
+                })?;
             }
             if unresolved.len() == count {
                 let request = &unresolved[0];
-                return Err(Error(format!(
+                let error = Error(format!(
                     "{}: unresolved or private import {}",
                     request.location,
                     request.path.join("::")
-                )));
+                ));
+                let entry = &self.entries[module];
+                return Err(NameError::unresolved(
+                    error,
+                    &module[..entry.root_depth],
+                    unresolved.iter().map(|request| request.path[0].as_str()),
+                ));
             }
             pending = unresolved;
         }
@@ -142,21 +158,31 @@ impl Resolver<'_> {
         module: &[String],
         bindings: &Names,
         path: &[String],
-    ) -> Result<Option<Path>, Error> {
-        let mut candidates = Vec::new();
-        if let Some(bound) = bindings.get(&path[0]).filter(|_| path[0] != "std") {
-            candidates.push((bound.clone(), true));
-        }
-        let depths = if path[0] == "std" {
-            0..=0
+    ) -> Result<Option<Path>, NameError> {
+        let entry = &self.entries[module];
+        let package = &entry.package;
+        let root = &module[..entry.root_depth];
+        let (candidates, tail) = if let Some((root, tail)) =
+            anchored_path(path, module, entry.root_depth)
+        {
+            (vec![(root, true)], tail)
         } else {
-            0..=module.len()
+            let mut candidates = Vec::new();
+            if let Some(bound) = bindings.get(&path[0]) {
+                candidates.push((bound.clone(), true));
+            }
+            for depth in (entry.root_depth..=module.len()).rev() {
+                let mut first = module[..depth].to_vec();
+                first.push(path[0].clone());
+                candidates.push((first, false));
+            }
+            if package != "<embedded std>"
+                && let Some(target) = self.externs.get(root).and_then(|names| names.get(&path[0]))
+            {
+                candidates.push((target.clone(), true));
+            }
+            (candidates, &path[1..])
         };
-        for depth in depths.rev() {
-            let mut first = module[..depth].to_vec();
-            first.push(path[0].clone());
-            candidates.push((first, false));
-        }
         for (mut current, imported) in candidates {
             let package = &self.entries[module].package;
             if !imported
@@ -169,7 +195,7 @@ impl Resolver<'_> {
                 continue;
             }
             let mut valid = true;
-            for part in &path[1..] {
+            for part in tail {
                 let mut direct = current.clone();
                 direct.push(part.clone());
                 if let Some(entry) = self.entries.get(&direct)
@@ -212,7 +238,8 @@ fn bind(names: &mut Names, name: &str, target: &[String]) -> Result<(), Error> {
 pub(super) fn resolve(
     modules: &[CompiledModule],
     entries: &BTreeMap<Path, Entry>,
-) -> Result<Imports, Error> {
+    externs: &Externs,
+) -> Result<Imports, NameError> {
     let requests = modules
         .iter()
         .map(|m| {
@@ -249,6 +276,7 @@ pub(super) fn resolve(
         .collect();
     let mut resolver = Resolver {
         entries,
+        externs,
         requests,
         states: BTreeMap::new(),
     };

@@ -3,6 +3,8 @@
 
 use crate::{AnalysisManager, Context, OpId, PassError};
 
+pub use generated::{ScopeFacts, scope};
+
 #[allow(dead_code)]
 pub(super) mod generated {
     include!(concat!(env!("OUT_DIR"), "/cfg_analysis.rs"));
@@ -10,11 +12,8 @@ pub(super) mod generated {
 
 /// Ensure the CDSL CFG + Reissmann §5.1.2 analysis catalog is installed on `context`.
 pub fn ensure_installed(context: &Context) -> Result<(), PassError> {
-    if !context.analyses().is_installed() {
-        AnalysisManager::install_cfg(context)
-            .map_err(|error| PassError::InvalidRuleSet(error.to_string()))?;
-    }
-    Ok(())
+    AnalysisManager::ensure_generated(context, generated::load_producers)
+        .map_err(|error| PassError::InvalidRuleSet(error.to_string()))
 }
 
 /// Refresh all Reissmann §5.1.2 CFG, Control Tree, Demand, and Memory Chain tables for `root`.

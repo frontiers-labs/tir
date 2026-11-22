@@ -12,6 +12,6 @@ pub mod matching {
       pub let recognize<node, result: std::ir::ValueRef<std::El<std::Bits<32>>>>:
           dialects::builtin::constant.matches(node, (), (result,)) -> (Attribute("operation", std::ir::raw_operation_id(node), "probe", 1), Attribute("operation", std::ir::raw_operation_id(node), "probe", 2));
     }
-    pub let execute = std::schedule::saturate(rules);
-    pub let wide = std::schedule::saturate(wide_rules);
+    pub let execute = || { std::schedule::saturate(rules::recognize) };
+    pub let wide = || { std::schedule::saturate(wide_rules::recognize) };
 }

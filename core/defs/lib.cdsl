@@ -3,3 +3,4 @@ pub mod ir;
 pub mod eqsat;
 pub mod analysis;
 pub mod passes;
+mod interp;

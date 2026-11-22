@@ -1,44 +1,51 @@
-pub mod floating_point {
-    pub let capture_round_trip<node, capture, computation, x, kind, owner, slot, xdecl, result, ty, declared>:
+use std::list::List::Cons as cons;
+use std::list::List::Nil as nil;
+
+pub let floating_point: std::List<Prop> = {
+    let capture_round_trip<node, capture, computation, x, kind, owner, slot, xdecl, result, ty, declared>:
         (EqSatLive(node), dialects::fp::materialize.matches(node, (computation,), (result,)),
          dialects::fp::capture.matches(capture, (x,), (computation,)),
          ir::Value(x, ty, kind, owner, slot, xdecl),
          ir::result(result, ty, node, 0, declared),
          !EqSatHasAttr(node, "semantics"))
         -> (EqSatReplace(node, result, x), EqSatErase(node));
-}
+    cons(capture_round_trip, nil)
+};
 
 // Computation type identity includes format, rounding and contraction.
 pub let EqSatFpBinary<T: Type>: std::ir::OperationKindOf<(std::ir::ValueRef<T>, std::ir::ValueRef<T>), (std::ir::ValueRef<T>,)> -> Prop;
 pub let EqSatFpUnary<I: Type, O: Type>: std::ir::OperationKindOf<(std::ir::ValueRef<I>,), (std::ir::ValueRef<O>,)> -> Prop;
 pub let EqSatFpKey: (std::ir::OperationId, std::ir::OperationKind, std::ir::ValueId, Int, std::ir::ValueId, std::ir::ValueId) -> Prop;
-pub mod fp_keys {
-    pub let capture: EqSatFpUnary(dialects::fp::capture.typed_kind);
-    pub let materialize: EqSatFpUnary(dialects::fp::materialize.typed_kind);
-    pub let add: EqSatFpBinary(dialects::fp::add.typed_kind);
-    pub let sub: EqSatFpBinary(dialects::fp::sub.typed_kind);
-    pub let mul: EqSatFpBinary(dialects::fp::mul.typed_kind);
-    pub let div: EqSatFpBinary(dialects::fp::div.typed_kind);
-    pub let unary<node,k,x,result,ty,decl>:
+pub let fp_keys: std::List<Prop> = {
+    let capture: EqSatFpUnary(dialects::fp::capture.typed_kind);
+    let materialize: EqSatFpUnary(dialects::fp::materialize.typed_kind);
+    let add: EqSatFpBinary(dialects::fp::add.typed_kind);
+    let sub: EqSatFpBinary(dialects::fp::sub.typed_kind);
+    let mul: EqSatFpBinary(dialects::fp::mul.typed_kind);
+    let div: EqSatFpBinary(dialects::fp::div.typed_kind);
+    let unary<node,k,x,result,ty,decl>:
         (EqSatLive(node), EqSatFpUnary(k), std::ir::match_kind(k, node, (x,), (result,)),
          ir::result(result, ty, node,0,decl), !EqSatHasAttr(node,"semantics"),
          !EqSatOperandSlot(node,1), !EqSatExtraResult(node))
         -> EqSatFpKey(node,std::ir::operation_kind(k),result,ty,x,x);
-    pub let binary<node,k,x,y,result,ty,decl>:
+    let binary<node,k,x,y,result,ty,decl>:
         (EqSatLive(node), EqSatFpBinary(k), std::ir::match_kind(k, node, (x, y), (result,)),
          ir::result(result, ty, node,0,decl),
          !EqSatHasAttr(node,"semantics"), !EqSatOperandSlot(node,2), !EqSatExtraResult(node))
         -> EqSatFpKey(node,std::ir::operation_kind(k),result,ty,x,y);
-}
-pub mod fp_congruence {
-    pub let ordered<a,b,k,x,y,ty,lhs,rhs,block,p,q,ad,bd,al,bl>:
+    cons(capture, cons(materialize, cons(add, cons(sub, cons(mul, cons(div, cons(unary,
+        cons(binary, nil))))))))
+};
+pub let fp_congruence: std::List<Prop> = {
+    let ordered<a,b,k,x,y,ty,lhs,rhs,block,p,q,ad,bd,al,bl>:
         (EqSatFpKey(a,k,x,ty,lhs,rhs), EqSatFpKey(b,k,y,ty,lhs,rhs),
          ir::Operation{ id: a, kind: k, placement: "block", container: block, position: p, display: ad, location: al }(), ir::Operation{ id: b, kind: k, placement: "block", container: block, position: q, display: bd, location: bl }(),
          std::int::less(p,q) == true)
         -> (EqSatReplace(b, y, x), EqSatErase(b));
-    pub let graph<a,b,k,x,y,ty,lhs,rhs,region,p,q,ad,bd,al,bl>:
+    let graph<a,b,k,x,y,ty,lhs,rhs,region,p,q,ad,bd,al,bl>:
         (EqSatFpKey(a,k,x,ty,lhs,rhs), EqSatFpKey(b,k,y,ty,lhs,rhs),
          ir::Operation{ id: a, kind: k, placement: "graph", container: region, position: p, display: ad, location: al }(), ir::Operation{ id: b, kind: k, placement: "graph", container: region, position: q, display: bd, location: bl }(),
          std::ir::operation_ids::less(a,b) == true)
         -> (EqSatReplace(b, y, x), EqSatErase(b));
-}
+    cons(ordered, cons(graph, nil))
+};

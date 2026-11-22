@@ -1,6 +1,7 @@
 //! Executable lowering against an explicitly shared engine schema.
 mod operation;
 mod program;
+mod rewrite;
 
 use program::{Dependencies, Selection};
 
@@ -10,7 +11,10 @@ use tir_egglog::{Database, EGraph, Merge, Rules, Schedule, SortId, SortKind, Tab
 
 use crate::{
     CheckedProgram, Error,
-    ast::{BinaryOp, Binding, Declaration, Expr, Expression, Literal, Path, RuleBinder, UnaryOp},
+    ast::{
+        BinaryOp, Binding, Block, Declaration, Expr, Expression, Function, Literal, Path,
+        RuleBinder, UnaryOp,
+    },
     kind::OperationImport,
     lower::{CheckedMatch, PortIndex, PortType},
 };
@@ -169,11 +173,8 @@ impl Schema {
         let mut schema = Self::from_engine(engine);
         schema.producers_only = true;
         schema.install(&dependencies, false)?;
-        let (program, producers) = schema
-            .lower_dependencies(&checked, &dependencies)?
-            .rules
-            .compile_producers(schema.database())
-            .map_err(error)?;
+        let lowered = schema.lower_dependencies(&checked, &dependencies)?;
+        let (program, producers) = lowered.compile_producers(schema.database(), &selected)?;
         Ok((schema.engine, program, producers))
     }
 
@@ -569,14 +570,14 @@ impl Schema {
     ) -> Result<LoweredProgram, Error> {
         let operations = dependencies.operation_imports(program);
         let mut rules = Rules::new();
-        let mut modules = BTreeMap::new();
+        let mut members = BTreeMap::new();
         let mut definitions = BTreeMap::new();
         for full in &dependencies.ordered {
             let module = &full[..full.len() - 1];
             if module.first().is_some_and(|name| name == "std") {
                 continue;
             }
-            let ruleset = path_name(module);
+            let ruleset = path_name(full);
             let declaration = dependencies.declarations[full];
             if let Declaration::Let { binding, .. } = declaration {
                 if dependencies.operations.contains_key(full) {
@@ -586,7 +587,7 @@ impl Schema {
                     let names = ["flags", "fold"].map(|name| {
                         let path = [full.as_slice(), &[name.to_owned()]].concat();
                         let name = path_name(&path);
-                        modules.insert(path, name.clone());
+                        members.insert(path, name.clone());
                         name
                     });
                     self.add_integer_operations(
@@ -620,60 +621,160 @@ impl Schema {
                 continue;
             }
             rules.add_ruleset(&ruleset);
-            modules.insert(module.to_vec(), ruleset.clone());
-            let (premise, head) = arrow(ty).map_or((None, ty), |(a, b)| (Some(a), b));
-            let lowering = RuleLowering {
+            members.insert(full.clone(), ruleset.clone());
+            RuleLowering {
                 schema: self,
                 operations: &operations,
                 declarations: &dependencies.declarations,
                 binders: generics,
                 operation_matches: program.operation_matches.get(full),
-            };
-            let mut facts = Vec::new();
-            if let Some(premise) = premise {
-                let expanded = propositions(premise)
-                    .into_iter()
-                    .map(|expr| lowering.predicate_row(expr))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let clauses = expanded
-                    .iter()
-                    .map(|expr| expr.as_ref())
-                    .collect::<Vec<_>>();
-                lowering
-                    .validate_inputs(&clauses)
-                    .map_err(|error| Error(format!("{ruleset}::{name}: {error}")))?;
-                for expr in clauses {
-                    lowering
-                        .fact(expr, &mut facts)
-                        .map_err(|error| Error(format!("{ruleset}::{name}: {error}")))?;
-                }
+                captures: &BTreeMap::new(),
             }
-            let actions = propositions(head)
-                .iter()
-                .map(|expr| lowering.action(expr))
-                .collect::<Result<Vec<_>, _>>()?;
-            rules
-                .rule(
-                    self.database(),
-                    &ruleset,
-                    ast::Facts(facts),
-                    ast::GenericActions(actions),
-                )
-                .map_err(error)?;
+            .install(&mut rules, &ruleset, ty, None)
+            .map_err(|error| Error(format!("{ruleset}::{name}: {error}")))?;
         }
         let mut schedules = BTreeMap::new();
+        let mut memos = BTreeMap::new();
+        let mut collections = BTreeMap::new();
+        let values = dependencies
+            .declarations
+            .iter()
+            .filter_map(|(path, declaration)| {
+                let Declaration::Let { binding, .. } = declaration else {
+                    return None;
+                };
+                (!rewrite::carries_clause(&binding.value)).then_some((path.clone(), binding))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let constructors = dependencies
+            .declarations
+            .iter()
+            .flat_map(|(path, declaration)| {
+                let mut names = Vec::new();
+                if let Declaration::Enum { variants, .. } = declaration {
+                    names.extend(variants.iter().map(|variant| {
+                        [path.as_slice(), std::slice::from_ref(&variant.name)].concat()
+                    }));
+                }
+                names
+            })
+            .collect::<BTreeSet<_>>();
+        let schedule_type = program
+            .type_families
+            .get(["std".into(), "schedule".into(), "Schedule".into()].as_slice())
+            .copied();
+        let collection_type = program
+            .type_families
+            .get(["std".into(), "rewrite".into(), "Collection".into()].as_slice())
+            .copied();
+        let enum_types = dependencies
+            .declarations
+            .iter()
+            .filter(|(_, declaration)| matches!(declaration, Declaration::Enum { .. }))
+            .filter_map(|(path, _)| program.type_families.get(path).copied())
+            .collect::<Vec<_>>();
+        let mut lowering = ScheduleLowering {
+            schema: self,
+            program,
+            dependencies,
+            operations: &operations,
+            definitions: &definitions,
+            members: &members,
+            constructors: &constructors,
+            active: BTreeSet::new(),
+            global: BTreeMap::new(),
+            bundles: BTreeMap::new(),
+            rules: &mut rules,
+        };
         for (path, expression) in &definitions {
-            let schedule = self.schedule(
-                expression,
-                &path_name(path),
-                &modules,
-                &definitions,
-                &mut BTreeSet::from([path.clone()]),
-                &mut rules,
-            )?;
+            let crate::hm::Ty::Fun(_, result) = &program.types()[path].ty else {
+                continue;
+            };
+            let is_schedule = matches!(&**result, crate::hm::Ty::Con(family, _) if schedule_type.as_ref() == Some(family));
+            let name = path_name(path);
+            if let Expression::Function(function) = &expression.value
+                && matches!(&**result, crate::hm::Ty::Con(family, _) if collection_type.as_ref() == Some(family))
+            {
+                if !function.parameters.is_empty() || !function.generics.is_empty() {
+                    return Err(Error(format!(
+                        "rule collection {name} requires a nullary function"
+                    )));
+                }
+                let body = Expr {
+                    value: Expression::Block(function.body.clone()),
+                    range: expression.range.clone(),
+                };
+                let value = crate::normalize::head(&body, &values, &constructors)?;
+                let (value, policy) = rewrite::collection_arguments(&value)?;
+                let policy = rewrite::Policy::resolve(self, policy, &values, &constructors)?;
+                let mut members = Vec::new();
+                let mut visit = |owner: &Path,
+                                 binders: &[RuleBinder],
+                                 clause: &Expr|
+                 -> Result<(), Error> {
+                    let label = format!("@cdsl::{name}::collection::{}", members.len());
+                    RuleLowering {
+                        schema: self,
+                        operations: &operations,
+                        declarations: &dependencies.declarations,
+                        binders,
+                        operation_matches: program.operation_matches.get(owner),
+                        captures: &BTreeMap::new(),
+                    }
+                    .install(lowering.rules, &label, clause, Some(&policy))?;
+                    members.push(label);
+                    Ok(())
+                };
+                rewrite::visit_rules(value, path, &definitions, &constructors, &mut visit)?;
+                lowering
+                    .rules
+                    .add_combined_ruleset(&name, &members)
+                    .map_err(error)?;
+                collections.insert(path.clone(), name);
+                continue;
+            }
+            if !is_schedule
+                && matches!(&**result, crate::hm::Ty::Con(family, _) if enum_types.contains(family))
+            {
+                continue;
+            }
+            lowering.active.insert(path.clone());
+            let schedule = if let Some((function, outputs)) = memo_definition(expression)? {
+                memos.insert(path.clone(), outputs);
+                lowering.function(
+                    &function,
+                    vec![tir_egglog::prelude::exprs::arg(0)],
+                    &name,
+                    path,
+                )?
+            } else {
+                let Expression::Function(function) = &expression.value else {
+                    return Err(Error(format!("unsupported executable definition {name}")));
+                };
+                if !is_schedule {
+                    return Err(Error(format!("unsupported executable definition {name}")));
+                }
+                let args = function
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        Ok(tir_egglog::prelude::exprs::arg(
+                            u32::try_from(index).map_err(error)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                lowering.call_schedule(function, args, &name, path)?
+            };
+            lowering.active.remove(path);
             schedules.insert(path.clone(), schedule);
         }
-        Ok(LoweredProgram { rules, schedules })
+        Ok(LoweredProgram {
+            rules,
+            schedules,
+            memos,
+            collections,
+        })
     }
 
     fn check_axiom(&self, path: &[String], ty: &Expr) -> Result<(), Error> {
@@ -704,30 +805,76 @@ impl Schema {
             path_name(path)
         )))
     }
+}
 
+struct ScheduleScope<'a> {
+    owner: &'a Path,
+    captures: BTreeMap<Path, ast::Expr>,
+    rules: BTreeMap<Path, Vec<String>>,
+}
+
+struct ScheduleLowering<'a, 'program> {
+    schema: &'a Schema,
+    program: &'program CheckedProgram,
+    dependencies: &'a Dependencies<'program>,
+    operations: &'a BTreeMap<Path, OperationImport>,
+    definitions: &'a BTreeMap<Path, Expr>,
+    members: &'a BTreeMap<Path, String>,
+    constructors: &'a BTreeSet<Path>,
+    active: BTreeSet<Path>,
+    global: BTreeMap<Path, Schedule>,
+    bundles: BTreeMap<Path, Vec<String>>,
+    rules: &'a mut Rules,
+}
+
+impl ScheduleLowering<'_, '_> {
     fn bundle(
-        &self,
+        &mut self,
         expression: &Expr,
-        modules: &BTreeMap<Path, String>,
+        scope: &ScheduleScope<'_>,
     ) -> Result<Vec<String>, Error> {
         match &expression.value {
             Expression::Path(path) => {
-                let names = modules
-                    .iter()
-                    .filter(|(module, _)| module.starts_with(path))
-                    .map(|(_, name)| name.clone())
-                    .collect::<Vec<_>>();
-                if names.is_empty() {
-                    return Err(Error(format!(
-                        "{} is not a selected executable rule module",
-                        self.name(path)
-                    )));
+                if let Some(names) = scope.rules.get(path) {
+                    return Ok(names.clone());
                 }
+                if let Some(name) = self.members.get(path) {
+                    return Ok(vec![name.clone()]);
+                }
+                if let Some(names) = self.bundles.get(path) {
+                    return Ok(names.clone());
+                }
+                if self.constructors.contains(path) {
+                    return Ok(Vec::new());
+                }
+                let definition = self.definitions.get(path).ok_or_else(|| {
+                    Error(format!(
+                        "{} is not an executable rule value",
+                        path_name(path)
+                    ))
+                })?;
+                if !self.active.insert(path.clone()) {
+                    return Err(Error("cyclic executable rule bundle".into()));
+                }
+                let global = ScheduleScope {
+                    owner: path,
+                    captures: BTreeMap::new(),
+                    rules: BTreeMap::new(),
+                };
+                let result = if let Expression::Block(block) = &definition.value {
+                    self.bind_rules(block, &path_name(path), global)
+                        .and_then(|scope| self.bundle(&block.value, &scope))
+                } else {
+                    self.bundle(definition, &global)
+                };
+                self.active.remove(path);
+                let names = result?;
+                self.bundles.insert(path.clone(), names.clone());
                 Ok(names)
             }
             Expression::Member { value, name } => {
                 let target = [path(value)?.as_slice(), std::slice::from_ref(name)].concat();
-                modules
+                self.members
                     .get(&target)
                     .cloned()
                     .map(|name| vec![name])
@@ -738,56 +885,185 @@ impl Schema {
                         ))
                     })
             }
-            Expression::Tuple(items) => items
-                .iter()
-                .map(|item| self.bundle(item, modules))
-                .collect::<Result<Vec<_>, _>>()
-                .map(|parts| parts.into_iter().flatten().collect()),
+            Expression::Call { value, arguments } if self.is_constructor(value) => {
+                self.bundle_items(arguments, scope)
+            }
+            Expression::Generic { .. } if self.is_constructor(expression) => Ok(Vec::new()),
+            Expression::Tuple(items) => self.bundle_items(items, scope),
+            Expression::Unit => Ok(Vec::new()),
             _ => Err(Error(
-                "executable rule bundles require modules or tuples of modules".into(),
+                "expected an executable rule value or tuple of rules".into(),
             )),
         }
     }
 
+    fn is_constructor(&self, expression: &Expr) -> bool {
+        let value = match &expression.value {
+            Expression::Generic { value, .. } => value,
+            _ => expression,
+        };
+        path(value).is_ok_and(|path| self.constructors.contains(path))
+    }
+
+    fn bundle_items(
+        &mut self,
+        items: &[Expr],
+        scope: &ScheduleScope<'_>,
+    ) -> Result<Vec<String>, Error> {
+        let mut names = Vec::new();
+        for item in items {
+            names.extend(self.bundle(item, scope)?);
+        }
+        Ok(names)
+    }
+
+    fn call_schedule(
+        &mut self,
+        function: &Function,
+        args: Vec<ast::Expr>,
+        name: &str,
+        owner: &Path,
+    ) -> Result<Schedule, Error> {
+        if !function.parameters.is_empty() {
+            return self.function(function, args, name, owner);
+        }
+        if let Some(schedule) = self.global.get(owner) {
+            return Ok(schedule.clone());
+        }
+        let schedule = self.function(function, args, &path_name(owner), owner)?;
+        self.global.insert(owner.clone(), schedule.clone());
+        Ok(schedule)
+    }
+
+    fn function(
+        &mut self,
+        function: &Function,
+        args: Vec<ast::Expr>,
+        name: &str,
+        owner: &Path,
+    ) -> Result<Schedule, Error> {
+        if function.parameters.len() != args.len() || !function.generics.is_empty() {
+            return Err(Error(format!(
+                "unsupported executable function signature for {name}"
+            )));
+        }
+        let captures = function
+            .parameters
+            .iter()
+            .zip(args)
+            .map(|(parameter, value)| (vec![parameter.name.clone()], value))
+            .collect();
+        self.block(
+            &function.body,
+            name,
+            ScheduleScope {
+                owner,
+                captures,
+                rules: BTreeMap::new(),
+            },
+        )
+    }
+
+    fn block(
+        &mut self,
+        block: &Block,
+        name: &str,
+        scope: ScheduleScope<'_>,
+    ) -> Result<Schedule, Error> {
+        let scope = self.bind_rules(block, name, scope)?;
+        self.schedule(&block.value, name, &scope)
+    }
+
+    fn bind_rules<'a>(
+        &mut self,
+        block: &Block,
+        name: &str,
+        mut scope: ScheduleScope<'a>,
+    ) -> Result<ScheduleScope<'a>, Error> {
+        for (index, binding) in block.bindings.iter().enumerate() {
+            let names = if let Expression::Rule { binders, clause } = &binding.value.value {
+                let label = format!("@cdsl::{name}::rule::{index}");
+                RuleLowering {
+                    schema: self.schema,
+                    operations: self.operations,
+                    declarations: &self.dependencies.declarations,
+                    binders,
+                    operation_matches: self.program.operation_matches.get(scope.owner),
+                    captures: &scope.captures,
+                }
+                .install(self.rules, &label, clause, None)?;
+                vec![label]
+            } else {
+                self.bundle(&binding.value, &scope)?
+            };
+            scope.rules.insert(binding.path.clone(), names);
+        }
+        Ok(scope)
+    }
+
     fn schedule(
-        &self,
+        &mut self,
         expression: &Expr,
         name: &str,
-        modules: &BTreeMap<Path, String>,
-        definitions: &BTreeMap<Path, Expr>,
-        active: &mut BTreeSet<Path>,
-        rules: &mut Rules,
+        scope: &ScheduleScope<'_>,
     ) -> Result<Schedule, Error> {
         if let Expression::Path(path) = &expression.value {
-            if !active.insert(path.clone()) {
+            if let Some(schedule) = self.global.get(path) {
+                return Ok(schedule.clone());
+            }
+            if !self.active.insert(path.clone()) {
                 return Err(Error("cyclic executable schedule".into()));
             }
-            let expression = definitions.get(path).ok_or_else(|| {
-                Error(format!("{} is not a schedule definition", self.name(path)))
+            let expression = self.definitions.get(path).ok_or_else(|| {
+                Error(format!("{} is not a schedule definition", path_name(path)))
             })?;
-            let result = self.schedule(expression, name, modules, definitions, active, rules);
-            active.remove(path);
-            return result;
+            let global = ScheduleScope {
+                owner: path,
+                captures: BTreeMap::new(),
+                rules: BTreeMap::new(),
+            };
+            let result = self.schedule(expression, &path_name(path), &global);
+            self.active.remove(path);
+            let result = result?;
+            self.global.insert(path.clone(), result.clone());
+            return Ok(result);
+        }
+        if let Expression::Block(block) = &expression.value {
+            return self.block(
+                block,
+                name,
+                ScheduleScope {
+                    owner: scope.owner,
+                    captures: scope.captures.clone(),
+                    rules: scope.rules.clone(),
+                },
+            );
         }
         let Expression::Call { value, arguments } = &expression.value else {
             return Err(Error(format!("unsupported executable definition {name}")));
         };
-        let callee = path(value)?.iter().map(String::as_str).collect::<Vec<_>>();
+        let path = path(value)?;
+        let callee = path.iter().map(String::as_str).collect::<Vec<_>>();
         match (callee.as_slice(), arguments.as_slice()) {
             (["std", "schedule", "Schedule", "Rules"], [bundle])
             | (["std", "schedule", "Schedule", "Repeat"], [_, bundle])
             | (["std", "schedule", "Schedule", "Saturate"], [bundle])
             | (["std", "schedule", "saturate"], [bundle])
             | (["std", "schedule", "repeat_colored"], [_, bundle]) => {
-                let mut members = self.bundle(bundle, modules)?;
-                members.sort();
-                members.dedup();
+                let mut seen = BTreeSet::new();
+                let members = self
+                    .bundle(bundle, scope)?
+                    .into_iter()
+                    .filter(|member| seen.insert(member.clone()))
+                    .collect::<Vec<_>>();
                 if callee.last() == Some(&"repeat_colored") {
                     for member in &members {
-                        rules.set_colored(member);
+                        self.rules.set_colored(member);
                     }
                 }
-                rules.add_combined_ruleset(name, &members).map_err(error)?;
+                self.rules
+                    .add_combined_ruleset(name, &members)
+                    .map_err(error)?;
                 let run = Schedule::run(name);
                 match callee.last() {
                     Some(&"Rules") => Ok(run),
@@ -804,46 +1080,104 @@ impl Schema {
                     _ => Ok(Schedule::saturate(run)),
                 }
             }
-            (["std", "schedule", "sequence"], [items]) => {
-                let children = parts(items)
+            (["std", "schedule", "sequence"], [items]) => self.sequence(parts(items), name, scope),
+            (
+                ["std", "schedule", "seq"] | ["std", "schedule", "Schedule", "Sequence"],
+                [first, second],
+            ) => self.sequence([first, second], name, scope),
+            _ => {
+                let Some(Expr {
+                    value: Expression::Function(function),
+                    ..
+                }) = self.definitions.get(path)
+                else {
+                    return Err(Error(format!("unsupported executable schedule {name}")));
+                };
+                if !self.active.insert(path.clone()) {
+                    return Err(Error("cyclic executable schedule function".into()));
+                }
+                let lowering = RuleLowering {
+                    schema: self.schema,
+                    operations: self.operations,
+                    declarations: &self.dependencies.declarations,
+                    binders: &[],
+                    operation_matches: None,
+                    captures: &scope.captures,
+                };
+                let args = arguments
                     .iter()
-                    .enumerate()
-                    .map(|(index, item)| {
-                        self.schedule(
-                            item,
-                            &format!("@cdsl::{name}::{index}"),
-                            modules,
-                            definitions,
-                            active,
-                            rules,
-                        )
-                    })
+                    .map(|argument| lowering.term(argument))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Schedule::seq(children))
+                let result = self.call_schedule(function, args, name, path);
+                self.active.remove(path);
+                result
             }
-            (["std", "schedule", "seq"], [first, second])
-            | (["std", "schedule", "Schedule", "Sequence"], [first, second]) => {
-                let first = self.schedule(
-                    first,
-                    &format!("@cdsl::{name}::0"),
-                    modules,
-                    definitions,
-                    active,
-                    rules,
-                )?;
-                let second = self.schedule(
-                    second,
-                    &format!("@cdsl::{name}::1"),
-                    modules,
-                    definitions,
-                    active,
-                    rules,
-                )?;
-                Ok(Schedule::seq([first, second]))
-            }
-            _ => Err(Error(format!("unsupported executable schedule {name}"))),
         }
     }
+
+    fn sequence<'a>(
+        &mut self,
+        items: impl IntoIterator<Item = &'a Expr>,
+        name: &str,
+        scope: &ScheduleScope<'_>,
+    ) -> Result<Schedule, Error> {
+        let children = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| self.schedule(item, &format!("@cdsl::{name}::{index}"), scope))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Schedule::seq(children))
+    }
+}
+
+type MemoOutputs = Vec<(String, Path)>;
+
+fn memo_definition(expression: &Expr) -> Result<Option<(Function, MemoOutputs)>, Error> {
+    let Expression::Call { value, arguments } = &expression.value else {
+        return Ok(None);
+    };
+    if !matches!(&value.value, Expression::Path(path) if path == &["std", "analysis", "memo"]) {
+        return Ok(None);
+    }
+    let [
+        Expr {
+            value: Expression::Function(function),
+            ..
+        },
+    ] = arguments.as_slice()
+    else {
+        return Err(Error("memo requires a producer function".into()));
+    };
+    let Expression::Record(fields) = &function.body.value.value else {
+        return Err(Error(
+            "memo must return a schedule and named outputs".into(),
+        ));
+    };
+    let [(_, schedule), (_, outputs)] = fields.as_slice() else {
+        return Err(Error(
+            "memo must return a schedule and named outputs".into(),
+        ));
+    };
+    let (schedule, outputs) = if fields[0].0 == "schedule" {
+        (schedule, outputs)
+    } else {
+        (outputs, schedule)
+    };
+    let Expression::Record(outputs) = &outputs.value else {
+        return Err(Error("memo requires a record of output relations".into()));
+    };
+    if outputs.is_empty() {
+        return Err(Error(
+            "memo requires at least one named output relation".into(),
+        ));
+    }
+    let outputs = outputs
+        .iter()
+        .map(|(name, relation)| Ok((name.clone(), path(relation)?.clone())))
+        .collect::<Result<Vec<_>, Error>>()?;
+    let mut function = (**function).clone();
+    function.body.value = Box::new(schedule.clone());
+    Ok(Some((function, outputs)))
 }
 
 struct RuleLowering<'a> {
@@ -851,6 +1185,7 @@ struct RuleLowering<'a> {
     operations: &'a BTreeMap<Path, OperationImport>,
     declarations: &'a BTreeMap<Path, &'a Declaration>,
     binders: &'a [RuleBinder],
+    captures: &'a BTreeMap<Path, ast::Expr>,
     operation_matches: Option<&'a BTreeMap<usize, CheckedMatch>>,
 }
 
@@ -1179,11 +1514,71 @@ impl RuleLowering<'_> {
         Ok(())
     }
 
+    fn install(
+        &self,
+        rules: &mut Rules,
+        name: &str,
+        clause: &Expr,
+        policy: Option<&rewrite::Policy>,
+    ) -> Result<(), Error> {
+        let (premise, head) = arrow(clause).map_or((None, clause), |(a, b)| (Some(a), b));
+        if let Some(premise) = premise
+            && let Some((pattern, guards)) = propositions(premise).split_first()
+            && rewrite::native_operation(self, pattern).is_some()
+        {
+            let policy = policy.ok_or_else(|| {
+                Error("an operation rewrite requires a policy from std::rewrite::collect".into())
+            })?;
+            let (premises, actions) = rewrite::lower(self, policy, pattern, guards, head)?;
+            return premises.into_iter().try_for_each(|facts| {
+                rules
+                    .rule(self.schema.database(), name, facts, actions.clone())
+                    .map_err(error)
+            });
+        }
+        let mut facts = Vec::new();
+        if let Some(premise) = premise {
+            let expanded = propositions(premise)
+                .into_iter()
+                .map(|expr| self.predicate_row(expr))
+                .collect::<Result<Vec<_>, _>>()?;
+            let clauses = expanded
+                .iter()
+                .map(|expr| expr.as_ref())
+                .collect::<Vec<_>>();
+            self.validate_inputs(&clauses)?;
+            for expr in clauses {
+                self.fact(expr, &mut facts)?;
+            }
+        }
+        let actions = propositions(head)
+            .iter()
+            .map(|expr| self.action(expr))
+            .collect::<Result<Vec<_>, _>>()?;
+        rules
+            .rule(
+                self.schema.database(),
+                name,
+                ast::Facts(facts),
+                ast::GenericActions(actions),
+            )
+            .map_err(error)
+    }
+
     fn term(&self, expr: &Expr) -> Result<ast::Expr, Error> {
         let span = tir_egglog::span!();
         Ok(match &expr.value {
             Expression::Path(path) if self.schema.constructors.contains(path) => {
                 ast::Expr::Call(span, self.schema.name(path), vec![])
+            }
+            Expression::Path(path)
+                if !self
+                    .binders
+                    .iter()
+                    .any(|binder| path == &[binder.name.as_str()])
+                    && self.captures.contains_key(path) =>
+            {
+                self.captures[path].clone()
             }
             Expression::Path(path) => ast::Expr::Var(span, path_name(path)),
             Expression::Member { value, name }
@@ -1470,12 +1865,54 @@ impl RuleLowering<'_> {
 pub struct LoweredProgram {
     rules: Rules,
     schedules: BTreeMap<Path, Schedule>,
+    memos: BTreeMap<Path, MemoOutputs>,
+    collections: BTreeMap<Path, String>,
 }
 impl LoweredProgram {
     /// Checked source schedules, with references bound to this program's rulesets.
     pub fn schedules(&self) -> &BTreeMap<Path, Schedule> {
         &self.schedules
     }
+    fn compile_producers(
+        &self,
+        database: &Database,
+        selected: &[String],
+    ) -> Result<(tir_egglog::Program, Vec<tir_egglog::Producer>), Error> {
+        let schedules = self
+            .schedules
+            .iter()
+            .filter(|(path, _)| path.starts_with(selected))
+            .collect::<Vec<_>>();
+        let (program, producers) = self
+            .rules
+            .compile_producers(
+                database,
+                schedules.iter().map(|(_, schedule)| (*schedule).clone()),
+            )
+            .map_err(error)?;
+        for ((path, _), producer) in schedules.into_iter().zip(&producers) {
+            if let Some(outputs) = self.memos.get(path) {
+                for (_, output) in outputs {
+                    let table = database
+                        .table(
+                            output
+                                .last()
+                                .ok_or_else(|| Error("missing output name".into()))?,
+                        )
+                        .map_err(error)?;
+                    if !producer.writes.contains(&table) {
+                        return Err(Error(format!(
+                            "{} does not write output {}",
+                            path_name(path),
+                            path_name(output)
+                        )));
+                    }
+                }
+            }
+        }
+        Ok((program, producers))
+    }
+
     /// Plan executable instructions against a database without replacing it.
     pub fn compile(&self, database: &Database) -> Result<tir_egglog::Program, Error> {
         self.rules.compile(database).map_err(error)

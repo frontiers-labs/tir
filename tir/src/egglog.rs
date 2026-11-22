@@ -10,7 +10,7 @@ use tir_egglog::{EGraph, Program};
 
 #[derive(Args)]
 #[command(
-    after_help = "Declare the script's schema in CDSL and define `let execute = std::schedule::saturate(rules);`. Relations and tables use their declared names. REPL declarations accumulate; each accepted revision runs the selected schedule when it exists."
+    after_help = "Declare the script's schema in CDSL and define `let execute = || { std::schedule::saturate((rule_a, rule_b)) };`. Relations and tables use their declared names. REPL declarations accumulate; each accepted revision runs the selected schedule when it exists."
 )]
 pub struct ToolArgs {
     /// Input TIR file

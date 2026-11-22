@@ -143,7 +143,7 @@ fn benchmarks(c: &mut Criterion, tma: &TMAMetrics) {
             .skip(1)
             .all(|line| line.starts_with("    "))
     );
-    let function = "let f = fn(a: T, b: T) { let c = a + b; c };";
+    let function = "let f = |a: T, b: T| { let c = a + b; c };";
     formatting_preflight(function);
     assert!(
         format_source(function, FormatOptions::default())

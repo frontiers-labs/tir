@@ -1,0 +1,18 @@
+use std::Bits;
+use std::El;
+use std::bits;
+
+pub let keep_left = op {
+    signature: (lhs: El<Bits<8>>, rhs: El<Bits<8>>) -> El<Bits<8>>,
+    exec: |lhs: El<Bits<8>>, rhs: El<Bits<8>>| -> El<Bits<8>> { lhs },
+};
+
+pub let deferred_add = op {
+    signature: (lhs: El<Bits<8>>, rhs: El<Bits<8>>) -> El<Bits<8>>,
+    exec: |lhs: El<Bits<8>>, rhs: El<Bits<8>>| -> El<Bits<8>> { bits::add_wrapping(lhs, rhs) },
+};
+
+pub let deferred_xor = op {
+    signature: (lhs: El<Bits<8>>, rhs: El<Bits<8>>) -> El<Bits<8>>,
+    exec: |lhs: El<Bits<8>>, rhs: El<Bits<8>>| -> El<Bits<8>> { bits::xor(lhs, rhs) },
+};

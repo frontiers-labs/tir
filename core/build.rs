@@ -1,13 +1,10 @@
-#[cfg(feature = "interp")]
-mod interp_build;
-
 use tir_cdsl::OutputKind::{OpDef, Producers, Program};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(feature = "interp")]
-    interp_build::compile()?;
     tir_cdsl::compile([
         ("core::ir::*", Program("ir_program.rs")),
+        #[cfg(feature = "interp")]
+        ("core::interp::*", Program("interp.rs")),
         ("core::std::ir::interfaces::*", OpDef("interfaces.rs")),
         ("core::dialects::builtin::*", OpDef("builtin.rs")),
         ("core::dialects::fp::*", OpDef("fp.rs")),

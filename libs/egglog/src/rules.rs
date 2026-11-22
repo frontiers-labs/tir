@@ -52,6 +52,36 @@ pub struct Producer {
     pub schedule: Schedule,
     pub reads: BTreeSet<TableId>,
     pub writes: BTreeSet<TableId>,
+    pub uses_arguments: bool,
+}
+
+/// A checked, reusable selection of rules emitted by the CDSL compiler.
+#[derive(Clone, Copy)]
+pub struct RuleCollection {
+    code: &'static [u8],
+    ruleset: &'static str,
+    install: fn(&mut Database) -> Result<(), crate::LoadError>,
+}
+
+impl RuleCollection {
+    /// Package a compiler-generated ruleset with its schema bindings.
+    pub const fn from_static(
+        code: &'static [u8],
+        ruleset: &'static str,
+        install: fn(&mut Database) -> Result<(), crate::LoadError>,
+    ) -> Self {
+        Self {
+            code,
+            ruleset,
+            install,
+        }
+    }
+
+    /// Bind the checked rules to a database for a fresh invocation.
+    pub fn load(&self, db: &mut Database) -> Result<(Program, &'static str), crate::LoadError> {
+        (self.install)(db)?;
+        Ok((Program::from_static(self.code, db)?, self.ruleset))
+    }
 }
 
 impl Rules {
@@ -60,12 +90,13 @@ impl Rules {
     }
 
     /// Compile materializing rulesets and derive their footprints from typed rules.
-    pub fn compile_producers(&self, db: &Database) -> Result<(Program, Vec<Producer>), Error> {
+    pub fn compile_producers(
+        &self,
+        db: &Database,
+        schedules: impl IntoIterator<Item = Schedule>,
+    ) -> Result<(Program, Vec<Producer>), Error> {
         let mut producers = Vec::new();
-        for set in &self.rulesets {
-            if set.rules.is_empty() {
-                continue;
-            }
+        for schedule in schedules {
             let mut reads = BTreeSet::new();
             let mut writes = BTreeSet::new();
             let schema = db.schema();
@@ -75,7 +106,12 @@ impl Rules {
                     .primitive_contexts(id)
                     .contains(&crate::Context::Pure)
             };
-            for (_, rule) in &set.rules {
+            let mut uses_arguments = false;
+            for rule in self.schedule_rules(&schedule) {
+                uses_arguments |= rule
+                    .constants
+                    .iter()
+                    .any(|constant| matches!(constant, Some(Literal::Arg(_))));
                 let tables = |atom: &hir::Atom| match atom.target {
                     Target::Table(table) => Some(table),
                     Target::Prim(_) => None,
@@ -109,9 +145,10 @@ impl Rules {
                 ));
             }
             producers.push(Producer {
-                schedule: Schedule::saturate(set.name.as_str()),
+                schedule,
                 reads,
                 writes,
+                uses_arguments,
             });
         }
         let mut program = self.compile(db)?;
@@ -414,6 +451,19 @@ impl Rules {
             }
         }
         Ok(())
+    }
+
+    fn schedule_rules(&self, schedule: &Schedule) -> Vec<&hir::Rule> {
+        match schedule {
+            Schedule::Run(_, config) => self.typed_rules_of(&config.ruleset),
+            Schedule::Repeat(_, _, child) | Schedule::Saturate(_, child) => {
+                self.schedule_rules(child)
+            }
+            Schedule::Sequence(_, children) => children
+                .iter()
+                .flat_map(|child| self.schedule_rules(child))
+                .collect(),
+        }
     }
 
     // The typed rules a run of `name` runs, combined members included.

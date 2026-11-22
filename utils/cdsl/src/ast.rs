@@ -187,6 +187,10 @@ pub enum Expression {
     Record(Record),
     Block(Block),
     Function(Box<Function>),
+    Rule {
+        binders: Vec<RuleBinder>,
+        clause: Box<Expr>,
+    },
     If {
         condition: Box<Expr>,
         then: Block,
