@@ -7,7 +7,6 @@ fn main() -> Result<(), Error> {
     tir_cdsl::compile([
         ("core::ir::*", Program("ir_program.rs")),
         ("core::std::ir::interfaces::*", OpDef("interfaces.rs")),
-        ("core::dialects::son::*", OpDef("son_ops.rs")),
         ("core::dialects::builtin::*", OpDef("builtin.rs")),
         ("core::dialects::fp::*", OpDef("fp.rs")),
         ("core::dialects::asm::*", OpDef("asm_ops.rs")),
