@@ -199,7 +199,6 @@ impl Context {
         context.register_dialect::<PtrDialect>();
         context.register_dialect::<ScfDialect>();
         context.register_dialect::<StateDialect>();
-        context.register_dialect::<crate::son::SonDialect>();
         context.register_dialect::<VectorDialect>();
         context.declare_core_types();
 
@@ -268,6 +267,7 @@ impl Context {
     }
 
     pub fn register_reg_classes(&self, classes: &'static [crate::backend::regalloc::RegClassInfo]) {
+        self.register_type("backend", &crate::backend::RegClassType::spelling(self));
         for class in classes {
             self.note_reg_class(crate::backend::regalloc::RegClassId::new(class));
         }

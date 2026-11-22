@@ -176,15 +176,8 @@ impl Check<'_> {
             );
         }
         errors.require(
-            !(terminator && ctx.parent_nodes_region(id).is_some())
-                || self.op.value_operands().iter().any(|&value| {
-                    ctx.has_value(value) && crate::son::CONTROL.is(ctx, ctx.get_value(value).ty())
-                }),
+            !(terminator && ctx.parent_nodes_region(id).is_some()),
             "terminator in unordered region",
-        );
-        errors.require(
-            self.op.dialect().as_str() != "son" || ctx.parent_nodes_region(id).is_some(),
-            "SoN operation outside unordered region",
         );
         self.region_shapes(errors);
         self.successors(errors);

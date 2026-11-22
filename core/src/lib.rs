@@ -51,7 +51,6 @@ mod cdsl_operations {
     include!(concat!(env!("OUT_DIR"), "/ptr_ops.rs"));
     include!(concat!(env!("OUT_DIR"), "/scf_ops.rs"));
     include!(concat!(env!("OUT_DIR"), "/state_ops.rs"));
-    include!(concat!(env!("OUT_DIR"), "/son_ops.rs"));
     include!(concat!(env!("OUT_DIR"), "/type_def_ops.rs"));
     include!(concat!(env!("OUT_DIR"), "/vector_ops.rs"));
 }
@@ -152,7 +151,6 @@ pub use dialects::fp;
 pub use dialects::func;
 pub use dialects::ptr;
 pub use dialects::scf;
-pub use dialects::son;
 pub use dialects::state;
 pub use dialects::vector;
 
