@@ -257,7 +257,7 @@ let guarded = {
     op {
         signature: () -> Bool,
         attributes: { flag: Bool },
-        interfaces: { ReadFlag: { read: fn () -> Bool { self.flag } } },
+        interfaces: { ReadFlag: { read: || -> Bool { self.flag } } },
     }
 };
 "#,
@@ -284,8 +284,8 @@ fn inferring_an_interface_operation_checks_exec_against_its_signature() {
     let error = compile_source(
         r#"
 interface Tag {}
-let make = fn () {
-    op { signature: () -> Bool, interfaces: { Tag: {} }, exec: fn () -> Int { 1 } }
+let make = || {
+    op { signature: () -> Bool, interfaces: { Tag: {} }, exec: || -> Int { 1 } }
 };
 "#,
     )
@@ -347,7 +347,7 @@ fn a_shared_named_relation_preserves_its_column_order() {
 fn separately_compiled_programs_share_populated_tables_and_keep_incremental_state() {
     let sources = Sources::new();
     sources.write("schema.cdsl", "pub let Input: Int -> Prop; pub let Middle: Int -> Prop; pub let Sentinel: Int -> Prop; pub mod unrelated { pub let poison<x>: Input(x) -> Sentinel(x); }");
-    let root = sources.write("lib.cdsl", "pub mod schema; pub mod first { pub mod rules { use schema::*; pub let step<x>: Input(x) -> Middle(x + 1); } pub let execute = std::schedule::saturate(rules); } pub mod second { pub mod rules { use schema::*; pub let step<x>: Middle(x) -> Input(x + 1); } pub let execute = std::schedule::seq(std::schedule::Schedule::Rules(rules), std::schedule::saturate(rules)); }");
+    let root = sources.write("lib.cdsl", "pub mod schema; pub mod first { pub mod rules { use schema::*; pub let step<x>: Input(x) -> Middle(x + 1); } pub let execute = || { std::schedule::saturate(rules::step) }; } pub mod second { pub mod rules { use schema::*; pub let step<x>: Middle(x) -> Input(x + 1); } pub let execute = || { std::schedule::seq(std::schedule::Schedule::Rules(rules::step), std::schedule::saturate(rules::step)) }; }");
     let first = compile_file(&root)
         .unwrap()
         .select(&["first".into()])
@@ -403,7 +403,7 @@ fn separately_compiled_programs_share_populated_tables_and_keep_incremental_stat
 #[test]
 fn cli_emits_the_executable_library_program_to_file_and_stdout() {
     let sources = Sources::new();
-    let source = sources.write("cli.cdsl", "pub let Input: Int -> Prop; pub let Output: Int -> Prop; pub mod copy { pub let seeds: (Output(99), (Output(100), Output(101))); pub let rule<x>: Input(x) -> (Output(x + 7), (Output(x + 8), Output(x + 9))); }");
+    let source = sources.write("cli.cdsl", "pub let Input: Int -> Prop; pub let Output: Int -> Prop; pub mod copying { pub let seeds: (Output(99), (Output(100), Output(101))); pub let rule<x>: Input(x) -> (Output(x + 7), (Output(x + 8), Output(x + 9))); } pub let copy = || { std::schedule::Schedule::Rules((copying::seeds, copying::rule)) };");
     let checked = compile_file(&source).unwrap().lower().unwrap();
     let schema = Schema::new(&checked).unwrap();
     let expected = schema
@@ -480,7 +480,7 @@ fn declaration_names_do_not_capture_local_rule_variables() {
     let sources = Sources::new();
     let source = sources.write(
         "locals.cdsl",
-        "pub let x: Int -> Prop; pub let Input: (Int, Int) -> Prop; pub let Output: (Int, Int) -> Prop; pub mod rules { pub let copy<x, y>: Input(x, y) -> Output(x, y); }",
+        "pub let x: Int -> Prop; pub let Input: (Int, Int) -> Prop; pub let Output: (Int, Int) -> Prop; pub mod rules { pub let copy<x, y>: Input(x, y) -> Output(x, y); } pub let execute = || { std::schedule::Schedule::Rules(rules::copy) };",
     );
     let checked = compile_file(&source).unwrap().lower().unwrap();
     let schema = Schema::new(&checked).unwrap();
@@ -497,7 +497,7 @@ fn declaration_names_do_not_capture_local_rule_variables() {
     let one = db.base(1i64);
     let two = db.base(2i64);
     db.insert(db.table("Input").unwrap(), &[one, two]).unwrap();
-    program.run(db, &Schedule::run("rules"), &[]).unwrap();
+    program.run(db, &Schedule::run("execute"), &[]).unwrap();
     let rows = db
         .rows(db.table("Output").unwrap())
         .map(|row| row.values().collect::<Vec<_>>())
@@ -506,11 +506,29 @@ fn declaration_names_do_not_capture_local_rule_variables() {
 }
 
 #[test]
+fn ordinary_enum_functions_do_not_export_rule_collections() {
+    let checked = compile_source(
+        r#"
+use std::option::Option;
+pub let ordinary_option = || -> Option<Prop> { Option::None<Prop> };
+"#,
+    )
+    .unwrap()
+    .lower()
+    .unwrap();
+    let generated = checked.render_program(&[]).unwrap();
+    let rust = syn::parse_file(&generated).unwrap();
+    assert!(!rust.items.iter().any(|item| {
+        matches!(item, syn::Item::Fn(function) if function.sig.ident == "ordinary_option")
+    }));
+}
+
+#[test]
 fn unsupported_executable_computations_and_invalid_merges_fail() {
     let sources = Sources::new();
     let source = sources.write(
         "function.cdsl",
-        "pub let identity = fn (x: Int) -> Int { x }; ",
+        "pub let identity = |x: Int| -> Int { x }; ",
     );
     let checked = compile_file(&source).unwrap().lower().unwrap();
     assert!(
@@ -520,6 +538,14 @@ fn unsupported_executable_computations_and_invalid_merges_fail() {
             .to_string()
             .contains("unsupported executable")
     );
+
+    let tuple = compile_source(
+        "let Out: Int -> Prop; pub let collection = || -> (Prop, Prop) { let seed: Out(0); (seed, seed) };",
+    )
+    .unwrap()
+    .lower()
+    .unwrap();
+    assert!(tuple.to_binary().is_err());
 
     let source = sources.write(
         "bad_merge.cdsl",
@@ -555,8 +581,8 @@ let integers = std::schedule::integer_rules(dialects::builtin, dialects::builtin
     bool_bit: bool_bit,
     shift_amount: shift_amount,
 });
-pub let evaluate = Schedule::Rules(integers.fold);
-pub let discover = Schedule::Rules(integers.flags);
+pub let evaluate = || { Schedule::Rules(integers.fold) };
+pub let discover = || { Schedule::Rules(integers.flags) };
 pub mod input {
     pub let constant: EqSatConstantImplementation(dialects::builtin::zero.kind);
     pub let results: (
@@ -569,7 +595,7 @@ pub mod input {
         EqSatIntegerResult(std::ir::operation_key(7), dialects::builtin::r#nullary_zero.kind, std::ir::value_key(7), 16),
     );
 }
-pub let seed = Schedule::Rules(input);
+pub let seed = || { Schedule::Rules((input::constant, input::results)) };
 
 let Attribute: (String, Int, String, Int) -> Prop;
 let attr_int: Int -> BigInt;
@@ -598,13 +624,13 @@ pub mod dialects {
         pub let divide<w: Nat> = op {
             signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
             attributes: Guards,
-            exec: fn (rhs: El<Bits<w>>, lhs: El<Bits<w>>) -> El<Bits<w>> { EXEC },
-            requires: fn (numerator: El<Bits<w>>, divisor: El<Bits<w>>) -> Bool {
+            exec: |rhs: El<Bits<w>>, lhs: El<Bits<w>>| -> El<Bits<w>> { EXEC },
+            requires: |numerator: El<Bits<w>>, divisor: El<Bits<w>>| -> Bool {
                 let zero = bits::zero<w>();
                 let nonzero = bits::ne(divisor, zero);
                 nonzero
             },
-            poison: fn (attrs: Guards, numerator: El<Bits<w>>, divisor: El<Bits<w>>) -> Bool {
+            poison: |attrs: Guards, numerator: El<Bits<w>>, divisor: El<Bits<w>>| -> Bool {
                 let guard = attrs;
                 let same = bits::eq(numerator, divisor);
                 option::get_or(guard.reject_equal, false) && same
@@ -612,7 +638,7 @@ pub mod dialects {
         };
         pub let wide_sum = op {
             signature: (x: Bits<8>, y: Bits<16>) -> Bits<16>,
-            exec: fn (x: El<Bits<8>>, y: El<Bits<16>>) -> El<Bits<16>> {
+            exec: |x: El<Bits<8>>, y: El<Bits<16>>| -> El<Bits<16>> {
                 let total = bits::add_wrapping(y, y);
                 total
             },
@@ -631,18 +657,18 @@ pub mod dialects {
         };
         pub let zero = op {
             signature: () -> Bits<16>,
-            interfaces: { ConstantLike: { constant_value: fn () { bits::zero<16>() } } },
+            interfaces: { ConstantLike: { constant_value: || { bits::zero<16>() } } },
         };
         pub let unary_zero<w: Nat> = op {
             signature: (input: Bits<w>) -> Bits<w>,
-            exec: fn (input: El<Bits<w>>) -> El<Bits<w>> {
+            exec: |input: El<Bits<w>>| -> El<Bits<w>> {
                 let z = bits::zero();
                 bits::add_wrapping(z, z)
             },
         };
         pub let nullary_zero = op {
             signature: () -> Bits<16>,
-            exec: fn () -> El<Bits<16>> { bits::add_wrapping(bits::zero(), bits::zero()) },
+            exec: || -> El<Bits<16>> { bits::add_wrapping(bits::zero(), bits::zero()) },
         };
         EXTRA
     }
@@ -761,7 +787,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             r#"
 pub let refused = op {
     signature: () -> Bits<16>,
-    exec: fn () -> El<Bits<16>> { if true { bits::zero() } else { bits::zero() } },
+    exec: || -> El<Bits<16>> { if true { bits::zero() } else { bits::zero() } },
 };
 "#,
         ),
@@ -770,8 +796,8 @@ pub let refused = op {
             r#"
 pub let refused = op {
     signature: () -> Bits<16>,
-    exec: fn () -> El<Bits<16>> { bits::zero() },
-    requires: fn () -> Bool {
+    exec: || -> El<Bits<16>> { bits::zero() },
+    requires: || -> Bool {
         let z: El<Bits<8>> = bits::zero();
         bits::slt(z, z)
     },
@@ -792,7 +818,7 @@ pub let refused = op {
 pub let wrong_width = op {
     signature: () -> Bits<16>,
     interfaces: {
-        ConstantLike: { constant_value: fn () -> El<Bits<8>> { bits::zero<8>() } },
+        ConstantLike: { constant_value: || -> El<Bits<8>> { bits::zero<8>() } },
     },
 };
 "#,
@@ -802,4 +828,213 @@ pub let wrong_width = op {
         error.contains("builtin.wrong_width.ConstantLike.constant_value"),
         "{error}"
     );
+}
+
+#[test]
+fn local_rules_run_only_the_selected_members_with_each_calls_arguments() {
+    let checked = compile_source(
+        r#"
+pub let Edge: (Int, Int) -> Prop;
+pub let Reach: (Int, Int) -> Prop;
+pub let unselected<x, y>: Edge(x, y) -> Reach(y, x);
+
+pub let selected: std::List<Prop> = {
+    let direct<x, y>: Edge(x, y) -> Reach(x, y);
+    let indirect<x, y, z>: (Reach(x, y), Edge(y, z)) -> Reach(x, z);
+    std::List::Cons(direct, std::List::Cons(indirect, std::List::Nil))
+};
+pub let data = std::schedule::saturate(selected);
+pub let closure = || { data };
+
+pub let reach_from = |start: Int| {
+    let direct<y>: Edge(start, y) -> Reach(start, y);
+    let indirect<y, z>: (Reach(start, y), Edge(y, z)) -> Reach(start, z);
+    std::schedule::saturate((direct, indirect))
+};
+
+pub let reach_from_both = |first: Int, second: Int| {
+    std::schedule::seq(reach_from(first), reach_from(second))
+};
+"#,
+    )
+    .unwrap()
+    .lower()
+    .unwrap();
+    let schema = Schema::new(&checked).unwrap();
+    let lowered = schema.lower(&checked).unwrap();
+    assert_eq!(lowered.schedules().len(), 3);
+    let mut db = schema.database().clone();
+    let mut program = lowered.compile(&db).unwrap();
+    let edge = db.table("Edge").unwrap();
+    let reach = db.table("Reach").unwrap();
+    for (from, to) in [(10_i64, 11_i64), (11, 12), (20, 21), (30, 31)] {
+        let row = [db.base(from), db.base(to)];
+        db.insert(edge, &row).unwrap();
+    }
+    let rows = |db: &tir_egglog::Database| {
+        let mut rows = db
+            .rows(reach)
+            .map(|row| (db.base_value::<i64>(row[0]), db.base_value::<i64>(row[1])))
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        rows
+    };
+    let schedule = |name: &str| &lowered.schedules()[&vec![name.into()]];
+    let first = db.base(10_i64);
+    program
+        .run(&mut db, schedule("reach_from"), &[first])
+        .unwrap();
+    assert_eq!(rows(&db), [(10, 11), (10, 12)]);
+    let both = [db.base(20_i64), db.base(10_i64)];
+    program
+        .run(&mut db, schedule("reach_from_both"), &both)
+        .unwrap();
+    assert_eq!(rows(&db), [(10, 11), (10, 12), (20, 21)]);
+    program.run(&mut db, schedule("closure"), &[]).unwrap();
+    assert_eq!(
+        rows(&db),
+        [(10, 11), (10, 12), (11, 12), (20, 21), (30, 31)]
+    );
+}
+
+#[test]
+fn cargo_dependencies_supply_crate_names_and_keep_their_own_module_roots() {
+    if env::var_os("CDSL_TEST_DEPENDENCY_BUILD").is_some() {
+        tir_cdsl::compile([("consumer::*", RustProgram("consumer.rs"))]).unwrap();
+        let consumer = tir_cdsl::resolve_crate("consumer")
+            .unwrap()
+            .lower()
+            .unwrap();
+        let schema = Schema::new(&consumer).unwrap();
+        let lowered = schema.lower(&consumer).unwrap();
+        let mut db = schema.database().clone();
+        let mut executable = lowered.compile(&db).unwrap();
+        let execute = &lowered.schedules()[&vec!["execute".into()]];
+        executable.run(&mut db, execute, &[]).unwrap();
+        let outcome = db.rows(db.table("Sink").unwrap()).next().unwrap();
+        assert_eq!(db.base_value::<i64>(outcome[0]), 5);
+
+        // The consumer's serialized operation import must link against a schema
+        // built by the declaring package on its own.
+        let producer = tir_cdsl::resolve_crate("tir").unwrap().lower().unwrap();
+        let mut producer_db = Schema::new(&producer).unwrap().database().clone();
+        Program::from_bytes(&consumer.to_binary().unwrap(), &mut producer_db).unwrap();
+        return;
+    }
+
+    let sources = Sources::new();
+    sources.write(
+        "Cargo.toml",
+        r#"[workspace]
+resolver = "3"
+members = ["core", "bridge", "consumer"]
+[workspace.dependencies]
+tir = { path = "core" }
+"#,
+    );
+    for package in ["core", "bridge", "consumer"] {
+        sources.write(&format!("{package}/src/lib.rs"), "");
+    }
+    sources.write(
+        "core/Cargo.toml",
+        "[package]\nname = \"tir\"\nversion = \"0.1.0\"\n",
+    );
+    sources.write(
+        "core/defs/lib.cdsl",
+        r#"
+pub mod ir;
+pub let Word: Type = std::ir::El<std::ir::Bits<8>>;
+pub mod dialects {
+    pub mod example {
+        pub let copy = op { signature: (value: super::super::Word) -> crate::Word };
+    }
+}
+pub let Kind: std::ir::OperationKind -> Prop;
+pub let identify = || { let seed: Kind(dialects::example::copy.kind); std::schedule::saturate(seed) };
+"#,
+    );
+    sources.write(
+        "core/defs/ir/mod.cdsl",
+        "pub enum Mark { Read, } pub let Edge: (Int, Int) -> Prop; let Private: Int -> Prop;",
+    );
+    sources.write(
+        "bridge/Cargo.toml",
+        r#"[package]
+name = "bridge"
+version = "0.1.0"
+[dependencies]
+renamed = { package = "tir", path = "../core" }
+"#,
+    );
+    sources.write("bridge/defs/lib.cdsl", "pub use renamed::ir::Edge as Link;");
+    sources.write(
+        "consumer/Cargo.toml",
+        r#"[package]
+name = "consumer"
+version = "0.1.0"
+[dependencies]
+tir.workspace = true
+bridge = { path = "../bridge" }
+"#,
+    );
+    let consumer = sources.write(
+        "consumer/defs/lib.cdsl",
+        r#"
+use tir::ir::*;
+use bridge::Link;
+pub let Sink: Int -> Prop;
+let Private: (Int, Int) -> Prop;
+pub let Seen: std::ir::OperationKind -> Prop;
+pub let Marker: tir::ir::Mark -> Prop;
+pub let execute = || {
+    let seed: (Edge(2, 5), Marker(tir::ir::Mark::Read));
+    let copy<x, y>: Link(x, y) -> self::Sink(y);
+    std::schedule::saturate((seed, copy))
+};
+pub let identify = || {
+    let seed: Seen(tir::dialects::example::copy.kind);
+    std::schedule::saturate(seed)
+};
+"#,
+    );
+
+    let build = sources
+        .build("cargo_dependencies_supply_crate_names_and_keep_their_own_module_roots")
+        .env("CDSL_TEST_DEPENDENCY_BUILD", "1")
+        .current_dir(&sources.0)
+        .env("CARGO_MANIFEST_DIR", sources.0.join("consumer"))
+        .env("CARGO_PKG_NAME", "consumer")
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stdout)
+    );
+    assert!(sources.0.join("out/consumer.rs").is_file());
+
+    let package_error = || {
+        let result = Command::new(env!("CARGO_BIN_EXE_cdslc"))
+            .args([
+                "--crate", "consumer", "::*", "--emit", "ast", "--output", "-",
+            ])
+            .current_dir(&sources.0)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        String::from_utf8(result.stderr).unwrap()
+    };
+    assert!(compile_file(&consumer).is_err());
+
+    sources.write("consumer/defs/lib.cdsl", "use tir::ir::Private;");
+    assert!(package_error().contains("tir::ir::Private"));
+    sources.write(
+        "consumer/Cargo.toml",
+        "[package]\nname = \"consumer\"\nversion = \"0.1.0\"\n[dependencies]\nbridge = { path = \"../bridge\" }\n",
+    );
+    sources.write(
+        "consumer/defs/lib.cdsl",
+        "use bridge::Link; use tir::ir::Edge;",
+    );
+    assert!(package_error().contains("tir::ir::Edge"));
 }

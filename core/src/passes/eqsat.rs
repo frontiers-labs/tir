@@ -5,6 +5,8 @@ pub(crate) mod generated {
     include!(concat!(env!("OUT_DIR"), "/eqsat.rs"));
 }
 
+pub use generated::{add_zero_rewrites, builtin_rewrites};
+
 impl From<generated::OperationId> for OpId {
     fn from(id: generated::OperationId) -> Self {
         Self::from_number(id.raw())
@@ -29,29 +31,50 @@ impl<T> From<generated::ValueRef<T>> for ValueId {
     }
 }
 
-use tir_egglog::{Color, Database};
+use tir_egglog::{Color, Database, RuleCollection, Schedule};
 
 use crate::{
     AnalysisManager, Context, OpId, Pass, PassError, RegionId, ValueId, attributes::AttributeValue,
 };
 
-/// Saturate integer equalities in a private snapshot of the current IR.
-#[derive(Default)]
-pub struct EqSatPass;
+/// Saturate equalities in a private snapshot of the current IR.
+pub struct EqSatPass {
+    rules: Rules,
+}
 
-#[linkme::distributed_slice(crate::PASSES)]
-static EQSAT: crate::PassInfo = crate::PassInfo {
-    name: "eqsat",
-    ctor: parse_eqsat,
-};
+enum Rules {
+    Builtin(Vec<RuleCollection>),
+    Custom(RuleCollection),
+}
 
-fn parse_eqsat(args: &str) -> Result<Box<dyn Pass>, String> {
-    if args.is_empty() {
-        Ok(Box::new(EqSatPass))
-    } else {
-        Err("pass 'eqsat' takes no arguments".into())
+impl EqSatPass {
+    /// Run the built-in EqSat rules.
+    pub fn new() -> Self {
+        Self::with_extra_rules([])
+    }
+
+    /// Run a custom rule collection. An empty collection performs no rewrites.
+    pub fn with_ruleset(rules: RuleCollection) -> Self {
+        Self {
+            rules: Rules::Custom(rules),
+        }
+    }
+
+    /// Run the built-in rules together with custom rule collections.
+    pub fn with_extra_rules(rules: impl IntoIterator<Item = RuleCollection>) -> Self {
+        Self {
+            rules: Rules::Builtin(rules.into_iter().collect()),
+        }
     }
 }
+
+impl Default for EqSatPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+crate::register_pass!(EqSatPass, "eqsat");
 
 fn rule_error(error: impl std::fmt::Display) -> PassError {
     PassError::InvalidRuleSet(error.to_string())
@@ -70,9 +93,49 @@ impl Pass for EqSatPass {
     ) -> Result<(), PassError> {
         let mut db = context.eqsat_database().map_err(rule_error)?;
         let mut program = snapshot(context, root_id, &mut db)?;
-        program.analyze().map_err(rule_error)?;
-        program.seed_assumptions().map_err(rule_error)?;
-        let local = scoped_literals(&mut program)?;
+        let local = match &self.rules {
+            Rules::Builtin(rules) => {
+                if !rules.is_empty() {
+                    program.prepare_custom().map_err(rule_error)?;
+                }
+                prepare_builtin(context, &mut program)?;
+                if rules.is_empty() {
+                    program.analyze().map_err(rule_error)?;
+                } else {
+                    let phase = if let Schedule::Repeat(_, _, step) = generated::schedule_global()
+                        && let Schedule::Run(_, phase) = *step
+                    {
+                        phase.ruleset
+                    } else {
+                        return Err(rule_error(
+                            "EqSat global schedule must repeat a single ruleset",
+                        ));
+                    };
+                    let mut extras = rules
+                        .iter()
+                        .map(|rules| program.load_rules(rules).map_err(rule_error))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut extras = extras
+                        .iter_mut()
+                        .map(|(program, name)| (program, *name))
+                        .collect::<Vec<_>>();
+                    program
+                        .run_schedule_with(&generated::schedule_analyze(), &phase, &mut extras)
+                        .map_err(rule_error)?;
+                }
+                program.seed_assumptions().map_err(rule_error)?;
+                scoped_literals(&mut program)?
+            }
+            Rules::Custom(rules) => {
+                program.prepare_custom().map_err(rule_error)?;
+                let (mut rules, name) = program.load_rules(rules).map_err(rule_error)?;
+                program
+                    .run_rules(&mut rules, &Schedule::repeat(64, name))
+                    .map_err(rule_error)?;
+                program.publish_aliases().map_err(rule_error)?;
+                Vec::new()
+            }
+        };
         let rebuild = program
             .eq_sat_definition()
             .map(|row| {
@@ -99,7 +162,7 @@ impl Pass for EqSatPass {
         redirected.sort_unstable();
         erase.sort_unstable();
         publish::publish(context, rebuild, edits, local, &redirected, &erase)?;
-        if context.has_operation(root_id) {
+        if matches!(self.rules, Rules::Builtin(_)) && context.has_operation(root_id) {
             sweep(context, root_id)?;
         }
         Ok(())
@@ -120,14 +183,21 @@ fn snapshot<'db>(
             .insert_eq_sat_constant_implementation((kind.into(),))
             .map_err(rule_error)?;
     }
-    program.prepare().map_err(rule_error)?;
-    layout_values(context, &mut program)?;
     Ok(program)
+}
+
+fn prepare_builtin(
+    context: &Context,
+    program: &mut generated::Program<'_>,
+) -> Result<(), PassError> {
+    program.prepare().map_err(rule_error)?;
+    layout_values(context, program)
 }
 
 fn sweep(context: &Context, root: OpId) -> Result<(), PassError> {
     let mut db = context.eqsat_database().map_err(rule_error)?;
     let mut program = snapshot(context, root, &mut db)?;
+    prepare_builtin(context, &mut program)?;
     program.sweep().map_err(rule_error)?;
     let removals = program
         .eq_sat_dead()

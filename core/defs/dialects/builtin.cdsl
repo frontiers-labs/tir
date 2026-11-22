@@ -66,11 +66,11 @@ let ConstantAttributes: Type = { value: Int };
 pub let constant<w: Nat> = op {
     signature: () -> El<Bits<w>>,
     attributes: ConstantAttributes,
-    exec: fn (self: ConstantAttributes) -> El<Bits<w>> { bits::from_int<w>(self.value) },
+    exec: |self: ConstantAttributes| -> El<Bits<w>> { bits::from_int<w>(self.value) },
 
     interfaces: {
-        ConstantLike: { constant_value: fn () -> El<Bits<w>> { bits::from_int<w>(self.value) } },
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        ConstantLike: { constant_value: || -> El<Bits<w>> { bits::from_int<w>(self.value) } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
@@ -79,20 +79,20 @@ let AddiAttributes: Type = { nsw: Optional<Bool>, nuw: Optional<Bool> };
 pub let addi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     attributes: AddiAttributes,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> {
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> {
         bits::add_wrapping(lhs, rhs)
     },
-    poison: fn (self: AddiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool {
+    poison: |self: AddiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool {
         (option::get_or(self.nsw, false) && bits::signed_add_overflows(lhs, rhs)) ||
         (option::get_or(self.nuw, false) && bits::unsigned_add_overflows(lhs, rhs))
     },
 
     interfaces: {
         Additive: {},
-        Commutative: { is_commutative: fn () -> Bool { true } },
+        Commutative: { is_commutative: || -> Bool { true } },
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
@@ -101,8 +101,8 @@ let SubiAttributes: Type = { nsw: Optional<Bool>, nuw: Optional<Bool> };
 pub let subi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
     attributes: SubiAttributes,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::sub_wrapping(lhs, rhs) },
-    poison: fn (self: SubiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool {
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::sub_wrapping(lhs, rhs) },
+    poison: |self: SubiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool {
         (option::get_or(self.nsw, false) && bits::signed_sub_overflows(lhs, rhs)) ||
         (option::get_or(self.nuw, false) && bits::unsigned_sub_overflows(lhs, rhs))
     },
@@ -111,27 +111,27 @@ pub let subi<w: Nat> = op {
         Subtractive: {},
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let muli<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::mul_wrapping(lhs, rhs) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::mul_wrapping(lhs, rhs) },
 
     interfaces: {
-        Commutative: { is_commutative: fn () -> Bool { true } },
+        Commutative: { is_commutative: || -> Bool { true } },
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
-        OpCost: { cost: fn () -> El<Bits<32>> { bits::literal<32>(4) } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
+        OpCost: { cost: || -> El<Bits<32>> { bits::literal<32>(4) } },
     },
 };
 
 pub let divsi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::sdiv(lhs, rhs) },
-    requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::signed_div_defined(lhs, rhs) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::sdiv(lhs, rhs) },
+    requires: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::signed_div_defined(lhs, rhs) },
 
     interfaces: {
         SameOperandAndResultType: {},
@@ -141,8 +141,8 @@ pub let divsi<w: Nat> = op {
 
 pub let divui<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::udiv(lhs, rhs) },
-    requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::ne(rhs, bits::zero<w>()) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::udiv(lhs, rhs) },
+    requires: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::ne(rhs, bits::zero<w>()) },
 
     interfaces: {
         SameOperandAndResultType: {},
@@ -152,8 +152,8 @@ pub let divui<w: Nat> = op {
 
 pub let remsi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::srem(lhs, rhs) },
-    requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::signed_div_defined(lhs, rhs) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::srem(lhs, rhs) },
+    requires: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::signed_div_defined(lhs, rhs) },
 
     interfaces: {
         SameOperandAndResultType: {},
@@ -163,8 +163,8 @@ pub let remsi<w: Nat> = op {
 
 pub let remui<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::urem(lhs, rhs) },
-    requires: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::ne(rhs, bits::zero<w>()) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::urem(lhs, rhs) },
+    requires: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::ne(rhs, bits::zero<w>()) },
 
     interfaces: {
         SameOperandAndResultType: {},
@@ -174,100 +174,100 @@ pub let remui<w: Nat> = op {
 
 pub let andi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::and(lhs, rhs) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::and(lhs, rhs) },
 
     interfaces: {
-        Commutative: { is_commutative: fn () -> Bool { true } },
+        Commutative: { is_commutative: || -> Bool { true } },
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let ori<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::or(lhs, rhs) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::or(lhs, rhs) },
 
     interfaces: {
-        Commutative: { is_commutative: fn () -> Bool { true } },
+        Commutative: { is_commutative: || -> Bool { true } },
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let xori<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::xor(lhs, rhs) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::xor(lhs, rhs) },
 
     interfaces: {
-        Commutative: { is_commutative: fn () -> Bool { true } },
+        Commutative: { is_commutative: || -> Bool { true } },
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let shli<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::shl(lhs, rhs) },
-    poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::shl(lhs, rhs) },
+    poison: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::uge(rhs, bits::width_value<w>()) },
 
     interfaces: {
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let shrui<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::lshr(lhs, rhs) },
-    poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::lshr(lhs, rhs) },
+    poison: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::uge(rhs, bits::width_value<w>()) },
 
     interfaces: {
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let shrsi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>> { bits::ashr(lhs, rhs) },
-    poison: fn (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> Bool { bits::uge(rhs, bits::width_value<w>()) },
+    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::ashr(lhs, rhs) },
+    poison: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::uge(rhs, bits::width_value<w>()) },
 
     interfaces: {
         SameOperandAndResultType: {},
         IntegerArithmetic: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let extsi<In: Nat, Out: Nat> = op {
     signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
-    exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::sext<In, Out>(input) },
+    exec: |input: El<Bits<In>>| -> El<Bits<Out>> { bits::sext<In, Out>(input) },
 
     interfaces: {
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let extui<In: Nat, Out: Nat> = op {
     signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
-    exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::zext<In, Out>(input) },
+    exec: |input: El<Bits<In>>| -> El<Bits<Out>> { bits::zext<In, Out>(input) },
 
     interfaces: {
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let trunci<In: Nat, Out: Nat> = op {
     signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
-    exec: fn (input: El<Bits<In>>) -> El<Bits<Out>> { bits::trunc<In, Out>(input) },
+    exec: |input: El<Bits<In>>| -> El<Bits<Out>> { bits::trunc<In, Out>(input) },
 
     interfaces: {
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
@@ -275,28 +275,28 @@ let bitcast_rust = { widened: true };
 
 pub let bitcast<w: Nat> = op {
     signature: (input: El<Bits<w>>) -> El<Bits<w>>,
-    exec: fn (input: El<Bits<w>>) -> El<Bits<w>> { bits::bitcast<w, w>(input) },
+    exec: |input: El<Bits<w>>| -> El<Bits<w>> { bits::bitcast<w, w>(input) },
     interfaces: {
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let assume = op {
     signature: (condition: El<Bits<1>>) -> (),
-    exec: fn (condition: El<Bits<1>>) -> () { () },
-    requires: fn (condition: El<Bits<1>>) -> Bool { bits::ne(condition, bits::zero<1>()) },
+    exec: |condition: El<Bits<1>>| -> () { () },
+    requires: |condition: El<Bits<1>>| -> Bool { bits::ne(condition, bits::zero<1>()) },
 };
 
 pub let freeze<T: Type> = op {
     signature: (input: T) -> T,
     interfaces: {
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
 pub let refine<T: Type> = op {
     signature: (input: T, predicate: El<Bits<1>>) -> T,
-    exec: fn (input: T, predicate: El<Bits<1>>) -> T { input },
+    exec: |input: T, predicate: El<Bits<1>>| -> T { input },
     interfaces: {
         Congruent: {},
     },
@@ -305,7 +305,7 @@ pub let refine<T: Type> = op {
 pub let module_end = op {
     signature: () -> (),
     interfaces: {
-        Terminator: { successors: fn () -> List<std::ir::BlockId> { List::Nil<std::ir::BlockId> } },
+        Terminator: { successors: || -> List<std::ir::BlockId> { List::Nil<std::ir::BlockId> } },
     },
 };
 
@@ -318,7 +318,7 @@ let CmpiAttributes: Type = { predicate: IntegerPredicate };
 pub let cmpi<w: Nat> = op {
     signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<1>>,
     attributes: CmpiAttributes,
-    exec: fn (self: CmpiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<1>> {
+    exec: |self: CmpiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<1>> {
         bits::from_bool(match self.predicate {
             IntegerPredicate::Eq => bits::eq(lhs, rhs),
             IntegerPredicate::Ne => bits::ne(lhs, rhs),
@@ -334,7 +334,7 @@ pub let cmpi<w: Nat> = op {
     },
 
     interfaces: {
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
@@ -371,17 +371,17 @@ pub let global<P: IrTy> = op {
     },
     interfaces: {
         Symbol: {
-                symbol_name: fn () -> String { self.sym_name },
-                symbol_signature: fn () -> Option<List<IrTy>> { option::none<List<IrTy>> },
-                symbol_result_type: fn () -> Option<IrTy> { option::none<IrTy> },
-                symbol_visibility: fn () -> Visibility {
+                symbol_name: || -> String { self.sym_name },
+                symbol_signature: || -> Option<List<IrTy>> { option::none<List<IrTy>> },
+                symbol_result_type: || -> Option<IrTy> { option::none<IrTy> },
+                symbol_visibility: || -> Visibility {
                     if option::get_or(self.sym_visibility, "") == "private" {
                         Visibility::Private
                     } else {
                         Visibility::Public
                     }
                 },
-                is_definition: fn () -> Bool { self.kind != 0 },
+                is_definition: || -> Bool { self.kind != 0 },
             },
     },
 };
@@ -390,7 +390,7 @@ pub let fn_to_ptr<Args: List<IrTy>, Ret: IrTy, E: EffectSet, P: IrTy> = op {
     signature: (callee: Function<Args, std::list::singleton<IrTy>(Ret), E>) -> Ptr<P>,
     interfaces: {
         Pure: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 
@@ -398,7 +398,7 @@ pub let ptr_to_fn<Args: List<IrTy>, Ret: IrTy, E: EffectSet, P: IrTy> = op {
     signature: (address: Ptr<P>) -> Function<Args, std::list::singleton<IrTy>(Ret), E>,
     interfaces: {
         Pure: {},
-        Speculatable: { is_speculatable: fn () -> Bool { true } },
+        Speculatable: { is_speculatable: || -> Bool { true } },
     },
 };
 

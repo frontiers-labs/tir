@@ -1,7 +1,7 @@
 //! AnalysisManager caching, def-use analysis and the monotone fact solver.
 
 use tir::{
-    analysis::DefUse,
+    analysis::{cfg, DefUse},
     builtin::{ops, IntegerType, UnitType},
     func::ops as func_ops,
     AnalysisManager, Context, Operation,
@@ -79,16 +79,20 @@ fn catalog_producers_publish_complete_current_facts() {
         pub mod source {
             pub let input<root, owner, slot, value>:
                 (ir::AnalysisRoot(root), ir::Operand(owner, slot, value), std::int::equal(slot, slot) == true) -> Values(slot);
+            pub let produce = || { std::schedule::saturate((input,)) };
         }
         pub mod bounds {
             pub let collect<v>: Values(v) -> Members(0, std::table::singleton(v));
+            pub let produce = || { std::schedule::saturate((collect,)) };
         }
         pub mod answers {
             pub let count<vs>: Members(0, vs) -> Count(0, std::table::cardinality(vs));
             pub let empty: !Values(9) -> Count(0, 0);
+            pub let produce = || { std::schedule::saturate((count, empty)) };
         }
         pub mod fail {
             pub let conflict<v>: Values(v) -> Conflict(0, v);
+            pub let produce = || { std::schedule::saturate((conflict,)) };
         }
     "#).unwrap();
     let require = |table| AnalysisManager::require(&context, root, table);
@@ -107,6 +111,63 @@ fn catalog_producers_publish_complete_current_facts() {
     });
     assert_eq!(read("Count").0, 0);
     assert_eq!(require("Conflict").unwrap().rows().count(), 0);
+}
+
+#[test]
+fn cfg_scope_refreshes_for_the_requested_root_and_ir_edits() {
+    use std::collections::BTreeSet;
+
+    let context = Context::with_default_dialects();
+    let parse =
+        |source| tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(&context, source).unwrap();
+    let module = parse(
+        r#"module {
+  %a = func.func @a(%0: !i32) -> !i32 { func.return %0 }
+  %b = func.func @b(%0: !i32) -> !i32 { func.return %0 }
+  module_end
+}"#,
+    );
+    let functions: Vec<_> = module
+        .body()
+        .op_ids()
+        .into_iter()
+        .filter_map(|id| context.get_op(id).as_op::<tir::func::FuncOp>())
+        .collect();
+    let [a, b] = functions.as_slice() else {
+        panic!("expected two functions");
+    };
+    let key = |id: tir::OpId| (i64::from(id.number()),);
+    let read = |function: &tir::func::FuncOp, modules: &[tir::OpId]| {
+        let root = function.id();
+        let ret = function.body().op_ids()[0];
+        let facts = cfg::scope(&context, root).unwrap();
+        assert_eq!(
+            facts.ops().collect::<Result<BTreeSet<_>, _>>().unwrap(),
+            BTreeSet::from([key(root), key(ret)])
+        );
+        assert_eq!(
+            facts.modules().collect::<Result<BTreeSet<_>, _>>().unwrap(),
+            modules.iter().copied().map(key).collect::<BTreeSet<_>>()
+        );
+        drop(facts);
+
+        let facts = AnalysisManager::require(&context, root, "ScopeOp").unwrap();
+        let root_row = facts
+            .rows()
+            .find(|row| facts.base_value::<i64>(row[0]) == key(root).0)
+            .unwrap();
+        root_row.timestamp()
+    };
+
+    let modules = [module.id()];
+    let initial = read(a, &modules);
+    assert_eq!(read(a, &modules), initial);
+    read(b, &modules);
+    let refreshed = read(a, &modules);
+    assert_ne!(refreshed, initial);
+
+    let added = parse("module { module_end }");
+    assert_ne!(read(a, &[module.id(), added.id()]), refreshed);
 }
 
 #[test]

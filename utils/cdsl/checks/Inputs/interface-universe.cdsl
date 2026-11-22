@@ -2,5 +2,5 @@ interface Produces<T: Type> { value: () -> T }
 
 let operation = op {
     signature: () -> Bool,
-    interfaces: { Produces: { value: fn () -> Type { Bool } } },
+    interfaces: { Produces: { value: || -> Type { Bool } } },
 };

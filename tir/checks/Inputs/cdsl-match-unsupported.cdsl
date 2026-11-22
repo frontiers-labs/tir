@@ -8,5 +8,5 @@ pub mod matching {
         pub let recognize<node, input, result: std::ValueRef<{ data: Bool }>>:
             dialects::builtin::freeze.matches(node, (input,), (result,)) -> Found(node);
     }
-    pub let execute = std::schedule::saturate(rules);
+    pub let execute = || { std::schedule::saturate(rules::recognize) };
 }

@@ -39,7 +39,7 @@ impl CheckedProgram {
         schema.install(&dependencies, !catalog_only)?;
         schema.bind_operation_imports(dependencies.operation_imports(self))?;
         if catalog_only {
-            return rust::emit(self, selected, &schema, &BTreeMap::new(), None, &[], None);
+            return rust::emit(self, selected, &schema, None, None, &[], None);
         }
         let hosts = schema
             .hosts
@@ -53,11 +53,11 @@ impl CheckedProgram {
             })
             .collect::<Vec<_>>();
         let lowered = schema.lower_dependencies(self, &dependencies)?;
+        if !producers && !lowered.memos.is_empty() {
+            return Err(Error("memo exports require a producer catalog".into()));
+        }
         let (program, producers) = if producers {
-            let (program, writers) = lowered
-                .rules
-                .compile_producers(schema.database())
-                .map_err(error)?;
+            let (program, writers) = lowered.compile_producers(schema.database(), selected)?;
             (program, Some(writers))
         } else {
             (lowered.compile(schema.database())?, None)
@@ -66,7 +66,7 @@ impl CheckedProgram {
             self,
             selected,
             &schema,
-            &lowered.schedules,
+            Some(&lowered),
             Some(&program.to_bytes()),
             &hosts,
             producers.as_deref(),

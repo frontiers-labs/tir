@@ -1,63 +1,70 @@
 use std::bigint::BigInt;
+use std::list::List::Cons as cons;
+use std::list::List::Nil as nil;
 
 pub let EqSatPort: (std::ir::OperationId, Int, Int, std::ir::ValueId, std::ir::ValueId) -> Prop;
 pub let EqSatArmResult: (std::ir::OperationId, Int, Int, std::ir::ValueId, Bool) -> Prop;
 pub let EqSatArmDisagrees: (std::ir::OperationId, Int, std::ir::ValueId) -> Prop;
 
-pub mod ports {
-    pub let entry<node, region, mode, slot, entry, port_slot, operand_slot, init, port, ty, declared>:
+pub let ports: std::List<Prop> = {
+    let entry<node, region, mode, slot, entry, port_slot, operand_slot, init, port, ty, declared>:
         (EqSatLive(node), ir::Region(region, mode, node, slot, entry),
          ir::Binding(region, "entry", port_slot, operand_slot), ir::Operand(node, operand_slot, init),
          ir::Value(port, ty, "region", region, port_slot, declared))
         -> EqSatPort(node, region, port_slot, port, init);
-}
+    cons(entry, nil)
+};
 
 pub let EqSatInvariantPort: (std::ir::OperationId, Int, Int, std::ir::ValueId, std::ir::ValueId) -> Prop;
-pub mod loop_facts {
-    pub let carried<node,selector,body,pred,polarity,slot,port,init,feedback>:
+pub let loop_facts: std::List<Prop> = {
+    let carried<node,selector,body,pred,polarity,slot,port,init,feedback>:
         (ir::Control(node,false,selector,true,body,pred,polarity), EqSatPort(node,body,slot,port,init),
          ir::Binding(body,"feedback",slot,feedback), ir::Yield(body,feedback,port))
         -> EqSatInvariantPort(node,body,slot,port,init);
-    pub let equal_literals<node,selector,body,pred,polarity,slot,port,init,feedback,next,bits>:
+    let equal_literals<node,selector,body,pred,polarity,slot,port,init,feedback,next,bits>:
         (ir::Control(node,false,selector,true,body,pred,polarity), EqSatPort(node,body,slot,port,init),
          ir::Binding(body,"feedback",slot,feedback), ir::Yield(body,feedback,next),
          EqSatFolded(init,bits), EqSatFolded(next,bits)) -> EqSatInvariantPort(node,body,slot,port,init);
-    pub let invariant<node, body, port_slot, port, init, exit, result_slot,
+    let invariant<node, body, port_slot, port, init, exit, result_slot,
                       result, ty, declared, kind, owner, init_slot, init_declared, loop_kind, home, pos, display, loc>:
         (EqSatInvariantPort(node,body,port_slot,port,init), ir::Operation{ id: node, kind: loop_kind, placement: "block", container: home, position: pos, display: display, location: loc }(),
          ir::Binding(body, "exit", result_slot, exit), ir::Yield(body, exit, port),
          ir::result(result, ty, node, result_slot, declared),
          ir::Value(init, ty, kind, owner, init_slot, init_declared))
         -> EqSatReplace(node, result, init);
-}
+    cons(carried, cons(equal_literals, cons(invariant, nil)))
+};
 
-pub mod gamma_witness {
-    pub let forwarded<node, selector, body, pred, polarity, region, port_slot, port, init, result_slot, exit>:
+pub let gamma_witness: std::List<Prop> = {
+    let forwarded<node, selector, body, pred, polarity, region, port_slot, port, init, result_slot, exit>:
         (ir::Control(node, true, selector, false, body, pred, polarity),
          EqSatPort(node, region, port_slot, port, init),
          ir::Binding(region, "exit", result_slot, exit), ir::Yield(region, exit, port))
         -> EqSatArmResult(node,region,result_slot,init,true);
-    pub let yielded<node,selector,body,pred,polarity,arm,mode,arm_slot,entry,result_slot,exit,state>:
+    let yielded<node,selector,body,pred,polarity,arm,mode,arm_slot,entry,result_slot,exit,state>:
         (EqSatLive(node), ir::Control(node,true,selector,false,body,pred,polarity),
          ir::Region(arm,mode,node,arm_slot,entry), ir::Binding(arm,"exit",result_slot,exit), ir::Yield(arm,exit,state))
         -> EqSatArmResult(node,arm,result_slot,state,false);
-}
+    cons(forwarded, cons(yielded, nil))
+};
 
-pub mod gamma_missing {
-    pub let missing<node, result_slot, init, witness, region, mode, slot, entry>:
+pub let gamma_missing: std::List<Prop> = {
+    let missing<node, result_slot, init, witness, region, mode, slot, entry>:
         (EqSatArmResult(node, witness, result_slot, init, true), ir::Region(region, mode, node, slot, entry),
          !EqSatArmResult(node, region, result_slot, init, true))
         -> EqSatArmDisagrees(node, result_slot, init);
-}
+    cons(missing, nil)
+};
 
-pub mod gamma_agrees {
-    pub let agreement<node, result_slot, init, witness, result, ty, declared, kind, owner, slot, init_declared, switch_kind, home, pos, display, loc>:
+pub let gamma_agrees: std::List<Prop> = {
+    let agreement<node, result_slot, init, witness, result, ty, declared, kind, owner, slot, init_declared, switch_kind, home, pos, display, loc>:
         (EqSatArmResult(node, witness, result_slot, init, true), !EqSatArmDisagrees(node, result_slot, init),
          ir::Operation{ id: node, kind: switch_kind, placement: "block", container: home, position: pos, display: display, location: loc }(),
          ir::result(result, ty, node, result_slot, declared),
          ir::Value(init, ty, kind, owner, slot, init_declared))
         -> EqSatReplace(node, result, init);
-}
+    cons(agreement, nil)
+};
 
 pub let EqSatCountedPort: (std::ir::OperationId, Int, Int, std::ir::ValueId, std::ir::ValueId, std::ir::ValueId) -> Prop;
 pub let EqSatCountedYield: (Int, std::ir::OperationId) -> Prop;
@@ -93,63 +100,70 @@ pub mod counted_exits {
         (EqSatCountedPort(node,region,j,port,result,init), EqSatCountedYield(region,exit),
          ir::Operand(exit,j,output), EqSatFolded(init,bits), EqSatFolded(output,bits))
         -> EqSatCountedSame(result,exit);
+    pub let rules: std::List<Prop> =
+        std::List::Cons(binding, std::List::Cons(sites, std::List::Cons(same, std::List::Cons(equal, std::List::Cons(same_literal, std::List::Nil)))));
 }
 
-pub mod counted_missing {
-    pub let refuted<node, region, slot, port, result, init, exit>:
+pub let counted_missing: std::List<Prop> = {
+    let refuted<node, region, slot, port, result, init, exit>:
         (EqSatCountedPort(node, region, slot, port, result, init), EqSatCountedYield(region, exit),
          !EqSatCountedSame(result, exit))
         -> EqSatCountedDiffer(result);
-}
+    cons(refuted, nil)
+};
 
-pub mod counted_agrees {
-    pub let invariant<node, region, slot, port, result, init, exit>:
+pub let counted_agrees: std::List<Prop> = {
+    let invariant<node, region, slot, port, result, init, exit>:
         (EqSatCountedPort(node, region, slot, port, result, init), EqSatCountedSame(result, exit),
          !EqSatCountedDiffer(result))
         -> EqSatReplace(node, result, init);
-    pub let literal<node,region,slot,port,result,init,exit,bits>:
+    let literal<node,region,slot,port,result,init,exit,bits>:
         (EqSatCountedPort(node,region,slot,port,result,init), EqSatCountedSame(result,exit),
          !EqSatCountedDiffer(result), EqSatFolded(init,bits)) -> EqSatKnownCountedPort(region,port,bits);
-}
+    cons(invariant, cons(literal, nil))
+};
 
-pub mod counted_reads {
-    pub let folded<user,region,member,port,bits,slot,k,place,home,p,d,l>:
+pub let counted_reads: std::List<Prop> = {
+    let folded<user,region,member,port,bits,slot,k,place,home,p,d,l>:
         (EqSatKnownCountedPort(region,port,bits), ir::ReaderAt(user,region,member), ir::Operand(user,slot,port),
          ir::Operation{ id: user, kind: k, placement: place, container: home, position: p, display: d, location: l }(), EqSatDropKind(k), !EqSatPinnedOp(user))
         -> EqSatScopedEdit(UseOwner::Operand(user),slot,port,bits);
-}
+    cons(folded, nil)
+};
 
-pub mod invariant_ports {
-    pub let induction<node, body, port_slot, port, init, ty, decl>:
+pub let invariant_ports: std::List<Prop> = {
+    let induction<node, body, port_slot, port, init, ty, decl>:
         (EqSatInvariantPort(node,body,port_slot,port,init),
          ir::Value(port, ty, "region", body, port_slot, decl), EqSatInteger(ty))
         -> EqSatReplace(node, port, init);
-    pub let known<node,body,slot,port,init,bits>:
+    let known<node,body,slot,port,init,bits>:
         (EqSatInvariantPort(node,body,slot,port,init), EqSatFolded(init,bits)) -> EqSatFolded(port,bits);
-}
+    cons(induction, cons(known, nil))
+};
 
 pub let EqSatCounted: (std::ir::OperationId, Int) -> Prop;
 pub let EqSatPinnedYield: (Int, Int) -> Prop;
 pub let EqSatPinned: std::ir::ValueId -> Prop;
 pub let EqSatPinnedOp: std::ir::OperationId -> Prop;
 
-pub mod counted_pins {
-    pub let body<node, place, home, pos, display, loc, select, body, pred, polarity>:
+pub let counted_pins: std::List<Prop> = {
+    let body<node, place, home, pos, display, loc, select, body, pred, polarity>:
         (ir::Operation{ id: node, kind: dialects::scf::r#for.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
          ir::Control(node, false, select, true, body, pred, polarity))
         -> (EqSatCounted(node, body), EqSatPinnedYield(body, pred));
-    pub let advance<node, region, slot>:
+    let advance<node, region, slot>:
         (EqSatCounted(node,region), ir::Binding(region,"feedback",0,slot)) -> EqSatPinnedYield(region,slot);
-    pub let exit<node, region, index, slot>:
+    let exit<node, region, index, slot>:
         (EqSatCounted(node,region), ir::Binding(region,"exit",index,slot)) -> EqSatPinnedYield(region,slot);
-    pub let value<region, slot, value>:
+    let value<region, slot, value>:
         (EqSatPinnedYield(region,slot), ir::Yield(region,slot,value)) -> EqSatPinned(value);
-    pub let computation<region, slot, value, ty, node, index, decl>:
+    let computation<region, slot, value, ty, node, index, decl>:
         (EqSatPinnedYield(region,slot), ir::Yield(region,slot,value),
          ir::result(value, ty, node,index,decl)) -> EqSatPinnedOp(node);
-    pub let operand<node, slot, value>:
+    let operand<node, slot, value>:
         (EqSatPinnedOp(node), ir::Operand(node,slot,value)) -> EqSatPinned(value);
-}
+    cons(body, cons(advance, cons(exit, cons(value, cons(computation, cons(operand, nil))))))
+};
 
 pub let EqSatUnprovedControl: std::ir::OperationId -> Prop;
 pub let EqSatKnownSelector: (std::ir::OperationId, BigInt) -> Prop;
@@ -161,24 +175,26 @@ pub let EqSatSwitchDisagrees: (std::ir::OperationId, std::ir::ValueId) -> Prop;
 
 pub let EqSatControlInputSafe: std::ir::ValueId -> Prop;
 pub let EqSatCheckControl: std::ir::OperationKind -> Prop;
-pub mod safe_control_inputs {
-    pub let switch: EqSatCheckControl(dialects::scf::r#switch.kind);
-    pub let loop_kind: EqSatCheckControl(dialects::scf::r#loop.kind);
-    pub let defined<value>: EqSatDefined(value) -> EqSatControlInputSafe(value);
-    pub let parameter<value,ty,kind,owner,slot,decl>:
+pub let safe_control_inputs: std::List<Prop> = {
+    let switch: EqSatCheckControl(dialects::scf::r#switch.kind);
+    let loop_kind: EqSatCheckControl(dialects::scf::r#loop.kind);
+    let defined<value>: EqSatDefined(value) -> EqSatControlInputSafe(value);
+    let parameter<value,ty,kind,owner,slot,decl>:
         (EqSatIncomingParameter(value), ir::Value(value,ty,kind,owner,slot,decl), EqSatInteger(ty))
         -> EqSatControlInputSafe(value);
-}
+    cons(switch, cons(loop_kind, cons(defined, cons(parameter, nil))))
+};
 
-pub mod control_effects {
-    pub let input<node,k,place,home,p,d,l,slot,value>:
+pub let control_effects: std::List<Prop> = {
+    let input<node,k,place,home,p,d,l,slot,value>:
         (EqSatCheckControl(k), ir::Operation{ id: node, kind: k, placement: place, container: home, position: p, display: d, location: l }(), ir::Operand(node,slot,value), !EqSatControlInputSafe(value))
         -> EqSatUnprovedControl(node);
-    pub let effect<node,region,mode,slot,entry,child,member,kind,place,home,p,d,l>:
+    let effect<node,region,mode,slot,entry,child,member,kind,place,home,p,d,l>:
         (ir::Region(region,mode,node,slot,entry), ir::ReaderAt(child,region,member),
          ir::Operation{ id: child, kind: kind, placement: place, container: home, position: p, display: d, location: l }(), !EqSatDropKind(kind))
         -> EqSatUnprovedControl(node);
-}
+    cons(input, cons(effect, nil))
+};
 
 pub mod switch_inputs {
     use bits::*;
@@ -188,63 +204,69 @@ pub mod switch_inputs {
          EqSatFolded(init,bits)) -> EqSatFolded(port,bits);
 }
 
-pub mod switch_cases {
-    pub let control<node,selector,body,pred,polarity,value,bits>:
+pub let switch_cases: std::List<Prop> = {
+    let control<node,selector,body,pred,polarity,value,bits>:
         (EqSatLive(node), ir::Control(node,true,selector,false,body,pred,polarity),
          ir::Operand(node,selector,value), EqSatFolded(value,bits))
         -> EqSatKnownSelector(node,bits);
-    pub let exact<node,bits,key,region>:
+    let exact<node,bits,key,region>:
         (EqSatKnownSelector(node,bits), key == std::bigint::to_string(bits), ir::Arm(node,false,key,region))
         -> (EqSatHasExplicitArm(node), EqSatSelectedArm(node,region));
-}
+    cons(control, cons(exact, nil))
+};
 
-pub mod switch_default {
-    pub let chosen<node,bits,region,key>:
+pub let switch_default: std::List<Prop> = {
+    let chosen<node,bits,region,key>:
         (EqSatKnownSelector(node,bits), !EqSatHasExplicitArm(node), ir::Arm(node,true,key,region))
         -> EqSatSelectedArm(node,region);
-}
+    cons(chosen, nil)
+};
 
-pub mod pure_switch {
-    pub let safe<node,home,p,d,l,selector,body,pred,polarity,value,result,ty,decl>:
+pub let pure_switch: std::List<Prop> = {
+    let safe<node,home,p,d,l,selector,body,pred,polarity,value,result,ty,decl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::scf::r#switch.kind, placement: "graph", container: home, position: p, display: d, location: l }(),
          ir::Control(node,true,selector,false,body,pred,polarity), ir::Operand(node,selector,value),
          EqSatDefined(value), !EqSatUnprovedControl(node), !EqSatExtraResult(node),
          ir::result(result, ty, node,0,decl), EqSatInteger(ty), !EqSatPinned(result))
         -> (EqSatPureSwitch(node,result,ty), EqSatRemovable(node,result), EqSatRemovableNode(node));
-}
-pub mod switch_values {
-    pub let selected_literal<node,result,ty,arm,slot,value,bits>:
+    cons(safe, nil)
+};
+pub let switch_values: std::List<Prop> = {
+    let selected_literal<node,result,ty,arm,slot,value,bits>:
         (EqSatPureSwitch(node,result,ty), EqSatSelectedArm(node,arm),
          ir::Binding(arm,"exit",0,slot), ir::Yield(arm,slot,value), EqSatFolded(value,bits))
         -> EqSatPhiLiteral(result,bits);
-    pub let capture<node,result,ty,arm,mode,arm_slot,entry,slot,value,kind,owner,i,decl>:
+    let capture<node,result,ty,arm,mode,arm_slot,entry,slot,value,kind,owner,i,decl>:
         (EqSatPureSwitch(node,result,ty), ir::Region(arm,mode,node,arm_slot,entry),
          ir::Binding(arm,"exit",0,slot), ir::Yield(arm,slot,value),
          EqSatVisibleAt(node,value), ir::Value(value,ty,kind,owner,i,decl))
         -> EqSatSwitchYield(node,result,arm,value);
-    pub let forwarded<node,result,ty,arm,value,kind,owner,slot,decl>:
+    let forwarded<node,result,ty,arm,value,kind,owner,slot,decl>:
         (EqSatPureSwitch(node,result,ty),
          EqSatArmResult(node,arm,0,value,true), ir::Value(value,ty,kind,owner,slot,decl))
         -> EqSatSwitchYield(node,result,arm,value);
-}
-pub mod switch_agreement {
-    pub let disagree<node,result,witness,value,arm,mode,slot,entry>:
+    cons(selected_literal, cons(capture, cons(forwarded, nil)))
+};
+pub let switch_agreement: std::List<Prop> = {
+    let disagree<node,result,witness,value,arm,mode,slot,entry>:
         (EqSatSwitchYield(node,result,witness,value), ir::Region(arm,mode,node,slot,entry),
          !EqSatSwitchYield(node,result,arm,value)) -> EqSatSwitchDisagrees(node,value);
-}
-pub mod switch_aliases {
-    pub let selected<node,result,arm,value>:
+    cons(disagree, nil)
+};
+pub let switch_aliases: std::List<Prop> = {
+    let selected<node,result,arm,value>:
         (EqSatSwitchYield(node,result,arm,value), EqSatSelectedArm(node,arm))
         -> EqSatReplace(node, result, value);
-    pub let all_arms<node,result,arm,value>:
+    let all_arms<node,result,arm,value>:
         (EqSatSwitchYield(node,result,arm,value), !EqSatSwitchDisagrees(node,value))
         -> EqSatReplace(node, result, value);
-}
+    cons(selected, cons(all_arms, nil))
+};
 
 pub let EqSatFiniteLoop: (std::ir::OperationId, Int) -> Prop;
-pub mod finite_loops {
+pub let finite_loops: std::List<Prop> = {
     // A nonnegative counter reaches its signed limit before a unit increment can wrap.
-    pub let finite<node,home,pos,display,loc,selector,body,predicate,condition,ct,cmp,
+    let finite<node,home,pos,display,loc,selector,body,predicate,condition,ct,cmp,
                    slot,counter,init,feedback,next,step,add,ty,term,bound_term,bound,start,mask>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::scf::r#loop.kind, placement: "graph", container: home, position: pos, display: display, location: loc }(), !EqSatUnprovedControl(node),
          ir::Control(node,false,selector,true,body,predicate,"true"), ir::Yield(body,predicate,condition),
@@ -255,8 +277,9 @@ pub mod finite_loops {
          EqSatFolded(init,start), EqSatAllBits(ty,mask),
          std::bigint::le((start + start),mask) == true, std::bigint::le((bound + bound),mask) == true)
         -> EqSatFiniteLoop(node,body);
-    pub let output<node,body,exits,slot,value,result,ty,decl,bits>:
+    let output<node,body,exits,slot,value,result,ty,decl,bits>:
         (EqSatFiniteLoop(node,body), ir::Binding(body,"exit",slot,exits), ir::Yield(body,exits,value),
          EqSatFolded(value,bits), ir::result(result, ty, node,slot,decl), EqSatInteger(ty), !EqSatPinned(result))
         -> EqSatPhiLiteral(result,bits);
-}
+    cons(finite, cons(output, nil))
+};

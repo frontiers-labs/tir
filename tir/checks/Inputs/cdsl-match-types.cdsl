@@ -23,9 +23,11 @@ pub mod matching {
         pub let recognize<kind, node, input: std::IntegerRef, result: std::IntegerRef>:
             (Candidate(kind), std::match_kind(kind, node, (input,), (result,)))
             -> (Attribute("operation", std::ir::raw_operation_id(node), "probe", 1), Attribute("operation", std::ir::raw_operation_id(node), "probe", 2));
+        pub let rules: std::List<Prop> =
+            std::List::Cons(freeze, std::List::Cons(truncate, std::List::Cons(recognize, std::List::Nil)));
     }
 
-    pub let pointer = std::schedule::saturate(pointer_i8);
-    pub let different_pointer = std::schedule::saturate(pointer_i32);
-    pub let same_integer_width = std::schedule::saturate(integer);
+    pub let pointer = || { std::schedule::saturate(pointer_i8::recognize) };
+    pub let different_pointer = || { std::schedule::saturate(pointer_i32::recognize) };
+    pub let same_integer_width = || { std::schedule::saturate(integer::rules) };
 }
