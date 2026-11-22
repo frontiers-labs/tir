@@ -24,7 +24,7 @@ pub interface Symbol {
 }
 
 pub interface Terminator {
-    successors: fn () -> List<std::ir::BlockId> { List::Nil<std::ir::BlockId> },
+    successors: || -> List<std::ir::BlockId> { List::Nil<std::ir::BlockId> },
 }
 
 pub interface ConstantLike<w: Nat> { constant_value: () -> El<Bits<w>> }
@@ -41,11 +41,11 @@ pub interface SameOperandAndResultType {}
 
 pub interface Congruent {}
 
-pub interface Commutative { is_commutative: fn () -> Bool { true } }
+pub interface Commutative { is_commutative: || -> Bool { true } }
 
-pub interface Speculatable { is_speculatable: fn () -> Bool { true } }
+pub interface Speculatable { is_speculatable: || -> Bool { true } }
 
-pub interface OpCost { cost: fn () -> El<Bits<32>> { std::bits::literal<32>(1) } }
+pub interface OpCost { cost: || -> El<Bits<32>> { std::bits::literal<32>(1) } }
 
 pub interface BranchTerminator {
     successor_operands: () -> List<(BlockId, List<ValueId>)>,
@@ -77,7 +77,7 @@ pub interface CountedLoop {
     lower_bound: () -> ValueId,
     upper_bound: () -> ValueId,
     step: () -> ValueId,
-    induction: fn () -> Option<OperandIndex> { std::option::none<OperandIndex> },
+    induction: || -> Option<OperandIndex> { std::option::none<OperandIndex> },
 }
 
 pub interface Callable {
@@ -104,7 +104,7 @@ pub interface NonLocalExit {
 
 pub interface ExitScope {
     exit_scope: () -> ExitScopeKind,
-    label: fn () -> Option<String> { std::option::none<String> },
+    label: || -> Option<String> { std::option::none<String> },
 }
 
 pub interface RegionBinding {
@@ -125,13 +125,13 @@ pub interface Gamma {
     arms: () -> List<RegionId>,
     binding: () -> std::ir::Binding,
     cases: () -> List<El<Bits<64>>>,
-    indexes_arms: fn () -> Bool {
-        std::list::all_indexed(self.cases(), fn (index: Nat, case: El<Bits<64>>) -> Bool {
+    indexes_arms: || -> Bool {
+        std::list::all_indexed(self.cases(), |index: Nat, case: El<Bits<64>>| -> Bool {
             std::bits::eq(std::bits::literal<64>(index), case)
         })
     },
-    arm_for: fn (bits: El<Bits<64>>) -> OperandIndex {
-        std::ir::operand_index(std::list::first_index_or_length(self.cases(), fn (case: El<Bits<64>>) -> Bool {
+    arm_for: |bits: El<Bits<64>>| -> OperandIndex {
+        std::ir::operand_index(std::list::first_index_or_length(self.cases(), |case: El<Bits<64>>| -> Bool {
             std::bits::eq(case, bits)
         }))
     },

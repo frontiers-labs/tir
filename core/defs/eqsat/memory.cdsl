@@ -1,4 +1,6 @@
 use std::bigint::BigInt;
+use std::list::List::Cons as cons;
+use std::list::List::Nil as nil;
 
 // A store establishes a cell only for its own state result and exact address.
 pub let EqSatWrite: (std::ir::ValueId, std::ir::ValueId, Int, std::ir::ValueId, std::ir::OperationId, String, Int, Int, Int) -> Prop;
@@ -11,83 +13,87 @@ pub let EqSatRequiredGraphValue: (Int, std::ir::ValueId) -> Prop;
 pub let EqSatMemoryOrdered: (std::ir::OperationId, std::ir::ValueId) -> Prop;
 pub let EqSatLoad: (std::ir::OperationId, std::ir::ValueId, std::ir::ValueId, std::ir::ValueId) -> Prop;
 
-pub mod memory_facts {
-    pub let store<node,address,ty,value,state,place,home,pos,st>:
+pub let memory_facts: std::List<Prop> = {
+    let store<node,address,ty,value,state,place,home,pos,st>:
         (EqSatStoreSite(node,address,ty,value,state,place,home,pos,st),
          EqSatOrdinaryAccess(node), EqSatInteger(ty))
         -> (EqSatWrite(state,address,ty,value,node,place,home,pos,st), EqSatStored(state,address,ty,value));
-    pub let pointer_store<node,address,ty,value,state,place,home,pos,st,width,alignment>:
+    let pointer_store<node,address,ty,value,state,place,home,pos,st,width,alignment>:
         (EqSatStoreSite(node,address,ty,value,state,place,home,pos,st), EqSatOrdinaryAccess(node),
          EqSatPointerType(ty), EqSatStoreLayout(node,width,alignment))
         -> EqSatWrite(state,address,ty,value,node,place,home,pos,st);
 
-    pub let adjacent<first,second,state,next,addr,ty,data,other,block,p,q,st,nt>:
+    let adjacent<first,second,state,next,addr,ty,data,other,block,p,q,st,nt>:
         (EqSatWrite(state,addr,ty,data,first,"block",block,p,st),
          EqSatWrite(next,addr,ty,other,second,"block",block,q,nt),
          q == (p + 1), ir::Operand(second,2,state))
         -> EqSatAdjacentWrite(first,second,state,next,addr,data,other,st,nt);
 
-    pub let ordered<read,write,kind,block,origin,region,order,prior,q,e,loc,state,ty,slot,decl,addr,out,ot>:
+    let ordered<read,write,kind,block,origin,region,order,prior,q,e,loc,state,ty,slot,decl,addr,out,ot>:
         (EqSatLoadSite(read,addr,ot,out,state,"block",block), EqSatLive(write),
          ir::Operation{ id: write, kind: kind, placement: "block", container: origin, position: q, display: e, location: loc }(), ir::Block(block,region,order), ir::Block(origin,region,prior),
          !EqSatMixedRegion(region), ir::result(state, ty, write,slot,decl))
         -> EqSatMemoryOrdered(read,state);
-    pub let block_state<read,block,state,ty,slot,decl,region,order,addr,out,ot>:
+    let block_state<read,block,state,ty,slot,decl,region,order,addr,out,ot>:
         (EqSatLoadSite(read,addr,ot,out,state,"block",block), ir::Value(state,ty,"block",block,slot,decl),
          ir::Block(block,region,order), !EqSatMixedRegion(region))
         -> EqSatMemoryOrdered(read,state);
     // A function exports all its results together. Theta feedback and exit do not.
-    pub let function_graph<node, place, home, pos, display, loc, region, slot, entry>:
+    let function_graph<node, place, home, pos, display, loc, region, slot, entry>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::func::func.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
          ir::Region(region, "graph", node, slot, entry)) -> EqSatFunctionGraph(region);
-    pub let returned<region,slot,value>:
+    let returned<region,slot,value>:
         (EqSatFunctionGraph(region), ir::Yield(region,slot,value)) -> EqSatRequiredGraphValue(region,value);
-    pub let joined<region,out,ty,node,slot,decl,p,d,l,input,i>:
+    let joined<region,out,ty,node,slot,decl,p,d,l,input,i>:
         (EqSatRequiredGraphValue(region,out), ir::result(out, ty, node,slot,decl),
          ir::Operation{ id: node, kind: dialects::state::join.kind, placement: "graph", container: region, position: p, display: d, location: l }(), ir::Operand(node,i,input))
         -> EqSatRequiredGraphValue(region,input);
-    pub let split<region,out,ty,node,slot,decl,p,d,l,input>:
+    let split<region,out,ty,node,slot,decl,p,d,l,input>:
         (EqSatRequiredGraphValue(region,out), ir::result(out, ty, node,slot,decl),
          ir::Operation{ id: node, kind: dialects::state::split.kind, placement: "graph", container: region, position: p, display: d, location: l }(), ir::Operand(node,0,input))
         -> EqSatRequiredGraphValue(region,input);
-    pub let written<region,out,node,addr,ty,data,pos,st,input>:
+    let written<region,out,node,addr,ty,data,pos,st,input>:
         (EqSatRequiredGraphValue(region,out), EqSatStoreSite(node,addr,ty,data,out,"graph",region,pos,st),
          ir::Operand(node,2,input)) -> EqSatRequiredGraphValue(region,input);
-    pub let returned_state<read, write, kind, region, q, e, loc, state, next, addr, out, ot,
+    let returned_state<read, write, kind, region, q, e, loc, state, next, addr, out, ot,
                            ty, decl, nd, source_slot>:
         (EqSatLoadSite(read,addr,ot,out,state,"graph",region), EqSatLive(write), EqSatFunctionGraph(region),
          ir::Operation{ id: write, kind: kind, placement: "graph", container: region, position: q, display: e, location: loc }(), ir::result(state, ty, write,source_slot,decl),
          ir::result(next, ty, read, 1, nd), EqSatRequiredGraphValue(region,next))
         -> EqSatMemoryOrdered(read, state);
-    pub let returned_input<read, write, kind, region, q, e, loc, state, addr, out, ot,
+    let returned_input<read, write, kind, region, q, e, loc, state, addr, out, ot,
                            ty, decl, source_slot>:
         (EqSatLoadSite(read,addr,ot,out,state,"graph",region), EqSatLive(write), EqSatFunctionGraph(region),
          ir::Operation{ id: write, kind: kind, placement: "graph", container: region, position: q, display: e, location: loc }(), ir::result(state, ty, write,source_slot,decl),
          EqSatRequiredGraphValue(region,state))
         -> EqSatMemoryOrdered(read, state);
 
-    pub let forward<node,place,home,address,state,result,ty,value>:
+    let forward<node,place,home,address,state,result,ty,value>:
         (EqSatLoadSite(node,address,ty,result,state,place,home), EqSatStored(state,address,ty,value),
          EqSatMemoryOrdered(node,state), EqSatOrdinaryAccess(node))
         -> EqSatLoad(node,state,result,value);
-    pub let repeated_read<first,second,address,ty,value,result,state,region>:
+    let repeated_read<first,second,address,ty,value,result,state,region>:
         (EqSatLoadSite(first,address,ty,value,state,"graph",region),
          EqSatLoadSite(second,address,ty,result,state,"graph",region), std::ir::operation_ids::less(first,second) == true,
          EqSatOrdinaryAccess(first), EqSatOrdinaryAccess(second), EqSatMemoryOrdered(second,state))
         -> EqSatLoad(second,state,result,value);
 
-    pub let disjoint_write<second,state,next,a,b,ty,bt,v,w,place,home,pos,st>:
+    let disjoint_write<second,state,next,a,b,ty,bt,v,w,place,home,pos,st>:
         (EqSatStored(state,a,ty,v), EqSatWrite(next,b,bt,w,second,place,home,pos,st), ir::Operand(second,2,state),
          EqSatAllocation(a), EqSatAllocation(b), a != b)
         -> EqSatStored(next,a,ty,v);
 
-    pub let forward_value<node, state, result, value>:
+    let forward_value<node, state, result, value>:
         EqSatLoad(node, state, result, value) -> (EqSatReplace(node, result, value), EqSatErase(node));
-    pub let forward_state<node, state, result, value, next, ty, declared, kind, owner, slot, input_declared>:
+    let forward_state<node, state, result, value, next, ty, declared, kind, owner, slot, input_declared>:
         (EqSatLoad(node, state, result, value), ir::result(next, ty, node, 1, declared),
          ir::Value(state, ty, kind, owner, slot, input_declared))
         -> EqSatReplace(node, next, state);
-}
+    cons(store, cons(pointer_store, cons(adjacent, cons(ordered, cons(block_state,
+        cons(function_graph, cons(returned, cons(joined, cons(split, cons(written,
+        cons(returned_state, cons(returned_input, cons(forward, cons(repeated_read,
+        cons(disjoint_write, cons(forward_value, cons(forward_state, nil)))))))))))))))))
+};
 
 pub let EqSatAllocation: std::ir::ValueId -> Prop;
 pub let EqSatAddressSlot: (std::ir::OperationKind, Int) -> Prop;
@@ -95,127 +101,139 @@ pub let EqSatEscapes: std::ir::ValueId -> Prop;
 pub let EqSatOverwrite: (std::ir::OperationId, std::ir::OperationId, std::ir::ValueId, std::ir::ValueId) -> Prop;
 pub let EqSatStateOtherUse: std::ir::ValueId -> Prop;
 
-pub mod allocation {
-    pub let alloc<node, place, home, pos, display, loc, address, ty, decl>:
+pub let allocation: std::List<Prop> = {
+    let alloc<node, place, home, pos, display, loc, address, ty, decl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::alloca.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
          ir::result(address, ty, node, 0, decl)) -> EqSatAllocation(address);
-    pub let load: EqSatAddressSlot(dialects::ptr::load.kind, 0);
-    pub let store: EqSatAddressSlot(dialects::ptr::store.kind, 1);
-}
+    let load: EqSatAddressSlot(dialects::ptr::load.kind, 0);
+    let store: EqSatAddressSlot(dialects::ptr::store.kind, 1);
+    cons(alloc, cons(load, cons(store, nil)))
+};
 
-pub mod escape {
-    pub let escape_use<address, user, slot, kind, place, home, pos, display, loc>:
+pub let escape: std::List<Prop> = {
+    let escape_use<address, user, slot, kind, place, home, pos, display, loc>:
         (EqSatAllocation(address), ir::Operand(user, slot, address),
          ir::Operation{ id: user, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }(), !EqSatAddressSlot(kind, slot))
         -> EqSatEscapes(address);
-    pub let escape_result<address, region, slot>:
+    let escape_result<address, region, slot>:
         (EqSatAllocation(address), ir::Yield(region, slot, address)) -> EqSatEscapes(address);
-}
+    cons(escape_use, cons(escape_result, nil))
+};
 
-pub mod dead_store_proof {
-    pub let adjacent<first,second,state,incoming,next,addr,data,other,st,nt,kind,owner,slot,decl>:
+pub let dead_store_proof: std::List<Prop> = {
+    let adjacent<first,second,state,incoming,next,addr,data,other,st,nt,kind,owner,slot,decl>:
         (EqSatAdjacentWrite(first,second,state,next,addr,data,other,st,nt),
          EqSatDefined(data),
          ir::Operand(first,2,incoming), ir::Value(incoming,st,kind,owner,slot,decl))
         -> EqSatOverwrite(first,second,state,incoming);
-    pub let same_value<first,second,state,incoming,next,addr,data,st,nt,kind,owner,slot,decl>:
+    let same_value<first,second,state,incoming,next,addr,data,st,nt,kind,owner,slot,decl>:
         (EqSatAdjacentWrite(first,second,state,next,addr,data,data,st,nt),
          ir::Operand(first,2,incoming), ir::Value(incoming,st,kind,owner,slot,decl))
         -> EqSatOverwrite(first,second,state,incoming);
-}
+    cons(adjacent, cons(same_value, nil))
+};
 
-pub mod dead_store_uses {
-    pub let another<first, second, state, in_state, other, slot>:
+pub let dead_store_uses: std::List<Prop> = {
+    let another<first, second, state, in_state, other, slot>:
         (EqSatOverwrite(first, second, state, in_state), ir::Operand(other, slot, state),
          other != second) -> EqSatStateOtherUse(state);
-    pub let yielded<first, second, state, in_state, region, slot>:
+    let yielded<first, second, state, in_state, region, slot>:
         (EqSatOverwrite(first, second, state, in_state), ir::Yield(region, slot, state))
         -> EqSatStateOtherUse(state);
-}
+    cons(another, cons(yielded, nil))
+};
 
-pub mod dead_store {
-    pub let overwrite<first, second, state, incoming>:
+pub let dead_store: std::List<Prop> = {
+    let overwrite<first, second, state, incoming>:
         (EqSatOverwrite(first, second, state, incoming), !EqSatStateOtherUse(state))
         -> (EqSatReplace(first, state, incoming), EqSatErase(first));
-}
+    cons(overwrite, nil)
+};
 
 pub let EqSatVisibleAt: (std::ir::OperationId, std::ir::ValueId) -> Prop;
 pub let EqSatBranchCell: (std::ir::OperationId, Int, Int, std::ir::ValueId, Int, std::ir::ValueId) -> Prop;
 pub let EqSatBranchDisagrees: (std::ir::OperationId, Int, std::ir::ValueId, Int, std::ir::ValueId) -> Prop;
 
-pub mod memory_join {
-    pub let enclosing_port<node, kind, region, pos, display, loc, data, ty, slot, decl>:
+pub let memory_join: std::List<Prop> = {
+    let enclosing_port<node, kind, region, pos, display, loc, data, ty, slot, decl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: kind, placement: "graph", container: region, position: pos, display: display, location: loc }(),
          ir::Value(data, ty, "region", region, slot, decl)) -> EqSatVisibleAt(node, data);
 
-    pub let captured_literal<node,k,region,p,d,l,data,source,source_kind,q,sd,sl>:
+    let captured_literal<node,k,region,p,d,l,data,source,source_kind,q,sd,sl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: k, placement: "graph", container: region, position: p, display: d, location: l }(),
          dialects::builtin::constant.matches(source, (), (data,)),
          ir::Operation{ id: source, kind: source_kind, placement: "graph", container: region, position: q, display: sd, location: sl }())
         -> EqSatVisibleAt(node,data);
-    pub let branch<node,arm,result_slot,arm_state,forwarded,addr,ty,data>:
+    let branch<node,arm,result_slot,arm_state,forwarded,addr,ty,data>:
         (EqSatArmResult(node,arm,result_slot,arm_state,forwarded),
          EqSatStored(arm_state,addr,ty,data), EqSatVisibleAt(node,data))
         -> EqSatBranchCell(node,arm,result_slot,addr,ty,data);
 
-    pub let loop_cell<node, body, port_slot, port, init, exit,
+    let loop_cell<node, body, port_slot, port, init, exit,
                       result_slot, result, st, decl, addr, ty, data>:
         (EqSatInvariantPort(node,body,port_slot,port,init),
          ir::Binding(body, "exit", result_slot, exit), ir::Yield(body, exit, port),
          EqSatStored(init, addr, ty, data),
          ir::result(result, st, node, result_slot, decl), EqSatVisibleAt(node, data))
         -> EqSatStored(result, addr, ty, data);
-}
+    cons(enclosing_port, cons(captured_literal, cons(branch, cons(loop_cell, nil))))
+};
 
-pub mod memory_join_missing {
-    pub let missing<node, result_slot, addr, ty, data, witness, arm, mode, slot, entry>:
+pub let memory_join_missing: std::List<Prop> = {
+    let missing<node, result_slot, addr, ty, data, witness, arm, mode, slot, entry>:
         (EqSatBranchCell(node, witness, result_slot, addr, ty, data),
          ir::Region(arm, mode, node, slot, entry), !EqSatBranchCell(node, arm, result_slot, addr, ty, data))
         -> EqSatBranchDisagrees(node, result_slot, addr, ty, data);
-}
+    cons(missing, nil)
+};
 
-pub mod memory_join_apply {
-    pub let agreed<node, result_slot, addr, ty, data, witness, state, st, decl>:
+pub let memory_join_apply: std::List<Prop> = {
+    let agreed<node, result_slot, addr, ty, data, witness, state, st, decl>:
         (EqSatBranchCell(node, witness, result_slot, addr, ty, data),
          !EqSatBranchDisagrees(node, result_slot, addr, ty, data),
          ir::result(state, st, node, result_slot, decl))
         -> EqSatStored(state, addr, ty, data);
-}
+    cons(agreed, nil)
+};
 
-pub mod memory_siblings {
-    pub let existing_result<node,arm,state_slot,state,addr,ty,data,data_slot,data_exit,value,decl>:
+pub let memory_siblings: std::List<Prop> = {
+    let existing_result<node,arm,state_slot,state,addr,ty,data,data_slot,data_exit,value,decl>:
         (EqSatArmResult(node,arm,state_slot,state,false), EqSatStored(state,addr,ty,data),
          ir::Binding(arm,"exit",data_slot,data_exit), ir::Yield(arm,data_exit,data),
          ir::result(value, ty, node,data_slot,decl))
         -> EqSatBranchCell(node,arm,state_slot,addr,ty,value);
-}
+    cons(existing_result, nil)
+};
 
 pub let EqSatCfgCell: (Int, Int, std::ir::OperationId, Int, std::ir::ValueId, Int, std::ir::ValueId) -> Prop;
 pub let EqSatCfgDisagrees: (Int, Int, std::ir::ValueId, Int, std::ir::ValueId) -> Prop;
 
-pub mod memory_cfg {
-    pub let edge<node, edge, target, param, operand, state, addr, ty, data,
+pub let memory_cfg: std::List<Prop> = {
+    let edge<node, edge, target, param, operand, state, addr, ty, data,
                  region, order, mode, function, region_slot, entry, data_slot, decl>:
         (EqSatLive(node), ir::Successor(node,edge,target), ir::SuccessorArgument(node,edge,param,operand),
          ir::Operand(node,operand,state), EqSatStored(state,addr,ty,data),
          ir::Block(target,region,order), ir::Region(region,mode,function,region_slot,entry),
          target != entry, ir::Value(data,ty,"block",entry,data_slot,decl))
         -> EqSatCfgCell(target,param,node,edge,addr,ty,data);
-}
+    cons(edge, nil)
+};
 
-pub mod memory_cfg_missing {
-    pub let missing<target, param, addr, ty, data, witness, incoming, node, edge>:
+pub let memory_cfg_missing: std::List<Prop> = {
+    let missing<target, param, addr, ty, data, witness, incoming, node, edge>:
         (EqSatCfgCell(target,param,witness,incoming,addr,ty,data), ir::Successor(node,edge,target),
          !EqSatCfgCell(target,param,node,edge,addr,ty,data))
         -> EqSatCfgDisagrees(target,param,addr,ty,data);
-}
+    cons(missing, nil)
+};
 
-pub mod memory_cfg_apply {
-    pub let agreed<target, param, addr, ty, data, witness, incoming, state, state_ty, decl>:
+pub let memory_cfg_apply: std::List<Prop> = {
+    let agreed<target, param, addr, ty, data, witness, incoming, state, state_ty, decl>:
         (EqSatCfgCell(target,param,witness,incoming,addr,ty,data), !EqSatCfgDisagrees(target,param,addr,ty,data),
          ir::Value(state,state_ty,"block",target,param,decl))
         -> EqSatStored(state,addr,ty,data);
-}
+    cons(agreed, nil)
+};
 
 // Unthreaded accesses use the verified order of their CFG block.
 pub let EqSatOrdinaryAccess: std::ir::OperationId -> Prop;
@@ -229,84 +247,91 @@ pub let EqSatBlockedSlot: std::ir::ValueId -> Prop;
 pub let EqSatPrivateWrite: (std::ir::ValueId, std::ir::OperationId) -> Prop;
 pub let EqSatLocalPointerUse: (std::ir::ValueId, std::ir::OperationId) -> Prop;
 
-pub mod memory_sites {
-    pub let operand<node,slot,value>: ir::Operand(node,slot,value) -> EqSatOperandSlot(node,slot);
-    pub let ordinary<node,kind,place,home,pos,display,loc,slot>:
+pub let memory_sites: std::List<Prop> = {
+    let operand<node,slot,value>: ir::Operand(node,slot,value) -> EqSatOperandSlot(node,slot);
+    let ordinary<node,kind,place,home,pos,display,loc,slot>:
         (EqSatLive(node), ir::Operation{ id: node, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }(), EqSatAddressSlot(kind,slot),
          !EqSatHasAttr(node,"volatile"), !EqSatHasAttr(node,"atomic"),
          !EqSatHasAttr(node,"align"), !EqSatHasAttr(node,"alignment"))
         -> EqSatOrdinaryAccess(node);
-    pub let store<node,place,home,pos,display,loc,address,ty,data,state,st,sd,kind,owner,slot,decl>:
+    let store<node,place,home,pos,display,loc,address,ty,data,state,st,sd,kind,owner,slot,decl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::store.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
          ir::Operand(node,0,data), ir::Operand(node,1,address), ir::Value(data,ty,kind,owner,slot,decl),
          ir::result(state, st, node,0,sd)) -> EqSatStoreSite(node,address,ty,data,state,place,home,pos,st);
-    pub let load<node,place,home,pos,display,loc,address,ty,result,state,decl>:
+    let load<node,place,home,pos,display,loc,address,ty,result,state,decl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::load.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
          ir::Operand(node,0,address), ir::Operand(node,1,state), ir::result(result, ty, node,0,decl))
         -> EqSatLoadSite(node,address,ty,result,state,place,home);
-}
+    cons(operand, cons(ordinary, cons(store, cons(load, nil))))
+};
 
-pub mod plain_access {
-    pub let harmless<k>: EqSatDropKind(k) -> EqSatTransparent(k);
-    pub let alloca: EqSatTransparent(dialects::ptr::alloca.kind);
-    pub let plain_store<node,block,pos,display,loc,data,addr,ty,kind,owner,slot,decl>:
+pub let plain_access: std::List<Prop> = {
+    let harmless<k>: EqSatDropKind(k) -> EqSatTransparent(k);
+    let alloca: EqSatTransparent(dialects::ptr::alloca.kind);
+    let plain_store<node,block,pos,display,loc,data,addr,ty,kind,owner,slot,decl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::store.kind, placement: "block", container: block, position: pos, display: display, location: loc }(),
          ir::Operand(node,0,data), ir::Operand(node,1,addr), !EqSatOperandSlot(node,2),
          ir::Value(data,ty,kind,owner,slot,decl), EqSatInteger(ty), EqSatOrdinaryAccess(node))
         -> EqSatPlainStore(node,block,pos,addr,ty,data);
-    pub let plain_load<node,block,pos,display,loc,data,addr,ty,decl>:
+    let plain_load<node,block,pos,display,loc,data,addr,ty,decl>:
         (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::load.kind, placement: "block", container: block, position: pos, display: display, location: loc }(),
          ir::Operand(node,0,addr), !EqSatOperandSlot(node,1),
          ir::result(data, ty, node,0,decl), EqSatInteger(ty), EqSatOrdinaryAccess(node))
         -> EqSatPlainLoad(node,block,pos,addr,ty,data);
-    pub let exact<write,block,pos,addr,ty,data>:
+    let exact<write,block,pos,addr,ty,data>:
         EqSatPlainStore(write,block,pos,addr,ty,data) -> EqSatAddressEquals(addr,addr);
-    pub let pair<read,write,block,p,q,a,b,ty,value,data>:
+    let pair<read,write,block,p,q,a,b,ty,value,data>:
         (EqSatPlainLoad(read,block,q,a,ty,value), EqSatPlainStore(write,block,p,b,ty,data),
          EqSatAddressEquals(b,a),
          std::int::less(p,q) == true) -> EqSatWindow(read,write,block,p,q,value,data);
-}
+    cons(harmless, cons(alloca, cons(plain_store, cons(plain_load, cons(exact, cons(pair, nil))))))
+};
 
-pub mod plain_clobber {
-    pub let alias<read,write,block,p,q,value,data,node,k,pos,display,loc>:
+pub let plain_clobber: std::List<Prop> = {
+    let alias<read,write,block,p,q,value,data,node,k,pos,display,loc>:
         (EqSatWindow(read,write,block,p,q,value,data), ir::Operation{ id: node, kind: k, placement: "block", container: block, position: pos, display: display, location: loc }(),
          std::int::less(p,pos) == true, std::int::less(pos,q) == true, !EqSatTransparent(k),
          !EqSatPreservesCell(write,node))
         -> EqSatClobber(read,write);
-}
+    cons(alias, nil)
+};
 pub let EqSatPreservesCell: (std::ir::OperationId, std::ir::OperationId) -> Prop;
-pub mod plain_disjoint {
-    pub let read_only<first,read,block,p,addr,ty,value,q,d,l>:
+pub let plain_disjoint: std::List<Prop> = {
+    let read_only<first,read,block,p,addr,ty,value,q,d,l>:
         (EqSatPlainStore(first,block,p,addr,ty,value), ir::Operation{ id: read, kind: dialects::ptr::load.kind, placement: "block", container: block, position: q, display: d, location: l }(),
          EqSatOrdinaryAccess(read)) -> EqSatPreservesCell(first,read);
-    pub let different<first,second,block,p,q,a,b,at,bt,x,y>:
+    let different<first,second,block,p,q,a,b,at,bt,x,y>:
         (EqSatPlainStore(first,block,p,a,at,x), EqSatPlainStore(second,block,q,b,bt,y),
          EqSatAllocation(a), EqSatAllocation(b), a != b)
         -> EqSatPreservesCell(first,second);
-}
+    cons(read_only, cons(different, nil))
+};
 
-pub mod plain_forward {
-    pub let load<read,write,block,p,q,value,data>:
+pub let plain_forward: std::List<Prop> = {
+    let load<read,write,block,p,q,value,data>:
         (EqSatWindow(read,write,block,p,q,value,data), !EqSatClobber(read,write))
         -> (EqSatReplace(read, value, data), EqSatErase(read));
-}
+    cons(load, nil)
+};
 
 pub let EqSatStoreLayout: (std::ir::OperationId, BigInt, BigInt) -> Prop;
 pub let EqSatHasStoreLayout: std::ir::OperationId -> Prop;
 pub let EqSatPrivateExtent: (std::ir::OperationId, BigInt, BigInt) -> Prop;
-pub mod private_layout {
-    pub let layout<write,width,align>: EqSatStoreLayout(write,width,align)
+pub let private_layout: std::List<Prop> = {
+    let layout<write,width,align>: EqSatStoreLayout(write,width,align)
         -> (EqSatHasStoreLayout(write), EqSatPrivateExtent(write,width,align));
-}
-pub mod private_extent {
-    pub let native_integer<write,block,p,addr,ty,data,ctor,args,width>:
+    cons(layout, nil)
+};
+pub let private_extent: std::List<Prop> = {
+    let native_integer<write,block,p,addr,ty,data,ctor,args,width>:
         (EqSatPlainStore(write,block,p,addr,ty,data), !EqSatHasStoreLayout(write),
          EqSatAllocation(addr), ir::TypeTerm(ty,ctor,args), width == std::ir::integer_width(args))
         -> EqSatPrivateExtent(write,std::bigint::bigint(width),std::bigint::bigint(1));
-}
+    cons(native_integer, nil)
+};
 
-pub mod private_store {
-    pub let bounded_defined<write,block,position,addr,base,offset,ty,data,alloc,st,decl,p,d,l,handle,bytes,alignment,align,width,end,start,required>:
+pub let private_store: std::List<Prop> = {
+    let bounded_defined<write,block,position,addr,base,offset,ty,data,alloc,st,decl,p,d,l,handle,bytes,alignment,align,width,end,start,required>:
         (EqSatPlainStore(write,block,position,addr,ty,data), EqSatLocalAddress(addr,base,offset),
          ir::result(base, st, alloc,0,decl),
          ir::Operation{ id: alloc, kind: dialects::ptr::alloca.kind, placement: "block", container: block, position: p, display: d, location: l }(),
@@ -320,116 +345,129 @@ pub mod private_store {
          std::bigint::le(end,(bytes * std::bigint::bigint(8))) == true,
          EqSatDefined(data))
         -> EqSatPrivateWrite(base,write);
-    pub let derivation<addr,base,offset,result,off,node,ty,decl,p,d,l,b,i,w,m,dist>:
+    let derivation<addr,base,offset,result,off,node,ty,decl,p,d,l,b,i,w,m,dist>:
         (EqSatLocalAddress(addr,base,offset), EqSatLocalAddress(result,base,off),
          EqSatOffsetStep(result,addr,ty,i,w,dist,m), ir::result(result, ty, node,0,decl),
          ir::Operation{ id: node, kind: dialects::ptr::ptradd.kind, placement: "block", container: b, position: p, display: d, location: l }(), !EqSatPinned(result))
         -> (EqSatLocalPointerUse(addr,node), EqSatRemovable(node,result), EqSatRemovableNode(node));
-}
+    cons(bounded_defined, cons(derivation, nil))
+};
 
-pub mod private_other {
-    pub let other<addr,base,offset,node,slot>:
+pub let private_other: std::List<Prop> = {
+    let other<addr,base,offset,node,slot>:
         (EqSatLocalAddress(addr,base,offset), ir::Operand(node,slot,addr),
          !EqSatPrivateWrite(base,node), !EqSatLocalPointerUse(addr,node))
         -> EqSatBlockedSlot(base);
-    pub let yielded<addr,base,offset,region,slot>:
+    let yielded<addr,base,offset,region,slot>:
         (EqSatLocalAddress(addr,base,offset), ir::Yield(region,slot,addr)) -> EqSatBlockedSlot(base);
-}
+    cons(other, cons(yielded, nil))
+};
 
-pub mod private_drop {
-    pub let write<addr,node>: (EqSatPrivateWrite(addr,node), !EqSatBlockedSlot(addr)) -> EqSatDead(node);
-    pub let alloca<addr,node,ty,decl,h,p,d,l>:
+pub let private_drop: std::List<Prop> = {
+    let write<addr,node>: (EqSatPrivateWrite(addr,node), !EqSatBlockedSlot(addr)) -> EqSatDead(node);
+    let alloca<addr,node,ty,decl,h,p,d,l>:
         (EqSatAllocation(addr), !EqSatBlockedSlot(addr), !EqSatPinned(addr),
          ir::result(addr, ty, node,0,decl), ir::Operation{ id: node, kind: dialects::ptr::alloca.kind, placement: "block", container: h, position: p, display: d, location: l }(),
          !EqSatExtraResult(node)) -> EqSatDead(node);
-}
+    cons(write, cons(alloca, nil))
+};
 pub let EqSatExtraResult: std::ir::OperationId -> Prop;
-pub mod allocation_shape {
-    pub let multiple<node,value,ty,slot,decl>:
+pub let allocation_shape: std::List<Prop> = {
+    let multiple<node,value,ty,slot,decl>:
         (ir::result(value, ty, node,slot,decl), std::int::less(0,slot) == true)
         -> EqSatExtraResult(node);
-}
+    cons(multiple, nil)
+};
 
 pub let EqSatPointerSize: (std::ir::OperationId, Int) -> Prop;
 pub let EqSatPointerType: Int -> Prop;
 pub let EqSatPointerCell: (std::ir::ValueId, std::ir::ValueId, Int, Int, std::ir::ValueId) -> Prop;
-pub mod pointer_cells {
-    pub let pointer<ty,ctor,args,decl,default>:
+pub let pointer_cells: std::List<Prop> = {
+    let pointer<ty,ctor,args,decl,default>:
         (ir::TypeTerm(ty,ctor,args), ir::TypeCtor(ctor,"ptr","p",decl,default)) -> EqSatPointerType(ty);
-    pub let write<node,place,home,pos,state,st,address,value,ty,width>:
+    let write<node,place,home,pos,state,st,address,value,ty,width>:
         (EqSatStoreSite(node,address,ty,value,state,place,home,pos,st),
          EqSatPointerSize(node,width), EqSatPointerType(ty), EqSatOrdinaryAccess(node))
         -> EqSatPointerCell(state,address,ty,width,value);
-    pub let read<node,place,home,address,state,result,ty,width,value>:
+    let read<node,place,home,address,state,result,ty,width,value>:
         (EqSatLoadSite(node,address,ty,result,state,place,home), EqSatPointerSize(node,width),
          EqSatPointerCell(state,address,ty,width,value), EqSatMemoryOrdered(node,state), EqSatOrdinaryAccess(node))
         -> EqSatLoad(node,state,result,value);
-}
+    cons(pointer, cons(write, cons(read, nil)))
+};
 
 pub let EqSatPlainOverwrite: (std::ir::OperationId, std::ir::OperationId, Int, Int, Int) -> Prop;
 pub let EqSatOverwriteBarrier: (std::ir::OperationId, std::ir::OperationId) -> Prop;
-pub mod plain_overwrites {
-    pub let repeated<first,second,block,p,q,addr,ty,value>:
+pub let plain_overwrites: std::List<Prop> = {
+    let repeated<first,second,block,p,q,addr,ty,value>:
         (EqSatPlainStore(first,block,p,addr,ty,value),
          EqSatPlainStore(second,block,q,addr,ty,value), q == (p + 1))
         -> EqSatDead(first);
-    pub let candidate<first,second,block,p,q,addr,ty,x,y>:
+    let candidate<first,second,block,p,q,addr,ty,x,y>:
         (EqSatPlainStore(first,block,p,addr,ty,x), EqSatPlainStore(second,block,q,addr,ty,y),
          std::int::less(p,q) == true, EqSatDefined(x)) -> EqSatPlainOverwrite(first,second,block,p,q);
-}
-pub mod overwrite_barriers {
-    pub let intervening<first,second,block,p,q,node,k,pos,d,l>:
+    cons(repeated, cons(candidate, nil))
+};
+pub let overwrite_barriers: std::List<Prop> = {
+    let intervening<first,second,block,p,q,node,k,pos,d,l>:
         (EqSatPlainOverwrite(first,second,block,p,q), ir::Operation{ id: node, kind: k, placement: "block", container: block, position: pos, display: d, location: l }(),
          std::int::less(p,pos) == true, std::int::less(pos,q) == true, !EqSatDropKind(k))
         -> EqSatOverwriteBarrier(first,second);
-}
-pub mod overwrite_plain {
-    pub let unobserved<first,second,block,p,q>:
+    cons(intervening, nil)
+};
+pub let overwrite_plain: std::List<Prop> = {
+    let unobserved<first,second,block,p,q>:
         (EqSatPlainOverwrite(first,second,block,p,q), !EqSatOverwriteBarrier(first,second))
         -> EqSatDead(first);
-}
+    cons(unobserved, nil)
+};
 
-pub mod read_state {
-    pub let retain_cell<node,block,addr,before,after,ty,value,st,decl,result>:
+pub let read_state: std::List<Prop> = {
+    let retain_cell<node,block,addr,before,after,ty,value,st,decl,result>:
         (EqSatLoadSite(node,addr,ty,result,before,"block",block), ir::result(after, st, node,1,decl),
          EqSatStored(before,addr,ty,value), EqSatOrdinaryAccess(node))
         -> EqSatStored(after,addr,ty,value);
-}
+    cons(retain_cell, nil)
+};
 
-pub mod private_call {
-    pub let inaccessible<write,block,p,addr,ty,value,call,q,d,l>:
+pub let private_call: std::List<Prop> = {
+    let inaccessible<write,block,p,addr,ty,value,call,q,d,l>:
         (EqSatPlainStore(write,block,p,addr,ty,value), EqSatAllocation(addr),
          !EqSatEscapes(addr), ir::Operation{ id: call, kind: dialects::func::call.kind, placement: "block", container: block, position: q, display: d, location: l }())
         -> EqSatPreservesCell(write,call);
-}
+    cons(inaccessible, nil)
+};
 
 pub let EqSatMixedRegion: Int -> Prop;
 pub let EqSatOpaqueMemory: std::ir::OperationKind -> Prop;
-pub mod memory_barriers {
-    pub let call: EqSatOpaqueMemory(dialects::func::call.kind);
-    pub let copy: EqSatOpaqueMemory(dialects::ptr::memcpy.kind);
-    pub let fill: EqSatOpaqueMemory(dialects::ptr::memset.kind);
-    pub let typed_copy: EqSatOpaqueMemory(dialects::ptr::copy.kind);
-    pub let unthreaded<node,k,block,p,d,l,region,order,address,token>:
+pub let memory_barriers: std::List<Prop> = {
+    let call: EqSatOpaqueMemory(dialects::func::call.kind);
+    let copy: EqSatOpaqueMemory(dialects::ptr::memcpy.kind);
+    let fill: EqSatOpaqueMemory(dialects::ptr::memset.kind);
+    let typed_copy: EqSatOpaqueMemory(dialects::ptr::copy.kind);
+    let unthreaded<node,k,block,p,d,l,region,order,address,token>:
         (ir::Operation{ id: node, kind: k, placement: "block", container: block, position: p, display: d, location: l }(), ir::Block(block,region,order), EqSatAddressSlot(k,address),
          token == (address + 1), !EqSatOperandSlot(node,token))
         -> EqSatMixedRegion(region);
-    pub let flagged<node,k,block,p,d,l,region,order,address>:
+    let flagged<node,k,block,p,d,l,region,order,address>:
         (EqSatLive(node), ir::Operation{ id: node, kind: k, placement: "block", container: block, position: p, display: d, location: l }(), ir::Block(block,region,order),
          EqSatAddressSlot(k,address), !EqSatOrdinaryAccess(node))
         -> EqSatMixedRegion(region);
-    pub let opaque<node,k,block,p,d,l,region,order>:
+    let opaque<node,k,block,p,d,l,region,order>:
         (ir::Operation{ id: node, kind: k, placement: "block", container: block, position: p, display: d, location: l }(), ir::Block(block,region,order), EqSatOpaqueMemory(k))
         -> EqSatMixedRegion(region);
-}
+    cons(call, cons(copy, cons(fill, cons(typed_copy, cons(unthreaded, cons(flagged, cons(opaque,
+        nil)))))))
+};
 
-pub mod storage_defined {
-    pub let literal<node,out,ty,decl>:
+pub let storage_defined: std::List<Prop> = {
+    let literal<node,out,ty,decl>:
         (EqSatLive(node), dialects::builtin::constant.matches(node, (), (out,)),
          ir::result(out, ty, node,0,decl), EqSatInteger(ty))
         -> EqSatDefined(out);
-    pub let argument<node,out>: EqSatArgumentFreeze(node,out) -> EqSatDefined(out);
-    pub let product<node,out,ty,x,y,home>:
+    let argument<node,out>: EqSatArgumentFreeze(node,out) -> EqSatDefined(out);
+    let product<node,out,ty,x,y,home>:
         (EqSatBinary(node,dialects::builtin::muli.typed_kind,out,ty,x,y,home), EqSatDefined(x), EqSatDefined(y))
         -> EqSatDefined(out);
-}
+    cons(literal, cons(argument, cons(product, nil)))
+};

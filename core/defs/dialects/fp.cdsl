@@ -38,10 +38,10 @@ pub mod model {
         fma: (Rounding, Float<format>, Float<format>, Float<format>) -> Float<format>,
     };
 
-    pub let materialize<format: Format, rounding: Rounding, contraction: Contraction> = fn(
+    pub let materialize<format: Format, rounding: Rounding, contraction: Contraction> = |
         algebra: ValueAlgebra<format>,
         computation: Computation<format, rounding, contraction>
-    ) -> Float<format> decreases computation {
+    | -> Float<format> decreases computation {
         match computation {
             Computation::Capture(value) => value,
             Computation::Add(lhs, rhs) => algebra.add(
@@ -81,7 +81,7 @@ pub mod model {
         ),
     }
 
-    pub let reference<format: Format, rounding: Rounding> = fn(refinement: Refinement<format, rounding>) -> Computation<
+    pub let reference<format: Format, rounding: Rounding> = |refinement: Refinement<format, rounding>| -> Computation<
         format,
         rounding,
         Contraction::Permitted
@@ -94,9 +94,9 @@ pub mod model {
         }
     };
 
-    pub let implementation<format: Format, rounding: Rounding> = fn(
+    pub let implementation<format: Format, rounding: Rounding> = |
         refinement: Refinement<format, rounding>
-    ) -> Computation<format, rounding, Contraction::Permitted> {
+    | -> Computation<format, rounding, Contraction::Permitted> {
         match refinement {
             Refinement::Contract(lhs, rhs, addend) => Computation::Fma(lhs, rhs, addend),
         }

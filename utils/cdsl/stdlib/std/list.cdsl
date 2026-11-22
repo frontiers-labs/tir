@@ -1,10 +1,10 @@
 pub enum List<A: Type> { Nil, Cons(A, List<A>), }
-let identity<A: Type> = fn (x: A) -> A { x };
-pub let singleton<A: Type> = fn (x: A) -> List<A> {
+let identity<A: Type> = |x: A| -> A { x };
+pub let singleton<A: Type> = |x: A| -> List<A> {
     List::Cons(identity(x), List::Nil)
 };
 pub let map<A: Type, B: Type> =
-    fn (xs: List<A>, f: A -> B) -> List<B> decreases xs {
+    |xs: List<A>, f: A -> B| -> List<B> decreases xs {
         match xs {
             List::Nil => List::Nil,
             List::Cons(x, rest) => List::Cons(f(x), map(rest, f)),
@@ -12,7 +12,7 @@ pub let map<A: Type, B: Type> =
     };
 use std::option::Option;
 
-pub let item<A: Type> = fn (xs: List<A>, index: Nat) -> Option<A> decreases xs {
+pub let item<A: Type> = |xs: List<A>, index: Nat| -> Option<A> decreases xs {
     match xs {
         List::Nil => Option::None<A>,
         List::Cons(value, rest) => if index == 0 {
@@ -23,24 +23,24 @@ pub let item<A: Type> = fn (xs: List<A>, index: Nat) -> Option<A> decreases xs {
     }
 };
 
-let all_from<A: Type> = fn (xs: List<A>, index: Nat, test: (Nat, A) -> Bool) -> Bool decreases xs {
+let all_from<A: Type> = |xs: List<A>, index: Nat, test: (Nat, A) -> Bool| -> Bool decreases xs {
     match xs {
         List::Nil => true,
         List::Cons(value, rest) => test(index, value) && all_from(rest, index + 1, test),
     }
 };
 
-pub let all_indexed<A: Type> = fn (xs: List<A>, test: (Nat, A) -> Bool) -> Bool {
+pub let all_indexed<A: Type> = |xs: List<A>, test: (Nat, A) -> Bool| -> Bool {
     all_from(xs, 0, test)
 };
 
-let first_from<A: Type> = fn (xs: List<A>, index: Nat, test: A -> Bool) -> Nat decreases xs {
+let first_from<A: Type> = |xs: List<A>, index: Nat, test: A -> Bool| -> Nat decreases xs {
     match xs {
         List::Nil => index,
         List::Cons(value, rest) => if test(value) { index } else { first_from(rest, index + 1, test) },
     }
 };
 
-pub let first_index_or_length<A: Type> = fn (xs: List<A>, test: A -> Bool) -> Nat {
+pub let first_index_or_length<A: Type> = |xs: List<A>, test: A -> Bool| -> Nat {
     first_from(xs, 0, test)
 };

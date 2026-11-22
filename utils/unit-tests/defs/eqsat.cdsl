@@ -1,0 +1,39 @@
+use dialects::test::keep_left;
+use std::Rewrite;
+use std::bigint::BigInt;
+use std::ir::OperationId;
+use std::ir::OperationKind;
+use std::ir::ValueId;
+
+// The test package has tir as a dev-dependency. These declarations link the
+// collection to the live IR and EqSat tables by their engine names.
+let Operation: { id: OperationId, kind: OperationKind, placement: String, container: Int, position: Int, display: Int, location: Int } -> Prop;
+let Operand: std::Table<(OperationId, Int), ValueId, std::Merge::Unique>;
+let Value: (ValueId, Int, String, Int, Int, Int) -> Prop;
+let TypeTerm: (Int, Int, Int) -> Prop;
+let TypeCtor: (Int, String, String, Int, Int) -> Prop;
+let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>;
+let EqSatLive: OperationId -> Prop;
+let EqSatPinnedOp: OperationId -> Prop;
+let EqSatPinned: ValueId -> Prop;
+let EqSatReplace: (OperationId, ValueId, ValueId) -> Prop;
+let EqSatErase: OperationId -> Prop;
+let EqSatDefinition: (OperationId, ValueId, Form) -> Prop;
+let eqsat_attr_int: Int -> BigInt;
+enum Form { Constant(OperationKind, String, BigInt), }
+
+let policy = {
+    live: EqSatLive,
+    pinned_operation: EqSatPinnedOp,
+    pinned_value: EqSatPinned,
+    replace: EqSatReplace,
+    erase: EqSatErase,
+    definition: EqSatDefinition,
+    constant: Form::Constant,
+    attributes: Attribute,
+    attribute_integer: eqsat_attr_int,
+};
+
+let same<x>: Rewrite(keep_left(x, x) -> x);
+
+pub let keep_left_rewrites = || { std::rewrite::collect(same, policy) };

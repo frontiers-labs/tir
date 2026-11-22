@@ -1,0 +1,19 @@
+use std::bigint::BigInt;
+use std::ir::OperationId;
+use std::ir::OperationKind;
+use std::ir::ValueId;
+
+pub enum Rewrite { Rewrite(Prop), }
+
+pub let Collection: Type;
+pub let collect<A: Type, R: Type>: (A, {
+    live: OperationId -> Prop,
+    pinned_operation: OperationId -> Prop,
+    pinned_value: ValueId -> Prop,
+    replace: (OperationId, ValueId, ValueId) -> Prop,
+    erase: OperationId -> Prop,
+    definition: (OperationId, ValueId, R) -> Prop,
+    constant: (OperationKind, String, BigInt) -> R,
+    attributes: (String, Int, String, Int) -> Prop,
+    attribute_integer: Int -> BigInt,
+}) -> Collection;

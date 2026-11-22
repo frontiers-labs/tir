@@ -1,0 +1,6 @@
+use std::ir::OperationId;
+use std::schedule::Schedule;
+
+pub let Analysis<O: Type>: Type;
+pub let memo<S: Type, O: Type>:
+    (OperationId -> { schedule: Schedule<S>, outputs: O }) -> (OperationId -> Analysis<O>);

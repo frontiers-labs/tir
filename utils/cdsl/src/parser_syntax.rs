@@ -125,6 +125,10 @@ pub(crate) enum Expression {
     Record(Record),
     Block(Block),
     Function(Box<Function>),
+    Rule {
+        binders: Vec<RuleBinder>,
+        clause: Box<Expr>,
+    },
     If {
         condition: Box<Expr>,
         then: Block,
@@ -309,6 +313,10 @@ impl Children for Expression {
             }
             Self::Block(v0) => {
                 v0.children(into);
+            }
+            Self::Rule { binders, clause } => {
+                binders.children(into);
+                clause.children(into);
             }
             Self::Function(v0) => {
                 v0.children(into);

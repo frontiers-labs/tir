@@ -22,10 +22,10 @@ pub let Symbol: (Int, String, Int, Int) -> Prop; // symbol ID, spelling, optiona
 // The -1 key identifies the declaration. Other keys identify Rust interface types.
 pub let OpSpec: std::Table<(std::ir::OperationKind, Int), Int, std::Merge::Unique>;
 
-pub let result = fn (value: std::ir::ValueId, ty: Int, owner: std::ir::OperationId, slot: Int, declared: Int) -> Prop {
+pub let result = |value: std::ir::ValueId, ty: Int, owner: std::ir::OperationId, slot: Int, declared: Int| -> Prop {
     Value(value, ty, "result", std::ir::raw_operation_id(owner), slot, declared)
 };
-pub let operation_attribute = fn (owner: std::ir::OperationId, name: String, attr: Int) -> Prop {
+pub let operation_attribute = |owner: std::ir::OperationId, name: String, attr: Int| -> Prop {
     Attribute("operation", std::ir::raw_operation_id(owner), name, attr)
 };
 
@@ -34,28 +34,28 @@ pub let CyclePath: (Int, std::ir::OperationId, std::ir::OperationId) -> Prop; //
 pub let ReaderAt: (std::ir::OperationId, Int, std::ir::OperationId) -> Prop; // reader, enclosing region, immediate member
 pub let DependsOn: (Int, std::ir::OperationId, std::ir::OperationId) -> Prop; // graph, consumer, immediate producer
 pub let Bypass: (Int, Int, Int) -> Prop; // CFG region, avoided defining block, reachable block
-pub mod structure {
-    pub let graph<operation, kind, region, position, display, location>:
+let structure: std::List<Prop> = {
+    let graph<operation, kind, region, position, display, location>:
         Operation{ id: operation, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }() -> ReaderAt(operation, region, operation);
-    pub let cfg<operation, kind, block, position, display, location, region, layout>:
+    let cfg<operation, kind, block, position, display, location, region, layout>:
         (
             Operation{ id: operation, kind: kind, placement: "block", container: block, position: position, display: display, location: location }(),
             Block(block, region, layout)
         ) -> ReaderAt(operation, region, operation);
-    pub let lift<reader, region, member, mode, parent, region_slot, entry, outer, representative>:
+    let lift<reader, region, member, mode, parent, region_slot, entry, outer, representative>:
         (
             ReaderAt(reader, region, member),
             Region(region, mode, parent, region_slot, entry),
             ReaderAt(parent, outer, representative)
         ) -> ReaderAt(reader, outer, representative);
-    pub let operand_dep<operation, slot, value, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>:
+    let operand_dep<operation, slot, value, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>:
         (
             Operand(operation, slot, value),
             result(value, ty, producer, result_slot, declared),
             ReaderAt(operation, region, sibling),
             Operation{ id: producer, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }()
         ) -> DependsOn(region, sibling, producer);
-    pub let yield_dep<inner, slot, value, mode, operation, region_slot, entry, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>:
+    let yield_dep<inner, slot, value, mode, operation, region_slot, entry, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>:
         (
             Yield(inner, slot, value),
             Region(inner, mode, operation, region_slot, entry),
@@ -63,19 +63,20 @@ pub mod structure {
             ReaderAt(operation, region, sibling),
             Operation{ id: producer, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }()
         ) -> DependsOn(region, sibling, producer);
-}
-pub mod flow {
-    pub let start<region, start_op, next_op>:
+    std::List::Cons(graph, std::List::Cons(cfg, std::List::Cons(lift, std::List::Cons(operand_dep, std::List::Cons(yield_dep, std::List::Nil)))))
+};
+let flow: std::List<Prop> = {
+    let start<region, start_op, next_op>:
         (
             DependsOn(region, start_op, next_op),
             std::ir::operation_ids::less(next_op, start_op) == false
         ) -> CyclePath(region, start_op, next_op);
-    pub let path<region, start_op, next_op, end_op>:
+    let path<region, start_op, next_op, end_op>:
         (
             CyclePath(region, start_op, next_op),
             DependsOn(region, next_op, end_op)
         ) -> CyclePath(region, start_op, end_op);
-    pub let avoid_param<operation, kind, use_block, position, display, location, slot, value, ty, definition, result_slot, declared, region, layout, other_layout, mode, owner, region_slot, entry>:
+    let avoid_param<operation, kind, use_block, position, display, location, slot, value, ty, definition, result_slot, declared, region, layout, other_layout, mode, owner, region_slot, entry>:
         (
             Operation{ id: operation, kind: kind, placement: "block", container: use_block, position: position, display: display, location: location }(),
             Operand(operation, slot, value),
@@ -87,7 +88,7 @@ pub mod flow {
             definition != entry,
             std::int::less(entry, 0) == false
         ) -> Bypass(region, definition, entry);
-    pub let avoid_result<operation, kind, use_block, position, display, location, slot, value, ty, producer, result_slot, declared, producer_kind, definition, producer_pos, producer_display, producer_location, region, layout, other_layout, mode, owner, region_slot, entry>:
+    let avoid_result<operation, kind, use_block, position, display, location, slot, value, ty, producer, result_slot, declared, producer_kind, definition, producer_pos, producer_display, producer_location, region, layout, other_layout, mode, owner, region_slot, entry>:
         (
             Operation{ id: operation, kind: kind, placement: "block", container: use_block, position: position, display: display, location: location }(),
             Operand(operation, slot, value),
@@ -100,7 +101,7 @@ pub mod flow {
             definition != entry,
             std::int::less(entry, 0) == false
         ) -> Bypass(region, definition, entry);
-    pub let bypass<region, definition, current, terminator, kind, position, display, location, layout, slot, target, other_layout>:
+    let bypass<region, definition, current, terminator, kind, position, display, location, layout, slot, target, other_layout>:
         (
             Bypass(region, definition, current),
             Block(current, region, layout),
@@ -109,10 +110,11 @@ pub mod flow {
             Block(target, region, other_layout),
             target != definition
         ) -> Bypass(region, definition, target);
-}
+    std::List::Cons(start, std::List::Cons(path, std::List::Cons(avoid_param, std::List::Cons(avoid_result, std::List::Cons(bypass, std::List::Nil)))))
+};
 
 
-pub let index = std::schedule::Schedule::Rules((structure, flow));
+pub let index = || { std::schedule::Schedule::Rules((flow, structure)) };
 
-pub let derive_structure = std::schedule::saturate(structure);
-pub let derive_flow = std::schedule::saturate(flow);
+pub let derive_structure = || { std::schedule::saturate(structure) };
+pub let derive_flow = || { std::schedule::saturate(flow) };
