@@ -1,4 +1,4 @@
-use tir_egglog::sort::BigInt;
+use tir_egglog::{NativeIdentity, sort::BigInt};
 
 use super::generated::Form;
 
@@ -6,6 +6,7 @@ use crate::{
     Context, NewOp, OpHandle, OpId, Operation, OperationRef, PassError, RegionId, ValueId,
     attributes::{AttributeValue, NamedAttribute},
     builtin::{IntegerType, ops},
+    schema::Argument,
     utils::APInt,
 };
 
@@ -28,7 +29,7 @@ type Definition = (OpHandle, ValueId, Expression);
 
 enum Expression {
     Read(ValueId),
-    Bits(AttributeValue),
+    Constant(NativeIdentity, &'static str, AttributeValue),
     Binary(&'static crate::schema::OpSchema, Box<[Expression; 2]>),
 }
 
@@ -182,14 +183,16 @@ fn check_definitions(
     redirected: &[ValueId],
     edits: &[CheckedEdit],
 ) -> Result<Vec<Definition>, PassError> {
-    forms.sort_unstable_by_key(|row| row.0);
+    forms.sort_unstable_by_key(|(id, _, form)| (*id, !matches!(form, Form::Constant(..))));
     let mut definitions: Vec<Definition> = Vec::new();
+    let mut custom_definition = None;
     for (id, result, form) in forms {
-        if redirected.binary_search(&result).is_ok() {
+        let custom = matches!(form, Form::Constant(..));
+        if redirected.binary_search(&result).is_ok() || (custom_definition == Some(id) && !custom) {
             continue;
         }
         let op = definition(context, id, result)?;
-        let Some(expression) = decode(context, result, form, redirected) else {
+        let Some(expression) = decode(context, result, form, redirected)? else {
             continue;
         };
         let use_offset = edits.partition_point(|edit| edit.0 < UseSite::Operand(id, 0));
@@ -204,6 +207,9 @@ fn check_definitions(
         if definitions.last().is_some_and(|row| row.0.id == id) {
             return Err(PassError::RewriteFailed(id));
         }
+        if custom {
+            custom_definition = Some(id);
+        }
         definitions.push((op, result, expression));
     }
     Ok(definitions)
@@ -214,8 +220,8 @@ fn decode(
     expected: ValueId,
     form: Form,
     redirected: &[ValueId],
-) -> Option<Expression> {
-    match form {
+) -> Result<Option<Expression>, PassError> {
+    Ok(match form {
         Form::Read(id) => {
             let value = ValueId::from(id);
             (context.has_value(value)
@@ -223,15 +229,83 @@ fn decode(
                 && context.get_value(value).ty() == context.get_value(expected).ty())
             .then_some(Expression::Read(value))
         }
-        Form::Bits(bits) => Some(Expression::Bits(literal(context, expected, bits).ok()?)),
-        Form::Bin(kind, left, right) => Some(Expression::Binary(
-            context.schema_for_kind(kind.declaration())?,
-            Box::new([
-                decode(context, expected, *left, redirected)?,
-                decode(context, expected, *right, redirected)?,
-            ]),
-        )),
+        Form::Bits(bits) => literal(context, expected, bits)
+            .ok()
+            .map(|value| Expression::Constant(ops::ConstantOp::native_identity(), "value", value)),
+        Form::Bin(kind, left, right) => {
+            let Some(schema) = context.schema_for_kind(kind.declaration()) else {
+                return Ok(None);
+            };
+            let left = decode(context, expected, *left, redirected)?;
+            let right = decode(context, expected, *right, redirected)?;
+            match (left, right) {
+                (Some(left), Some(right)) => {
+                    Some(Expression::Binary(schema, Box::new([left, right])))
+                }
+                _ => None,
+            }
+        }
+        Form::Constant(kind, attr, bits) => Some(custom_constant(
+            context,
+            expected,
+            kind.declaration(),
+            &attr,
+            bits,
+        )?),
+    })
+}
+
+fn custom_constant(
+    context: &Context,
+    expected: ValueId,
+    kind: NativeIdentity,
+    attr: &str,
+    bits: BigInt,
+) -> Result<Expression, PassError> {
+    let schema = context.schema_for_kind(kind).ok_or_else(|| {
+        PassError::InvalidRuleSet(format!(
+            "unregistered constant declaration '{}'",
+            kind.as_str()
+        ))
+    })?;
+    let ty = context.get_value(expected).ty();
+    if !context.kind_has_interface::<dyn crate::ConstantLike>(&kind)
+        || !schema.regions.is_empty()
+        || schema
+            .signature
+            .substitution(context.terms(), &[], &[Argument::Fixed(ty)])
+            .is_none()
+    {
+        return Err(PassError::InvalidRuleSet(format!(
+            "'{}' cannot construct a constant with this result type",
+            kind.as_str()
+        )));
     }
+    let field = schema
+        .attributes
+        .iter()
+        .find(|field| field.name == attr && matches!(field.ty, "Int" | "?Int"))
+        .ok_or_else(|| {
+            PassError::InvalidRuleSet(format!(
+                "'{}' has no integer attribute '{attr}'",
+                kind.as_str()
+            ))
+        })?;
+    if schema
+        .attributes
+        .iter()
+        .any(|other| other.name != attr && !other.ty.starts_with('?'))
+    {
+        return Err(PassError::InvalidRuleSet(format!(
+            "'{}' requires additional constant attributes",
+            kind.as_str()
+        )));
+    }
+    Ok(Expression::Constant(
+        kind,
+        field.name,
+        literal(context, expected, bits)?,
+    ))
 }
 
 fn materialize(
@@ -244,10 +318,10 @@ fn materialize(
     let (identity, operands, attributes) = match expression {
         Expression::Read(value) if root_result.is_none() => return Ok(value),
         Expression::Read(_) => return Err(PassError::RewriteFailed(anchor.op().id)),
-        Expression::Bits(bits) => (
-            ops::ConstantOp::native_identity(),
+        Expression::Constant(kind, attr, value) => (
+            kind,
             Vec::new(),
-            vec![NamedAttribute::new(context.intern("value"), bits)],
+            vec![NamedAttribute::new(context.intern(attr), value)],
         ),
         Expression::Binary(schema, children) => {
             let mut operands = Vec::with_capacity(2);
@@ -332,12 +406,17 @@ fn literal(context: &Context, value: ValueId, bits: BigInt) -> Result<AttributeV
     let width = IntegerType::view(context, ty)
         .ok_or_else(|| PassError::InvalidRuleSet("expected integer replacement type".into()))?
         .width();
-    let number: APInt = bits
-        .to_string()
+    let spelling = bits.to_string();
+    let magnitude: APInt = spelling
+        .strip_prefix('-')
+        .unwrap_or(&spelling)
         .parse()
         .map_err(PassError::InvalidRuleSet)?;
-    Ok(AttributeValue::from_int(&APInt::from_limbs(
-        width,
-        &number.limbs(),
-    )))
+    let number = APInt::from_limbs(width, &magnitude.limbs());
+    let number = if bits.is_negative() {
+        number.neg()
+    } else {
+        number
+    };
+    Ok(AttributeValue::from_int(&number))
 }

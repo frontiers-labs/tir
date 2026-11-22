@@ -32,17 +32,22 @@ pub struct Facts<'a> {
 }
 
 impl Facts<'_> {
+    #[doc(hidden)]
+    pub fn database(&self) -> &Database {
+        self.engine.database()
+    }
+
     pub fn rows(&self) -> impl Iterator<Item = Row<'_>> {
-        self.engine.database().rows(self.table)
+        self.database().rows(self.table)
     }
 
     pub fn base_value<T: BaseValue>(&self, value: Value) -> T {
-        self.engine.database().base_value(value)
+        self.database().base_value(value)
     }
 }
 
 struct Catalog {
-    root: TableId,
+    root: Option<TableId>,
     existing_tables: usize,
     program: Program,
     owners: BTreeMap<TableId, AnalysisId>,
@@ -52,7 +57,13 @@ struct Catalog {
 struct State {
     producer: Producer,
     order: Vec<AnalysisId>,
-    version: Option<u128>,
+    completion: Option<Completion>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Completion {
+    root: Option<OpId>,
+    version: u128,
 }
 
 impl State {
@@ -92,35 +103,35 @@ impl AnalysisManager {
         let (engine, program, producers) =
             tir_cdsl::Schema::compile_producers(snapshot, source, ANALYSIS_INPUTS)
                 .map_err(|e| Error::Unsupported(e.to_string()))?;
-        let installed = Self::build_catalog(root, existing_tables, program, producers)?;
+        let installed = Self::build_catalog(Some(root), existing_tables, program, producers)?;
         *catalog = Some(installed);
         *live = engine;
         Ok(())
     }
 
-    pub(crate) fn install_cfg(context: &Context) -> Result<(), Error> {
+    #[doc(hidden)]
+    pub fn ensure_generated(
+        context: &Context,
+        load: impl FnOnce(&mut Database) -> Result<(Program, Vec<Producer>), Box<dyn std::error::Error>>,
+    ) -> Result<(), Error> {
         let mut catalog = context.analyses().0.borrow_mut();
         if catalog.is_some() {
-            return Err(Error::Unsupported("duplicate analysis catalog".into()));
+            return Ok(());
         }
         let mut live = context.egraph();
         let mut snapshot = live.clone();
         let db = snapshot.database_mut();
-        if super::cfg::generated::table_analysis_root(db).is_ok() {
-            return Err(Error::Unsupported("reserved analysis root".into()));
-        }
         let existing_tables = db.table_count();
-        let (program, producers) = super::cfg::generated::load_producers(db)
-            .map_err(|error| Error::Unsupported(error.to_string()))?;
-        let root = super::cfg::generated::table_analysis_root(db)?;
-        let installed = Self::build_catalog(root, existing_tables, program, producers)?;
+        let (program, producers) =
+            load(db).map_err(|error| Error::Unsupported(error.to_string()))?;
+        let installed = Self::build_catalog(None, existing_tables, program, producers)?;
         *catalog = Some(installed);
         *live = snapshot;
         Ok(())
     }
 
     fn build_catalog(
-        root: TableId,
+        root: Option<TableId>,
         existing_tables: usize,
         program: Program,
         producers: Vec<Producer>,
@@ -128,7 +139,7 @@ impl AnalysisManager {
         let mut owners = BTreeMap::new();
         for (id, producer) in producers.iter().enumerate() {
             for &table in &producer.writes {
-                if table == root
+                if Some(table) == root
                     || table.index() < existing_tables
                     || owners.insert(table, AnalysisId(id)).is_some()
                 {
@@ -141,7 +152,7 @@ impl AnalysisManager {
             .map(|producer| State {
                 producer,
                 order: Vec::new(),
-                version: None,
+                completion: None,
             })
             .collect();
         let mut installed = Catalog {
@@ -191,17 +202,19 @@ impl AnalysisManager {
         let db = engine.database_mut();
         let table = resolve(db)?;
         let producer = *catalog.owners.get(&table).ok_or_else(missing)?;
-        let root = db.base(i64::from(root.raw()));
-        let mut roots = db.rows(catalog.root);
-        let visible = roots
-            .next()
-            .is_some_and(|row| row[0] == root && !row.is_subsumed());
-        if !visible || roots.next().is_some() {
-            db.clear(catalog.root);
-            db.insert(catalog.root, &[root])?;
+        if let Some(table) = catalog.root {
+            let root = db.base(i64::from(root.raw()));
+            let mut roots = db.rows(table);
+            let visible = roots
+                .next()
+                .is_some_and(|row| row[0] == root && !row.is_subsumed());
+            if !visible || roots.next().is_some() {
+                db.clear(table);
+                db.insert(table, &[root])?;
+            }
         }
         for id in catalog.producers[producer.0].order.clone() {
-            catalog.refresh(db, id)?;
+            catalog.refresh(db, id, root)?;
         }
         Ok(Facts {
             engine,
@@ -223,8 +236,12 @@ impl AnalysisManager {
             for (id, state) in catalog.producers.iter_mut().enumerate() {
                 let keep = matches!(&preserved, Some(Preserved::All))
                     || matches!(&preserved, Some(Preserved::Only(ids)) if ids.contains(&AnalysisId(id)));
-                if !keep || state.version != Some(state.version(engine.database())) {
-                    state.version = None;
+                if !keep
+                    || state
+                        .completion
+                        .is_some_and(|saved| saved.version != state.version(engine.database()))
+                {
+                    state.completion = None;
                 }
             }
         }
@@ -256,19 +273,28 @@ impl Catalog {
         Ok(())
     }
 
-    fn refresh(&mut self, db: &mut Database, id: AnalysisId) -> Result<(), Error> {
+    fn refresh(&mut self, db: &mut Database, id: AnalysisId, root: OpId) -> Result<(), Error> {
         let state = &mut self.producers[id.0];
-        if state.version == Some(state.version(db)) {
+        let root = state.producer.uses_arguments.then_some(root);
+        let key = Completion {
+            root,
+            version: state.version(db),
+        };
+        if state.completion == Some(key) {
             return Ok(());
         }
-        state.version = None;
+        state.completion = None;
         let writes = &state.producer.writes;
         let clear = |db: &mut Database| writes.iter().for_each(|&table| db.clear(table));
         clear(db);
+        let argument = root.map(|root| db.base(i64::from(root.raw())));
         self.program
-            .run(db, &state.producer.schedule, &[])
+            .run(db, &state.producer.schedule, argument.as_slice())
             .inspect_err(|_| clear(db))?;
-        state.version = Some(state.version(db));
+        state.completion = Some(Completion {
+            version: state.version(db),
+            ..key
+        });
         Ok(())
     }
 }

@@ -1,5 +1,8 @@
 use std::ir::interfaces::*;
 
+pub mod dialects;
+pub mod eqsat;
+
 pub let def_reg = {
     rust_name: "DefOp",
     name: "def",

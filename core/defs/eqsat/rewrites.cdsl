@@ -1,0 +1,33 @@
+use dialects::builtin::addi;
+use dialects::builtin::constant;
+use dialects::builtin::xori;
+use integer::EqSatDefined as defined;
+use std::List;
+use std::Rewrite;
+
+pub let rewrite_policy = {
+    live: context::EqSatLive,
+    pinned_operation: loops::EqSatPinnedOp,
+    pinned_value: loops::EqSatPinned,
+    replace: context::EqSatReplace,
+    erase: context::EqSatErase,
+    definition: integer::EqSatDefinition,
+    constant: Form::Constant,
+    attributes: ir::Attribute,
+    attribute_integer: eqsat_attr_int,
+};
+
+let xor_self<x>: Rewrite((xori(x, x), defined(x)) -> constant(0));
+let add_zero<x>: Rewrite((addi(x, constant(0)), defined(x)) -> x);
+
+let add_zero_rules = || -> List<Rewrite> {
+    List::Cons(add_zero, List::Nil)
+};
+
+pub let builtin_rewrites = || {
+    std::rewrite::collect(List::Cons(xor_self, add_zero_rules()), rewrite_policy)
+};
+
+pub let add_zero_rewrites = || {
+    std::rewrite::collect(add_zero_rules(), rewrite_policy)
+};

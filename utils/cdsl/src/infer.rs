@@ -57,7 +57,7 @@ const VECTOR: ConId = ConId(10);
 const SUM: ConId = ConId(15);
 const PRODUCT: ConId = ConId(16);
 const TYPE1: ConId = ConId(18);
-const FACT: ConId = ConId(32);
+pub(crate) const FACT: ConId = ConId(32);
 const INT: ConId = ConId(41);
 
 pub(crate) fn builtin_path(path: &[String]) -> bool {
@@ -734,7 +734,9 @@ impl Checker {
         let left = self.normalize_indices(&self.substitution.apply(left))?;
         let right = self.normalize_indices(&self.substitution.apply(right))?;
         let next = hm::unify(&left, &right).map_err(kernel_error)?;
-        self.substitution = next.compose(&self.substitution);
+        if !next.bindings.is_empty() {
+            self.substitution = next.compose(&self.substitution);
+        }
         Ok(())
     }
     fn instantiate(&mut self, scheme: &Scheme) -> Result<Ty, Error> {
@@ -1351,6 +1353,28 @@ impl Checker {
                 outcome?;
                 Ok(Ty::Con(self.record_id(names)?, type_list(args)))
             }
+            Expression::Rule { binders, clause } => {
+                if !clause_annotation(clause) {
+                    return Err(Error("a local rule requires a clause".into()));
+                }
+                let mut local = environment.clone();
+                let mut types = types.clone();
+                let mut names = BTreeSet::new();
+                for binder in binders {
+                    if !names.insert(&binder.name) {
+                        return Err(Error("duplicate rule binder".into()));
+                    }
+                    let ty = match &binder.ty {
+                        Some(ty) => self.annotation(definitions, ty, &types)?,
+                        None => self.fresh()?,
+                    };
+                    let name = vec![binder.name.clone()];
+                    local.insert(name.clone(), BoundValue::mono(ty));
+                    types.insert(name, None);
+                }
+                let owner = self.frames.last().cloned().unwrap_or_default();
+                self.check_clause(definitions, &owner, binders, clause, &local, &types)
+            }
             Expression::Block(block) => self.block(definitions, block, environment, types),
             Expression::Function(function) => self.function(
                 definitions,
@@ -1502,6 +1526,206 @@ impl Checker {
             ),
         }
     }
+    fn rewrite_operation<'a>(
+        &self,
+        definitions: &Definitions<'a>,
+        expression: &'a Expr,
+    ) -> Option<(&'a Path, &'a Binding, &'a [Expr])> {
+        let Expression::Call { value, arguments } = &expression.value else {
+            return None;
+        };
+        let Expression::Path(path) = &value.value else {
+            return None;
+        };
+        let binding = *definitions.get(path)?;
+        binding.operation_name(&path[..path.len() - binding.path.len()])?;
+        Some((path, binding, arguments))
+    }
+
+    fn check_rewrite_term(
+        &mut self,
+        definitions: &Definitions<'_>,
+        term: &Expr,
+        local: &Environment,
+        matches: &mut MatchArguments,
+        literals: &mut BTreeMap<usize, String>,
+    ) -> Result<Ty, Error> {
+        let Some((path, binding, arguments)) = self.rewrite_operation(definitions, term) else {
+            if let Expression::Path(name) = &term.value
+                && let Some(binder) = local.get(name)
+            {
+                return self.instantiate(binder);
+            }
+            return Err(Error(
+                "a rewrite term requires a bound value or a declared operation".into(),
+            ));
+        };
+        let Ty::Con(_, groups) = self.operation_kind(definitions, path, binding)? else {
+            return Err(Error("rewrite operation has no checked ports".into()));
+        };
+        let groups = list_values(&groups);
+        let [inputs @ Ty::Con(_, operands), outputs @ Ty::Con(_, results)] = groups.as_slice()
+        else {
+            return Err(Error("rewrite operation has invalid ports".into()));
+        };
+        let operands = list_values(operands);
+        let results = list_values(results);
+        let [result] = results.as_slice() else {
+            return Err(Error("rewrite operation must have one result".into()));
+        };
+        if operands.is_empty() && arguments.len() == 1 {
+            let attributes = binding
+                .operation_fields()
+                .and_then(|fields| {
+                    fields.iter().find_map(|field| match &field.value {
+                        OpField::Field { name, value } if name == "attributes" => Some(value),
+                        _ => None,
+                    })
+                })
+                .ok_or_else(|| {
+                    Error("literal operation requires a declared integer attribute".into())
+                })?;
+            let attrs = self.annotation(definitions, attributes, &self.types.clone())?;
+            let Ty::Con(record, fields) = attrs else {
+                return Err(Error(
+                    "literal operation requires an integer attribute record".into(),
+                ));
+            };
+            let attribute = self
+                .records
+                .iter()
+                .find_map(|(names, id)| {
+                    if *id == record && names.len() == 1 {
+                        names.first().cloned()
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| {
+                    Error("literal operation requires exactly one integer attribute".into())
+                })?;
+            if list_values(&fields).as_slice() != [con(INT)]
+                || !matches!(
+                    &arguments[0].value,
+                    Expression::Literal(Literal::Natural(_))
+                )
+            {
+                return Err(Error("literal operation requires an Int literal".into()));
+            }
+            literals.insert(term.range.start, attribute);
+        } else {
+            if operands.len() != arguments.len() {
+                return Err(Error("rewrite operation operand count mismatch".into()));
+            }
+            for (argument, expected) in arguments.iter().zip(&operands) {
+                let actual =
+                    self.check_rewrite_term(definitions, argument, local, matches, literals)?;
+                self.unify(&actual, expected)?;
+            }
+        }
+        matches.insert(term.range.start, [inputs.clone(), outputs.clone()]);
+        Ok(result.clone())
+    }
+
+    fn check_clause(
+        &mut self,
+        definitions: &Definitions<'_>,
+        owner: &Path,
+        generics: &[RuleBinder],
+        annotation: &Expr,
+        local: &Environment,
+        types: &Types,
+    ) -> Result<Ty, Error> {
+        let (premises, heads) = match &annotation.value {
+            Expression::Binary {
+                op: BinaryOp::Arrow,
+                left,
+                right,
+            } => (Some(&**left), &**right),
+            _ => (None, annotation),
+        };
+        let mut matches = MatchArguments::new();
+        let mut value_ids = Vec::new();
+        let mut literals = BTreeMap::new();
+        let mut rewrite = false;
+        if let Some(premises) = premises {
+            let mut clauses = clause_parts(premises);
+            if let Some(first) = clauses.first().copied()
+                && self.rewrite_operation(definitions, first).is_some()
+            {
+                rewrite = true;
+                clauses.remove(0);
+                let lhs = self.check_rewrite_term(
+                    definitions,
+                    first,
+                    local,
+                    &mut matches,
+                    &mut literals,
+                )?;
+                let rhs = self.check_rewrite_term(
+                    definitions,
+                    heads,
+                    local,
+                    &mut matches,
+                    &mut literals,
+                )?;
+                self.unify(&lhs, &rhs)?;
+            }
+            for premise in clauses {
+                self.propositions(
+                    definitions,
+                    premise,
+                    local,
+                    types,
+                    Some(&mut matches),
+                    &mut value_ids,
+                )?;
+            }
+            self.check_value_ids(&mut value_ids)?;
+        }
+        if !rewrite {
+            self.propositions(definitions, heads, local, types, None, &mut value_ids)?;
+            self.check_value_ids(&mut value_ids)?;
+        }
+        if !matches.is_empty() {
+            let mut matches = self.checked_matches(matches)?;
+            for (position, attribute) in literals {
+                if let Some(pattern) = matches.get_mut(&position) {
+                    pattern.literal_attribute = Some(attribute);
+                }
+            }
+            self.operation_matches
+                .entry(owner.clone())
+                .or_default()
+                .extend(matches);
+        }
+        let binding = if let Some(premises) = premises {
+            Some(premises)
+        } else if let Expression::Binary {
+            op: BinaryOp::Equal,
+            left,
+            ..
+        } = &heads.value
+        {
+            Some(&**left)
+        } else {
+            None
+        };
+        let bound = binding
+            .map(crate::totality::free_paths)
+            .transpose()?
+            .unwrap_or_default();
+        if generics
+            .iter()
+            .any(|binder| !bound.contains(&vec![binder.name.clone()]))
+        {
+            return Err(Error(
+                "every clause binder must occur in a premise or the left side of an equation"
+                    .into(),
+            ));
+        }
+        Ok(con(FACT))
+    }
     fn axiom(
         &mut self,
         definitions: &Definitions<'_>,
@@ -1569,59 +1793,7 @@ impl Checker {
             self.relations.insert(path.clone());
             ty
         } else if clause_annotation(annotation) {
-            let (premises, heads) = match &annotation.value {
-                Expression::Binary {
-                    op: BinaryOp::Arrow,
-                    left,
-                    right,
-                } => (Some(&**left), &**right),
-                _ => (None, annotation),
-            };
-            let mut matches = MatchArguments::new();
-            let mut value_ids = Vec::new();
-            if let Some(premises) = premises {
-                self.propositions(
-                    definitions,
-                    premises,
-                    &local,
-                    &types,
-                    Some(&mut matches),
-                    &mut value_ids,
-                )?;
-                self.check_value_ids(&mut value_ids)?;
-            }
-            self.propositions(definitions, heads, &local, &types, None, &mut value_ids)?;
-            self.check_value_ids(&mut value_ids)?;
-            if !matches.is_empty() {
-                let matches = self.checked_matches(matches)?;
-                self.operation_matches.insert(path.clone(), matches);
-            }
-            let binding = if let Some(premises) = premises {
-                Some(premises)
-            } else if let Expression::Binary {
-                op: BinaryOp::Equal,
-                left,
-                ..
-            } = &heads.value
-            {
-                Some(&**left)
-            } else {
-                None
-            };
-            let bound = binding
-                .map(crate::totality::free_paths)
-                .transpose()?
-                .unwrap_or_default();
-            if generics
-                .iter()
-                .any(|binder| !bound.contains(&vec![binder.name.clone()]))
-            {
-                return Err(Error(
-                    "every clause binder must occur in a premise or the left side of an equation"
-                        .into(),
-                ));
-            }
-            con(FACT)
+            self.check_clause(definitions, path, generics, annotation, &local, &types)?
         } else {
             self.annotation(definitions, annotation, &types)?
         };
@@ -2198,6 +2370,13 @@ fn any_rigid(ty: &Ty) -> bool {
         Ty::Con(_, args) => list_values(args).iter().any(any_rigid),
         Ty::Fun(args, result) => list_values(args).iter().any(any_rigid) || any_rigid(result),
         Ty::Var(_) => false,
+    }
+}
+
+fn clause_parts(expression: &Expr) -> Vec<&Expr> {
+    match &expression.value {
+        Expression::Tuple(items) => items.iter().flat_map(clause_parts).collect(),
+        _ => vec![expression],
     }
 }
 
