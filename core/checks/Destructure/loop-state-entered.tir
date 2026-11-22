@@ -1,5 +1,3 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass destructure --verify %s | filecheck %s
 
 // The continue edge carries the header's state back while the exit cone
@@ -37,5 +35,7 @@ module {
 // CHECK-NEXT: cfg.br ^[[LOOP]](%[[NEXT]], %[[CS]] : !i32, !state<memory>)
 // CHECK-NEXT: ^[[EXIT]](%[[ES:[0-9]+]]: !state<memory>):
 // CHECK-NEXT: %[[STORED:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[SLOT]] state(%[[ES]])
-// CHECK-NEXT: %[[FINAL:[0-9]+]] = ptr.load %[[SLOT]] state(%[[STORED]]) : !i32
+// CHECK-NEXT: cfg.br ^[[MERGE:bb[0-9]+]](%[[STORED]] : !state<memory>)
+// CHECK-NEXT: ^[[MERGE]](%[[MS:[0-9]+]]: !state<memory>):
+// CHECK-NEXT: %[[FINAL:[0-9]+]] = ptr.load %[[SLOT]] state(%[[MS]]) : !i32
 // CHECK-NEXT: func.return %[[FINAL]]

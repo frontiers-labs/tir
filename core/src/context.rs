@@ -1197,6 +1197,14 @@ impl Context {
             self.normalize_op(owner);
         }
     }
+    // The entry has adopted the graph ports. Any remaining graph operations are dead.
+    pub(crate) fn finish_region_as_cfg(&self, region: RegionId) {
+        self.set_region_results(region, Vec::new());
+        for op in self.region_ops(region) {
+            self.remove_operation(op);
+        }
+        self.edit_record::<RegionRow>(region.raw(), |row| row.mode = "cfg".into());
+    }
     pub fn create_block(&self, arguments: Vec<Value>) -> BlockHandle {
         let id = BlockId::new(self.mint());
         BlockRow {

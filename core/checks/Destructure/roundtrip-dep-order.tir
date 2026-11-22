@@ -1,5 +1,3 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,destructure %s | filecheck --check-prefix=CFG %s
 
 // `*p = 1; x = *p; *p = 2` through the unordered form and back: the chain the

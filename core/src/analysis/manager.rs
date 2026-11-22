@@ -1,4 +1,4 @@
-use crate::{Context, OpId};
+use crate::{Context, OpId, PassError};
 use std::{
     cell::{RefCell, RefMut},
     collections::{BTreeMap, BTreeSet},
@@ -98,7 +98,15 @@ impl AnalysisManager {
         Ok(())
     }
 
-    pub(crate) fn install_cfg(context: &Context) -> Result<(), Error> {
+    pub(crate) fn ensure_default(context: &Context) -> Result<(), PassError> {
+        if !context.analyses().is_installed() {
+            Self::install_default(context)
+                .map_err(|error| PassError::InvalidRuleSet(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn install_default(context: &Context) -> Result<(), Error> {
         let mut catalog = context.analyses().0.borrow_mut();
         if catalog.is_some() {
             return Err(Error::Unsupported("duplicate analysis catalog".into()));
@@ -106,13 +114,13 @@ impl AnalysisManager {
         let mut live = context.egraph();
         let mut snapshot = live.clone();
         let db = snapshot.database_mut();
-        if super::cfg::generated::table_analysis_root(db).is_ok() {
+        if super::generated::table_root_analysis_root(db).is_ok() {
             return Err(Error::Unsupported("reserved analysis root".into()));
         }
         let existing_tables = db.table_count();
-        let (program, producers) = super::cfg::generated::load_producers(db)
+        let (program, producers) = super::generated::load_producers(db)
             .map_err(|error| Error::Unsupported(error.to_string()))?;
-        let root = super::cfg::generated::table_analysis_root(db)?;
+        let root = super::generated::table_root_analysis_root(db)?;
         let installed = Self::build_catalog(root, existing_tables, program, producers)?;
         *catalog = Some(installed);
         *live = snapshot;

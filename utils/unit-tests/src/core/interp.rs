@@ -300,18 +300,55 @@ module {layout.spec = #layout_spec} {
 }
 
 #[test]
-fn captured_read_is_lazy_and_shared_across_iterations() {
-    for capture in [
-        "%captured = ptr.load %addr : !i32",
-        r#"%captured = scf.loop (%inner = %zero) {
+fn destructure_preserves_captured_read_demand() {
+    for (capture, loads, result) in [
+        (r#"%captured = ptr.load %addr : !i32"#, 1, 21),
+        (
+            r#"%captured = scf.loop (%inner = %zero) {
       %again = cmpi %inner, %one {predicate = "ult"} : !i1
       %word = ptr.load %addr : !i32
       -> %again, %one, %word
     }"#,
+            1,
+            21,
+        ),
+        (
+            r#"%test = cmpi %zero, %n {predicate = "eq"} : !i1
+    %captured = scf.switch %test {
+      %load0 = ptr.load %addr : !i32
+      -> %load0
+    }
+    {
+      %load1 = ptr.load %addr : !i32
+      -> %load1
+    }"#,
+            3,
+            24,
+        ),
+        (
+            r#"%captured, %unused = scf.loop (%inner = %zero, %j = %zero) {
+      %again = cmpi %inner, %one {predicate = "ult"} : !i1
+      %word = ptr.load %addr : !i32
+      -> %again, %one, %j, %one, %word
+    }"#,
+            0,
+            3,
+        ),
+        (
+            r#"%test = cmpi %zero, %n {predicate = "eq"} : !i1
+    %unused_load = ptr.load %addr : !i32
+    %captured = scf.switch %test args(%unused_load) (%a) {
+      -> %one
+    }
+    (%b) {
+      -> %one
+    }"#,
+            0,
+            3,
+        ),
     ] {
-        let program = {
-            let (_, _, func, _) = super::fixtures::parse_function(
-                &r#"
+        let (ctx, module, func, _) = super::fixtures::parse_function(
+            &r#"
 #layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 module {layout.spec = #layout_spec} {
   %f = func.func @sum(%n: !i32, %addr: !ptr.p<!i32>) -> !i32 {
@@ -328,24 +365,40 @@ module {layout.spec = #layout_spec} {
   }
   module_end
 }"#
-                .replace("CAPTURE", capture),
-            );
-            tir::interp::build(&func).unwrap()
-        };
-        let run = |n| {
-            program
-                .run(Func(0), vec![APInt::new(32, n), APInt::new(64, 99)], 500)
-                .unwrap()
-        };
-        assert_eq!(returned(run(0)).limbs(), [0]);
-        let Outcome::Load(load) = run(3) else {
-            panic!("expected captured load")
-        };
-        assert_eq!(load.address().limbs(), [99]);
-        assert_eq!(
-            returned(load.resume(APInt::new(32, 7)).unwrap()).limbs(),
-            [21]
+            .replace("CAPTURE", capture),
         );
+        let check = |phase, program: tir::interp::Program| {
+            let run = |n| {
+                program
+                    .run(Func(0), vec![APInt::new(32, n), APInt::new(64, 99)], 500)
+                    .unwrap()
+            };
+            let Outcome::Returned(value) = run(0) else {
+                panic!("{phase}: zero iterations requested a load");
+            };
+            assert_eq!(value.limbs(), [0]);
+
+            let mut outcome = run(3);
+            for index in 0..loads {
+                let Outcome::Load(load) = outcome else {
+                    panic!("{phase}: missing captured load");
+                };
+                assert_eq!(load.address().limbs(), [99]);
+                outcome = load.resume(APInt::new(32, 7 + index)).unwrap();
+            }
+            let Outcome::Returned(value) = outcome else {
+                panic!("{phase}: requested an extra captured load");
+            };
+            assert_eq!(value.limbs(), [result]);
+        };
+
+        check("original", tir::interp::build(&func).unwrap());
+        let mut passes = PassManager::new();
+        passes
+            .nest::<FuncOp>()
+            .add_pass(tir::passes::DestructurePass::new());
+        passes.run(&ctx, module.id()).unwrap();
+        check("after destructure", tir::interp::build(&func).unwrap());
     }
 }
 
@@ -358,7 +411,9 @@ fn compiled_overflow_observes_the_dialect_flags() {
         ("subi", "nuw"),
     ] {
         let program = {
-            let text=format!("module {{ %f = func.func @f(%x: !i4, %y: !i4) -> !i4 {{\n %r = {op} %x, %y {{{flag} = true}} : !i4\n func.return %r\n }}\n module_end\n}}");
+            let text = format!(
+                "module {{ %f = func.func @f(%x: !i4, %y: !i4) -> !i4 {{\n %r = {op} %x, %y {{{flag} = true}} : !i4\n func.return %r\n }}\n module_end\n}}"
+            );
             let (_, _, func, _) = super::fixtures::parse_function(&text);
             tir::interp::build(&func).unwrap()
         };
@@ -491,7 +546,9 @@ fn rejects_load_qualifiers_and_noninteger_results() {
         ("align = 4", "!i32"),
         ("", "!f32"),
     ] {
-        let text=format!("#layout_spec = #layout.spec<!ptr.p = {{size = 64, abi = 64}}>\nmodule {{layout.spec = #layout_spec}} {{\n %f = func.func @f(%p: !ptr.p) -> {ret} {{\n %v = ptr.load %p {{{attr}}} : {ret}\n func.return %v\n }}\n module_end\n}}");
+        let text = format!(
+            "#layout_spec = #layout.spec<!ptr.p = {{size = 64, abi = 64}}>\nmodule {{layout.spec = #layout_spec}} {{\n %f = func.func @f(%p: !ptr.p) -> {ret} {{\n %v = ptr.load %p {{{attr}}} : {ret}\n func.return %v\n }}\n module_end\n}}"
+        );
         let (_, _, func, _) = super::fixtures::parse_function(&text);
         assert!(matches!(
             tir::interp::build(&func),
