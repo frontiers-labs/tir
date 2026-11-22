@@ -149,6 +149,7 @@ impl Checker {
                     CheckedMatch {
                         operands: group(operands)?,
                         results: group(results)?,
+                        literal_attribute: None,
                     },
                 ))
             })

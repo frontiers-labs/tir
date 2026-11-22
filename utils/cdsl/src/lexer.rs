@@ -57,8 +57,6 @@ pub enum Token {
     Use,
     #[token("as")]
     As,
-    #[token("fn")]
-    Fn,
     #[token("if")]
     If,
     #[token("else")]
@@ -93,6 +91,8 @@ pub enum Token {
     FatArrow,
     #[token("||")]
     Or,
+    #[token("|")]
+    Pipe,
     #[token("&&")]
     And,
     #[token("==")]

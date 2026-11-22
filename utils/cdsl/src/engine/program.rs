@@ -30,7 +30,7 @@ impl CheckedProgram {
         schema.install(&dependencies, !catalog_only)?;
         schema.bind_operation_imports(dependencies.operation_imports(self))?;
         if catalog_only {
-            return rust::emit(self, selected, &schema, &BTreeMap::new(), None, &[]);
+            return rust::emit(self, selected, &schema, None, None, &[]);
         }
         let hosts = schema
             .hosts
@@ -49,7 +49,7 @@ impl CheckedProgram {
             self,
             selected,
             &schema,
-            &lowered.schedules,
+            Some(&lowered),
             Some(&program.to_bytes()),
             &hosts,
         )

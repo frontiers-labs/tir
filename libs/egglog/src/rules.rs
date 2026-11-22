@@ -45,6 +45,35 @@ pub struct Rules {
     rulesets: Vec<Ruleset>,
 }
 
+/// A checked, reusable selection of rules emitted by the CDSL compiler.
+#[derive(Clone, Copy)]
+pub struct RuleCollection {
+    code: &'static [u8],
+    ruleset: &'static str,
+    install: fn(&mut Database) -> Result<(), crate::LoadError>,
+}
+
+impl RuleCollection {
+    /// Package a compiler-generated ruleset with its schema bindings.
+    pub const fn from_static(
+        code: &'static [u8],
+        ruleset: &'static str,
+        install: fn(&mut Database) -> Result<(), crate::LoadError>,
+    ) -> Self {
+        Self {
+            code,
+            ruleset,
+            install,
+        }
+    }
+
+    /// Bind the checked rules to a database for a fresh invocation.
+    pub fn load(&self, db: &mut Database) -> Result<(Program, &'static str), crate::LoadError> {
+        (self.install)(db)?;
+        Ok((Program::from_static(self.code, db)?, self.ruleset))
+    }
+}
+
 impl Rules {
     pub fn new() -> Self {
         Self::default()

@@ -112,6 +112,7 @@ mod core {
     mod dependence;
     mod dialects;
     mod edits;
+    mod eqsat;
     mod encodings;
     mod fixtures;
     mod idmap;

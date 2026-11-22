@@ -1,4 +1,6 @@
 use std::bigint::BigInt;
+use std::list::List::Cons as cons;
+use std::list::List::Nil as nil;
 
 pub let EqSatFlag: (std::ir::OperationId, String, Bool, Bool) -> Prop;
 pub let EqSatFolded: (std::ir::ValueId, BigInt) -> Prop;
@@ -38,27 +40,30 @@ pub mod scalars {
     pub let mask<ty, ctor, args, w>:
         (EqSatInteger(ty), ir::TypeTerm(ty, ctor, args), w == std::ir::integer_width(args))
         -> EqSatAllBits(ty, (std::bigint::shl(std::bigint::bigint(1), w) - std::bigint::bigint(1)));
+    pub let rules: std::List<Prop> =
+        std::List::Cons(integer, std::List::Cons(binary, std::List::Cons(used, std::List::Cons(defined, std::List::Cons(forwarded, std::List::Cons(read,
+            std::List::Cons(literal, std::List::Cons(evaluated, std::List::Cons(mask, std::List::Nil)))))))));
 }
 
 pub let EqSatPureBinary: std::ir::BinaryIntegerOperation -> Prop;
 pub let EqSatBinaryKey: std::ir::OperationId -> Prop;
-pub mod congruence {
-    pub let and_kind: EqSatPureBinary(dialects::builtin::andi.typed_kind);
-    pub let or_kind: EqSatPureBinary(dialects::builtin::ori.typed_kind);
-    pub let xor_kind: EqSatPureBinary(dialects::builtin::xori.typed_kind);
-    pub let mul_kind: EqSatPureBinary(dialects::builtin::muli.typed_kind);
-    pub let shl_kind: EqSatPureBinary(dialects::builtin::shli.typed_kind);
-    pub let lshr_kind: EqSatPureBinary(dialects::builtin::shrui.typed_kind);
-    pub let ashr_kind: EqSatPureBinary(dialects::builtin::shrsi.typed_kind);
-    pub let pure<owner,kind,out,ty,x,y,home>:
+pub let congruence: std::List<Prop> = {
+    let and_kind: EqSatPureBinary(dialects::builtin::andi.typed_kind);
+    let or_kind: EqSatPureBinary(dialects::builtin::ori.typed_kind);
+    let xor_kind: EqSatPureBinary(dialects::builtin::xori.typed_kind);
+    let mul_kind: EqSatPureBinary(dialects::builtin::muli.typed_kind);
+    let shl_kind: EqSatPureBinary(dialects::builtin::shli.typed_kind);
+    let lshr_kind: EqSatPureBinary(dialects::builtin::shrui.typed_kind);
+    let ashr_kind: EqSatPureBinary(dialects::builtin::shrsi.typed_kind);
+    let pure<owner,kind,out,ty,x,y,home>:
         (EqSatBinary(owner,kind,out,ty,x,y,home), EqSatPureBinary(kind)) -> EqSatBinaryKey(owner);
-    pub let add<owner>: EqSatWrappingAdd(owner) -> EqSatBinaryKey(owner);
-    pub let sub<owner>: EqSatWrappingSub(owner) -> EqSatBinaryKey(owner);
-    pub let node<owner, kind, out, ty, x, y, home, t, a, b>:
+    let add<owner>: EqSatWrappingAdd(owner) -> EqSatBinaryKey(owner);
+    let sub<owner>: EqSatWrappingSub(owner) -> EqSatBinaryKey(owner);
+    let node<owner, kind, out, ty, x, y, home, t, a, b>:
         (EqSatBinary(owner, kind, out, ty, x, y, home), EqSatBinaryKey(owner),
          EqSatScalar(out, ty, t), EqSatScalar(x, ty, a), EqSatScalar(y, ty, b))
         -> t == Scalar::Binary(kind, ty, a, b);
-    pub let comparison<node, out: std::ir::ValueRef<std::El<std::Bits<1>>>, ty,
+    let comparison<node, out: std::ir::ValueRef<std::El<std::Bits<1>>>, ty,
                        lhs: std::ir::IntegerRef, rhs: std::ir::IntegerRef, width, a, b, result, attr, pred>:
         (EqSatLive(node), dialects::builtin::cmpi.matches(node, (lhs, rhs), (out,)),
          EqSatScalar(out, ty, result),
@@ -66,66 +71,73 @@ pub mod congruence {
          ir::operation_attribute(node, "predicate", attr), pred == eqsat_attr_case(attr))
         -> result == Scalar::Compare(pred, ty, a, b);
 
-}
+    cons(and_kind, cons(or_kind, cons(xor_kind, cons(mul_kind, cons(shl_kind, cons(lshr_kind,
+        cons(ashr_kind, cons(pure, cons(add, cons(sub, cons(node, cons(comparison, nil))))))))))))
+};
 
 pub let EqSatZeros: (Scalar, Int, BigInt) -> Prop;
-pub mod known_bits {
-    pub let constant<value, ty, bits, term, width>:
+pub let known_bits: std::List<Prop> = {
+    let constant<value, ty, bits, term, width>:
         (EqSatScalar(value, ty, term), term == Scalar::Literal(ty, bits), EqSatAllBits(ty, width))
         -> EqSatZeros(term, ty, std::bigint::bit_and(std::bigint::bit_not(bits), width));
-    pub let and_left<ty, a, b, zeros, expr>:
+    let and_left<ty, a, b, zeros, expr>:
         (expr == Scalar::Binary(dialects::builtin::andi.typed_kind, ty, a, b), EqSatZeros(a, ty, zeros))
         -> EqSatZeros(expr, ty, zeros);
-    pub let and_right<ty, a, b, zeros, expr>:
+    let and_right<ty, a, b, zeros, expr>:
         (expr == Scalar::Binary(dialects::builtin::andi.typed_kind, ty, a, b), EqSatZeros(b, ty, zeros))
         -> EqSatZeros(expr, ty, zeros);
-    pub let or_both<ty, a, b, x, y, expr>:
+    let or_both<ty, a, b, x, y, expr>:
         (expr == Scalar::Binary(dialects::builtin::ori.typed_kind, ty, a, b), EqSatZeros(a, ty, x), EqSatZeros(b, ty, y))
         -> EqSatZeros(expr, ty, std::bigint::bit_and(x,y));
-}
+    cons(constant, cons(and_left, cons(and_right, cons(or_both, nil))))
+};
 
 pub let EqSatCommutative: std::ir::BinaryIntegerOperation -> Prop;
-pub mod commute {
-    pub let add: EqSatCommutative(dialects::builtin::addi.typed_kind);
-    pub let mul: EqSatCommutative(dialects::builtin::muli.typed_kind);
-    pub let and: EqSatCommutative(dialects::builtin::andi.typed_kind);
-    pub let or: EqSatCommutative(dialects::builtin::ori.typed_kind);
-    pub let xor: EqSatCommutative(dialects::builtin::xori.typed_kind);
-    pub let swap<node, kind, value, ty, x, y, home>:
+pub let commute: std::List<Prop> = {
+    let add: EqSatCommutative(dialects::builtin::addi.typed_kind);
+    let mul: EqSatCommutative(dialects::builtin::muli.typed_kind);
+    let and: EqSatCommutative(dialects::builtin::andi.typed_kind);
+    let or: EqSatCommutative(dialects::builtin::ori.typed_kind);
+    let xor: EqSatCommutative(dialects::builtin::xori.typed_kind);
+    let swap<node, kind, value, ty, x, y, home>:
         (EqSatBinary(node,kind,value,ty,x,y,home), EqSatCommutative(kind))
         -> EqSatBinary(node,kind,value,ty,y,x,home);
-}
+    cons(add, cons(mul, cons(and, cons(or, cons(xor, cons(swap, nil))))))
+};
 
-pub mod shift_bits {
-    pub let left_zeroes<node,value,ty,x,y,home,shift,amount,term,ctor,args,width>:
+pub let shift_bits: std::List<Prop> = {
+    let left_zeroes<node,value,ty,x,y,home,shift,amount,term,ctor,args,width>:
         (EqSatBinary(node,dialects::builtin::shli.typed_kind,value,ty,x,y,home), EqSatFolded(y,shift),
          EqSatScalar(value,ty,term), ir::TypeTerm(ty,ctor,args), width == std::ir::integer_width(args),
          amount == eqsat_shift_amount(shift), std::int::less(amount,width) == true)
         -> EqSatZeros(term,ty,(std::bigint::shl(std::bigint::bigint(1),amount) - std::bigint::bigint(1)));
-}
+    cons(left_zeroes, nil)
+};
 
 pub let EqSatIntegerWidth: (Int, Int) -> Prop;
 pub let EqSatIntegerResult: (std::ir::OperationId, std::ir::OperationKind, std::ir::ValueId, Int) -> Prop;
 pub let EqSatIntegerOperand: (std::ir::OperationId, Int, std::ir::ValueId, Int) -> Prop;
 pub let EqSatConstantImplementation: std::ir::OperationKind -> Prop;
-pub mod integer_inputs {
-    pub let width<ty,ctor,args,bits>:
+pub let integer_inputs: std::List<Prop> = {
+    let width<ty,ctor,args,bits>:
         (EqSatInteger(ty), ir::TypeTerm(ty,ctor,args), bits == std::ir::integer_width(args)) -> EqSatIntegerWidth(ty,bits);
-    pub let result<node,kind,place,home,pos,display,loc,out,ty,decl,bits>:
+    let result<node,kind,place,home,pos,display,loc,out,ty,decl,bits>:
         (EqSatLive(node), !EqSatPinnedOp(node), ir::Operation{ id: node, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }(),
          ir::result(out, ty, node,0,decl), EqSatIntegerWidth(ty,bits))
         -> EqSatIntegerResult(node,kind,out,bits);
-    pub let operand<node,slot,input,ty,kind,owner,index,decl,bits>:
+    let operand<node,slot,input,ty,kind,owner,index,decl,bits>:
         (EqSatLive(node), ir::Operand(node,slot,input), ir::Value(input,ty,kind,owner,index,decl),
          EqSatIntegerWidth(ty,bits)) -> EqSatIntegerOperand(node,slot,input,bits);
-}
+    cons(width, cons(result, cons(operand, nil)))
+};
 
 pub let EqSatFlagField: (String, Bool) -> Prop;
-pub mod flag_values {
-    pub let present<node,name,default,attr,value>:
+pub let flag_values: std::List<Prop> = {
+    let present<node,name,default,attr,value>:
         (EqSatLive(node), EqSatFlagField(name,default), ir::operation_attribute(node,name,attr),
          value == eqsat_attr_bool(attr)) -> EqSatFlag(node,name,default,value);
-    pub let absent<node,name,default>:
+    let absent<node,name,default>:
         (EqSatLive(node), EqSatFlagField(name,default), !EqSatHasAttr(node,name))
         -> EqSatFlag(node,name,default,default);
-}
+    cons(present, cons(absent, nil))
+};

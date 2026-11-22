@@ -123,6 +123,7 @@ pub(crate) enum PortIndex {
 pub(crate) struct CheckedMatch {
     pub operands: Vec<PortType>,
     pub results: Vec<PortType>,
+    pub literal_attribute: Option<String>,
 }
 
 #[derive(Debug)]

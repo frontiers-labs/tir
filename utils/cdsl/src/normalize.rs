@@ -140,6 +140,26 @@ fn replace(e: &Expr, values: &Values, next: &mut usize) -> Expr {
             }
             Expression::Record(output)
         }
+        Expression::Rule { binders, clause } => {
+            let mut local = values.clone();
+            let binders = binders
+                .iter()
+                .map(|binder| {
+                    let ty = binder.ty.as_ref().map(|ty| replace(ty, &local, next));
+                    let path = vec![format!("\0cdsl{}", *next)];
+                    *next += 1;
+                    local.insert(vec![binder.name.clone()], replacement(&path, &clause.range));
+                    RuleBinder {
+                        name: path[0].clone(),
+                        ty,
+                    }
+                })
+                .collect();
+            Expression::Rule {
+                binders,
+                clause: Box::new(replace(clause, &local, next)),
+            }
+        }
         Expression::Block(b) => Expression::Block(block(b, values, next)),
         Expression::Function(f) => {
             let mut local = values.clone();
