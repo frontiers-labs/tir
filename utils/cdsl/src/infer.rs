@@ -630,6 +630,31 @@ impl Checker {
         self.rigid_types.insert(id.0, kind);
         Ok(id)
     }
+    fn table_relation(
+        &mut self,
+        definitions: &Definitions<'_>,
+        annotation: &Expr,
+        types: &Types,
+    ) -> Result<Ty, Error> {
+        let descriptor = self.annotation(definitions, annotation, types)?;
+        let (Expression::Generic { arguments, .. }, Ty::Con(_, parameters)) =
+            (&annotation.value, descriptor)
+        else {
+            return Err(Error("invalid Table declaration".into()));
+        };
+        let parameters = list_values(&parameters);
+        let (Some(keys), [key, output, _]) = (arguments.first(), parameters.as_slice()) else {
+            return Err(Error("Table requires key, value and merge".into()));
+        };
+        let mut columns = match (&keys.value, key) {
+            (Expression::Unit, _) => Vec::new(),
+            (Expression::Tuple(_), Ty::Con(_, columns)) => list_values(columns),
+            _ => vec![key.clone()],
+        };
+        columns.push(output.clone());
+        Ok(Ty::Fun(type_list(columns), Box::new(con(FACT))))
+    }
+
     fn local_binding(
         &mut self,
         definitions: &Definitions<'_>,
@@ -1307,6 +1332,22 @@ impl Checker {
         match &expression.value {
             Expression::Literal(literal) => Ok(literal_type(literal)),
             Expression::Unit => Ok(con(UNIT)),
+            Expression::LocalTable(ty) => {
+                if crate::engine::table_type(ty).is_some() {
+                    self.table_relation(definitions, ty, types)
+                } else {
+                    self.annotation(definitions, ty, types)
+                }
+            }
+            Expression::Run(schedule) => {
+                let ty = self.expression(definitions, schedule, environment, types)?;
+                if !matches!(self.substitution.apply(&ty), Ty::Con(family, _)
+                    if self.port_family(family, &["std", "schedule", "Schedule"]))
+                {
+                    return Err(Error("expected a schedule before ?".into()));
+                }
+                Ok(con(UNIT))
+            }
             Expression::Path(path) => self.lookup(definitions, path, environment),
             Expression::Tuple(items) => {
                 let args = self.expressions(definitions, items, environment, types)?;
@@ -1770,24 +1811,8 @@ impl Checker {
         let table = matches!(&annotation.value, Expression::Generic { value, .. }
             if matches!(&value.value, Expression::Path(path) if path == &["std", "table", "Table"]));
         let ty = if table {
-            let descriptor = self.annotation(definitions, annotation, &types)?;
-            let (Expression::Generic { arguments, .. }, Ty::Con(_, parameters)) =
-                (&annotation.value, descriptor)
-            else {
-                return Err(Error("invalid Table declaration".into()));
-            };
-            let parameters = list_values(&parameters);
-            let (Some(keys), [key, output, _]) = (arguments.first(), parameters.as_slice()) else {
-                return Err(Error("Table requires key, value and merge".into()));
-            };
-            let mut columns = match (&keys.value, key) {
-                (Expression::Unit, _) => Vec::new(),
-                (Expression::Tuple(_), Ty::Con(_, columns)) => list_values(columns),
-                _ => vec![key.clone()],
-            };
-            columns.push(output.clone());
             self.relations.insert(path.clone());
-            Ty::Fun(type_list(columns), Box::new(con(FACT)))
+            self.table_relation(definitions, annotation, &types)?
         } else if relation {
             let ty = self.annotation(definitions, annotation, &types)?;
             self.relations.insert(path.clone());

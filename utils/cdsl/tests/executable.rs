@@ -1038,3 +1038,60 @@ pub let identify = || {
     );
     assert!(package_error().contains("tir::ir::Edge"));
 }
+
+#[test]
+fn local_tables_feed_checked_rules_and_are_released_on_return_and_failure() {
+    let checked = compile_source(
+        r#"
+pub let Output: Int -> Prop;
+pub let ordinary = || { let write: Output(9); std::schedule::saturate(write) };
+
+let seed = |value: Int, scratch: Int -> Prop| {
+    let insert: scratch(value);
+    insert
+};
+
+pub let execute = || {
+    let Scratch: Int -> Prop;
+    std::schedule::saturate(seed(7, Scratch))?;
+    let publish<value>: Scratch(value) -> Output(value);
+    std::schedule::saturate(publish)?;
+    ()
+};
+
+pub let fail = || {
+    let Scratch: std::Table<Int, Int, std::Merge::Unique>;
+    let first: Scratch(0, 1);
+    let second: Scratch(0, 2);
+    std::schedule::saturate((first, second))?;
+    ()
+};
+"#,
+    )
+    .unwrap()
+    .lower()
+    .unwrap();
+    let schema = Schema::new(&checked).unwrap();
+    let mut db = schema.database().clone();
+    let count = db.table_count();
+    let result = schema
+        .run_local_schedule(&checked, &["execute".into()], &mut db)
+        .unwrap();
+    assert!(result.unwrap().updated);
+    let output = db.table("Output").unwrap();
+    let rows = db.rows(output).map(|row| db.base_value::<i64>(row[0]));
+    assert_eq!(rows.collect::<Vec<_>>(), [7]);
+    assert_eq!(db.table_count(), count);
+    assert!(
+        schema
+            .run_local_schedule(&checked, &["fail".into()], &mut db)
+            .is_err()
+    );
+    assert_eq!(db.table_count(), count);
+
+    let lowered = schema.lower(&checked).unwrap();
+    let ordinary = &lowered.schedules()[&vec!["ordinary".into()]];
+    let mut program = lowered.compile(&db).unwrap();
+    program.run(&mut db, ordinary, &[]).unwrap();
+    assert!(db.lookup(output, &[db.base(9_i64)]).is_some());
+}

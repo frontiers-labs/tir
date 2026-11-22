@@ -1,6 +1,13 @@
+pub let IntSet: Type;
+pub let singleton: Int -> IntSet;
+pub let cardinality: IntSet -> Int;
+
 pub enum Merge<V: Type> {
     Union,
     Unique,
+    Min: Merge<Int>,
+    Max: Merge<Int>,
+    SetUnion: Merge<IntSet>,
     With((V, V) -> V),
 }
 

@@ -37,3 +37,61 @@ let policy = {
 let same<x>: Rewrite(keep_left(x, x) -> x);
 
 pub let keep_left_rewrites = || { std::rewrite::collect(same, policy) };
+
+let input = 2;
+
+pub let scoped_value = memo |input: Int| {
+    let Scratch: Int -> Prop;
+    let seed: Scratch(input);
+    std::schedule::saturate(seed)?;
+    let next = input + 1;
+    if next == 8 { next } else { next + 1 }
+};
+
+let rows = 2;
+
+pub let scoped_offset = memo |rows: Int| {
+    let Scratch: (Int, Int) -> Prop;
+    let seed: Scratch(rows, rows);
+    std::schedule::saturate(seed)?;
+    let offset = rows - 5;
+    |x: Int, next: Bool| {
+        if next {
+            let key = x + 1;
+            Scratch(rows, key + offset)
+        } else {
+            Scratch(rows, x)
+        }
+    }
+};
+
+pub enum ProbeTerm { Original, Input }
+pub let ProbeSeen: ProbeTerm -> Prop;
+pub let ProbeAlternate: ProbeTerm -> Prop;
+
+pub let scoped_query = memo || {
+    let Scratch: ProbeTerm -> Prop;
+    let Alternate: ProbeTerm -> Prop;
+    let copy<term>: ProbeSeen(term) -> Scratch(term);
+    let copy_alternate<term>: ProbeAlternate(term) -> Alternate(term);
+    std::schedule::saturate((copy, copy_alternate))?;
+    |term: ProbeTerm, first: Bool| {
+        if first { Scratch(term) } else {
+            let query = Alternate;
+            query(term)
+        }
+    }
+};
+
+pub let scoped_pair = memo |x: Int| {
+    let Scratch: Int -> Prop;
+    let seed: Scratch(x);
+    std::schedule::saturate(seed)?;
+    let pair = (x + 1, true);
+    (pair.0, 2)
+};
+
+pub let scoped_projection = memo |x: Int, flag: Bool| {
+    let pair = if flag { (x + 1, 2) } else { (x + 2, 4) };
+    pair.1
+};

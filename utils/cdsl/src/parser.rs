@@ -164,19 +164,46 @@ fn block<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Block> {
             path: vec![name],
             generics: Vec::new(),
             ty: None,
-            value: finish(ctx, Expression::Rule { binders, clause: Box::new(clause) }, extra.span().into_range()),
+            value: {
+                let value = if is_local_table(&clause) && binders.is_empty() {
+                    Expression::LocalTable(Box::new(clause))
+                } else {
+                    Expression::Rule { binders, clause: Box::new(clause) }
+                };
+                finish(ctx, value, extra.span().into_range())
+            },
         });
-    binding(ctx, identifier(ctx).map(move |name| vec![name]).boxed(), expr.clone())
+    let bindings = binding(ctx, identifier(ctx).map(move |name| vec![name]).boxed(), expr.clone())
         .or(rule)
         .repeated()
-        .collect()
-        .then(expr)
-        .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        .map(move |(bindings, value)| Block {
-            bindings,
-            value: Box::new(value),
-        })
-        .boxed()
+        .collect::<Vec<_>>();
+    recursive(move |tail| {
+        bindings.clone()
+            .then(expr.clone())
+            .then(
+                just(Token::Question)
+                    .ignore_then(just(Token::Semi))
+                    .ignore_then(tail)
+                    .or_not(),
+            )
+            .map(move |((mut bindings, expression), tail): ((Vec<Binding>, Expr), Option<Block>)| {
+                if let Some(Block { bindings: next, value }) = tail {
+                    let range = expression.range.clone();
+                    bindings.push(Binding {
+                        path: vec![format!("\0run{}", range.start)],
+                        generics: Vec::new(),
+                        ty: None,
+                        value: finish(ctx, Expression::Run(Box::new(expression)), range),
+                    });
+                    bindings.extend(next);
+                    Block { bindings, value }
+                } else {
+                    Block { bindings, value: Box::new(expression) }
+                }
+            })
+    })
+    .delimited_by(just(Token::LBrace), just(Token::RBrace))
+    .boxed()
 }
 
 fn record<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Record> {
@@ -191,13 +218,16 @@ fn record<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Record> {
 }
 
 fn function<'a>(ctx: &'a Context<'a>, expr: P<'a, Expr>) -> P<'a, Function> {
-    just(Token::Or)
-        .to(Vec::new())
-        .or(binders(ctx, expr.clone()).delimited_by(just(Token::Pipe), just(Token::Pipe)))
+    just(Token::Memo).or_not().then(
+        just(Token::Or)
+            .to(Vec::new())
+            .or(binders(ctx, expr.clone()).delimited_by(just(Token::Pipe), just(Token::Pipe)))
+    )
         .then(just(Token::Arrow).ignore_then(expr.clone()).or_not())
         .then(just(Token::Decreases).ignore_then(expr.clone()).or_not())
         .then(block(ctx, expr))
-        .map(|(((parameters, result), decreases), body)| Function {
+        .map(|((((memo, parameters), result), decreases), body)| Function {
+            memo: memo.is_some(),
             generics: Vec::new(),
             parameters,
             result,
@@ -599,11 +629,29 @@ mod compile {
     fn ungroup(expr: Expr) -> Expression {
         expr.value
     }
+    fn is_local_table(clause: &Expr) -> bool {
+        match &clause.value {
+            Expression::Binary {
+                op: BinaryOp::Arrow,
+                right,
+                ..
+            } => {
+                matches!(&right.value, Expression::Path(path) if path == &["Prop"])
+            }
+            Expression::Generic { value, .. } => {
+                matches!(&value.value, Expression::Path(path) if path.last().is_some_and(|s| s == "Table"))
+            }
+            _ => false,
+        }
+    }
     grammar! { const _: () = (); }
 }
 mod lossless {
     use super::*;
     use crate::ast::{BinaryOp, Literal, Node, UnaryOp};
     use crate::parser_syntax::*;
+    fn is_local_table(_: &Expr) -> bool {
+        false
+    }
     grammar! { impl Build for Suffix { type Built = Self; fn build(self, _: &Context<'_>, _: std::ops::Range<usize>) -> Self { self } } }
 }

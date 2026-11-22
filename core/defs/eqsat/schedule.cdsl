@@ -36,8 +36,8 @@ let integers = std::schedule::integer_rules(dialects::builtin, dialects::builtin
 
 pub let global = || {
     Schedule::Repeat(64, (
-        commute, congruence, integer_inputs, known_bits, scalars::rules,
-        shift_bits, floating_point, fp_congruence,
+        commute, congruence, integer_inputs, scalars::rules,
+        floating_point, fp_congruence,
         fp_keys, cast_cse, casts, complements, defined_integer::rules,
         extraction, guarded_cancel, integer_facts, integer_shapes,
         modular, strength, address_keys, layout_pointer,

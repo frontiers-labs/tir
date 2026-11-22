@@ -160,6 +160,8 @@ fn replace(e: &Expr, values: &Values, next: &mut usize) -> Expr {
                 clause: Box::new(replace(clause, &local, next)),
             }
         }
+        Expression::LocalTable(ty) => Expression::LocalTable(Box::new(replace(ty, values, next))),
+        Expression::Run(schedule) => Expression::Run(Box::new(replace(schedule, values, next))),
         Expression::Block(b) => Expression::Block(block(b, values, next)),
         Expression::Function(f) => {
             let mut local = values.clone();
@@ -174,6 +176,7 @@ fn replace(e: &Expr, values: &Values, next: &mut usize) -> Expr {
                 .map(|b| bind(b, &mut local, next))
                 .collect();
             Expression::Function(Box::new(Function {
+                memo: f.memo,
                 generics,
                 parameters,
                 result: f.result.as_ref().map(|e| replace(e, &local, next)),

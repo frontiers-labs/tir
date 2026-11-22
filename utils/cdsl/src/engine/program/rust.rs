@@ -13,6 +13,7 @@ use crate::{
     hm::{Ty, TyList},
 };
 
+mod scoped_value;
 mod signature;
 use signature::Signature;
 
@@ -133,6 +134,20 @@ impl Codec {
         }
     }
 
+    fn argument_ty(&self) -> TokenStream {
+        match self {
+            Self::Enum(name) => quote!(Class<#name>),
+            _ => self.ty(),
+        }
+    }
+
+    fn encode_argument(&self, value: TokenStream) -> TokenStream {
+        match self {
+            Self::Enum(_) => quote!((#value).value_for(db.id())?),
+            _ => self.encode(quote!(db), value),
+        }
+    }
+
     fn field(&self) -> TokenStream {
         let ty = self.ty();
         match self {
@@ -142,6 +157,15 @@ impl Codec {
     }
 
     fn base(&self, db: TokenStream, value: TokenStream) -> TokenStream {
+        self.decode_cell(db, value, None)
+    }
+
+    fn decode_cell(
+        &self,
+        db: TokenStream,
+        value: TokenStream,
+        captured: Option<&TokenStream>,
+    ) -> TokenStream {
         match self {
             Self::OpId | Self::ValueId | Self::ValueRef(_) => {
                 let ty = self.ty();
@@ -150,12 +174,18 @@ impl Codec {
             Self::Kind(ty) => quote!(<#ty>::decode(
                 #db, #db.native_identity(#value).ok_or("invalid native operation cell")?
             )?),
-            Self::Enum(name) => quote!({
-                let (terms, term) = extractor
-                    .get_or_init(|| ::tir_egglog::extract::Extractor::new_in(db, color))
-                    .best(#value)?;
-                #name::decode(db, &terms, term)?
-            }),
+            Self::Enum(name) => match captured {
+                Some(view) => quote!({
+                    let (terms, term) = (#view).best(#value)?;
+                    #name::decode(db, terms, term)?
+                }),
+                None => quote!({
+                    let (terms, term) = extractor
+                        .get_or_init(|| ::tir_egglog::extract::Extractor::new_in(db, color))
+                        .best(#value)?;
+                    #name::decode(db, &terms, term)?
+                }),
+            },
             _ => {
                 let ty = self.ty();
                 quote!(#db.base_value::<#ty>(#value))
@@ -463,7 +493,7 @@ fn relation_types(ty: &Expr) -> Option<Vec<&Expr>> {
     None
 }
 
-fn decode_rows(codecs: &[Codec], rows: TokenStream) -> TokenStream {
+fn decode_rows(codecs: &[Codec], rows: TokenStream, captured: Option<&TokenStream>) -> TokenStream {
     let columns = 0..codecs.len();
     let args = (0..codecs.len())
         .map(|i| format_ident!("column_{i}"))
@@ -471,10 +501,8 @@ fn decode_rows(codecs: &[Codec], rows: TokenStream) -> TokenStream {
     let values = codecs
         .iter()
         .zip(&args)
-        .map(|(ty, arg)| ty.base(quote!(db), quote!(#arg)));
-    let extractor = codecs
-        .iter()
-        .any(|ty| matches!(ty, Codec::Enum(_)))
+        .map(|(ty, arg)| ty.decode_cell(quote!(db), quote!(#arg), captured));
+    let extractor = (captured.is_none() && codecs.iter().any(|ty| matches!(ty, Codec::Enum(_))))
         .then(|| quote!(let extractor = std::cell::OnceCell::new();));
     quote! {
         #extractor
@@ -483,6 +511,519 @@ fn decode_rows(codecs: &[Codec], rows: TokenStream) -> TokenStream {
             Ok((#(#values,)*))
         })
     }
+}
+
+fn scoped_tokens(
+    program: &CheckedProgram,
+    selected: &[String],
+    schema: &Schema,
+    signature: &mut Signature,
+    (name, owner): (&Ident, &Path),
+    (frame, code): (&ScopedFunction, &FrameCode),
+    declarations: &BTreeMap<Path, &Declaration>,
+) -> Result<TokenStream, Error> {
+    let locals = &code.locals;
+    let dependencies = &code.reads;
+    let bytecode = RustLiteral::byte_string(&code.bytes);
+    let schedule = schedule_tokens(&frame.schedule);
+    let schedule_fn = format_ident!("frame_schedule_{name}");
+    let ty = &program.types()[owner].ty;
+    let args = frame
+        .parameters
+        .iter()
+        .map(|parameter| scoped_value::ident(&parameter.name))
+        .collect::<Vec<_>>();
+    let codecs = codecs(
+        frame.parameters.iter().map(|parameter| &parameter.ty),
+        &function_inputs(ty),
+        signature,
+        schema,
+        selected,
+    )?;
+    let types = codecs.iter().map(Codec::argument_ty);
+    let values = codecs
+        .iter()
+        .zip(&args)
+        .map(|(codec, arg)| codec.encode_argument(quote!(::std::borrow::ToOwned::to_owned(&#arg))));
+    let scoped_root = frame.memo && matches!(codecs.as_slice(), [Codec::OpId, ..]);
+    let revision_input = scoped_root.then(|| quote!(revision: u64,));
+    let stamp = scoped_stamp(scoped_root, dependencies, declarations);
+    let globals = declarations
+        .iter()
+        .filter_map(|(path, declaration)| {
+            let Declaration::Let { binding, .. } = declaration else {
+                return None;
+            };
+            (!rewrite::carries_clause(&binding.value) &&
+         !matches!(&binding.value.value, Expression::Function(function) if function.has_frame()))
+            .then_some((path.clone(), binding))
+        })
+        .collect();
+    let values_for_result = scoped_value::Values {
+        globals: &globals,
+        constructors: &schema.constructors,
+        tables: None,
+    };
+    let ScopedView {
+        definition,
+        result,
+        finish,
+        slots,
+    } = scoped_view(
+        program,
+        selected,
+        schema,
+        signature,
+        (name, ty),
+        (frame, code),
+        (declarations, &codecs, &values_for_result),
+    )?;
+    let in_color = format_ident!("{name}_in");
+    let memo_key = quote!(concat!(module_path!(), "::", stringify!(#name)));
+    let cache_hit = frame.memo.then(|| {
+        quote! {
+            if color != ::tir_egglog::Color::BASE {
+                db.rebuild()?;
+            }
+            let revision = #stamp;
+            if let Some(result) = db.memo_result::<#result>(#memo_key, &args, color, &revision) {
+                return Ok(result);
+            }
+        }
+    });
+    let return_value = scoped_return(frame, ty, &memo_key, &result, &finish);
+    let argument_types = types.collect::<Vec<_>>();
+    let root_arg = scoped_root.then(|| quote!(revision,));
+    Ok(quote! {
+        #definition
+
+        fn #schedule_fn() -> ::tir_egglog::Schedule { #schedule }
+
+        pub fn #name(db: &mut ::tir_egglog::Database, #revision_input #(#args: #argument_types),*) -> Result<#result, Box<dyn std::error::Error>> {
+            #in_color(db, ::tir_egglog::Color::BASE, #root_arg #(#args),*)
+        }
+
+        pub fn #in_color(db: &mut ::tir_egglog::Database, color: ::tir_egglog::Color, #revision_input #(#args: #argument_types),*) -> Result<#result, Box<dyn std::error::Error>> {
+            let args = [#(#values),*];
+            #cache_hit
+            install_schema(db)?;
+            let result = (|| -> Result<Vec<::tir_egglog::LocalTable>, Box<dyn std::error::Error>> {
+                let (mut code, _locals) = ::tir_egglog::Program::from_static_with_tables(#bytecode, db, &[#(#locals),*], &[])?;
+                code.set_naive(true);
+                code.run_in(db, color, &#schedule_fn(), &args)?;
+                Ok(vec![#(_locals[#slots].clone()),*])
+            })();
+            db.collect_local_tables();
+            let tables = result?;
+            #return_value
+        }
+    })
+}
+
+fn scoped_stamp(
+    scoped_root: bool,
+    dependencies: &[String],
+    declarations: &BTreeMap<Path, &Declaration>,
+) -> TokenStream {
+    let dependency_versions = quote! {
+        stamp.extend([#(#dependencies),*].into_iter().map(|name|
+            db.table(name).map_or(0, |table| db.table_version_in(color, table))
+        ));
+    };
+    if scoped_root {
+        let scoped_tables = declarations
+            .iter()
+            .filter(|(path, _)| path.first().is_some_and(|part| part == "ir"))
+            .filter_map(|(_, declaration)| storage_name(declaration))
+            .collect::<BTreeSet<_>>();
+        let outside = dependencies
+            .iter()
+            .filter(|name| !scoped_tables.contains(name.as_str()))
+            .collect::<Vec<_>>();
+        let outside_versions = (!outside.is_empty()).then(|| {
+            quote!(
+                stamp.extend([#(#outside),*].into_iter().map(|name|
+                    db.table(name).map_or(0, |table| db.table_version(table))
+                ));
+            )
+        });
+        quote!({
+            let mut stamp = vec![revision, db.equality_revision(color)];
+            if color == ::tir_egglog::Color::BASE {
+                #outside_versions
+            } else {
+                #dependency_versions
+            }
+            stamp
+        })
+    } else {
+        quote!({
+            let mut stamp = vec![db.equality_revision(color)];
+            #dependency_versions
+            stamp
+        })
+    }
+}
+
+fn scoped_return(
+    frame: &ScopedFunction,
+    ty: &Ty,
+    memo_key: &TokenStream,
+    result: &TokenStream,
+    finish: &TokenStream,
+) -> TokenStream {
+    let unit = frame.fields.is_empty()
+        && (frame.value.is_none()
+            || matches!(ty, Ty::Fun(_, output)
+            if matches!(output.as_ref(), Ty::Con(family, _) if *family == crate::infer::UNIT)));
+    match (frame.memo, unit) {
+        (true, true) => quote! {
+            #finish;
+            db.store_memo_result(#memo_key, &args, color, revision, ());
+            Ok(())
+        },
+        (true, false) => quote! {
+            let result: #result = { #finish };
+            db.store_memo_result(
+                #memo_key, &args, color, revision, ::std::borrow::ToOwned::to_owned(&result),
+            );
+            Ok(result)
+        },
+        (false, true) => quote! {
+            #finish;
+            Ok(())
+        },
+        (false, false) => quote!(Ok({ #finish })),
+    }
+}
+
+struct ScopedView {
+    definition: Option<TokenStream>,
+    result: TokenStream,
+    finish: TokenStream,
+    slots: Vec<usize>,
+}
+
+type ScopedInputs<'a> = (
+    &'a BTreeMap<Path, &'a Declaration>,
+    &'a [Codec],
+    &'a scoped_value::Values<'a>,
+);
+
+fn scoped_view(
+    program: &CheckedProgram,
+    selected: &[String],
+    schema: &Schema,
+    signature: &mut Signature,
+    (name, ty): (&Ident, &Ty),
+    (frame, code): (&ScopedFunction, &FrameCode),
+    (declarations, parameters, values): ScopedInputs<'_>,
+) -> Result<ScopedView, Error> {
+    if let Some(expression) = &frame.value {
+        let Ty::Fun(_, output) = ty else {
+            return Err(Error("scoped function has no result type".into()));
+        };
+        let result = scoped_value::ty(program, selected, schema, signature, output)?;
+        let shape = scoped_value::Shape::new(program, output);
+        let expression = values.emit(expression, &shape)?;
+        return Ok(ScopedView {
+            result,
+            definition: None,
+            finish: quote!({ drop(tables); #expression }),
+            slots: Vec::new(),
+        });
+    }
+    let locals = &code.locals;
+    let result_name = format_ident!("{}Result", rust_type_name(&name.to_string()));
+    let mut fields = Vec::new();
+    let mut row_types = Vec::new();
+    let mut bindings = Vec::new();
+    let mut handles = Vec::new();
+    let mut readers = Vec::new();
+    let mut slots = Vec::new();
+    let mut tables = BTreeMap::new();
+    for (field, path) in &frame.fields {
+        let table = schema.name(path);
+        let Some(slot) = locals.iter().position(|local| *local == table) else {
+            return Err(Error(format!(
+                "scoped result {field} does not capture a written local table"
+            )));
+        };
+        slots.push(slot);
+        let field = method(std::slice::from_ref(field));
+        fields.push(field.clone());
+        let column_codecs = if let Some(Declaration::Axiom { ty, .. }) = declarations.get(path) {
+            let source =
+                relation_types(ty).ok_or_else(|| Error("expected a relation result".into()))?;
+            codecs(
+                source,
+                &relation_columns(ty, &program.types()[path].ty),
+                signature,
+                schema,
+                selected,
+            )?
+        } else if let Some(ty) = schema.local_types.get(path) {
+            let source =
+                relation_types(ty).ok_or_else(|| Error("expected a local relation".into()))?;
+            let checked = Ty::Con(crate::infer::UNIT, Box::new(TyList::Nil));
+            source
+                .into_iter()
+                .map(|ty| Codec::read(ty, &checked, signature, schema, selected))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            return Err(Error("expected a scoped table signature".into()));
+        };
+        let handle = format_ident!("table_{field}");
+        let handle_expr = if frame.query.is_some() {
+            quote!(self.#field.table())
+        } else {
+            quote!(&self.#field)
+        };
+        bindings.push(quote!((#table, #handle_expr)));
+        handles.push(quote! {
+            pub fn #handle(&self) -> &::tir_egglog::LocalTable { #handle_expr }
+        });
+        let types = column_codecs.iter().map(Codec::ty);
+        let row = format_ident!("{}{}Row", result_name, rust_type_name(&field.to_string()));
+        row_types.push(quote! {
+            /// Columns of the completed local table.
+            pub type #row = (#(#types,)*);
+        });
+        if frame.query.is_some() {
+            let snapshot = quote!(self.#field);
+            let decoded = decode_rows(
+                &column_codecs,
+                quote!(self.#field.rows().filter(|row| !row.is_subsumed())),
+                Some(&snapshot),
+            );
+            readers.push(quote! {
+                pub fn #field<'a>(&'a self, db: &'a ::tir_egglog::Database) -> Result<impl Iterator<Item=DecodeResult<#row>> + use<'a>, ::tir_egglog::Error> {
+                    self.#field.table().id(db)?;
+                    Ok({ #decoded })
+                }
+            });
+            tables.insert(
+                path.clone(),
+                QueryTable {
+                    field,
+                    codecs: column_codecs,
+                },
+            );
+        } else {
+            let decoded = decode_rows(
+                &column_codecs,
+                quote!(db.rows_in(color, table).filter(|row| !row.is_subsumed())),
+                None,
+            );
+            readers.push(quote! {
+                pub fn #field<'a>(&self, db: &'a ::tir_egglog::Database) -> Result<impl Iterator<Item=DecodeResult<#row>> + use<'a>, ::tir_egglog::Error> {
+                    let table = self.#field.id(db)?;
+                    let color = self.color;
+                    Ok({ #decoded })
+                }
+            });
+        }
+    }
+    let field_count = fields.len();
+    let (declarations, finish) = if let Some(query) = &frame.query {
+        let Ty::Fun(_, output) = ty else {
+            return Err(Error("scoped query has no checked signature".into()));
+        };
+        let method = query_contains(
+            query,
+            values,
+            &tables,
+            (&frame.parameters, parameters),
+            (output, signature, schema, selected),
+        )?;
+        readers.push(method.tokens);
+        let captures = tables.values().map(QueryTable::snapshot_tokens);
+        let capture_fields = method.capture_fields;
+        let capture_values = method.capture_values;
+        (
+            quote!(#(#fields: ::tir_egglog::CapturedTable,)* #capture_fields),
+            quote! {
+                let [#(#fields,)*] = <[_; #field_count]>::try_from(tables)
+                    .map_err(|_| ::tir_egglog::Error::Unsupported("missing captured query tables".into()))?;
+                #result_name { #(#captures,)* #capture_values }
+            },
+        )
+    } else if fields.is_empty() {
+        (
+            quote!(),
+            quote!({
+                drop(tables);
+            }),
+        )
+    } else {
+        (
+            quote!(color: ::tir_egglog::Color, #(#fields: ::tir_egglog::LocalTable,)*),
+            quote! {
+                let [#(#fields,)*] = <[_; #field_count]>::try_from(tables)
+                    .map_err(|_| ::tir_egglog::Error::Unsupported("incomplete scoped function result".into()))?;
+                #result_name { color, #(#fields,)* }
+            },
+        )
+    };
+    let definition = (!fields.is_empty()).then(|| quote! {
+        #(#row_types)*
+        #[derive(Clone)]
+        pub struct #result_name { #declarations }
+
+        impl #result_name {
+            /// Bind this result's tables as inputs to a separately compiled schedule.
+            pub fn bindings(&self) -> [(&'static str, &::tir_egglog::LocalTable); #field_count] {
+                [#(#bindings),*]
+            }
+
+            #(#handles)*
+            #(#readers)*
+        }
+    });
+    let result = if fields.is_empty() {
+        quote!(())
+    } else {
+        quote!(#result_name)
+    };
+
+    Ok(ScopedView {
+        definition,
+        result,
+        finish,
+        slots,
+    })
+}
+
+struct QueryTable {
+    field: Ident,
+    codecs: Vec<Codec>,
+}
+
+impl QueryTable {
+    fn snapshot_tokens(&self) -> TokenStream {
+        let field = &self.field;
+        let columns = self
+            .codecs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, codec)| matches!(codec, Codec::Enum(_)).then_some(i));
+        quote!(#field: #field.capture_with_terms(db, color, &[#(#columns),*])?)
+    }
+
+    fn lookup(
+        &self,
+        values: &scoped_value::Values<'_>,
+        arguments: &[Expr],
+    ) -> Result<TokenStream, Error> {
+        if self.codecs.len() != arguments.len() {
+            return Err(Error(
+                "wrong number of operands for a captured table".into(),
+            ));
+        }
+        let field = &self.field;
+        let keys = self
+            .codecs
+            .iter()
+            .zip(arguments)
+            .map(|(codec, expr)| {
+                let value = values.emit(expr, &scoped_value::Shape::Other)?;
+                let encoded = codec.encode_argument(value);
+                if matches!(codec, Codec::Enum(_)) {
+                    Ok(quote!(self.#field.find(#encoded)))
+                } else {
+                    Ok(encoded)
+                }
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        Ok(quote!({
+            let key = [#(#keys),*];
+            self.#field.rows().any(|row| !row.is_subsumed() && key.iter().enumerate().all(|(index, cell)| row[index] == *cell))
+        }))
+    }
+}
+
+struct QueryMethod {
+    tokens: TokenStream,
+    capture_fields: TokenStream,
+    capture_values: TokenStream,
+}
+
+fn query_contains(
+    query: &ScopedQuery,
+    values: &scoped_value::Values<'_>,
+    tables: &BTreeMap<Path, QueryTable>,
+    (outer_parameters, parameters): (&[crate::ast::Binder], &[Codec]),
+    (output, signature, schema, selected): (&Ty, &mut Signature, &Schema, &[String]),
+) -> Result<QueryMethod, Error> {
+    let input_codecs = codecs(
+        query.parameters.iter().map(|param| &param.ty),
+        &function_inputs(output),
+        signature,
+        schema,
+        selected,
+    )?;
+    let free = crate::totality::free_paths(&query.body)?;
+    let capture = outer_parameters
+        .iter()
+        .zip(parameters)
+        .filter(|(parameter, _)| {
+            free.contains(&vec![parameter.name.clone()])
+                && !query
+                    .parameters
+                    .iter()
+                    .any(|binder| binder.name == parameter.name)
+        })
+        .map(|(parameter, codec)| (scoped_value::ident(&parameter.name), codec.argument_ty()))
+        .collect::<Vec<_>>();
+    let (capture_names, capture_types): (Vec<_>, Vec<_>) = capture.into_iter().unzip();
+    let arguments = query
+        .parameters
+        .iter()
+        .map(|param| scoped_value::ident(&param.name));
+    let input_types = input_codecs.iter().map(Codec::argument_ty);
+    let aliases = query
+        .tables
+        .iter()
+        .map(|(alias, path)| {
+            let table = tables
+                .get(path)
+                .ok_or_else(|| Error("captured query table is missing".into()))?;
+            Ok((alias.clone(), table))
+        })
+        .collect::<Result<BTreeMap<_, _>, Error>>()?;
+    let values = scoped_value::Values {
+        globals: values.globals,
+        constructors: values.constructors,
+        tables: Some(&aliases),
+    };
+    let body = values.emit(&query.body, &scoped_value::Shape::Other)?;
+    let fields = tables.values().map(|table| &table.field);
+    let tokens = quote! {
+        pub fn contains(&self, db: &::tir_egglog::Database, #(#arguments: #input_types),*) -> Result<bool, ::tir_egglog::Error> {
+            #(self.#fields.table().id(db)?;)*
+            let (#(#capture_names,)*) = ::std::borrow::ToOwned::to_owned(&self.captures);
+            Ok(#body)
+        }
+    };
+    Ok(QueryMethod {
+        tokens,
+        capture_fields: quote!(captures: (#(#capture_types,)*),),
+        capture_values: quote!(captures: (#(#capture_names,)*),),
+    })
+}
+
+fn rust_type_name(name: &str) -> String {
+    name.trim_start_matches("r#")
+        .split('_')
+        .flat_map(|part| {
+            let mut chars = part.chars();
+            chars
+                .next()
+                .into_iter()
+                .flat_map(char::to_uppercase)
+                .chain(chars)
+        })
+        .collect()
 }
 
 fn relation_tokens(
@@ -503,7 +1044,7 @@ fn relation_tokens(
     let args = (0..codecs.len())
         .map(|i| format_ident!("column_{i}"))
         .collect::<Vec<_>>();
-    let decoded = decode_rows(codecs, quote!(db.rows_in(color, self.#table)));
+    let decoded = decode_rows(codecs, quote!(db.rows_in(color, self.#table)), None);
     let columns = (0..codecs.len()).collect::<Vec<_>>();
     let has_enum = codecs.iter().any(|ty| matches!(ty, Codec::Enum(_)));
     let type_name = name
@@ -1000,14 +1541,24 @@ fn enum_api(
     Ok((enums, methods))
 }
 
+pub(super) struct Executable<'a> {
+    pub lowered: &'a LoweredProgram,
+    pub binary: &'a [u8],
+    pub frames: &'a BTreeMap<Path, FrameCode>,
+    pub local_tables: &'a BTreeSet<String>,
+}
+
 pub(super) fn emit(
     program: &CheckedProgram,
     selected: &[String],
     schema: &Schema,
-    lowered: Option<&LoweredProgram>,
-    binary: Option<&[u8]>,
     hosts: &[Host<'_>],
+    catalog: &[u8],
+    executable: Option<Executable<'_>>,
 ) -> Result<String, Error> {
+    let executable = executable.as_ref();
+    let lowered = executable.map(|code| code.lowered);
+    let binary = executable.map(|code| code.binary);
     let mut signature = Signature::new(program);
     let mut accessors = Vec::new();
     let mut rows = Vec::new();
@@ -1046,6 +1597,21 @@ pub(super) fn emit(
                     ::tir_egglog::RuleCollection::from_static(CODE, #ruleset, install_schema)
                 }
             });
+        } else if let Some((frame, code)) = lowered.and_then(|lowered| {
+            lowered
+                .scoped
+                .get(&path)
+                .zip(executable.and_then(|code| code.frames.get(&path)))
+        }) {
+            accessors.push(scoped_tokens(
+                program,
+                selected,
+                schema,
+                &mut signature,
+                (&name, &path),
+                (frame, code),
+                &declarations,
+            )?);
         } else if let Some(schedule) = lowered.and_then(|lowered| lowered.schedules.get(&path)) {
             let (attached, callable) = schedule_api(
                 &name,
@@ -1059,6 +1625,7 @@ pub(super) fn emit(
             methods.push(callable);
         } else if let Some(Declaration::Axiom { ty, .. }) = declarations.get(&path)
             && let Some(types) = relation_types(ty)
+            && !executable.is_some_and(|code| code.local_tables.contains(&schema.name(&path)))
             && schema
                 .database()
                 .schema()
@@ -1089,7 +1656,7 @@ pub(super) fn emit(
         }
     }
     let (fields, names): (Vec<_>, Vec<_>) = tables.into_iter().unzip();
-    let catalog = RustLiteral::byte_string(&schema.to_bytes()?);
+    let catalog = RustLiteral::byte_string(catalog);
     let code = binary.map(RustLiteral::byte_string);
     let code_declaration = code.as_ref().map(|bytes| quote! {
         static CODE: &[u8] = #bytes;
@@ -1104,7 +1671,15 @@ pub(super) fn emit(
     let code_field = code.as_ref().map(|_| quote!(code: ::tir_egglog::Program,));
     let load_code = code
         .as_ref()
-        .map(|_| quote!(let code = ::tir_egglog::Program::from_static(CODE, db)?;));
+        .map(|_| quote!(let (code, _) = ::tir_egglog::Program::from_static_with_tables(CODE, db, &[], inputs)?;));
+    let table_resolver = (!fields.is_empty()).then(|| {
+        quote! {
+            let table = |name| match inputs.iter().find(|(alias, _)| *alias == name) {
+                Some((_, handle)) => handle.id(db),
+                None => db.table(name),
+            };
+        }
+    });
     let code_init = code.as_ref().map(|_| quote!(code,));
     let rule_methods = code.as_ref().map(|_| {
         quote! {
@@ -1123,6 +1698,17 @@ pub(super) fn emit(
                 schedule: &::tir_egglog::Schedule,
             ) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
                 program.run(self.db, schedule, &[])
+            }
+
+            /// Run the dependent phase after each selected iteration.
+            pub fn run_schedule_with_after(
+                &mut self,
+                schedule: &::tir_egglog::Schedule,
+                selected: &str,
+                extras: &mut [(&mut ::tir_egglog::Program, &str)],
+                after: impl FnMut(&mut ::tir_egglog::Database) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error>,
+            ) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
+                self.code.run_with_after(self.db, schedule, &[], selected, extras, after)
             }
 
             /// Run a nullary schedule with extra rules in each iteration of the named ruleset.
@@ -1213,8 +1799,12 @@ pub(super) fn emit(
 
         /// Install the declared catalog on the caller's database.
         pub fn install_schema(db: &mut ::tir_egglog::Database) -> Result<(), ::tir_egglog::LoadError> {
+            install_schema_with_tables(db, &[])
+        }
+
+        fn install_schema_with_tables(db: &mut ::tir_egglog::Database, inputs: &[(&str, &::tir_egglog::LocalTable)]) -> Result<(), ::tir_egglog::LoadError> {
             #native_imports
-            ::tir_egglog::Program::from_static(CATALOG, db)?;
+            ::tir_egglog::Program::from_static_with_tables(CATALOG, db, &[], inputs)?;
             Ok(())
         }
 
@@ -1230,9 +1820,15 @@ pub(super) fn emit(
         impl<'db> Program<'db> {
             /// Install the schema and bind this program to the existing database.
             pub fn load(db: &'db mut ::tir_egglog::Database) -> Result<Self, Box<dyn std::error::Error>> {
-                install_schema(db)?;
+                Self::load_with_tables(db, &[])
+            }
+
+            /// Bind compiled table inputs to owned local table handles.
+            pub fn load_with_tables(db: &'db mut ::tir_egglog::Database, inputs: &[(&str, &::tir_egglog::LocalTable)]) -> Result<Self, Box<dyn std::error::Error>> {
+                install_schema_with_tables(db, inputs)?;
                 #load_code
-                #(let #fields = db.table(#names)?;)*
+                #table_resolver
+                #(let #fields = table(#names)?;)*
                 Ok(Self { db, #code_init #(#fields,)* })
             }
 
