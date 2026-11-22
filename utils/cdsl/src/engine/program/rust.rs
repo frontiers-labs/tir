@@ -1,9 +1,17 @@
+use std::{
+    borrow::Cow,
+    hash::{DefaultHasher, Hash, Hasher},
+};
+
 use proc_macro2::{Ident, Literal as RustLiteral, TokenStream};
 use quote::{format_ident, quote};
 use tir_egglog::Schedule;
 
 use super::*;
-use crate::hm::{Ty, TyList};
+use crate::{
+    compiler::CARGO_PACKAGE_ROOT_PREFIX,
+    hm::{Ty, TyList},
+};
 
 mod signature;
 use signature::Signature;
@@ -21,18 +29,34 @@ fn snake(name: &str) -> String {
     lowered
 }
 
+fn identifier_part(name: &str) -> Cow<'_, str> {
+    if name.starts_with(CARGO_PACKAGE_ROOT_PREFIX) {
+        let mut hash = DefaultHasher::new();
+        name.hash(&mut hash);
+        Cow::Owned(format!("dep_{:016x}", hash.finish()))
+    } else {
+        Cow::Borrowed(name)
+    }
+}
+
 fn method(path: &[String]) -> Ident {
     format_ident!(
         "{}",
         path.iter()
-            .map(|name| snake(name))
+            .map(|name| snake(&identifier_part(name)))
             .collect::<Vec<_>>()
             .join("_")
     )
 }
 
 fn enum_name(path: &[String], selected: &[String]) -> Ident {
-    format_ident!("{}", path.strip_prefix(selected).unwrap_or(path).join("_"))
+    let path = path.strip_prefix(selected).unwrap_or(path);
+    let name = path
+        .iter()
+        .map(|part| identifier_part(part))
+        .collect::<Vec<_>>()
+        .join("_");
+    format_ident!("{name}")
 }
 
 enum Codec {
@@ -439,6 +463,28 @@ fn relation_types(ty: &Expr) -> Option<Vec<&Expr>> {
     None
 }
 
+fn decode_rows(codecs: &[Codec], rows: TokenStream) -> TokenStream {
+    let columns = 0..codecs.len();
+    let args = (0..codecs.len())
+        .map(|i| format_ident!("column_{i}"))
+        .collect::<Vec<_>>();
+    let values = codecs
+        .iter()
+        .zip(&args)
+        .map(|(ty, arg)| ty.base(quote!(db), quote!(#arg)));
+    let extractor = codecs
+        .iter()
+        .any(|ty| matches!(ty, Codec::Enum(_)))
+        .then(|| quote!(let extractor = std::cell::OnceCell::new();));
+    quote! {
+        #extractor
+        #rows.map(move |row| {
+            #(let #args = row[#columns];)*
+            Ok((#(#values,)*))
+        })
+    }
+}
+
 fn relation_tokens(
     name: &Ident,
     table: &Ident,
@@ -457,10 +503,7 @@ fn relation_tokens(
     let args = (0..codecs.len())
         .map(|i| format_ident!("column_{i}"))
         .collect::<Vec<_>>();
-    let values = codecs
-        .iter()
-        .zip(&args)
-        .map(|(ty, arg)| ty.base(quote!(db), quote!(#arg)));
+    let decoded = decode_rows(codecs, quote!(db.rows_in(color, self.#table)));
     let columns = (0..codecs.len()).collect::<Vec<_>>();
     let has_enum = codecs.iter().any(|ty| matches!(ty, Codec::Enum(_)));
     let type_name = name
@@ -488,7 +531,6 @@ fn relation_tokens(
     } else {
         row.clone()
     };
-    let extractor = has_enum.then(|| quote!(let extractor = std::cell::OnceCell::new();));
     let handles = has_enum.then(|| {
         let class_types = codecs.iter().map(|ty| match ty {
             Codec::Enum(name) => quote!(Class<#name>),
@@ -574,11 +616,7 @@ fn relation_tokens(
         /// Read the rows visible in the given color.
         pub fn #in_color(&self, color: ::tir_egglog::Color) -> impl Iterator<Item=DecodeResult<#row>> + '_ {
             let db = &*self.db;
-            #extractor
-            db.rows_in(color, self.#table).map(move |row| {
-                #(let #args = row[#columns];)*
-                Ok((#(#values,)*))
-            })
+            #decoded
         }
 
         #handles
@@ -853,50 +891,98 @@ fn native_import_tokens(
     (declarations, install)
 }
 
-pub(super) fn emit(
-    program: &CheckedProgram,
-    selected: &[String],
+fn schedule_api(
+    name: &Ident,
+    schedule: &Schedule,
+    (declaration, ty): (Option<&Declaration>, &Ty),
+    signature: &mut Signature,
     schema: &Schema,
-    schedules: &BTreeMap<Path, Schedule>,
-    binary: Option<&[u8]>,
-    hosts: &[Host<'_>],
-) -> Result<String, Error> {
-    let mut signature = Signature::new(program);
-    let mut methods = Vec::new();
-    let mut accessors = Vec::new();
+    selected: &[String],
+) -> Result<(Option<TokenStream>, TokenStream), Error> {
+    let schedule = schedule_tokens(schedule);
+    let parameters = match declaration {
+        Some(Declaration::Let { binding, .. }) => match &binding.value.value {
+            Expression::Function(function) => function.parameters.as_slice(),
+            _ => &[],
+        },
+        _ => &[],
+    };
+    let checked = function_inputs(ty);
+    let codecs = codecs(
+        parameters.iter().map(|binder| &binder.ty),
+        &checked,
+        signature,
+        schema,
+        selected,
+    )?;
+    let arguments = parameters
+        .iter()
+        .map(|binder| format_ident!("r#{}", binder.name))
+        .collect::<Vec<_>>();
+    let types = codecs.iter().map(Codec::ty);
+    let values = codecs
+        .iter()
+        .zip(&arguments)
+        .map(|(codec, arg)| codec.encode(quote!(self.db), quote!(#arg)));
+    let (attached, invocation) = if parameters.is_empty() {
+        let accessor = format_ident!("schedule_{name}");
+        let run_on = format_ident!("run_{name}");
+        (
+            Some(quote! {
+                /// Construct the declared CDSL schedule.
+                pub fn #accessor() -> ::tir_egglog::Schedule {
+                    #schedule
+                }
+
+                /// Run this program's attached schedule.
+                pub fn #run_on(engine: &mut ::tir_egglog::EGraph) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
+                    engine.run_schedule(&#accessor())
+                }
+            }),
+            quote!(#accessor()),
+        )
+    } else {
+        (None, schedule)
+    };
+    let methods = quote! {
+        /// Run the declared CDSL schedule.
+        pub fn #name(&mut self, #(#arguments: #types),*) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
+            let args = [#(#values),*];
+            self.code.run(self.db, &#invocation, &args)
+        }
+    };
+    Ok((attached, methods))
+}
+
+fn executable_variants<'a>(
+    schema: &Schema,
+    path: &[String],
+    declaration: &'a Declaration,
+) -> Option<&'a [crate::ast::Variant]> {
+    let Declaration::Enum { variants, .. } = declaration else {
+        return None;
+    };
+    schema.database().schema().sort_named(&schema.name(path))?;
+    Some(variants)
+}
+
+fn enum_api(
+    program: &CheckedProgram,
+    schema: &Schema,
+    selected: &[String],
+    declarations: &BTreeMap<Path, &Declaration>,
+    signature: &mut Signature,
+) -> Result<(Vec<TokenStream>, Vec<TokenStream>), Error> {
     let mut enums = Vec::new();
-    let mut rows = Vec::new();
-    let mut tables = Vec::new();
-    let declarations = program
-        .artifact()
-        .all_modules()
-        .flat_map(|module| {
-            module.ast.declarations.iter().filter_map(|declaration| {
-                let name = match &declaration.value {
-                    Declaration::Axiom { name, .. } | Declaration::Enum { name, .. } => name,
-                    _ => return None,
-                };
-                Some((
-                    [module.path.as_slice(), std::slice::from_ref(name)].concat(),
-                    &declaration.value,
-                ))
-            })
-        })
-        .collect::<BTreeMap<_, _>>();
-    for (path, declaration) in &declarations {
-        if let Declaration::Enum { variants, .. } = declaration
-            && schema
-                .database()
-                .schema()
-                .sort_named(&schema.name(path))
-                .is_some()
-        {
+    let mut methods = Vec::new();
+    for (path, declaration) in declarations {
+        if let Some(variants) = executable_variants(schema, path, declaration) {
             enums.push(enum_tokens(
                 &enum_name(path, selected),
                 path,
                 variants,
                 program,
-                &mut signature,
+                signature,
                 schema,
                 selected,
             )?);
@@ -905,41 +991,65 @@ pub(super) fn emit(
                 path,
                 &enum_name(path, selected),
                 variants,
-                &mut signature,
+                signature,
                 schema,
                 selected,
             )?);
         }
     }
+    Ok((enums, methods))
+}
+
+pub(super) fn emit(
+    program: &CheckedProgram,
+    selected: &[String],
+    schema: &Schema,
+    lowered: Option<&LoweredProgram>,
+    binary: Option<&[u8]>,
+    hosts: &[Host<'_>],
+) -> Result<String, Error> {
+    let mut signature = Signature::new(program);
+    let mut accessors = Vec::new();
+    let mut rows = Vec::new();
+    let mut tables = Vec::new();
+    let declarations = program
+        .artifact()
+        .all_modules()
+        .flat_map(|module| {
+            module.ast.declarations.iter().filter_map(|declaration| {
+                let name = match &declaration.value {
+                    Declaration::Axiom { name, .. } | Declaration::Enum { name, .. } => {
+                        std::slice::from_ref(name)
+                    }
+                    Declaration::Let { binding, .. } => binding.path.as_slice(),
+                    _ => return None,
+                };
+                Some(([module.path.as_slice(), name].concat(), &declaration.value))
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let (mut enums, mut methods) =
+        enum_api(program, schema, selected, &declarations, &mut signature)?;
     for (visible, path) in exported_members(program, selected) {
         let name = method(&visible);
-        if let Some(Declaration::Enum { .. }) = declarations.get(&path)
-            && schema
-                .database()
-                .schema()
-                .sort_named(&schema.name(&path))
-                .is_some()
+        if declarations
+            .get(&path)
+            .is_some_and(|declaration| executable_variants(schema, &path, declaration).is_some())
         {
             let enum_name = enum_name(&path, selected);
             let alias = format_ident!("{}", visible.join("_"));
-            if alias != enum_name {
-                enums.push(quote!(pub use #enum_name as #alias;));
-            }
-        } else if let Some(schedule) = schedules.get(&path) {
-            let schedule = schedule_tokens(schedule);
-            let run_on = format_ident!("run_{name}");
-            accessors.push(quote! {
-                /// Run this program's attached schedule.
-                pub fn #run_on(engine: &mut ::tir_egglog::EGraph) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
-                    engine.run_schedule(&#schedule)
-                }
-            });
-            methods.push(quote! {
-                /// Run the declared CDSL schedule.
-                pub fn #name(&mut self) -> Result<::tir_egglog::RunReport, ::tir_egglog::Error> {
-                    self.code.run(self.db, &#schedule, &[])
-                }
-            });
+            enums.extend((alias != enum_name).then(|| quote!(pub use #enum_name as #alias;)));
+        } else if let Some(schedule) = lowered.and_then(|lowered| lowered.schedules.get(&path)) {
+            let (attached, callable) = schedule_api(
+                &name,
+                schedule,
+                (declarations.get(&path).copied(), &program.types()[&path].ty),
+                &mut signature,
+                schema,
+                selected,
+            )?;
+            accessors.extend(attached);
+            methods.push(callable);
         } else if let Some(Declaration::Axiom { ty, .. }) = declarations.get(&path)
             && let Some(types) = relation_types(ty)
             && schema

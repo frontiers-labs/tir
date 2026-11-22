@@ -22,7 +22,7 @@ pub let constant<w: Nat> = op {
     interfaces: {
         Tag: {},
         Constant: {
-            constant_value: fn () -> El<Bits<w>> {
+            constant_value: || -> El<Bits<w>> {
                 std::bits::from_int<w>(self.value)
             },
         },

@@ -1,6 +1,6 @@
 pub enum Option<A: Type> { None, Some(A) }
 pub let none<A: Type> = Option::None<A>;
-pub let get_or<A: Type> = fn(value: Option<A>, fallback: A) -> A {
+pub let get_or<A: Type> = |value: Option<A>, fallback: A| -> A {
     match value {
         Option::None => fallback,
         Option::Some(actual) => actual,

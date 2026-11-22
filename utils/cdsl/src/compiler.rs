@@ -3,6 +3,8 @@ mod imports;
 #[path = "compiler_sources.rs"]
 mod sources;
 
+pub(crate) use sources::CARGO_PACKAGE_ROOT_PREFIX;
+
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -30,6 +32,7 @@ pub struct CompiledModule {
 pub struct Program {
     pub modules: Vec<CompiledModule>,
     support: Vec<CompiledModule>,
+    externs: imports::Externs,
     pub(crate) module_exports: BTreeMap<Vec<String>, BTreeMap<String, Vec<String>>>,
     pub(crate) references: BTreeMap<CdslPath, Vec<BTreeSet<CdslPath>>>,
     declaration_sources: BTreeMap<CdslPath, String>,
@@ -54,7 +57,7 @@ impl Program {
             .collect::<BTreeSet<_>>();
         let mut snapshot = self.clone();
         snapshot.modules.append(&mut snapshot.support);
-        resolve_names(&mut snapshot, true)?;
+        resolve_names(&mut snapshot, true).map_err(|failure| failure.error)?;
         let (modules, support) = snapshot
             .modules
             .into_iter()
@@ -79,6 +82,21 @@ impl Program {
     }
 
     pub fn select(mut self, selector: &[String]) -> Result<Self, Error> {
+        if !self
+            .modules
+            .iter()
+            .any(|module| module.path.starts_with(selector))
+            && let Some(target) = self.exported_module(selector).map(<[_]>::to_vec)
+            && selector != target
+        {
+            let (modules, support) = self
+                .support
+                .into_iter()
+                .partition(|module| module.path.starts_with(&target));
+            self.modules.extend(modules);
+            self.support = support;
+            return self.select(&target);
+        }
         let mut modules = Vec::new();
         for module in self.modules {
             if module.path.starts_with(selector) {
@@ -93,13 +111,8 @@ impl Program {
                 selector.join("::")
             )));
         }
-        Ok(Self {
-            modules,
-            support: self.support,
-            module_exports: self.module_exports,
-            references: self.references,
-            declaration_sources: self.declaration_sources,
-        })
+        self.modules = modules;
+        Ok(self)
     }
 
     pub(crate) fn exported_module<'a>(&'a self, selector: &'a [String]) -> Option<&'a [String]> {
@@ -120,9 +133,11 @@ pub fn compile_file(file: &Path) -> Result<Program, Error> {
     finish(load_file(file)?)
 }
 
-pub(crate) fn check_file(file: &Path) -> Result<crate::CheckedProgram, Error> {
-    let program = resolve_package(load_file(file)?)?;
-    crate::infer::lower(&separate_embedded_std(program))
+pub(crate) fn check_package(
+    file: &Path,
+) -> Result<(crate::CheckedProgram, BTreeSet<PathBuf>), Error> {
+    let (program, inputs) = load_package(file)?;
+    Ok((crate::infer::lower(&separate_support(program))?, inputs))
 }
 
 fn load_file(file: &Path) -> Result<Program, Error> {
@@ -130,6 +145,7 @@ fn load_file(file: &Path) -> Result<Program, Error> {
     let mut program = Program {
         modules: Vec::new(),
         support: Vec::new(),
+        externs: imports::Externs::new(),
         module_exports: BTreeMap::new(),
         references: BTreeMap::new(),
         declaration_sources: BTreeMap::new(),
@@ -154,57 +170,16 @@ pub fn compile_source(source: &str) -> Result<Program, Error> {
 
 /// Compile a workspace member's defs/lib.cdsl, located by its package name.
 pub fn resolve_crate(name: &str) -> Result<Program, Error> {
-    compile_file(&resolve_package_defs(name, false)?)
+    check_program(load_package(&resolve_package_defs(name, false)?)?.0)
 }
 
 /// Resolve the package prefix of a build selector by Cargo name or directory.
 pub fn resolve_program_package(prefix: &str) -> Result<Program, Error> {
-    compile_file(&resolve_package_defs(prefix, true)?)
+    check_program(load_package(&resolve_package_defs(prefix, true)?)?.0)
 }
 
 pub(crate) fn resolve_package_defs(name: &str, allow_directory: bool) -> Result<PathBuf, Error> {
-    let current = std::env::current_dir().map_err(|error| Error(error.to_string()))?;
-    for root in current.ancestors() {
-        let manifest = root.join("Cargo.toml");
-        if !manifest.is_file() {
-            continue;
-        }
-        let source = fs::read_to_string(&manifest)
-            .map_err(|error| Error(format!("{}: {error}", manifest.display())))?;
-        let Some(members) = manifest_field(&source, "workspace", "members") else {
-            continue;
-        };
-        let members = members
-            .trim_start()
-            .strip_prefix('[')
-            .and_then(|members| members.split_once(']'))
-            .ok_or_else(|| {
-                Error(format!(
-                    "{}: expected workspace members array",
-                    manifest.display()
-                ))
-            })?
-            .0;
-        for member in members.split('"').skip(1).step_by(2) {
-            let directory = root.join(member);
-            let manifest = directory.join("Cargo.toml");
-            let source = fs::read_to_string(&manifest)
-                .map_err(|error| Error(format!("{}: {error}", manifest.display())))?;
-            if manifest_field(&source, "package", "name")
-                .and_then(|value| value.trim_start().strip_prefix('"'))
-                .and_then(|value| value.split_once('"'))
-                .is_some_and(|(package, _)| package == name)
-                || (allow_directory && directory.file_name().is_some_and(|part| part == name))
-            {
-                return Ok(directory.join("defs/lib.cdsl"));
-            }
-        }
-        return Err(Error(format!(
-            "Cargo package {name} does not exist in {}",
-            root.display()
-        )));
-    }
-    Err(Error("no Cargo workspace found".into()))
+    sources::CargoMetadata::read(None)?.workspace_defs(name, allow_directory)
 }
 
 fn manifest_field<'a>(source: &'a str, table: &str, key: &str) -> Option<&'a str> {
@@ -277,6 +252,7 @@ fn compile_single(ast: Ast, file: &Path) -> Result<Program, Error> {
             ast,
         }],
         support: Vec::new(),
+        externs: imports::Externs::new(),
         module_exports: BTreeMap::new(),
         references: BTreeMap::new(),
         declaration_sources: BTreeMap::new(),
@@ -319,31 +295,104 @@ fn expand_inline_modules(program: &mut Program) {
     }
 }
 
-fn finish(program: Program) -> Result<Program, Error> {
-    let program = resolve_package(program)?;
-    crate::infer::check(&program)?;
-    Ok(separate_embedded_std(program))
+fn finish(mut program: Program) -> Result<Program, Error> {
+    prepare_program(&mut program)?;
+    resolve_names(&mut program, false).map_err(|failure| failure.error)?;
+    check_program(program)
 }
 
-fn resolve_package(mut program: Program) -> Result<Program, Error> {
+fn check_program(program: Program) -> Result<Program, Error> {
+    crate::infer::check(&program)?;
+    Ok(separate_support(program))
+}
+
+fn prepare_program(program: &mut Program) -> Result<(), Error> {
     load_source(
-        &mut program,
+        program,
         "<embedded std>",
         sources::Source::embedded_std(),
         vec!["std".into()],
         0,
         &mut BTreeSet::new(),
     )?;
-    expand_inline_modules(&mut program);
-    resolve_names(&mut program, false)?;
-    Ok(program)
+    expand_inline_modules(program);
+    Ok(())
 }
 
-fn separate_embedded_std(mut program: Program) -> Program {
+fn load_package(file: &Path) -> Result<(Program, BTreeSet<PathBuf>), Error> {
+    let mut graph = None;
+    let mut packages = BTreeMap::<Vec<String>, PathBuf>::from([(Vec::new(), file.to_path_buf())]);
+    let mut externs = imports::Externs::new();
+    let mut inputs = BTreeSet::new();
+    loop {
+        let mut program = load_file(file)?;
+        program.externs.clone_from(&externs);
+        let mut seen = BTreeSet::new();
+        for (path, root) in packages.iter().filter(|(path, _)| !path.is_empty()) {
+            let defs = root.parent().unwrap_or(Path::new("."));
+            load_module(
+                &mut program,
+                &path[0],
+                defs,
+                root,
+                path.clone(),
+                1,
+                &mut seen,
+            )?;
+        }
+        prepare_program(&mut program)?;
+        let failure = match resolve_names(&mut program, false) {
+            Ok(()) => return Ok((program, inputs)),
+            Err(failure) => failure,
+        };
+        let Some((owner, names)) = failure.dependency else {
+            return Err(failure.error);
+        };
+        let Some(manifest) = packages.get(&owner).and_then(|file| package_manifest(file)) else {
+            return Err(failure.error);
+        };
+        if graph.is_none() {
+            let metadata = sources::CargoMetadata::read(Some(&manifest))?;
+            inputs.extend(metadata.workspace_inputs());
+            graph = Some(metadata);
+        }
+        let Some((name, (segment, root))) = names.into_iter().find_map(|name| {
+            if externs
+                .get(&owner)
+                .is_some_and(|names| names.contains_key(&name))
+            {
+                return None;
+            }
+            graph
+                .as_ref()?
+                .dependency_defs(&manifest, &name)
+                .map(|dep| (name, dep))
+        }) else {
+            return Err(failure.error);
+        };
+        let target = vec![segment];
+        if let Some(defs) = root.parent() {
+            inputs.insert(defs.to_path_buf());
+        }
+        inputs.insert(manifest);
+        inputs.extend(package_manifest(&root));
+        packages.insert(target.clone(), root);
+        externs.entry(owner).or_default().insert(name, target);
+    }
+}
+
+fn package_manifest(file: &Path) -> Option<PathBuf> {
+    let defs = file.parent()?;
+    (defs.file_name()? == "defs" && file.file_name()? == "lib.cdsl")
+        .then(|| defs.parent()?.join("Cargo.toml").canonicalize().ok())
+        .flatten()
+}
+
+fn separate_support(mut program: Program) -> Program {
     let (modules, support) = program
         .modules
         .into_iter()
-        .partition(|m| m.package != "<embedded std>");
+        .partition(|m| m.root_depth == 0 && m.package != "<embedded std>");
     program.modules = modules;
     program.support = support;
     program
@@ -489,7 +538,7 @@ fn load_source(
         ast,
     });
     for name in children {
-        if path.is_empty() && name == "std" {
+        if path.len() == root_depth && name == "std" {
             return Err(Error(
                 "std is reserved for the embedded standard library".into(),
             ));
@@ -505,14 +554,67 @@ fn load_source(
 #[derive(Clone)]
 struct Entry {
     package: String,
+    root_depth: usize,
     public: bool,
     module: bool,
+}
+
+struct NameError {
+    error: Error,
+    dependency: Option<(Vec<String>, Vec<String>)>,
+}
+
+impl NameError {
+    fn unresolved<'a>(
+        error: Error,
+        owner: &[String],
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let names = names
+            .into_iter()
+            .filter(|name| !matches!(*name, "crate" | "std"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        Self {
+            error,
+            dependency: (!names.is_empty()).then(|| (owner.to_vec(), names)),
+        }
+    }
+}
+
+impl From<Error> for NameError {
+    fn from(error: Error) -> Self {
+        Self {
+            error,
+            dependency: None,
+        }
+    }
+}
+
+fn anchored_path<'a>(
+    path: &'a [String],
+    module: &[String],
+    root_depth: usize,
+) -> Option<(Vec<String>, &'a [String])> {
+    let (first, tail) = path.split_first()?;
+    match first.as_str() {
+        "std" => Some((vec![first.clone()], tail)),
+        "crate" if !tail.is_empty() => Some((module[..root_depth].to_vec(), tail)),
+        "self" if !tail.is_empty() => Some((module.to_vec(), tail)),
+        "super" => {
+            let levels = path.iter().take_while(|part| *part == "super").count();
+            let depth = module.len().checked_sub(levels)?;
+            (depth >= root_depth).then(|| (module[..depth].to_vec(), &path[levels..]))
+        }
+        _ => None,
+    }
 }
 
 struct Scope<'a> {
     module: &'a [String],
     root_depth: usize,
     imports: &'a BTreeMap<String, Vec<String>>,
+    externs: &'a BTreeMap<String, Vec<String>>,
     symbols: &'a BTreeSet<Vec<String>>,
     constructors: &'a BTreeSet<Vec<String>>,
     interfaces: &'a BTreeSet<Vec<String>>,
@@ -520,9 +622,10 @@ struct Scope<'a> {
     exported: &'a BTreeSet<Vec<String>>,
     exports: &'a BTreeMap<Vec<String>, BTreeMap<String, Vec<String>>>,
     references: RefCell<BTreeSet<CdslPath>>,
+    unresolved: RefCell<Option<String>>,
 }
 
-fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
+fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), NameError> {
     let mut entries = BTreeMap::<Vec<String>, Entry>::new();
     let mut constructors = BTreeSet::new();
     let mut interfaces = BTreeSet::new();
@@ -530,6 +633,7 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
     for module in &program.modules {
         entries.entry(module.path.clone()).or_insert(Entry {
             package: module.package.clone(),
+            root_depth: module.root_depth,
             public: true,
             module: true,
         });
@@ -552,17 +656,19 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             for depth in module.path.len() + 1..full.len() {
                 entries.entry(full[..depth].to_vec()).or_insert(Entry {
                     package: module.package.clone(),
+                    root_depth: module.root_depth,
                     public,
                     module: true,
                 });
             }
             if !declarations.insert(full.clone()) {
-                return Err(Error(format!("duplicate definition ::{}", full.join("::"))));
+                return Err(Error(format!("duplicate definition ::{}", full.join("::"))).into());
             }
             let previous = entries.insert(
                 full.clone(),
                 Entry {
                     package: module.package.clone(),
+                    root_depth: module.root_depth,
                     public,
                     module: is_module,
                 },
@@ -570,7 +676,7 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             if previous.is_some_and(|entry| {
                 !(is_module && entry.module && entry.package == module.package)
             }) {
-                return Err(Error(format!("duplicate definition ::{}", full.join("::"))));
+                return Err(Error(format!("duplicate definition ::{}", full.join("::"))).into());
             }
             if let Declaration::Enum { variants, .. } = &declaration.value {
                 for variant in variants {
@@ -582,6 +688,7 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
                             variant_path.clone(),
                             Entry {
                                 package: module.package.clone(),
+                                root_depth: module.root_depth,
                                 public,
                                 module: false,
                             },
@@ -591,7 +698,8 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
                         return Err(Error(format!(
                             "duplicate definition ::{}",
                             variant_path.join("::")
-                        )));
+                        ))
+                        .into());
                     }
                 }
             }
@@ -605,17 +713,24 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             return Err(Error(format!(
                 "module ::{} conflicts with a definition",
                 module.path.join("::")
-            )));
+            ))
+            .into());
         }
     }
-    let imports = imports::resolve(&program.modules, &entries)?;
+    let imports = imports::resolve(&program.modules, &entries, &program.externs)?;
     let exports = imports.exports;
     let imports = imports.bindings;
     program.references.clear();
     for module in &mut program.modules {
         let symbols = visible_symbols(&entries, &module.package, &module.path);
+        let root = &module.path[..module.root_depth];
         let empty = BTreeMap::new();
         let imported = imports.get(&module.path).unwrap_or(&empty);
+        let externs = program
+            .externs
+            .get(root)
+            .filter(|_| module.package != "<embedded std>")
+            .unwrap_or(&empty);
         // Canonicalized ASTs retain access through public re-exports, including
         // declarations whose original implementation modules are private.
         let mut exported = BTreeSet::new();
@@ -624,6 +739,7 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             .filter(|p| entries[*p].module)
             .cloned()
             .chain(imported.values().cloned())
+            .chain(externs.values().cloned())
             .collect::<Vec<_>>();
         let mut visited = BTreeSet::new();
         while let Some(target) = namespaces.pop() {
@@ -648,6 +764,7 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             module: &module.path,
             root_depth: module.root_depth,
             imports: imported,
+            externs,
             symbols: &symbols,
             constructors: &constructors,
             interfaces: &interfaces,
@@ -655,6 +772,7 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
             exported: &exported,
             exports: &exports,
             references: RefCell::default(),
+            unresolved: RefCell::default(),
         };
         let mut references = Vec::with_capacity(module.ast.declarations.len());
         for declaration in &mut module.ast.declarations {
@@ -662,8 +780,14 @@ fn resolve_names(program: &mut Program, resolved: bool) -> Result<(), Error> {
                 Some(Span::Source(range)) => range.start,
                 _ => 0,
             };
-            resolve_declaration(declaration, &scope)
-                .map_err(|error| Error(format!("{}:{offset}: {error}", module.file.display())))?;
+            resolve_declaration(declaration, &scope).map_err(|error| {
+                let error = Error(format!("{}:{offset}: {error}", module.file.display()));
+                if let Some(name) = scope.unresolved.take() {
+                    NameError::unresolved(error, root, [name.as_str()])
+                } else {
+                    error.into()
+                }
+            })?;
             references.push(scope.references.take());
         }
         program.references.insert(module.path.clone(), references);
@@ -679,6 +803,9 @@ fn visible_symbols(
 ) -> BTreeSet<Vec<String>> {
     let mut symbols = BTreeSet::new();
     for (path, entry) in entries {
+        if entry.package != package && entry.package != "<embedded std>" {
+            continue;
+        }
         let visible = (entry.public
             || (entry.package == package
                 && module.starts_with(&path[..path.len().saturating_sub(1)])))
@@ -700,43 +827,50 @@ fn resolve_path(path: &[String], scope: &Scope<'_>) -> Option<Vec<String>> {
         if scope.resolved && (scope.symbols.contains(path) || scope.exported.contains(path)) {
             path.to_vec()
         } else {
-            resolve_lexical_path(path, scope)?
+            resolve_lexical_path(path, scope).or_else(|| {
+                if path.len() > 1 {
+                    scope.unresolved.replace(Some(path[0].clone()));
+                }
+                None
+            })?
         };
     scope.references.borrow_mut().insert(resolved.clone());
     Some(resolved)
 }
 
 fn resolve_lexical_path(path: &[String], scope: &Scope<'_>) -> Option<Vec<String>> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut candidates = Vec::new();
-    if let Some(imported) = scope.imports.get(&path[0]).filter(|_| path[0] != "std") {
-        candidates.push(imported.clone());
-    }
-    let depths = if path[0] == "std" {
-        0..=0
-    } else {
-        scope.root_depth..=scope.module.len()
-    };
-    for depth in depths.rev() {
-        let enclosing = &scope.module[..depth];
-        let mut candidate = enclosing.to_vec();
-        candidate.push(path[0].clone());
-        if scope.symbols.contains(&candidate) {
-            candidates.push(candidate);
-        } else if !crate::infer::builtin_path(path)
-            && let Some(target) = scope
-                .exports
-                .get(enclosing)
-                .and_then(|names| names.get(&path[0]))
-        {
-            candidates.push(target.clone());
-        }
-    }
+    let (first, tail) = path.split_first()?;
+    let (candidates, tail) =
+        if let Some((root, tail)) = anchored_path(path, scope.module, scope.root_depth) {
+            (vec![root], tail)
+        } else {
+            let mut candidates = scope
+                .imports
+                .get(first)
+                .cloned()
+                .into_iter()
+                .collect::<Vec<_>>();
+            for depth in (scope.root_depth..=scope.module.len()).rev() {
+                let enclosing = &scope.module[..depth];
+                let mut candidate = enclosing.to_vec();
+                candidate.push(first.clone());
+                if scope.symbols.contains(&candidate) {
+                    candidates.push(candidate);
+                } else if !crate::infer::builtin_path(path)
+                    && let Some(target) = scope
+                        .exports
+                        .get(enclosing)
+                        .and_then(|names| names.get(first))
+                {
+                    candidates.push(target.clone());
+                }
+            }
+            candidates.extend(scope.externs.get(first).cloned());
+            (candidates, tail)
+        };
     for mut current in candidates {
         let mut valid = true;
-        for part in &path[1..] {
+        for part in tail {
             if let Some(target) = scope
                 .exports
                 .get(&current)
@@ -858,6 +992,16 @@ fn resolve_expr(
         }
         Expression::Record(fields) | Expression::Limit(fields) => {
             resolve_record(fields, scope, locals)?
+        }
+        Expression::Rule { binders, clause } => {
+            let mut local = locals.clone();
+            for binder in binders {
+                if let Some(ty) = &mut binder.ty {
+                    resolve_expr(ty, scope, &local)?;
+                }
+                local.insert(binder.name.clone());
+            }
+            resolve_expr(clause, scope, &local)?;
         }
         Expression::Block(block) => resolve_block(block, scope, locals)?,
         Expression::Function(function) => resolve_function(function, scope, locals)?,

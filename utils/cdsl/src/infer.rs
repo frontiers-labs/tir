@@ -1351,6 +1351,28 @@ impl Checker {
                 outcome?;
                 Ok(Ty::Con(self.record_id(names)?, type_list(args)))
             }
+            Expression::Rule { binders, clause } => {
+                if !clause_annotation(clause) {
+                    return Err(Error("a local rule requires a clause".into()));
+                }
+                let mut local = environment.clone();
+                let mut types = types.clone();
+                let mut names = BTreeSet::new();
+                for binder in binders {
+                    if !names.insert(&binder.name) {
+                        return Err(Error("duplicate rule binder".into()));
+                    }
+                    let ty = match &binder.ty {
+                        Some(ty) => self.annotation(definitions, ty, &types)?,
+                        None => self.fresh()?,
+                    };
+                    let name = vec![binder.name.clone()];
+                    local.insert(name.clone(), BoundValue::mono(ty));
+                    types.insert(name, None);
+                }
+                let owner = self.frames.last().cloned().unwrap_or_default();
+                self.check_clause(definitions, &owner, binders, clause, &local, &types)
+            }
             Expression::Block(block) => self.block(definitions, block, environment, types),
             Expression::Function(function) => self.function(
                 definitions,
@@ -1502,6 +1524,72 @@ impl Checker {
             ),
         }
     }
+    fn check_clause(
+        &mut self,
+        definitions: &Definitions<'_>,
+        owner: &Path,
+        generics: &[RuleBinder],
+        annotation: &Expr,
+        local: &Environment,
+        types: &Types,
+    ) -> Result<Ty, Error> {
+        let (premises, heads) = match &annotation.value {
+            Expression::Binary {
+                op: BinaryOp::Arrow,
+                left,
+                right,
+            } => (Some(&**left), &**right),
+            _ => (None, annotation),
+        };
+        let mut matches = MatchArguments::new();
+        let mut value_ids = Vec::new();
+        if let Some(premises) = premises {
+            self.propositions(
+                definitions,
+                premises,
+                local,
+                types,
+                Some(&mut matches),
+                &mut value_ids,
+            )?;
+            self.check_value_ids(&mut value_ids)?;
+        }
+        self.propositions(definitions, heads, local, types, None, &mut value_ids)?;
+        self.check_value_ids(&mut value_ids)?;
+        if !matches.is_empty() {
+            let matches = self.checked_matches(matches)?;
+            self.operation_matches
+                .entry(owner.clone())
+                .or_default()
+                .extend(matches);
+        }
+        let binding = if let Some(premises) = premises {
+            Some(premises)
+        } else if let Expression::Binary {
+            op: BinaryOp::Equal,
+            left,
+            ..
+        } = &heads.value
+        {
+            Some(&**left)
+        } else {
+            None
+        };
+        let bound = binding
+            .map(crate::totality::free_paths)
+            .transpose()?
+            .unwrap_or_default();
+        if generics
+            .iter()
+            .any(|binder| !bound.contains(&vec![binder.name.clone()]))
+        {
+            return Err(Error(
+                "every clause binder must occur in a premise or the left side of an equation"
+                    .into(),
+            ));
+        }
+        Ok(con(FACT))
+    }
     fn axiom(
         &mut self,
         definitions: &Definitions<'_>,
@@ -1569,59 +1657,7 @@ impl Checker {
             self.relations.insert(path.clone());
             ty
         } else if clause_annotation(annotation) {
-            let (premises, heads) = match &annotation.value {
-                Expression::Binary {
-                    op: BinaryOp::Arrow,
-                    left,
-                    right,
-                } => (Some(&**left), &**right),
-                _ => (None, annotation),
-            };
-            let mut matches = MatchArguments::new();
-            let mut value_ids = Vec::new();
-            if let Some(premises) = premises {
-                self.propositions(
-                    definitions,
-                    premises,
-                    &local,
-                    &types,
-                    Some(&mut matches),
-                    &mut value_ids,
-                )?;
-                self.check_value_ids(&mut value_ids)?;
-            }
-            self.propositions(definitions, heads, &local, &types, None, &mut value_ids)?;
-            self.check_value_ids(&mut value_ids)?;
-            if !matches.is_empty() {
-                let matches = self.checked_matches(matches)?;
-                self.operation_matches.insert(path.clone(), matches);
-            }
-            let binding = if let Some(premises) = premises {
-                Some(premises)
-            } else if let Expression::Binary {
-                op: BinaryOp::Equal,
-                left,
-                ..
-            } = &heads.value
-            {
-                Some(&**left)
-            } else {
-                None
-            };
-            let bound = binding
-                .map(crate::totality::free_paths)
-                .transpose()?
-                .unwrap_or_default();
-            if generics
-                .iter()
-                .any(|binder| !bound.contains(&vec![binder.name.clone()]))
-            {
-                return Err(Error(
-                    "every clause binder must occur in a premise or the left side of an equation"
-                        .into(),
-                ));
-            }
-            con(FACT)
+            self.check_clause(definitions, path, generics, annotation, &local, &types)?
         } else {
             self.annotation(definitions, annotation, &types)?
         };
