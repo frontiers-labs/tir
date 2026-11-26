@@ -362,8 +362,8 @@ fn module_document(children: Vec<LayoutChild<'_>>) -> Doc<'_> {
 
 fn separator(previous: &str, text: &str) -> Option<Doc<'static>> {
     if previous.is_empty()
-        || matches!(text, "," | ";" | "." | "::" | ":" | ">")
-        || matches!(previous, "." | "::" | "<" | "!")
+        || matches!(text, "," | ";" | "." | "::" | ":" | ">" | "?")
+        || matches!(previous, "." | "::" | "<" | "!" | "..")
         || (matches!(text, "(" | "<")
             && !matches!(
                 previous,
@@ -371,6 +371,7 @@ fn separator(previous: &str, text: &str) -> Option<Doc<'static>> {
                     | ","
                     | ";"
                     | "+"
+                    | "++"
                     | "-"
                     | "*"
                     | "/"
@@ -379,13 +380,15 @@ fn separator(previous: &str, text: &str) -> Option<Doc<'static>> {
                     | "||"
                     | "=="
                     | "!="
+                    | "<="
+                    | ">="
                     | "->"
+                    | "~>"
                     | "=>"
                     | "if"
                     | "match"
-                    | "yield"
-                    | "when"
-                    | "derive"
+                    | "rec"
+                    | "memo"
             ))
     {
         None
@@ -401,7 +404,21 @@ fn separator(previous: &str, text: &str) -> Option<Doc<'static>> {
 fn binary_operator(text: &str) -> bool {
     matches!(
         text,
-        "+" | "-" | "*" | "/" | "%" | "&&" | "||" | "==" | "!=" | "->"
+        "+" | "++"
+            | "-"
+            | "*"
+            | "/"
+            | "%"
+            | "&&"
+            | "||"
+            | "=="
+            | "!="
+            | "<"
+            | "<="
+            | ">"
+            | ">="
+            | "->"
+            | "~>"
     )
 }
 

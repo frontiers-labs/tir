@@ -351,6 +351,7 @@ fn vacant_schema() -> TableSchema {
         merge: None,
         shapes: Vec::new(),
         ids: Vec::new(),
+        native: Vec::new(),
         symmetries: Vec::new(),
         cost: None,
         unextractable: true,

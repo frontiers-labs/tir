@@ -19,6 +19,7 @@ members = [
     "tools/llvm",
     "utils/pdl",
     "utils/cdsl",
+    "utils/cdsl/core",
     "libs/cst",
     "utils/unit-tests",
     "utils/arrange",
@@ -50,6 +51,7 @@ tir-bench = { path = "utils/bench" }
 tir-pdl = { path = "utils/pdl", default-features = false }
 
 tir-cdsl = { path = "utils/cdsl" }
+tir-cdsl-core = { path = "utils/cdsl/core" }
 tir-cst = { path = "libs/cst" }
 
 # Per-target crates

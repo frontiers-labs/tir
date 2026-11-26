@@ -22,7 +22,9 @@ use super::{
 use crate::ArcSort;
 use crate::Context;
 use crate::prelude::BaseSort;
-use crate::sort::{BoolSort, EqSort, F64Sort, I64Sort, OpaqueSort, StringSort, UnitSort};
+use crate::sort::{
+    BoolSort, EqSort, F64Sort, I64Sort, NativeIdentitySort, OpaqueSort, StringSort, UnitSort,
+};
 
 /// The body of a primitive: `None` means the primitive has no result for
 /// these arguments.
@@ -35,6 +37,7 @@ pub(crate) struct Prim {
     // Where rules may call it.
     pub(crate) contexts: &'static [Context],
     pub(crate) f: Arc<PrimFn>,
+    pub(crate) declaration: Option<crate::NativeIdentity>,
 }
 
 #[derive(Clone)]
@@ -167,6 +170,8 @@ impl Database {
         db.add_arcsort(BoolSort.to_arcsort());
         db.add_arcsort(StringSort.to_arcsort());
         db.add_arcsort(UnitSort.to_arcsort());
+        db.add_arcsort(NativeIdentitySort.to_arcsort());
+        crate::sort::register_native_identity(&mut db);
         db
     }
 
@@ -290,6 +295,11 @@ impl Database {
         let ids = (0..columns.len())
             .filter(|&c| kind_of(&columns[c]).has_ids())
             .collect();
+        let native = (0..columns.len())
+            .filter(|&column| {
+                kind_of(&columns[column]) == SortKind::base::<crate::NativeIdentity>()
+            })
+            .collect();
         TableSchema {
             name: name.to_owned(),
             kind,
@@ -298,6 +308,7 @@ impl Database {
             keys,
             merge,
             ids,
+            native,
             symmetries: Vec::new(),
             cost: None,
             unextractable: false,
@@ -376,6 +387,7 @@ impl Database {
             signature,
             contexts,
             f,
+            declaration: None,
         };
         let same = |other: &Prim| other.name == prim.name && other.signature == prim.signature;
         if let Some(at) = self.prims.iter().position(same) {
@@ -414,6 +426,10 @@ impl Database {
 
     pub fn base<T: BaseValue>(&self, value: T) -> Value {
         self.base.get(value)
+    }
+
+    pub fn native_identity(&self, value: Value) -> Option<crate::NativeIdentity> {
+        self.base.native(value)
     }
 
     /// The `T` that `value` stands for; `value` must come from [`Database::base`].
@@ -468,6 +484,17 @@ impl Database {
                 table,
                 column,
                 value,
+            });
+        }
+        if let Some(&column) = schema
+            .native
+            .iter()
+            .find(|&&column| self.native_identity(row[column]).is_none())
+        {
+            return Err(Error::Sort {
+                table: schema.name.clone(),
+                column,
+                value: row[column],
             });
         }
         Ok(())

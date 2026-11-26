@@ -1,122 +1,146 @@
-pub use std::ir::integer_width;
-pub use std::ir::type_argument;
-pub use std::ir::fp_format;
+use std::core::*;
+use std::ir::{OperationId, ValueId};
 
-// IR entity IDs are nonnegative. A missing optional ID or slot is encoded as -1.
-pub let Operation: { id: std::ir::OperationId, kind: std::ir::OperationKind, placement: String, container: Int, position: Int, display: Int, location: Int } -> Prop;
-pub let Region: (Int, String, std::ir::OperationId, Int, Int) -> Prop; // id, mode, owner, slot, entry
-pub let Block: (Int, Int, Int) -> Prop; // id, region, layout
-pub let Value: (std::ir::ValueId, Int, String, Int, Int, Int) -> Prop; // id, type, definition kind, owner, slot, declared type
-pub let Operand: std::Table<(std::ir::OperationId, Int), std::ir::ValueId, std::Merge::Unique>;
-pub let Yield: std::Table<(Int, Int), std::ir::ValueId, std::Merge::Unique>;
-pub let Successor: std::Table<(std::ir::OperationId, Int), Int, std::Merge::Unique>;
-pub let SuccessorArgument: std::Table<(std::ir::OperationId, Int, Int), Int, std::Merge::Unique>;
-pub let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>; // owner kind, owner, name, typed attribute handle
-pub let Binding: std::Table<(Int, String, Int), Int, std::Merge::Unique>; // region, role, from slot, to slot
-pub let Control: (std::ir::OperationId, Bool, Int, Bool, Int, Int, String) -> Prop; // operation, gamma present, selector slot, theta present, body, predicate slot, continuation polarity
-pub let Arm: std::Table<(std::ir::OperationId, Bool, String), Int, std::Merge::Unique>; // operation, default flag, canonical case integer, region
-// Payload handles identify immutable values interned by this engine.
-pub let TypeTerm: (Int, Int, Int) -> Prop; // type ID, constructor ID, interned arguments
-pub let TypeCtor: (Int, String, String, Int, Int) -> Prop; // constructor ID, dialect, name, declaration, default
-pub let Symbol: (Int, String, Int, Int) -> Prop; // symbol ID, spelling, optional type-name entity, kind
-// The empty interface names the operation declaration. Other rows register
-// its interface implementations. The type key distinguishes Rust interfaces
-// with identical spellings from different crates.
-pub let OpSpec: std::Table<(String, String, Int), Int, std::Merge::Unique>;
+// ── Live IR Fact Tables ──────────────────────────────────────────────────────
 
-pub let result = |value: std::ir::ValueId, ty: Int, owner: std::ir::OperationId, slot: Int, declared: Int| -> Prop {
-    Value(value, ty, "result", std::ir::raw_operation_id(owner), slot, declared)
+pub let Arm: Table<(OperationId, Bool, String), Int, Merge::Unique>;
+pub let Attribute: Table<(String, Int, String), Int, Merge::Unique>;
+pub let Binding: Table<(Int, String, Int), Int, Merge::Unique>;
+pub let Block: Relation<(Int, Int, Int)>;
+pub let Bypass: Relation<(Int, Int, Int)>;
+pub let Control: Relation<(OperationId, Bool, Int, Bool, Int, Int, String)>;
+pub let CyclePath: Relation<(Int, OperationId, OperationId)>;
+pub let DependsOn: Relation<(Int, OperationId, OperationId)>;
+pub let OpSpec: Table<(String, String, Int), Int, Merge::Unique>;
+pub let Operand: Table<(OperationId, Int), ValueId, Merge::Unique>;
+pub let Operation: Relation<{
+    id: OperationId,
+    kind: String,
+    placement: String,
+    container: Int,
+    position: Int,
+    display: Int,
+    location: Int,
+}>;
+pub let ReaderAt: Relation<(OperationId, Int, OperationId)>;
+pub let Region: Relation<(Int, String, OperationId, Int, Int)>;
+pub let Successor: Table<(OperationId, Int), Int, Merge::Unique>;
+pub let SuccessorArgument: Table<(OperationId, Int, Int), Int, Merge::Unique>;
+pub let Symbol: Relation<(Int, String, Int, Int)>;
+pub let TypeCtor: Relation<(Int, String, String, Int, Int)>;
+pub let TypeTerm: Relation<(Int, Int, Int)>;
+pub let Value: Relation<(ValueId, Int, String, Int, Int, Int)>;
+pub let Yield: Table<(Int, Int), ValueId, Merge::Unique>;
+
+// ── Structure Derivation Rules ───────────────────────────────────────────────
+
+let graph<operation, kind, region, position, display, location>: Rule(
+    (Operation(operation, kind, "graph", region, position, display, location)) ->
+    (ReaderAt(operation, region, operation))
+);
+
+let cfg_reader<operation, kind, block, position, display, location, region, layout>: Rule(
+    (
+        Operation(operation, kind, "block", block, position, display, location),
+        Block(block, region, layout),
+    ) ->
+    (ReaderAt(operation, region, operation))
+);
+
+let lift<reader, region, member, mode, parent, region_slot, entry, outer, representative>: Rule(
+    (
+        ReaderAt(reader, region, member),
+        Region(region, mode, parent, region_slot, entry),
+        ReaderAt(parent, outer, representative),
+    ) ->
+    (ReaderAt(reader, outer, representative))
+);
+
+let operand_dep<operation, slot, value, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>: Rule(
+    (
+        Operand(operation, slot, value),
+        Value(value, ty, "result", producer, result_slot, declared),
+        ReaderAt(operation, region, sibling),
+        Operation(producer, kind, "graph", region, position, display, location),
+    ) ->
+    (DependsOn(region, sibling, producer))
+);
+
+let yield_dep<inner, slot, value, mode, operation, region_slot, entry, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>: Rule(
+    (
+        Yield(inner, slot, value),
+        Region(inner, mode, operation, region_slot, entry),
+        Value(value, ty, "result", producer, result_slot, declared),
+        ReaderAt(operation, region, sibling),
+        Operation(producer, kind, "graph", region, position, display, location),
+    ) ->
+    (DependsOn(region, sibling, producer))
+);
+
+// ── Flow Derivation Rules ────────────────────────────────────────────────────
+
+let cycle_start<region, start_op, next_op>: Rule(
+    (DependsOn(region, start_op, next_op), next_op >= start_op) ->
+    (CyclePath(region, start_op, next_op))
+);
+
+let cycle_path<region, start_op, next_op, end_op>: Rule(
+    (CyclePath(region, start_op, next_op), DependsOn(region, next_op, end_op)) ->
+    (CyclePath(region, start_op, end_op))
+);
+
+let avoid_param<operation, kind, use_block, position, display, location, slot, value, ty, definition, result_slot, declared, region, layout, other_layout, mode, owner, region_slot, entry>: Rule(
+    (
+        Operation(operation, kind, "block", use_block, position, display, location),
+        Operand(operation, slot, value),
+        Value(value, ty, "block", definition, result_slot, declared),
+        Block(use_block, region, layout),
+        Block(definition, region, other_layout),
+        Region(region, mode, owner, region_slot, entry),
+        use_block != definition,
+        definition != entry,
+        entry >= 0,
+    ) ->
+    (Bypass(region, definition, entry))
+);
+
+let avoid_result<operation, kind, use_block, position, display, location, slot, value, ty, producer, result_slot, declared, producer_kind, definition, producer_pos, producer_display, producer_location, region, layout, other_layout, mode, owner, region_slot, entry>: Rule(
+    (
+        Operation(operation, kind, "block", use_block, position, display, location),
+        Operand(operation, slot, value),
+        Value(value, ty, "result", producer, result_slot, declared),
+        Operation(producer, producer_kind, "block", definition, producer_pos, producer_display, producer_location),
+        Block(use_block, region, layout),
+        Block(definition, region, other_layout),
+        Region(region, mode, owner, region_slot, entry),
+        use_block != definition,
+        definition != entry,
+        entry >= 0,
+    ) ->
+    (Bypass(region, definition, entry))
+);
+
+let bypass_step<region, definition, current, terminator, kind, position, display, location, layout, slot, target, other_layout>: Rule(
+    (
+        Bypass(region, definition, current),
+        Block(current, region, layout),
+        Operation(terminator, kind, "block", current, position, display, location),
+        Successor(terminator, slot, target),
+        Block(target, region, other_layout),
+        target != definition,
+    ) ->
+    (Bypass(region, definition, target))
+);
+
+// ── Schedules ────────────────────────────────────────────────────────────────
+
+let structure_rules: List<Rule> = List(graph, cfg_reader, lift, operand_dep, yield_dep);
+let flow_rules: List<Rule> = List(cycle_start, cycle_path, avoid_param, avoid_result, bypass_step);
+extract rust structure_rules => "@ct";
+extract rust flow_rules => "@ct";
+
+pub let derive_structure = || -> Schedule { Schedule::Saturate(structure_rules) };
+pub let derive_flow = || -> Schedule { Schedule::Saturate(flow_rules) };
+pub let index = || -> Schedule {
+    Schedule::Seq(List(Schedule::Saturate(structure_rules), Schedule::Saturate(flow_rules)))
 };
-pub let operation_attribute = |owner: std::ir::OperationId, name: String, attr: Int| -> Prop {
-    Attribute("operation", std::ir::raw_operation_id(owner), name, attr)
-};
-
-
-pub let CyclePath: (Int, std::ir::OperationId, std::ir::OperationId) -> Prop; // graph, candidate start, reachable operation
-pub let ReaderAt: (std::ir::OperationId, Int, std::ir::OperationId) -> Prop; // reader, enclosing region, immediate member
-pub let DependsOn: (Int, std::ir::OperationId, std::ir::OperationId) -> Prop; // graph, consumer, immediate producer
-pub let Bypass: (Int, Int, Int) -> Prop; // CFG region, avoided defining block, reachable block
-let structure: std::List<Prop> = {
-    let graph<operation, kind, region, position, display, location>:
-        Operation{ id: operation, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }() -> ReaderAt(operation, region, operation);
-    let cfg<operation, kind, block, position, display, location, region, layout>:
-        (
-            Operation{ id: operation, kind: kind, placement: "block", container: block, position: position, display: display, location: location }(),
-            Block(block, region, layout)
-        ) -> ReaderAt(operation, region, operation);
-    let lift<reader, region, member, mode, parent, region_slot, entry, outer, representative>:
-        (
-            ReaderAt(reader, region, member),
-            Region(region, mode, parent, region_slot, entry),
-            ReaderAt(parent, outer, representative)
-        ) -> ReaderAt(reader, outer, representative);
-    let operand_dep<operation, slot, value, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>:
-        (
-            Operand(operation, slot, value),
-            result(value, ty, producer, result_slot, declared),
-            ReaderAt(operation, region, sibling),
-            Operation{ id: producer, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }()
-        ) -> DependsOn(region, sibling, producer);
-    let yield_dep<inner, slot, value, mode, operation, region_slot, entry, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>:
-        (
-            Yield(inner, slot, value),
-            Region(inner, mode, operation, region_slot, entry),
-            result(value, ty, producer, result_slot, declared),
-            ReaderAt(operation, region, sibling),
-            Operation{ id: producer, kind: kind, placement: "graph", container: region, position: position, display: display, location: location }()
-        ) -> DependsOn(region, sibling, producer);
-    std::List::Cons(graph, std::List::Cons(cfg, std::List::Cons(lift, std::List::Cons(operand_dep, std::List::Cons(yield_dep, std::List::Nil)))))
-};
-let flow: std::List<Prop> = {
-    let start<region, start_op, next_op>:
-        (
-            DependsOn(region, start_op, next_op),
-            std::ir::operation_ids::less(next_op, start_op) == false
-        ) -> CyclePath(region, start_op, next_op);
-    let path<region, start_op, next_op, end_op>:
-        (
-            CyclePath(region, start_op, next_op),
-            DependsOn(region, next_op, end_op)
-        ) -> CyclePath(region, start_op, end_op);
-    let avoid_param<operation, kind, use_block, position, display, location, slot, value, ty, definition, result_slot, declared, region, layout, other_layout, mode, owner, region_slot, entry>:
-        (
-            Operation{ id: operation, kind: kind, placement: "block", container: use_block, position: position, display: display, location: location }(),
-            Operand(operation, slot, value),
-            Value(value, ty, "block", definition, result_slot, declared),
-            Block(use_block, region, layout),
-            Block(definition, region, other_layout),
-            Region(region, mode, owner, region_slot, entry),
-            use_block != definition,
-            definition != entry,
-            std::int::less(entry, 0) == false
-        ) -> Bypass(region, definition, entry);
-    let avoid_result<operation, kind, use_block, position, display, location, slot, value, ty, producer, result_slot, declared, producer_kind, definition, producer_pos, producer_display, producer_location, region, layout, other_layout, mode, owner, region_slot, entry>:
-        (
-            Operation{ id: operation, kind: kind, placement: "block", container: use_block, position: position, display: display, location: location }(),
-            Operand(operation, slot, value),
-            result(value, ty, producer, result_slot, declared),
-            Operation{ id: producer, kind: producer_kind, placement: "block", container: definition, position: producer_pos, display: producer_display, location: producer_location }(),
-            Block(use_block, region, layout),
-            Block(definition, region, other_layout),
-            Region(region, mode, owner, region_slot, entry),
-            use_block != definition,
-            definition != entry,
-            std::int::less(entry, 0) == false
-        ) -> Bypass(region, definition, entry);
-    let bypass<region, definition, current, terminator, kind, position, display, location, layout, slot, target, other_layout>:
-        (
-            Bypass(region, definition, current),
-            Block(current, region, layout),
-            Operation{ id: terminator, kind: kind, placement: "block", container: current, position: position, display: display, location: location }(),
-            Successor(terminator, slot, target),
-            Block(target, region, other_layout),
-            target != definition
-        ) -> Bypass(region, definition, target);
-    std::List::Cons(start, std::List::Cons(path, std::List::Cons(avoid_param, std::List::Cons(avoid_result, std::List::Cons(bypass, std::List::Nil)))))
-};
-
-
-pub let index = || { std::schedule::Schedule::Rules((flow, structure)) };
-
-pub let derive_structure = || { std::schedule::saturate(structure) };
-pub let derive_flow = || { std::schedule::saturate(flow) };

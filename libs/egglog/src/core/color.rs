@@ -93,6 +93,7 @@ impl Colors {
             shapes: vec![Shape::Dense; 3],
             merge: None,
             ids: vec![1, 2],
+            native: Vec::new(),
             symmetries: Vec::new(),
             cost: None,
             unextractable: true,
@@ -365,6 +366,7 @@ fn colored(base: &TableSchema) -> TableSchema {
             .collect(),
         merge: base.merge.clone(),
         ids: shift(&base.ids),
+        native: shift(&base.native),
         symmetries: (base.symmetries.iter())
             .map(|order| once(0).chain(shift(order)).collect())
             .collect(),
@@ -383,6 +385,7 @@ fn removal(base: &TableSchema) -> TableSchema {
     schema.columns.truncate(keys);
     schema.shapes.truncate(keys);
     schema.ids.retain(|&column| column < keys);
+    schema.native.retain(|&column| column < keys);
     schema.merge = None;
     schema.symmetries.clear();
     schema

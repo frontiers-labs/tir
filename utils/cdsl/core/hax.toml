@@ -1,0 +1,16 @@
+[scenario.cdsl-v3]
+backend = "lean"
+# cargo-hax 0.4.2 generates plain imports for external models.
+aeneas-args = ["-use-lean-modules", "false"]
+include = ["tir_cdsl_core::kernel_core", "tir_cdsl_core::tegg_core"]
+exclude = [
+    "{impl core::fmt::Debug for _}",
+]
+
+[tools]
+aeneas = "build-2b9e3ea"
+charon = "nightly-2026.10.31"
+
+[versions]
+lean = "leanprover/lean4:v4.35.0"
+hax-lean-lib = "v0.3.41"

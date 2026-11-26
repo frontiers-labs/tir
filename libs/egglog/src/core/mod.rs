@@ -6,6 +6,7 @@ mod group;
 mod index;
 mod keymap;
 mod local;
+mod native;
 mod rebuild;
 mod schema;
 mod table;
@@ -23,6 +24,7 @@ pub(crate) use group::{GroupRow, GroupView, group_at};
 pub(crate) use keymap::{EMPTY, RowTable, l2, same_key};
 pub(crate) use local::LocalTables;
 pub use local::{CapturedTable, LocalTable};
+pub use native::{NativeDeclaration, NativeIdentity};
 pub(crate) use rebuild::Delta;
 pub(crate) use schema::close_group;
 pub use schema::{

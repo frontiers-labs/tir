@@ -285,6 +285,7 @@ impl Writer {
                 self.word(u32::from(*b));
             }
             Literal::Unit => self.word(4u32),
+            Literal::Native(_) => unreachable!("native declarations serialize as imports"),
             Literal::Arg(n) => {
                 self.word(5u32);
                 self.word(*n);

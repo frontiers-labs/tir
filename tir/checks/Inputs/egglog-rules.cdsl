@@ -1,17 +1,21 @@
-pub let Operation: (Int, String, String, Int, Int, Int, Int) -> Prop;
-pub let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>;
-pub let Marker: Int -> Prop;
+use std::core::*;
+use std::ir::OperationId;
 
+pub let Operation: Relation<(OperationId, String, String, Int, Int, Int, Int)>;
+pub let Attribute: Table<(String, OperationId, String), Int, Merge::Unique>;
+pub let Marker: Relation<Int>;
 
-pub mod success {
-    pub let seed: Marker(1);
-}
+let seed: Rule(
+    () -> (Marker(1))
+);
 
-pub mod conflict {
-    pub let write<id, place, parent, position, order, location>:
-        Operation(id, "builtin.module", place, parent, position, order, location) ->
-        (Attribute("operation", id, "probe", 1), Attribute("operation", id, "probe", 2));
-}
+let write<id, kind, parent, position, order, location>: Rule(
+    (Operation(id, kind, "root", parent, position, order, location)) ->
+    (
+        Attribute("operation", id, "probe", 1),
+        Attribute("operation", id, "probe", 2),
+    )
+);
 
-pub let execute = || { std::schedule::saturate(success::seed) };
-pub let reject = || { std::schedule::saturate(conflict::write) };
+pub let execute: Schedule = Schedule::Once(List(seed));
+pub let reject: Schedule = Schedule::Once(List(write));
