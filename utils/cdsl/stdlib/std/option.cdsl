@@ -1,8 +1,12 @@
-pub enum Option<A: Type> { None, Some(A) }
-pub let none<A: Type> = Option::None<A>;
-pub let get_or<A: Type> = |value: Option<A>, fallback: A| -> A {
-    match value {
-        Option::None => fallback,
-        Option::Some(actual) => actual,
+// Option utility functions.
+
+use std::core::Option;
+
+pub let get_or<A> = |opt: Option<A>, default: A| -> A {
+    match opt {
+        Option::Some(v) => v,
+        Option::None => default,
     }
 };
+
+extract rust get_or => "@ct";

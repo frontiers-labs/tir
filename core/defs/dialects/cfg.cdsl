@@ -1,33 +1,27 @@
-use std::ir::interfaces::*;
+use std::core::*;
+use std::ir::{Bits, Block};
 
-pub let br = {
+pub let br = op {
     rust_name: "BranchOp",
-    name: "br",
-    dialect: "cfg",
-    operands: { dest_args: "*_" },
-    attributes: { dest: "Block" },
+    signature: (dest_args: ..Any) -> (),
+    attributes: { dest: Block },
     interfaces: (Terminator, BranchTerminator),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };
 
-pub let cond_br = {
+pub let cond_br = op {
     rust_name: "CondBranchOp",
-    name: "cond_br",
-    dialect: "cfg",
-    operands: { condition: "int<1>", true_args: "*_", false_args: "*_" },
-    attributes: { true_dest: "Block", false_dest: "Block" },
+    signature: (condition: Bits<1>, true_args: ..Any, false_args: ..Any) -> (),
+    attributes: { true_dest: Block, false_dest: Block },
     interfaces: (Terminator, BranchTerminator, BranchGuard),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };
 
-pub let r#switch = {
-    rust_name: "SwitchOp",
-    name: "switch",
-    dialect: "cfg",
-    operands: { selector: "int<_>", args: "*_" },
+pub let r#switch<w: Nat> = op {
+    signature: (selector: Bits<w>, args: ..Any) -> (),
     interfaces: (Terminator, BranchTerminator, CaseGuard),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };

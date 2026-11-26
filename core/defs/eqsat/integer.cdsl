@@ -1,353 +1,195 @@
-use std::bigint::BigInt;
-use std::list::List::Cons as cons;
-use std::list::List::Nil as nil;
+// Non-term relational integer rules for EqSat (congruence CSE, power-of-2
+// strength reduction, modular constant reassociation, cast CSE, argument freeze,
+// and definition selection).
+//
+// All algebraic identities, cancellations, complements, and reconstructions
+// live as concise `Rewrite(...)` rules over typed `OpDef`s in `rewrites.cdsl`.
 
-pub let EqSatIdentity: (std::ir::OperationId, std::ir::ValueId, std::ir::ValueId) -> Prop;
-pub let EqSatZeroRhs: std::ir::BinaryIntegerOperation -> Prop;
-pub let EqSatIdempotent: std::ir::BinaryIntegerOperation -> Prop;
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use dialects::builtin;
+use dialects::func;
 
-pub let integer_facts: std::List<Prop> = {
-    let add: EqSatZeroRhs(dialects::builtin::addi.typed_kind);
-    let or: EqSatZeroRhs(dialects::builtin::ori.typed_kind);
-    let xor: EqSatZeroRhs(dialects::builtin::xori.typed_kind);
-    let sub: EqSatZeroRhs(dialects::builtin::subi.typed_kind);
-    let shl: EqSatZeroRhs(dialects::builtin::shli.typed_kind);
-    let lshr: EqSatZeroRhs(dialects::builtin::shrui.typed_kind);
-    let ashr: EqSatZeroRhs(dialects::builtin::shrsi.typed_kind);
-    let and_dup: EqSatIdempotent(dialects::builtin::andi.typed_kind);
-    let or_dup: EqSatIdempotent(dialects::builtin::ori.typed_kind);
-
-    let right_zero<owner, kind, out, ty, x, y, home, b>:
-        (EqSatBinary(owner, kind, out, ty, x, y, home), EqSatZeroRhs(kind),
-         EqSatScalar(y, ty, b), b == Scalar::Literal(ty, std::bigint::bigint(0)))
-        -> EqSatIdentity(owner, out, x);
-    let idempotent<owner, kind, out, ty, x, y, home, t>:
-        (EqSatBinary(owner, kind, out, ty, x, y, home), EqSatIdempotent(kind),
-         EqSatScalar(x, ty, t), EqSatScalar(y, ty, t))
-        -> EqSatIdentity(owner, out, x);
-    let multiply_one<owner, out, ty, x, y, home, b>:
-        (EqSatBinary(owner, dialects::builtin::muli.typed_kind, out, ty, x, y, home),
-         EqSatScalar(y, ty, b), b == Scalar::Literal(ty, std::bigint::bigint(1)))
-        -> EqSatIdentity(owner, out, x);
-    let and_all<owner, out, ty, x, y, home, b, all>:
-        (EqSatBinary(owner, dialects::builtin::andi.typed_kind, out, ty, x, y, home),
-         EqSatScalar(y, ty, b), EqSatAllBits(ty, all), b == Scalar::Literal(ty, all))
-        -> EqSatIdentity(owner, out, x);
-    let unsigned_divide_one<owner, out, ty, x, y, home, b>:
-        (EqSatBinary(owner, dialects::builtin::divui.typed_kind, out, ty, x, y, home),
-         EqSatScalar(y, ty, b), b == Scalar::Literal(ty, std::bigint::bigint(1)))
-        -> EqSatIdentity(owner, out, x);
-    let congruent_cfg<a, b, ak, bk, block, ap, bp, ad, bd, al, bl, x, y, ty, term, xd, yd>:
-        (ir::Operation{ id: a, kind: ak, placement: "block", container: block, position: ap, display: ad, location: al }(), ir::Operation{ id: b, kind: bk, placement: "block", container: block, position: bp, display: bd, location: bl }(),
-         std::int::less(ap,bp) == true, EqSatBinaryKey(a), EqSatBinaryKey(b),
-         ir::result(x, ty, a, 0, xd), ir::result(y, ty, b, 0, yd),
-         EqSatScalar(x, ty, term), EqSatScalar(y, ty, term))
-        -> EqSatIdentity(b, y, x);
-
-    let congruent_graph<a, b, k, region, ap, bp, ad, bd, al, bl, x, y, ty, left, right>:
-        (ir::Operation{ id: a, kind: std::ir::operation_kind(k), placement: "graph", container: region, position: ap, display: ad, location: al }(), ir::Operation{ id: b, kind: std::ir::operation_kind(k), placement: "graph", container: region, position: bp, display: bd, location: bl }(),
-         std::ir::operation_ids::less(a,b) == true, EqSatBinaryKey(a), EqSatBinaryKey(b),
-         EqSatBinary(a, k, x, ty, left, right, region), EqSatBinary(b, k, y, ty, left, right, region))
-        -> EqSatIdentity(b, y, x);
-
-    let equal<owner, out, input, ty, a, b>:
+pub let integer_facts: List<Rule> = {
+    let congruent_cfg<a, b, ak, bk, block, ap, bp, ad, bd, al, bl, x, y, ty, term, xd, yd>: Rule(
+        (
+            Operation(a, ak, "block", block, ap, ad, al),
+            Operation(b, bk, "block", block, bp, bd, bl),
+            less(ap, bp) == true,
+            EqSatBinaryKey(a), EqSatBinaryKey(b),
+            Value(x, ty, "result", a, 0, xd), Value(y, ty, "result", b, 0, yd),
+            EqSatScalar(x, ty, term), EqSatScalar(y, ty, term),
+        ) -> EqSatIdentity(b, y, x)
+    );
+    let congruent_graph<a, b, k, region, ap, bp, ad, bd, al, bl, x, y, ty, left, right>: Rule(
+        (
+            Operation(a, k, "graph", region, ap, ad, al),
+            Operation(b, k, "graph", region, bp, bd, bl),
+            less(a, b) == true,
+            EqSatBinaryKey(a), EqSatBinaryKey(b),
+            EqSatBinary(a, k, x, ty, left, right, region),
+            EqSatBinary(b, k, y, ty, left, right, region),
+        ) -> EqSatIdentity(b, y, x)
+    );
+    let equal<owner, out, input, ty, a, b>: Rule(
         (EqSatIdentity(owner, out, input), EqSatScalar(out, ty, a), EqSatScalar(input, ty, b))
-        -> a == b;
-    let candidate<owner, out, input>:
-        EqSatIdentity(owner, out, input) -> (EqSatReplace(owner, out, input), EqSatErase(owner));
-    cons(add, cons(or, cons(xor, cons(sub, cons(shl, cons(lshr, cons(ashr, cons(and_dup,
-        cons(or_dup, cons(right_zero, cons(idempotent, cons(multiply_one, cons(and_all,
-        cons(unsigned_divide_one, cons(congruent_cfg, cons(congruent_graph,
-        cons(equal, cons(candidate, nil))))))))))))))))))
+        -> a == b
+    );
+    let candidate<owner, out, input>: Rule(
+        EqSatIdentity(owner, out, input)
+        -> (EqSatReplace(owner, out, input), EqSatErase(owner))
+    );
+    List(congruent_cfg, congruent_graph, equal, candidate)
 };
 
-pub let EqSatPowerForm: (std::ir::BinaryIntegerOperation, std::ir::BinaryIntegerOperation) -> Prop;
-pub let EqSatPower: (BigInt, BigInt) -> Prop;
-pub let EqSatRebuild: std::Table<(std::ir::OperationId, std::ir::IntegerRef), Form, std::Merge::Union>;
-
-pub let EqSatWrappingAdd: std::ir::OperationId -> Prop;
-pub let EqSatWrappingSub: std::ir::OperationId -> Prop;
-
-pub let strength: std::List<Prop> = {
-    let multiply: EqSatPowerForm(dialects::builtin::muli.typed_kind, dialects::builtin::shli.typed_kind);
-    let divide: EqSatPowerForm(dialects::builtin::divui.typed_kind, dialects::builtin::shrui.typed_kind);
-
-    let power<value, bits, log, width>:
-        (EqSatFolded(value, bits), log == (std::bigint::bits(bits) - std::bigint::bigint(1)),
-         width == eqsat_shift_amount(log), std::int::less(width, 0) == false,
-         std::bigint::shl(std::bigint::bigint(1),width) == bits)
-        -> EqSatPower(bits,log);
-
-    let shift<node, kind, target, result, ty, x, y, home, value, power>:
-        (EqSatBinary(node, kind, result, ty, x, y, home), EqSatPowerForm(kind,target),
-         EqSatFolded(y, value), EqSatPower(value,power), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,result,Form::Bin(target,Form::Read(x),Form::Bits(power)));
-
-    let remainder<node, result, ty, x, y, home, value, power>:
-        (EqSatBinary(node, dialects::builtin::remui.typed_kind, result, ty, x, y, home),
-         EqSatFolded(y,value), EqSatPower(value,power), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,result,Form::Bin(dialects::builtin::andi.typed_kind,Form::Read(x),Form::Bits((value - std::bigint::bigint(1)))));
-
-    let wrapping_add<node, result, ty, x, y, home>:
-        (EqSatBinary(node,dialects::builtin::addi.typed_kind,result,ty,x,y,home),
-         !EqSatHasAttr(node,"nsw"), !EqSatHasAttr(node,"nuw")) -> EqSatWrappingAdd(node);
-    let wrapping_sub<node, result, ty, x, y, home>:
-        (EqSatBinary(node,dialects::builtin::subi.typed_kind,result,ty,x,y,home),
-         !EqSatHasAttr(node,"nsw"), !EqSatHasAttr(node,"nuw")) -> EqSatWrappingSub(node);
-
-    let reassociate<inner, outer, result, middle, ty, x, y, z, home, prior, a, b, mask>:
-        (EqSatBinary(inner,dialects::builtin::addi.typed_kind,middle,ty,x,y,prior), EqSatWrappingAdd(inner),
-         EqSatBinary(outer,dialects::builtin::addi.typed_kind,result,ty,middle,z,home), EqSatWrappingAdd(outer),
-         EqSatFolded(y,a), EqSatFolded(z,b), EqSatAllBits(ty,mask), !EqSatPinnedOp(outer))
-        -> EqSatRebuild(outer,result,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Bits(std::bigint::bit_and((a + b),mask))));
-
-    let cancel<inner, outer, result, middle, ty, x, y, z, home, prior, a>:
-        (EqSatBinary(inner,dialects::builtin::addi.typed_kind,middle,ty,x,y,prior), EqSatWrappingAdd(inner),
-         EqSatBinary(outer,dialects::builtin::subi.typed_kind,result,ty,middle,z,home), EqSatWrappingSub(outer),
-         EqSatFolded(y,a), EqSatFolded(z,a))
-        -> EqSatIdentity(outer, result, x);
-    cons(multiply, cons(divide, cons(power, cons(shift, cons(remainder, cons(wrapping_add,
-        cons(wrapping_sub, cons(reassociate, cons(cancel, nil)))))))))
+pub let strength: List<Rule> = {
+    let multiply: Rule(() -> EqSatPowerForm(builtin::muli.kind, builtin::shli.kind));
+    let divide:   Rule(() -> EqSatPowerForm(builtin::divui.kind, builtin::shrui.kind));
+    let power<value, bits, log, width>: Rule(
+        (
+            EqSatFolded(value, bits),
+            log == (big_bits(bits) - bigint(1)),
+            width == eqsat_shift_amount(log),
+            less(width, int_lit(0)) == false,
+            shl(bigint(1), width) == bits,
+        ) -> EqSatPower(bits, log)
+    );
+    let shift<node, kind, target, result, ty, x, y, home, value, power>: Rule(
+        (
+            EqSatBinary(node, kind, result, ty, x, y, home),
+            EqSatPowerForm(kind, target),
+            EqSatFolded(y, value), EqSatPower(value, power),
+            !EqSatPinnedOp(node),
+        ) -> EqSatRebuild(node, result, Form::Bin(target, Form::Read(x), Form::Bits(power)))
+    );
+    let remainder<node, result, ty, x, y, home, value, power>: Rule(
+        (
+            EqSatBinary(node, builtin::remui.kind, result, ty, x, y, home),
+            EqSatFolded(y, value), EqSatPower(value, power),
+            !EqSatPinnedOp(node),
+        ) -> EqSatRebuild(node, result, Form::Bin(builtin::andi.kind, Form::Read(x), Form::Bits((value - bigint(1)))))
+    );
+    let wrapping_add<node, result, ty, x, y, home>: Rule(
+        (EqSatBinary(node, builtin::addi.kind, result, ty, x, y, home), !EqSatHasAttr(node, "nsw"), !EqSatHasAttr(node, "nuw"))
+        -> EqSatWrappingAdd(node)
+    );
+    let wrapping_sub<node, result, ty, x, y, home>: Rule(
+        (EqSatBinary(node, builtin::subi.kind, result, ty, x, y, home), !EqSatHasAttr(node, "nsw"), !EqSatHasAttr(node, "nuw"))
+        -> EqSatWrappingSub(node)
+    );
+    let reassociate<inner, outer, result, middle, ty, x, y, z, home, prior, a, b, mask>: Rule(
+        (
+            EqSatBinary(inner, builtin::addi.kind, middle, ty, x, y, prior), EqSatWrappingAdd(inner),
+            EqSatBinary(outer, builtin::addi.kind, result, ty, middle, z, home), EqSatWrappingAdd(outer),
+            EqSatFolded(y, a), EqSatFolded(z, b), EqSatAllBits(ty, mask), !EqSatPinnedOp(outer),
+        ) -> EqSatRebuild(outer, result, Form::Bin(builtin::addi.kind, Form::Read(x), Form::Bits(bit_and(big_add(a, b), mask))))
+    );
+    let offsets<node, out, ty, u, v, home, left, right, lh, rh, x, y, c, d, a, b, mask>: Rule(
+        (
+            EqSatBinary(node, builtin::addi.kind, out, ty, u, v, home), EqSatWrappingAdd(node), !EqSatPinnedOp(node),
+            EqSatBinary(left, builtin::addi.kind, u, ty, x, c, lh), EqSatWrappingAdd(left),
+            EqSatBinary(right, builtin::addi.kind, v, ty, y, d, rh), EqSatWrappingAdd(right),
+            EqSatFolded(c, a), EqSatFolded(d, b), EqSatAllBits(ty, mask), less(y, x) == false,
+        ) -> EqSatRebuild(node, out, Form::Bin(builtin::addi.kind, Form::Bin(builtin::addi.kind, Form::Read(x), Form::Read(y)), Form::Bits(bit_and(big_add(a, b), mask))))
+    );
+    let subtract<inner, outer, result, middle, ty, x, y, z, home, prior, a, b, mask>: Rule(
+        (
+            EqSatBinary(inner, builtin::addi.kind, middle, ty, x, y, prior), EqSatWrappingAdd(inner),
+            EqSatBinary(outer, builtin::subi.kind, result, ty, middle, z, home), EqSatWrappingSub(outer),
+            EqSatFolded(y, a), EqSatFolded(z, b), EqSatAllBits(ty, mask), !EqSatPinnedOp(outer),
+        ) -> EqSatRebuild(outer, result, Form::Bin(builtin::addi.kind, Form::Read(x), Form::Bits(bit_and(big_sub(a, b), mask))))
+    );
+    let multiply_const<inner, outer, result, middle, ty, x, y, z, home, prior, a, b, mask>: Rule(
+        (
+            EqSatBinary(inner, builtin::muli.kind, middle, ty, x, y, prior),
+            EqSatBinary(outer, builtin::muli.kind, result, ty, middle, z, home),
+            EqSatFolded(y, a), EqSatFolded(z, b), EqSatAllBits(ty, mask), !EqSatPinnedOp(outer),
+        ) -> EqSatRebuild(outer, result, Form::Bin(builtin::muli.kind, Form::Read(x), Form::Bits(bit_and(big_mul(a, b), mask))))
+    );
+    List(multiply, divide, power, shift, remainder, wrapping_add, wrapping_sub, reassociate, offsets, subtract, multiply_const)
 };
 
-pub let casts: std::List<Prop> = {
-    let extension_kind: EqSatExtends(dialects::builtin::extui.typed_kind);
-    let sign_extension: EqSatExtends(dialects::builtin::extsi.typed_kind);
-    let round_trip<outer, inner, out, ot, middle, kind, x, xt, xk, xo, xs, xd>:
-        (EqSatLive(outer), dialects::builtin::trunci.matches(outer, (middle,), (out,)),
-         EqSatExtends(kind), std::ir::match_kind(kind, inner, (x,), (middle,)),
-         ir::Value(x, xt, xk, xo, xs, xd),
-         ir::result(out, xt, outer, 0, ot))
-        -> EqSatIdentity(outer, out, x);
-    cons(extension_kind, cons(sign_extension, cons(round_trip, nil)))
-};
-pub let EqSatExtends<I: Nat, O: Nat>:
-    std::ir::OperationKindOf<(std::ir::ValueRef<std::El<std::Bits<I>>>,), (std::ir::ValueRef<std::El<std::Bits<O>>>,)> -> Prop;
-
-pub let EqSatBitPair: (std::ir::BinaryIntegerOperation, std::ir::BinaryIntegerOperation) -> Prop;
-pub let extraction: std::List<Prop> = {
-    let union_and: EqSatBitPair(dialects::builtin::ori.typed_kind,dialects::builtin::xori.typed_kind);
-    let xor_and: EqSatBitPair(dialects::builtin::xori.typed_kind,dialects::builtin::ori.typed_kind);
-    let bit_pair<node,out,ty,u,v,home,a,b,kind,target,ha,hb,x,y>:
-        (EqSatBinary(node,dialects::builtin::xori.typed_kind,out,ty,u,v,home), !EqSatPinnedOp(node),
-         EqSatBinary(a,kind,u,ty,x,y,ha), EqSatBinary(b,dialects::builtin::andi.typed_kind,v,ty,x,y,hb),
-         EqSatBitPair(kind,target))
-        -> EqSatRebuild(node,out,Form::Bin(target,Form::Read(x),Form::Read(y)));
-
-    let offsets<node,out,ty,u,v,home,left,right,lh,rh,x,y,c,d,a,b,mask>:
-        (EqSatBinary(node,dialects::builtin::addi.typed_kind,out,ty,u,v,home), EqSatWrappingAdd(node), !EqSatPinnedOp(node),
-         EqSatBinary(left,dialects::builtin::addi.typed_kind,u,ty,x,c,lh), EqSatWrappingAdd(left),
-         EqSatBinary(right,dialects::builtin::addi.typed_kind,v,ty,y,d,rh), EqSatWrappingAdd(right),
-         EqSatFolded(c,a), EqSatFolded(d,b), EqSatAllBits(ty,mask), std::ir::value_ids::less(y,x) == false)
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::addi.typed_kind,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Read(y)),
-                                                Form::Bits(std::bigint::bit_and((a + b),mask))));
-    cons(union_and, cons(xor_and, cons(bit_pair, cons(offsets, nil))))
+pub let cast_cse: List<Rule> = {
+    let ext_u: Rule(() -> EqSatUnaryKind(builtin::extui.kind));
+    let ext_s: Rule(() -> EqSatUnaryKind(builtin::extsi.kind));
+    let trunc: Rule(() -> EqSatUnaryKind(builtin::trunci.kind));
+    let introduce<node, k, input, result, ty, decl, pl, hm, pos, dp, lc>: Rule(
+        (
+            EqSatLive(node), EqSatUnaryKind(k),
+            Operation(node, k, pl, hm, pos, dp, lc),
+            Operand(node, 0, input),
+            Value(result, ty, "result", node, 0, decl),
+        ) -> EqSatCast(node, k, input, result, ty)
+    );
+    let existing<first, last, k, input, a, b, ty, place, home, p, q, ad, bd, al, bl>: Rule(
+        (
+            EqSatCast(first, k, input, a, ty), EqSatCast(last, k, input, b, ty),
+            Operation(first, k, place, home, p, ad, al),
+            Operation(last, k, place, home, q, bd, bl),
+            less(p, q) == true,
+        ) -> EqSatIdentity(last, b, a)
+    );
+    List(ext_u, ext_s, trunc, introduce, existing)
 };
 
-pub let modular: std::List<Prop> = {
-    let subtract<inner,outer,result,middle,ty,x,y,z,home,prior,a,b,mask>:
-        (EqSatBinary(inner,dialects::builtin::addi.typed_kind,middle,ty,x,y,prior), EqSatWrappingAdd(inner),
-         EqSatBinary(outer,dialects::builtin::subi.typed_kind,result,ty,middle,z,home), EqSatWrappingSub(outer),
-         EqSatFolded(y,a), EqSatFolded(z,b), EqSatAllBits(ty,mask), !EqSatPinnedOp(outer))
-        -> EqSatRebuild(outer,result,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Bits(std::bigint::bit_and((a - b),mask))));
-    let multiply<inner,outer,result,middle,ty,x,y,z,home,prior,a,b,mask>:
-        (EqSatBinary(inner,dialects::builtin::muli.typed_kind,middle,ty,x,y,prior),
-         EqSatBinary(outer,dialects::builtin::muli.typed_kind,result,ty,middle,z,home),
-         EqSatFolded(y,a), EqSatFolded(z,b), EqSatAllBits(ty,mask), !EqSatPinnedOp(outer))
-        -> EqSatRebuild(outer,result,Form::Bin(dialects::builtin::muli.typed_kind,Form::Read(x),Form::Bits(std::bigint::bit_and((a * b),mask))));
-    cons(subtract, cons(multiply, nil))
+pub let arguments: List<Rule> = {
+    let cfg_parameter<f, k, h, p, d, l, region, slot, entry, value, ty, i, decl>: Rule(
+        (Operation(f, func::func.kind, k, h, p, d, l), Region(region, "cfg", f, slot, entry), Value(value, ty, "block", entry, i, decl))
+        -> EqSatIncomingParameter(value)
+    );
+    let graph_parameter<f, k, h, p, d, l, region, slot, entry, value, ty, i, decl>: Rule(
+        (Operation(f, func::func.kind, k, h, p, d, l), Region(region, "graph", f, slot, entry), Value(value, ty, "region", region, i, decl))
+        -> EqSatIncomingParameter(value)
+    );
+    let freeze<node, input, out, pl, hm, pos, dp, lc, ty, decl>: Rule(
+        (
+            EqSatLive(node),
+            Operation(node, builtin::freeze.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, input),
+            Value(out, ty, "result", node, 0, decl),
+            EqSatIncomingParameter(input),
+        ) -> EqSatArgumentFreeze(node, out)
+    );
+    List(cfg_parameter, graph_parameter, freeze)
 };
 
-pub let EqSatCast: (std::ir::OperationId, std::ir::OperationKind, std::ir::ValueId, std::ir::ValueId, Int) -> Prop;
-pub let EqSatUnaryKind<I: Nat, O: Nat>:
-    std::ir::OperationKindOf<(std::ir::ValueRef<std::El<std::Bits<I>>>,), (std::ir::ValueRef<std::El<std::Bits<O>>>,)> -> Prop;
-pub let cast_cse: std::List<Prop> = {
-    let introduce<node,k,input,result,ty,decl>:
-        (EqSatLive(node), EqSatUnaryKind(k), std::ir::match_kind(k, node, (input,), (result,)),
-         ir::result(result, ty, node,0,decl))
-        -> EqSatCast(node,std::ir::operation_kind(k),input,result,ty);
-    let existing<first,last,k,input,a,b,ty,place,home,p,q,ad,bd,al,bl>:
-        (EqSatCast(first,k,input,a,ty), EqSatCast(last,k,input,b,ty),
-         ir::Operation{ id: first, kind: k, placement: place, container: home, position: p, display: ad, location: al }(), ir::Operation{ id: last, kind: k, placement: place, container: home, position: q, display: bd, location: bl }(),
-         std::int::less(p,q) == true)
-        -> EqSatIdentity(last, b, a);
-    let extend<k>: EqSatExtends(k) -> EqSatUnaryKind(k);
-    let truncate: EqSatUnaryKind(dialects::builtin::trunci.typed_kind);
-    cons(introduce, cons(existing, cons(extend, cons(truncate, nil))))
+pub let defined_frozen: List<Rule> = {
+    let frozen<node, value>: Rule(EqSatArgumentFreeze(node, value) -> EqSatDefined(value));
+    List(frozen)
 };
 
-pub let integer_shapes: std::List<Prop> = {
-    let signed_divide_one<node,out,ty,x,y,home,all>:
-        (EqSatBinary(node,dialects::builtin::divsi.typed_kind,out,ty,x,y,home), EqSatFolded(y,std::bigint::bigint(1)),
-         EqSatAllBits(ty,all), all != std::bigint::bigint(1))
-        -> EqSatIdentity(node, out, x);
-    let signed_remainder_one<node,out,ty,x,y,home,all>:
-        (EqSatBinary(node,dialects::builtin::remsi.typed_kind,out,ty,x,y,home), EqSatFolded(y,std::bigint::bigint(1)),
-         EqSatAllBits(ty,all), all != std::bigint::bigint(1), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::andi.typed_kind,Form::Read(x),Form::Bits(std::bigint::bigint(0))));
-
-    let factor<node,out,ty,u,v,home,left,right,lh,rh,x,y,factor>:
-        (EqSatBinary(node,dialects::builtin::addi.typed_kind,out,ty,u,v,home), EqSatWrappingAdd(node),
-         EqSatBinary(left,dialects::builtin::muli.typed_kind,u,ty,x,factor,lh),
-         EqSatBinary(right,dialects::builtin::muli.typed_kind,v,ty,y,factor,rh), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::muli.typed_kind,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Read(y)),Form::Read(factor)));
-
-    let double_negation<node,out,ty,zero,value,home,inner,input,prior,other_zero>:
-        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,zero,value,home), EqSatWrappingSub(node), EqSatFolded(zero,std::bigint::bigint(0)),
-         EqSatBinary(inner,dialects::builtin::subi.typed_kind,value,ty,other_zero,input,prior), EqSatWrappingSub(inner),
-         EqSatFolded(other_zero,std::bigint::bigint(0))) -> EqSatIdentity(node, out, input);
-    cons(signed_divide_one, cons(signed_remainder_one, cons(factor, cons(double_negation, nil))))
+pub let defined_integer: List<Rule> = {
+    let known<value, bits>: Rule(EqSatFolded(value, bits) -> EqSatDefined(value));
+    let frozen<node, value>: Rule(EqSatArgumentFreeze(node, value) -> EqSatDefined(value));
+    let fold<node, out, bits>: Rule(
+        (EqSatDefinedFold(node, out, bits), !EqSatPinnedOp(node))
+        -> (EqSatFolded(out, bits), EqSatConstant(node, out, bits))
+    );
+    List(known, frozen, fold)
 };
 
-pub let EqSatDefined: std::ir::ValueId -> Prop;
-pub let EqSatIncomingParameter: std::ir::ValueId -> Prop;
-pub let EqSatAnnihilator: std::ir::BinaryIntegerOperation -> Prop;
-pub let EqSatCancelSelf: std::ir::BinaryIntegerOperation -> Prop;
-pub let EqSatDefinedFold: (std::ir::OperationId, std::ir::ValueId, BigInt) -> Prop;
-pub let EqSatArgumentFreeze: (std::ir::OperationId, std::ir::ValueId) -> Prop;
-pub let arguments: std::List<Prop> = {
-    let cfg_parameter<func,k,h,p,d,l,region,slot,entry,value,ty,i,decl>:
-        (ir::Operation{ id: func, kind: dialects::func::func.kind, placement: k, container: h, position: p, display: d, location: l }(), ir::Region(region,"cfg",func,slot,entry),
-         ir::Value(value,ty,"block",entry,i,decl)) -> EqSatIncomingParameter(value);
-    let graph_parameter<func,k,h,p,d,l,region,slot,entry,value,ty,i,decl>:
-        (ir::Operation{ id: func, kind: dialects::func::func.kind, placement: k, container: h, position: p, display: d, location: l }(), ir::Region(region,"graph",func,slot,entry),
-         ir::Value(value,ty,"region",region,i,decl)) -> EqSatIncomingParameter(value);
-    // Freezing an already supplied argument cannot hide an undefined computation.
-    let freeze<node, input, out>:
-        (EqSatLive(node), dialects::builtin::freeze.matches(node, (input,), (out,)),
-         EqSatIncomingParameter(input))
-        -> EqSatArgumentFreeze(node, out);
-
-    cons(cfg_parameter, cons(graph_parameter, cons(freeze, nil)))
-};
-pub mod defined_integer {
-    pub let known<value,bits>: EqSatFolded(value,bits) -> EqSatDefined(value);
-    pub let frozen<node,value>: EqSatArgumentFreeze(node,value) -> EqSatDefined(value);
-
-    pub let and_zero: EqSatAnnihilator(dialects::builtin::andi.typed_kind);
-    pub let multiply_zero: EqSatAnnihilator(dialects::builtin::muli.typed_kind);
-    pub let xor_self: EqSatCancelSelf(dialects::builtin::xori.typed_kind);
-    pub let sub_self: EqSatCancelSelf(dialects::builtin::subi.typed_kind);
-    pub let zero<node,k,out,ty,x,y,home>:
-        (EqSatBinary(node,k,out,ty,x,y,home), EqSatAnnihilator(k), EqSatDefined(x),
-         EqSatFolded(y,std::bigint::bigint(0))) -> EqSatDefinedFold(node,out,std::bigint::bigint(0));
-    pub let self_cancel<node,k,out,ty,x,y,home,term>:
-        (EqSatBinary(node,k,out,ty,x,y,home), EqSatCancelSelf(k), EqSatDefined(x),
-         EqSatScalar(x,ty,term), EqSatScalar(y,ty,term)) -> EqSatDefinedFold(node,out,std::bigint::bigint(0));
-    pub let ones<node,out,ty,x,y,home,all>:
-        (EqSatBinary(node,dialects::builtin::ori.typed_kind,out,ty,x,y,home), EqSatDefined(x),
-         EqSatFolded(y,all), EqSatAllBits(ty,all)) -> EqSatDefinedFold(node,out,all);
-    pub let fold<node,out,bits>:
-        (EqSatDefinedFold(node,out,bits), !EqSatPinnedOp(node))
-        -> (EqSatFolded(out,bits), EqSatConstant(node,out,bits));
-    pub let rules: std::List<Prop> =
-        std::List::Cons(known, std::List::Cons(frozen, std::List::Cons(and_zero, std::List::Cons(multiply_zero, std::List::Cons(xor_self, std::List::Cons(sub_self,
-            std::List::Cons(zero, std::List::Cons(self_cancel, std::List::Cons(ones, std::List::Cons(fold, std::List::Nil))))))))));
-}
-
-pub let EqSatAbsorbs: (std::ir::BinaryIntegerOperation, std::ir::BinaryIntegerOperation) -> Prop;
-pub let guarded_cancel: std::List<Prop> = {
-    let intersection: EqSatAbsorbs(dialects::builtin::andi.typed_kind,dialects::builtin::ori.typed_kind);
-    let union: EqSatAbsorbs(dialects::builtin::ori.typed_kind,dialects::builtin::andi.typed_kind);
-    let absorb<outer,inner,out,ty,x,y,mid,k,other,home,prior>:
-        (EqSatBinary(outer,k,out,ty,x,mid,home), EqSatAbsorbs(k,other),
-         EqSatBinary(inner,other,mid,ty,x,y,prior), EqSatDefined(y))
-        -> EqSatIdentity(outer, out, x);
-    let exclusive_or<outer,inner,out,ty,x,y,mid,home,prior>:
-        (EqSatBinary(outer,dialects::builtin::xori.typed_kind,out,ty,mid,y,home),
-         EqSatBinary(inner,dialects::builtin::xori.typed_kind,mid,ty,x,y,prior), EqSatDefined(y))
-        -> EqSatIdentity(outer, out, x);
-
-    let undo_add<outer,inner,out,ty,x,y,mid,home,prior>:
-        (EqSatBinary(outer,dialects::builtin::subi.typed_kind,out,ty,mid,y,home), EqSatWrappingSub(outer),
-         EqSatBinary(inner,dialects::builtin::addi.typed_kind,mid,ty,x,y,prior), EqSatWrappingAdd(inner), EqSatDefined(y))
-        -> EqSatIdentity(outer, out, x);
-    let undo_subtract<outer,inner,out,ty,x,y,mid,home,prior>:
-        (EqSatBinary(outer,dialects::builtin::addi.typed_kind,out,ty,mid,y,home), EqSatWrappingAdd(outer),
-         EqSatBinary(inner,dialects::builtin::subi.typed_kind,mid,ty,x,y,prior), EqSatWrappingSub(inner), EqSatDefined(y))
-        -> EqSatIdentity(outer, out, x);
-    let subtract_difference<outer,inner,out,ty,x,y,mid,home,prior>:
-        (EqSatBinary(outer,dialects::builtin::subi.typed_kind,out,ty,y,mid,home), EqSatWrappingSub(outer),
-         EqSatBinary(inner,dialects::builtin::subi.typed_kind,mid,ty,y,x,prior), EqSatWrappingSub(inner), EqSatDefined(y))
-        -> EqSatIdentity(outer, out, x);
-    cons(intersection, cons(union, cons(absorb, cons(exclusive_or, cons(undo_add,
-        cons(undo_subtract, cons(subtract_difference, nil)))))))
+pub let definition_constants: List<Rule> = {
+    let selected<node, result, bits>: Rule(
+        EqSatConstant(node, result, bits)
+        -> (EqSatDefinition(node, result, Form::Bits(bits)), EqSatConstantNode(node))
+    );
+    List(selected)
 };
 
-pub let EqSatDefinition: (std::ir::OperationId, std::ir::ValueId, Form) -> Prop;
-pub let EqSatConstantNode: std::ir::OperationId -> Prop;
-pub let definition_constants: std::List<Prop> = {
-    let selected<node,result,bits>: EqSatConstant(node,result,bits)
-        -> (EqSatDefinition(node,result,Form::Bits(bits)), EqSatConstantNode(node));
-    cons(selected, nil)
-};
-pub let definition_expressions: std::List<Prop> = {
-    let selected<node,result,form>:
-        (EqSatRebuild(node,result,form), !EqSatConstantNode(node))
-        -> EqSatDefinition(node,result,form);
-    cons(selected, nil)
+pub let definition_expressions: List<Rule> = {
+    let selected<node, result, form>: Rule(
+        (EqSatRebuild(node, result, form), !EqSatConstantNode(node))
+        -> EqSatDefinition(node, result, form)
+    );
+    List(selected)
 };
 
-pub let EqSatComplement: (std::ir::ValueId, std::ir::ValueId, Int, BigInt) -> Prop;
-pub let complements: std::List<Prop> = {
-    let neg_one<node,out,ty,x,y,home,all>:
-        (EqSatBinary(node,dialects::builtin::muli.typed_kind,out,ty,x,y,home), EqSatFolded(y,all),
-         EqSatAllBits(ty,all), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Bits(std::bigint::bigint(0)),Form::Read(x)));
-
-    let common_addend<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
-        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,a,b,home), EqSatWrappingSub(node),
-         EqSatBinary(left,dialects::builtin::addi.typed_kind,a,ty,x,y,lh), EqSatWrappingAdd(left),
-         EqSatBinary(right,dialects::builtin::addi.typed_kind,b,ty,x,z,rh), EqSatWrappingAdd(right),
-         EqSatDefined(x), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Read(y),Form::Read(z)));
-    let common_minuend<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
-        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,a,b,home), EqSatWrappingSub(node),
-         EqSatBinary(left,dialects::builtin::subi.typed_kind,a,ty,x,y,lh), EqSatWrappingSub(left),
-         EqSatBinary(right,dialects::builtin::subi.typed_kind,b,ty,x,z,rh), EqSatWrappingSub(right),
-         EqSatDefined(x), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Read(z),Form::Read(y)));
-    let common_subtrahend<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
-        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,a,b,home), EqSatWrappingSub(node),
-         EqSatBinary(left,dialects::builtin::subi.typed_kind,a,ty,x,y,lh), EqSatWrappingSub(left),
-         EqSatBinary(right,dialects::builtin::subi.typed_kind,b,ty,z,y,rh), EqSatWrappingSub(right),
-         EqSatDefined(y), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Read(x),Form::Read(z)));
-
-    let negate_addend<node,out,ty,x,b,home,right,y,rh>:
-        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,x,b,home), EqSatWrappingSub(node),
-         EqSatBinary(right,dialects::builtin::addi.typed_kind,b,ty,x,y,rh), EqSatWrappingAdd(right),
-         EqSatDefined(x), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Bits(std::bigint::bigint(0)),Form::Read(y)));
-    let negate_subtrahend<node,out,ty,a,x,home,left,y,lh>:
-        (EqSatBinary(node,dialects::builtin::subi.typed_kind,out,ty,a,x,home), EqSatWrappingSub(node),
-         EqSatBinary(left,dialects::builtin::subi.typed_kind,a,ty,x,y,lh), EqSatWrappingSub(left),
-         EqSatDefined(x), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Bits(std::bigint::bigint(0)),Form::Read(y)));
-
-    let complement<node,out,ty,x,mask,home,all>:
-        (EqSatBinary(node,dialects::builtin::xori.typed_kind,out,ty,x,mask,home),
-         EqSatFolded(mask,all), EqSatAllBits(ty,all), EqSatDefined(x))
-        -> EqSatComplement(out,x,ty,all);
-    let intersection<node,out,ty,x,inverse,home,all>:
-        (EqSatBinary(node,dialects::builtin::andi.typed_kind,out,ty,x,inverse,home), EqSatComplement(inverse,x,ty,all))
-        -> EqSatDefinedFold(node,out,std::bigint::bigint(0));
-    let union<node,out,ty,x,inverse,home,all>:
-        (EqSatBinary(node,dialects::builtin::ori.typed_kind,out,ty,x,inverse,home), EqSatComplement(inverse,x,ty,all))
-        -> EqSatDefinedFold(node,out,all);
-    let cancel_pair<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
-        (EqSatBinary(node,dialects::builtin::addi.typed_kind,out,ty,a,b,home), EqSatWrappingAdd(node),
-         EqSatBinary(left,dialects::builtin::addi.typed_kind,a,ty,x,y,lh), EqSatWrappingAdd(left),
-         EqSatBinary(right,dialects::builtin::subi.typed_kind,b,ty,z,y,rh), EqSatWrappingSub(right),
-         EqSatDefined(y), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::addi.typed_kind,Form::Read(x),Form::Read(z)));
-    let telescope<node,out,ty,a,b,home,left,right,x,y,z,lh,rh>:
-        (EqSatBinary(node,dialects::builtin::addi.typed_kind,out,ty,a,b,home), EqSatWrappingAdd(node),
-         EqSatBinary(left,dialects::builtin::subi.typed_kind,a,ty,x,y,lh), EqSatWrappingSub(left),
-         EqSatBinary(right,dialects::builtin::subi.typed_kind,b,ty,y,z,rh), EqSatWrappingSub(right),
-         EqSatDefined(y), !EqSatPinnedOp(node))
-        -> EqSatRebuild(node,out,Form::Bin(dialects::builtin::subi.typed_kind,Form::Read(x),Form::Read(z)));
-    cons(neg_one, cons(common_addend, cons(common_minuend, cons(common_subtrahend,
-        cons(negate_addend, cons(negate_subtrahend, cons(complement, cons(intersection, cons(union,
-        cons(cancel_pair, cons(telescope, nil)))))))))))
-};
+extract rust integer_facts          => "@ct";
+extract rust strength               => "@ct";
+extract rust cast_cse               => "@ct";
+extract rust arguments              => "@ct";
+extract rust defined_frozen         => "@ct";
+extract rust defined_integer        => "@ct";
+extract rust definition_constants   => "@ct";
+extract rust definition_expressions => "@ct";

@@ -1,0 +1,425 @@
+// CDSL v3 core standard library.
+//
+// Pure CDSL definitions with Rocq-style `extract` bindings.
+// ZERO string templates, ZERO `RustChunk`, ZERO compiler hardcoding.
+
+// ── Core algebraic data types & dependent primitives ─────────────────────────
+
+pub let Nat: Type = Int;
+pub type Any;
+pub type Variadic<T>;
+pub type BigInt;
+pub type Vec<T, N: Nat>;
+
+pub enum Option<A> {
+    None,
+    Some(A),
+}
+
+pub let Optional<A>: Type = Option<A>;
+
+pub enum List<A> {
+    Nil,
+    Cons(A, List<A>),
+}
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+pub let append<A> = rec |xs: List<A>, ys: List<A>| -> List<A> {
+    match xs {
+        List::Nil => ys,
+        List::Cons(h, t) => List::Cons(h, append(t, ys)),
+    }
+};
+
+pub let map<A, B> = rec |f: A -> B, xs: List<A>| -> List<B> {
+    match xs {
+        List::Nil => List::Nil,
+        List::Cons(h, t) => List::Cons(f(h), map(f, t)),
+    }
+};
+
+pub let flat_map<A, B> = rec |f: A -> List<B>, xs: List<A>| -> List<B> {
+    match xs {
+        List::Nil => List::Nil,
+        List::Cons(h, t) => append(f(h), flat_map(f, t)),
+    }
+};
+
+pub let fold<A, B> = rec |acc: B, f: (B, A) -> B, xs: List<A>| -> B {
+    match xs {
+        List::Nil => acc,
+        List::Cons(h, t) => fold(f(acc, h), f, t),
+    }
+};
+
+pub let length<A> = rec |xs: List<A>| -> Int {
+    match xs {
+        List::Nil => 0,
+        List::Cons(_, t) => 1 + length(t),
+    }
+};
+
+pub let map_indexed<A, B> = rec |idx: Int, f: (Int, A) -> B, xs: List<A>| -> List<B> {
+    match xs {
+        List::Nil => List::Nil,
+        List::Cons(h, t) => List::Cons(f(idx, h), map_indexed(idx + 1, f, t)),
+    }
+};
+
+extract egglog List   => "list"   [ Nil => "nil", Cons => "cons" ];
+extract egglog BigInt => "BigInt";
+
+extract rust Option => "::core::option::Option" [ None => "None", Some => "Some" ];
+extract rust List   => "::std::vec::Vec"        [ Nil => "::std::vec::Vec::new()", Cons => "::tir_cdsl_rt::vec_cons" ];
+extract rust Result => "::core::result::Result" [ Ok => "Ok", Err => "Err" ];
+extract rust BigInt => "::tir_egglog::sort::BigInt";
+
+extract lean Option => "Option" [ None => "Option.none", Some => "Option.some" ];
+extract lean List   => "List"   [ Nil => "List.nil", Cons => "List.cons" ];
+
+extract rust append      => "@ct";
+extract rust map         => "@ct";
+extract rust flat_map    => "@ct";
+extract rust fold        => "@ct";
+extract rust length      => "@ct";
+extract rust map_indexed => "@ct";
+
+// ── Logical proofs (live in Prop -> erased in Rust & egglog, kept in Lean 4) ─
+
+pub enum Eq<A: Type, x: A, y: A>: Prop {
+    Refl: Eq<A, x, x>,
+}
+
+pub enum SoundRewrite: Prop {
+    Assumed,
+}
+
+pub enum TrueProp: Prop {
+    Trivial,
+}
+
+// ── Relational tables & lattice merges ───────────────────────────────────────
+
+pub enum Merge<V> {
+    Union,
+    Unique,
+    Min: Merge<Int>,
+    Max: Merge<Int>,
+    Old,
+    New,
+    With((V, V) -> V),
+}
+
+pub type Relation<Args>;
+pub type Table<K, V, M: Merge<V>>;
+
+extract egglog Merge => "merge" [
+    Union  => "union",
+    Unique => "unique",
+    Min    => "min",
+    Max    => "max",
+    Old    => "old",
+    New    => "new",
+    With   => "custom",
+];
+extract egglog Relation => "@relation";
+extract egglog Table    => "@table";
+
+// ── Engine IR (staged at compile time via NbE -> TEGG v15 bytecode) ──────────
+
+pub enum SortDecl {
+    EqSort(String),
+    BaseSort(String),
+    ContainerSort(String),
+}
+
+pub enum ExternDecl {
+    Extern(String, List<String>, String),
+}
+
+pub enum TableDecl {
+    Relation(String, List<String>),
+    Constructor(String, List<String>),
+    Function(String, List<String>, String),
+    FunctionK(String, List<String>, Int, String),
+}
+
+pub enum Atom {
+    Var(String),
+    IntLit(Int),
+    BoolLit(Bool),
+    StrLit(String),
+    UnitLit,
+    Arg(Int),
+    Call(String, List<Atom>),
+}
+
+pub enum Fact {
+    Row(String, List<Atom>),
+    NotRow(String, List<Atom>),
+    Eq(Atom, Atom),
+    Neq(Atom, Atom),
+    Lt(Atom, Atom),
+    Le(Atom, Atom),
+    Gt(Atom, Atom),
+    Ge(Atom, Atom),
+}
+
+pub enum Action {
+    Insert(String, List<Atom>),
+    Union(Atom, Atom),
+    Delete(String, List<Atom>),
+    Subsume(String, List<Atom>),
+    Call(String, List<Atom>),
+    Panic(String),
+}
+
+pub enum Rule {
+    Forall(Atom -> Rule),
+    Clause(String, List<Fact>, List<Action>),
+}
+
+pub enum Ruleset {
+    Ruleset(String, List<Rule>, Bool, Bool),
+    Combined(String, List<String>, Bool),
+}
+
+pub enum Schedule {
+    Once(List<Rule>),
+    Repeat(Int, List<Rule>),
+    Saturate(List<Rule>),
+    RunNamed(String, Int),
+    RepeatNamed(String, Int, List<Rule>),
+    Seq(List<Schedule>),
+    Colored(List<Rule>),
+    OnceFlag(List<Rule>),
+    RepeatSched(Int, Schedule),
+    SaturateSched(Schedule),
+}
+
+pub enum EgglogProgram {
+    Program(List<SortDecl>, List<TableDecl>, Schedule),
+    ProgramFull(List<SortDecl>, List<ExternDecl>, List<TableDecl>, List<Ruleset>, Schedule),
+}
+
+extract egglog SortDecl => "sort_decl" [
+    EqSort => "eq_sort",
+    BaseSort => "base_sort",
+    ContainerSort => "container_sort",
+];
+extract egglog ExternDecl => "extern_decl" [
+    Extern => "extern",
+];
+extract egglog TableDecl => "table_decl" [
+    Relation => "relation",
+    Constructor => "constructor",
+    Function => "function",
+    FunctionK => "function_k",
+];
+extract egglog Atom => "atom" [
+    Var => "var",
+    IntLit => "int_lit",
+    BoolLit => "bool_lit",
+    StrLit => "str_lit",
+    UnitLit => "unit_lit",
+    Arg => "arg",
+    Call => "call",
+];
+extract egglog Fact => "fact" [
+    Row => "row",
+    NotRow => "not_row",
+    Eq => "eq",
+    Neq => "neq",
+    Lt => "lt",
+    Le => "le",
+    Gt => "gt",
+    Ge => "ge",
+];
+extract egglog Action => "action" [
+    Insert => "insert",
+    Union => "union",
+    Delete => "delete",
+    Subsume => "subsume",
+    Call => "call",
+    Panic => "panic",
+];
+extract egglog Rule => "rule" [
+    Forall => "forall",
+    Clause => "clause",
+];
+extract egglog Ruleset => "ruleset" [
+    Ruleset => "ruleset",
+    Combined => "combined_ruleset",
+];
+extract egglog Schedule => "schedule" [
+    Once => "once",
+    Repeat => "repeat",
+    Saturate => "saturate",
+    RunNamed => "run_named",
+    RepeatNamed => "repeat_named",
+    Seq => "seq",
+    Colored => "colored",
+    OnceFlag => "once_flag",
+    RepeatSched => "repeat_sched",
+    SaturateSched => "saturate_sched",
+];
+extract egglog EgglogProgram => "egg_program" [
+    Program => "program",
+    ProgramFull => "program_full",
+];
+
+// ── Unified Typed Operation Descriptor (`op { ... }` target) ─────────────────
+
+pub enum Port {
+    Port(String, Type),
+}
+
+pub enum Sem {
+    None,
+    Body { ty: Type, func: ty },
+}
+
+pub enum Interface {
+    Pure,
+    PureInterface,
+    ConstantLike,
+    ConstantLikeExternal,
+    Speculatable,
+    Commutative,
+    SameOperandAndResultType,
+    IntegerArithmetic,
+    Additive,
+    Subtractive,
+    OpCost(Int),
+    MemoryRead,
+    MemoryWrite,
+    ResourceEffects,
+    PromotableAllocation,
+    Terminator,
+    ExitScope,
+    Congruent,
+    Symbol,
+    Visibility,
+    Callable,
+    Apply,
+    BranchGuard,
+    BranchTerminator,
+    CaseGuard,
+    CountedLoop,
+    Gamma,
+    Global,
+    NonLocalExit,
+    RegionBinding,
+    Theta,
+    FloatingPoint,
+    Custom(String),
+}
+
+pub enum BindSpec {
+    None,
+    Theta(String, String, String, String, String, Int, Int),
+    Gamma(String, String, String, String, String),
+}
+
+pub enum CountedSpec {
+    None,
+    Counted(String, String, String, String, String),
+}
+
+pub enum ImmSpec {
+    Imm(String, String, Int, Int, Bool, Bool, Bool),
+}
+
+pub enum OpFlags {
+    Flags(Bool, Bool, Bool, Bool, Bool),
+}
+
+pub enum OpDef {
+    Define(
+        String,
+        String,
+        String,
+        List<Port>,
+        List<Port>,
+        List<Port>,
+        List<Port>,
+        List<Port>,
+        List<Interface>,
+        Sem,
+        Sem,
+        BindSpec,
+        CountedSpec,
+        List<ImmSpec>,
+        List<Port>,
+        OpFlags,
+    ),
+}
+
+extract rust   OpDef       => "@op_def";
+extract egglog OpDef       => "@op_def";
+extract egglog Port        => "compile_time";
+extract egglog Sem         => "compile_time";
+extract egglog Interface   => "compile_time";
+extract egglog BindSpec    => "compile_time";
+extract egglog CountedSpec => "compile_time";
+extract egglog ImmSpec     => "compile_time";
+extract egglog OpFlags     => "compile_time";
+
+// ── High-Level Rewrite ADT (lowered by pure CDSL via NbE) ────────────────────
+
+pub enum Term {
+    TVar(Atom),
+    TConst(OpDef, Int),
+    TAllOnes,
+    TOp(OpDef, List<Term>),
+}
+
+pub enum Guard {
+    True,
+    And(Guard, Guard),
+    Fact(Fact),
+    Not(Fact),
+    Meta(String, List<Atom>),
+}
+
+pub enum Rewrite {
+    Forall(Term -> Rewrite),
+    Equiv(Term, Guard, Term),
+    Refine(Term, Guard, Term),
+    Raw(Rule),
+}
+
+extract egglog Term    => "compile_time";
+extract egglog Guard   => "compile_time";
+extract egglog Rewrite => "@rewrite";
+
+pub let term_to_atom = |t: Term| -> Atom {
+    match t {
+        Term::TVar(a) => a,
+        _ => Atom::Var("_invalid_term_var"),
+    }
+};
+extract rust term_to_atom => "@ct";
+
+// ── Memoization combinator (`memo |root| ...`) ───────────────────────────────
+
+pub let memo<Key, Out>: (Key -> Out) -> Key -> Out;
+extract rust memo => "@memo";
+
+pub let has_row<Args>: (Relation<Args>, Args) -> Bool;
+extract rust has_row => "@ct";
+
+// ── Rule argument placeholder (`arg(0)` for memoized root parameter) ─────────
+
+pub let arg = |i: Int| -> Atom { Atom::Arg(i) };
+pub let int_lit = |n: Int| -> Atom { Atom::IntLit(n) };
+pub let bool_lit = |b: Bool| -> Atom { Atom::BoolLit(b) };
+pub let str_lit = |s: String| -> Atom { Atom::StrLit(s) };
+extract rust arg      => "@ct";
+extract rust int_lit  => "@ct";
+extract rust bool_lit => "@ct";
+extract rust str_lit  => "@ct";

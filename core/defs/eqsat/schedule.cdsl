@@ -1,166 +1,176 @@
-use std::schedule::Schedule;
-use std::schedule::sequence;
+// EqSat stage builders — parameterized over `List<Rewrite>` and driven
+// directly by `dialects::builtin::all_ops` via NbE.
 
-use bits::*;
-use context::*;
-use integer::*;
-use memory::*;
-use loops::*;
-use fp::*;
-use layout::*;
+use std::core::*;
+use std::ir::dialect_flag_rules;
+use std::ir::integers::integer_fold_rules;
+use std::ir::rewrites::lower_eqsat_rewrites;
+use dialects::builtin;
+use eqsat::{bits, context, fp, integer, layout, loops, memory};
 
-pub let frame = || {
-    Schedule::Repeat(8, (
-        attributes, arguments, counted_pins, ports, allocation,
-        allocation_shape,
-    ))
-};
-pub let sites = || { std::schedule::Schedule::Rules((escape, memory_sites)) };
+let int_flags: List<Rule> = dialect_flag_rules(builtin::all_ops);
+let int_fold: List<Rule> = integer_fold_rules(builtin::all_ops);
 
-let integers = std::schedule::integer_rules(dialects::builtin, dialects::builtin::ConstantLike<1>, {
-    binary: EqSatBinaryKind,
-    flag_field: EqSatFlagField,
-    result: EqSatIntegerResult,
-    operand: EqSatIntegerOperand,
-    folded: EqSatFolded,
-    constant_kind: EqSatConstantImplementation,
-    flag_value: EqSatFlag,
-    constant: EqSatConstant,
-    attribute: ir::Attribute,
-    attr_int: eqsat_attr_int,
-    attr_case: eqsat_attr_case,
-    pick_case: eqsat_pick_case,
-    bool_bit: eqsat_bool_bit,
-    shift_amount: eqsat_shift_amount,
-});
-
-pub let global = || {
-    Schedule::Repeat(64, (
-        commute, congruence, integer_inputs, scalars::rules,
-        floating_point, fp_congruence,
-        fp_keys, cast_cse, casts, complements, defined_integer::rules,
-        extraction, guarded_cancel, integer_facts, integer_shapes,
-        modular, strength, address_keys, layout_pointer,
-        layout_values, invariant_ports, loop_facts, switch_inputs::incoming,
-        memory_facts, memory_join, memory_siblings, pointer_cells,
-        read_state, integers.fold,
-    ))
+let constant_defined_rules: List<Rule> = {
+    let constant_defined<node, kind, place, home, pos, display, loc, value, ty, decl>: Rule(
+        (
+            EqSatLive(node),
+            EqSatConstantImplementation(kind),
+            Operation(node, kind, place, home, pos, display, loc),
+            Value(value, ty, "result", node, 0, decl),
+            EqSatInteger(ty),
+        ) -> EqSatDefined(value)
+    );
+    List(constant_defined)
 };
 
-pub let publish_aliases = || {
-    sequence((
-        Schedule::Repeat(64, paths),
-        Schedule::Rules(used),
-        Schedule::Repeat(4, edits),
-    ))
+let cat = |lists: List<List<Rule>>| -> List<Rule> {
+    flat_map(|xs: List<Rule>| -> List<Rule> { xs }, lists)
 };
 
-pub let analyze = || {
-    sequence((
-        Schedule::Rules(flag_values),
-        Schedule::Repeat(4, memory_barriers),
-        Schedule::Rules(gamma_witness),
-        Schedule::Rules(gamma_missing),
-        Schedule::Rules(gamma_agrees),
-        global(),
-        Schedule::Repeat(4, incoming),
-        Schedule::Rules(phi_candidates),
-        Schedule::Rules(phi_disagreement),
-        Schedule::Rules(phi_literals),
-        Schedule::Rules(memory_cfg),
-        Schedule::Rules(memory_cfg_missing),
-        Schedule::Rules(memory_cfg_apply),
-        Schedule::Rules(memory_join_missing),
-        Schedule::Rules(memory_join_apply),
-        global(),
-        Schedule::Repeat(4, removable),
-        Schedule::Repeat(8, plain_access),
-        Schedule::Rules(plain_disjoint),
-        Schedule::Rules(private_call),
-        Schedule::Rules(plain_clobber),
-        Schedule::Rules(safe_control_inputs),
-        Schedule::Rules(control_effects),
-        Schedule::Repeat(2, finite_loops),
-        Schedule::Repeat(4, switch_cases),
-        Schedule::Rules(switch_default),
-        Schedule::Rules(pure_switch),
-        Schedule::Rules(switch_values),
-        Schedule::Rules(switch_agreement),
-        Schedule::Rules(switch_aliases),
-        Schedule::Rules(plain_forward),
-        Schedule::Rules(dead_store_proof),
-        Schedule::Rules(dead_store_uses),
-        Schedule::Rules(dead_store),
-        Schedule::Repeat(64, paths),
-        Schedule::Repeat(4, counted_exits::rules),
-        Schedule::Rules(counted_missing),
-        Schedule::Rules(counted_agrees),
-        Schedule::Rules(counted_reads),
-        publish_aliases(),
-        Schedule::Rules(phi_uses),
-        Schedule::Rules(definition_constants),
-        Schedule::Rules(definition_expressions),
-    ))
-};
+let frame_rules: List<Rule> = cat(List(
+    context::attributes, integer::arguments, loops::counted_pins,
+    loops::ports, memory::allocation, memory::allocation_shape,
+    constant_defined_rules, integer::defined_frozen,
+));
+let site_rules: List<Rule> = cat(List(memory::escape, memory::memory_sites));
+let custom_frame_rules: List<Rule> = cat(List(
+    context::attributes, integer::arguments, loops::counted_pins,
+    constant_defined_rules, integer::defined_frozen,
+));
 
-let constant_defined<node, kind, place, home, pos, display, loc, value, ty, decl>:
-    (EqSatLive(node), EqSatConstantImplementation(kind),
-     ir::Operation{ id: node, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }(),
-     ir::result(value, ty, node, 0, decl), EqSatInteger(ty))
-    -> EqSatDefined(value);
+let base_global_rules: List<Rule> = cat(List(
+    bits::commute, bits::congruence, bits::integer_inputs, bits::scalars,
+    fp::fp_congruence, fp::fp_keys,
+    integer::cast_cse, integer::defined_integer, integer::integer_facts, integer::strength,
+    layout::address_keys, layout::layout_values,
+    loops::invariant_ports, loops::loop_facts, loops::switch_inputs,
+    memory::memory_facts, memory::memory_join, memory::memory_siblings,
+    memory::pointer_cells, memory::read_state,
+    int_fold,
+));
 
-pub let prepare_custom = || {
-    sequence((
-        Schedule::Saturate(select),
-        Schedule::Rules(scalars::integer),
-        Schedule::Repeat(8, (
-            attributes, arguments, counted_pins, constant_defined,
-            defined_integer::frozen,
-        )),
+pub let publish_aliases_stage: Schedule = Schedule::Seq(List(
+    Schedule::Repeat(64, context::paths),
+    Schedule::Once(context::used),
+    Schedule::Repeat(4, context::edits),
+));
+
+pub let build_analyze = |rules: List<Rewrite>| -> Schedule {
+    let global_rules = append(base_global_rules, lower_eqsat_rewrites("eqsat::rw", rules));
+    let global = Schedule::RepeatNamed("eqsat::global", 64, global_rules);
+    Schedule::Seq(List(
+        Schedule::Once(bits::flag_values),
+        Schedule::Repeat(4, memory::memory_barriers),
+        Schedule::Once(loops::gamma_witness),
+        Schedule::Once(loops::gamma_missing),
+        Schedule::Once(loops::gamma_agrees),
+        global,
+        Schedule::Repeat(4, context::incoming),
+        Schedule::Once(context::phi_candidates),
+        Schedule::Once(context::phi_disagreement),
+        Schedule::Once(context::phi_literals),
+        Schedule::Once(memory::memory_cfg),
+        Schedule::Once(memory::memory_cfg_missing),
+        Schedule::Once(memory::memory_cfg_apply),
+        Schedule::Once(memory::memory_join_missing),
+        Schedule::Once(memory::memory_join_apply),
+        global,
+        Schedule::Repeat(4, context::removable),
+        Schedule::Repeat(8, memory::plain_access),
+        Schedule::Once(memory::plain_disjoint),
+        Schedule::Once(memory::private_call),
+        Schedule::Once(memory::plain_clobber),
+        Schedule::Once(loops::safe_control_inputs),
+        Schedule::Once(loops::control_effects),
+        Schedule::Repeat(2, loops::finite_loops),
+        Schedule::Repeat(4, loops::switch_cases),
+        Schedule::Once(loops::switch_default),
+        Schedule::Once(loops::pure_switch),
+        Schedule::Once(loops::switch_values),
+        Schedule::Once(loops::switch_agreement),
+        Schedule::Once(loops::switch_aliases),
+        Schedule::Once(memory::plain_forward),
+        Schedule::Once(memory::dead_store_proof),
+        Schedule::Once(memory::dead_store_uses),
+        Schedule::Once(memory::dead_store),
+        Schedule::Repeat(64, context::paths),
+        Schedule::Repeat(4, loops::counted_exits),
+        Schedule::Once(loops::counted_missing),
+        Schedule::Once(loops::counted_agrees),
+        Schedule::Once(loops::counted_reads),
+        publish_aliases_stage,
+        Schedule::Once(context::phi_uses),
+        Schedule::Once(integer::definition_constants),
+        Schedule::Once(integer::definition_expressions),
     ))
 };
 
-pub let prepare = || {
-    sequence((
-        Schedule::Saturate(select),
-        Schedule::Rules(integers.flags),
-        frame(),
-        sites(),
-        Schedule::Repeat(4, layout_queries),
-    ))
-};
+pub let prepare_custom_stage: Schedule = Schedule::Seq(List(
+    Schedule::Saturate(context::select),
+    Schedule::Once(bits::scalars_integer),
+    Schedule::Repeat(8, custom_frame_rules),
+));
 
-pub let sweep = || {
-    sequence((
-        Schedule::Rules(congruence),
-        Schedule::Repeat(4, scalars::rules),
-        Schedule::Repeat(4, cast_cse),
-        Schedule::Repeat(8, removable),
-        Schedule::Repeat(2, integer_inputs),
-        Schedule::Rules(integers.fold),
-        Schedule::Saturate(address_keys),
-        Schedule::Repeat(8, plain_access),
-        Schedule::Saturate(storage_defined),
-        Schedule::Rules(private_layout),
-        Schedule::Rules(private_extent),
-        Schedule::Repeat(8, private_store),
-        Schedule::Rules(private_other),
-        Schedule::Rules(private_drop),
-        Schedule::Rules(plain_overwrites),
-        Schedule::Rules(overwrite_barriers),
-        Schedule::Rules(overwrite_plain),
-        Schedule::Rules(safe_control_inputs),
-        Schedule::Rules(control_effects),
-        Schedule::Rules(pure_switch),
-        Schedule::Saturate(demand),
-        Schedule::Rules(dead),
-    ))
-};
+pub let prepare_stage: Schedule = Schedule::Seq(List(
+    Schedule::Saturate(context::select),
+    Schedule::Once(bits::scalars_integer),
+    Schedule::OnceFlag(int_flags),
+    Schedule::Repeat(8, frame_rules),
+    Schedule::Once(site_rules),
+    Schedule::Repeat(4, layout::layout_queries),
+));
 
-pub let seed_assumptions = || {
-    sequence((
-        Schedule::Rules(incoming),
-        Schedule::Repeat(64, assumptions),
-    ))
-};
-pub let propagate_scoped = || { std::schedule::repeat_colored(8, branch_local) };
+pub let apply_masks_stage: Schedule = Schedule::Once(bits::redundant_masks);
+
+pub let sweep_stage: Schedule = Schedule::Seq(List(
+    Schedule::Once(bits::congruence),
+    Schedule::Repeat(4, bits::scalars),
+    Schedule::Repeat(4, integer::cast_cse),
+    Schedule::Repeat(8, context::removable),
+    Schedule::Repeat(2, bits::integer_inputs),
+    Schedule::Once(int_fold),
+    Schedule::Saturate(layout::address_keys),
+    Schedule::Repeat(8, memory::plain_access),
+    Schedule::Saturate(memory::storage_defined),
+    Schedule::Once(memory::private_layout),
+    Schedule::Once(memory::private_extent),
+    Schedule::Repeat(8, memory::private_store),
+    Schedule::Once(memory::private_other),
+    Schedule::Once(memory::private_drop),
+    Schedule::Once(memory::plain_overwrites),
+    Schedule::Once(memory::overwrite_barriers),
+    Schedule::Once(memory::overwrite_plain),
+    Schedule::Once(loops::safe_control_inputs),
+    Schedule::Once(loops::control_effects),
+    Schedule::Once(loops::pure_switch),
+    Schedule::Saturate(context::demand),
+    Schedule::Once(context::dead),
+));
+
+pub let seed_assumptions_stage: Schedule = Schedule::Seq(List(
+    Schedule::Once(context::incoming),
+    Schedule::Repeat(64, context::assumptions),
+));
+
+pub let propagate_scoped_stage: Schedule = Schedule::RepeatSched(
+    8,
+    Schedule::Colored(context::branch_local),
+);
+
+extract rust int_flags              => "@ct";
+extract rust int_fold               => "@ct";
+extract rust constant_defined_rules => "@ct";
+extract rust cat                    => "@ct";
+extract rust frame_rules            => "@ct";
+extract rust site_rules             => "@ct";
+extract rust custom_frame_rules     => "@ct";
+extract rust base_global_rules      => "@ct";
+extract rust publish_aliases_stage  => "@ct";
+extract rust build_analyze          => "@ct";
+extract rust prepare_custom_stage   => "@ct";
+extract rust prepare_stage          => "@ct";
+extract rust apply_masks_stage      => "@ct";
+extract rust sweep_stage            => "@ct";
+extract rust seed_assumptions_stage => "@ct";
+extract rust propagate_scoped_stage => "@ct";
