@@ -2045,16 +2045,17 @@ dependencies = [
  "chumsky",
  "criterion",
  "logos",
- "prettyplease",
- "proc-macro2",
- "quote",
  "serde",
  "serde_json",
- "syn 2.0.118",
  "tir-bench",
+ "tir-cdsl-core",
  "tir-cst",
  "tir-egglog",
 ]
+
+[[package]]
+name = "tir-cdsl-core"
+version = "0.1.0"
 
 [[package]]
 name = "tir-cli"

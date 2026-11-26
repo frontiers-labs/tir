@@ -1,19 +1,25 @@
+//! Cargo `build.rs` API for compiling CDSL v3 packages.
+
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     env, fs, io,
     path::{Path, PathBuf},
 };
 
-use crate::{Error, compiler};
+use crate::{CheckedProgram, Error, check, compiler_sources, elaborate};
 
 /// A generated file requested by a Cargo build script.
 pub enum OutputKind<'a> {
     /// Rust definitions for the selected module's exports.
     OpDef(&'a str),
-    /// Rust API and private bytecode for the selected program.
+    /// Rust API and embedded TEGG bytecode for the selected program.
     Program(&'a str),
     /// Rust interface for a catalog owned by a workspace package.
     Catalog(&'a str),
+    /// Unified CDSL v3 Rust output (ops + analyses + passes + bytecode).
+    Rust(&'a str),
+    /// Lean 4 proof skeleton output from unerased kernel AST.
+    Lean(&'a str),
 }
 
 struct OutputFile<'a> {
@@ -21,12 +27,36 @@ struct OutputFile<'a> {
     bytes: Vec<u8>,
 }
 
-/// Check CDSL sources for the current Cargo package and generate build outputs.
-///
-/// Select exports or rules with `package::module::*` or select the root with
-/// `package::*`. The package prefix can be the Cargo package name or its
-/// directory name. Relative destinations are resolved under `OUT_DIR`.
-/// All selections and destinations are checked before any output file is written.
+/// Unified v3 build.rs entrypoint: compile a package root file (relative to
+/// `CARGO_MANIFEST_DIR`) and write the generated Rust file into `OUT_DIR` (or
+/// an absolute path).
+pub fn compile_package(root_rel: impl AsRef<Path>, out_rel: impl AsRef<Path>) -> Result<(), Error> {
+    let manifest = PathBuf::from(
+        env::var_os("CARGO_MANIFEST_DIR")
+            .ok_or_else(|| Error("missing CARGO_MANIFEST_DIR".into()))?,
+    );
+    let root = manifest.join(root_rel);
+    if let Some(defs) = root.parent()
+        && defs.is_dir()
+    {
+        println!("cargo:rerun-if-changed={}", defs.display());
+    }
+    let mut checked = check_package(&root)?;
+    let rust = checked.emit_rust()?;
+    let out_path = out_rel.as_ref();
+    let dest = if out_path.is_absolute() {
+        out_path.to_path_buf()
+    } else {
+        PathBuf::from(env::var_os("OUT_DIR").ok_or_else(|| Error("missing OUT_DIR".into()))?)
+            .join(out_path)
+    };
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| path_error(parent, e))?;
+    }
+    fs::write(&dest, rust).map_err(|e| path_error(&dest, e))
+}
+
+/// Preserved `build.rs` batch compilation API supporting module globs (`pkg::mod::*`).
 pub fn compile<'a>(
     outputs: impl IntoIterator<Item = (&'a str, OutputKind<'a>)>,
 ) -> Result<(), Error> {
@@ -47,22 +77,14 @@ pub fn compile<'a>(
         println!("cargo:rerun-if-changed={}", defs.display());
     }
     let root = defs.join("lib.cdsl");
-    let checked = outputs
-        .iter()
-        .any(|(_, kind)| !matches!(kind, OutputKind::Catalog(_)))
-        .then(|| check_package(&root))
-        .transpose()?;
 
+    let mut local_checked: Option<CheckedProgram> = None;
     let mut files = Vec::new();
+
     for (filter, kind) in outputs {
-        let language = match kind {
-            OutputKind::OpDef(_) => "Rust",
-            OutputKind::Program(_) => "program",
-            OutputKind::Catalog(_) => "catalog",
-        };
         let invalid_filter = || {
             Error(format!(
-                "invalid {language} filter {filter:?}; expected a module glob in {package} or {}",
+                "invalid filter {filter:?}; expected a module glob in {package} or {}",
                 manifest.display()
             ))
         };
@@ -71,7 +93,7 @@ pub fn compile<'a>(
             .ok_or_else(invalid_filter)?
             .split("::");
         let prefix = segments.next().ok_or_else(invalid_filter)?;
-        let module = segments.map(str::to_owned).collect::<Vec<_>>();
+        let module: Vec<String> = segments.map(str::to_owned).collect();
         let local = prefix == package || manifest.file_name().is_some_and(|name| name == prefix);
         if (!local && !matches!(kind, OutputKind::Catalog(_)))
             || module.iter().any(|name| {
@@ -83,38 +105,65 @@ pub fn compile<'a>(
             return Err(invalid_filter());
         }
 
-        match kind {
-            OutputKind::Catalog(destination) => {
-                let root = if local {
+        let module_prefix = module.join("::");
+        let prefix_opt = if module_prefix.is_empty() {
+            Some("")
+        } else {
+            Some(module_prefix.as_str())
+        };
+        let (destination, bytes) = match kind {
+            OutputKind::Catalog(dest) => {
+                let target_root = if local {
                     root.clone()
                 } else {
-                    compiler::resolve_package_defs(prefix, true)?
+                    compiler_sources::CargoMetadata::read(None)?.workspace_defs(prefix, true)?
                 };
-                if let Some(defs) = root.parent() {
-                    println!("cargo:rerun-if-changed={}", defs.display());
+                if let Some(d) = target_root.parent() {
+                    println!("cargo:rerun-if-changed={}", d.display());
                 }
-                let checked = check_package(&root)?;
-                let rust = checked.render_catalog(&module)?;
-                files.push(OutputFile {
-                    destination,
-                    bytes: rust.into_bytes(),
-                });
+                let mut checked = check_package(&target_root)?;
+                let rust = checked.emit_for_mode(prefix_opt, crate::erase::EraseMode::Catalog)?;
+                (dest, rust.into_bytes())
             }
-            OutputKind::OpDef(destination) | OutputKind::Program(destination) => {
-                let checked = checked
-                    .as_ref()
-                    .ok_or_else(|| Error("missing checked package".into()))?;
-                let rust = match kind {
-                    OutputKind::Program(_) => checked.render_program(&module),
-                    _ => checked.artifact().render_rust_module(&module),
+            OutputKind::Lean(dest) => {
+                if local_checked.is_none() {
+                    local_checked = Some(check_package(&root)?);
                 }
-                .map_err(|error| Error(format!("{language} filter {filter:?}: {error}")))?;
-                files.push(OutputFile {
-                    destination,
-                    bytes: rust.into_bytes(),
-                });
+                let lean = local_checked.as_ref().unwrap().emit_lean();
+                (dest, lean.into_bytes())
             }
-        }
+            OutputKind::OpDef(dest) => {
+                if local_checked.is_none() {
+                    local_checked = Some(check_package(&root)?);
+                }
+                let rust = local_checked
+                    .as_mut()
+                    .unwrap()
+                    .emit_for_mode(prefix_opt, crate::erase::EraseMode::OpDef)?;
+                (dest, rust.into_bytes())
+            }
+            OutputKind::Program(dest) => {
+                if local_checked.is_none() {
+                    local_checked = Some(check_package(&root)?);
+                }
+                let rust = local_checked
+                    .as_mut()
+                    .unwrap()
+                    .emit_for_mode(prefix_opt, crate::erase::EraseMode::Program)?;
+                (dest, rust.into_bytes())
+            }
+            OutputKind::Rust(dest) => {
+                if local_checked.is_none() {
+                    local_checked = Some(check_package(&root)?);
+                }
+                let rust = local_checked
+                    .as_mut()
+                    .unwrap()
+                    .emit_for_mode(prefix_opt, crate::erase::EraseMode::Standalone)?;
+                (dest, rust.into_bytes())
+            }
+        };
+        files.push(OutputFile { destination, bytes });
     }
 
     let mut pending = Vec::new();
@@ -156,12 +205,13 @@ pub fn compile<'a>(
     Ok(())
 }
 
-fn check_package(root: &Path) -> Result<crate::CheckedProgram, Error> {
-    let (checked, inputs) = compiler::check_package(root)?;
+fn check_package(root: &Path) -> Result<CheckedProgram, Error> {
+    let (interner, decls, inputs) = elaborate::elaborate_file(root)?;
     for input in inputs {
         println!("cargo:rerun-if-changed={}", input.display());
     }
-    Ok(checked)
+    let signature = check::check_program(interner, decls)?;
+    Ok(CheckedProgram { signature })
 }
 
 fn canonical_destination(path: &Path) -> Result<PathBuf, Error> {

@@ -70,13 +70,13 @@ impl Batch {
 
 // The writes of one iteration, per table of the program.
 pub(crate) struct Writes {
-    rows: Vec<Delta>,
+    rows: Vec<(TableId, Delta)>,
     // The rows Entry made, by key, so a key gets one e-class per iteration.
     entries: Vec<RowTable>,
     unions: Vec<(u32, u32)>,
     removed: Vec<Removal>,
     removed_colors: Vec<(Color, TableId, Vec<Value>)>,
-    subsumed: Vec<(usize, Vec<u32>)>,
+    subsumed: Vec<(TableId, Vec<u32>)>,
     // The color of each union, in a color run.
     colors: Vec<u32>,
     // The groups FindOrMake made, by their color and rows, so equal rows
@@ -96,13 +96,15 @@ impl Writes {
     // The rows of a color run lead with their color.
     fn new(program: &Program, colored: bool) -> Self {
         let file_tables = &program.file.tables;
+        let rows = file_tables.iter().zip(&program.tables).map(|(table, &id)| {
+            let delta = Delta {
+                columns: vec![Vec::new(); usize::from(colored) + table.columns.len()],
+                subsumed: Vec::new(),
+            };
+            (id, delta)
+        });
         Self {
-            rows: (file_tables.iter())
-                .map(|table| Delta {
-                    columns: vec![Vec::new(); usize::from(colored) + table.columns.len()],
-                    subsumed: Vec::new(),
-                })
-                .collect(),
+            rows: rows.collect(),
             entries: file_tables.iter().map(|_| RowTable::default()).collect(),
             unions: Vec::new(),
             removed: Vec::new(),
@@ -116,7 +118,7 @@ impl Writes {
 
     // A function with a default makes its default rather than a fresh id.
     fn entry(&mut self, table: (usize, &Table), key: &[u32], hash: u32, uf: &mut UnionFind) -> u32 {
-        let delta = &mut self.rows[table.0];
+        let (_, delta) = &mut self.rows[table.0];
         let entries = &mut self.entries[table.0];
         if let Some(row) = entries.get(hash, |row| same_key(&delta.columns, row, key)) {
             return delta.columns[key.len()][row as usize];
@@ -133,11 +135,7 @@ impl Writes {
     }
 
     // Searches have finished: row ids remain stable until every removal is done.
-    pub(crate) fn apply(
-        writes: Vec<Self>,
-        db: &mut Database,
-        tables: &[TableId],
-    ) -> Result<(), Error> {
+    pub(crate) fn apply(writes: Vec<Self>, db: &mut Database) -> Result<(), Error> {
         for writes in &writes {
             for removal in &writes.removed {
                 db.remove_row(removal.table, removal.row, removal.hash);
@@ -145,14 +143,14 @@ impl Writes {
         }
         let mut unions = Vec::new();
         for writes in writes {
-            for (mut delta, &table) in writes.rows.into_iter().zip(tables) {
+            for (table, mut delta) in writes.rows {
                 if !delta.subsumed.is_empty() {
                     db.apply(table, &mut delta)?;
                 }
             }
             for (table, key) in writes.subsumed {
                 let key: Vec<Value> = key.into_iter().map(Value::new).collect();
-                db.subsume(tables[table], &key);
+                db.subsume(table, &key);
             }
             for (table, _, g) in writes.keyed {
                 db.insert(table, &[Value::new(g)])?;
@@ -167,18 +165,14 @@ impl Writes {
 
     // Writes the rows and unions of a color run into their colors; a color
     // rebuild follows.
-    pub(crate) fn apply_colors(
-        writes: Vec<Self>,
-        db: &mut Database,
-        tables: &[TableId],
-    ) -> Result<(), Error> {
+    pub(crate) fn apply_colors(writes: Vec<Self>, db: &mut Database) -> Result<(), Error> {
         for writes in &writes {
             for (color, table, key) in &writes.removed_colors {
                 db.remove_in(*color, *table, key);
             }
         }
         for writes in writes {
-            for (delta, &table) in writes.rows.iter().zip(tables) {
+            for (table, delta) in writes.rows {
                 for (i, &subsumed) in delta.subsumed.iter().enumerate() {
                     let row = delta.columns.iter().map(|column| column[i]).collect();
                     db.write_in(table, row, subsumed)?;
@@ -1118,7 +1112,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 } else {
                     None
                 };
-                let delta = &mut self.writes.rows[table as usize];
+                let (_, delta) = &mut self.writes.rows[table as usize];
                 let mut columns = delta.columns.iter_mut();
                 if R::COLORED {
                     let colors = columns.next().expect("a color column");
@@ -1192,7 +1186,8 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 }
             }
             ActionRef::Subsume { table, args } => {
-                let keys = (0..n).map(|i| (table as usize, batch.row(args, i)));
+                let table = self.table_id(table);
+                let keys = (0..n).map(|i| (table, batch.row(args, i)));
                 self.writes.subsumed.extend(keys);
             }
             ActionRef::Call {
@@ -1286,7 +1281,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             }
             let g = self.ctx.uf.fresh();
             for (_, cells, t) in &spec {
-                let delta = &mut self.writes.rows[*t as usize];
+                let (_, delta) = &mut self.writes.rows[*t as usize];
                 let colored = R::COLORED.then_some(c);
                 let row = colored.into_iter().chain([g]).chain(cells.iter().copied());
                 for (column, cell) in delta.columns.iter_mut().zip(row) {

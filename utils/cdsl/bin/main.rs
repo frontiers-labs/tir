@@ -8,14 +8,8 @@ use std::{
 use tir_cdsl::{Error, compile_file, resolve_crate, resolve_program_package};
 
 enum Input {
-    Package {
-        name: String,
-        selector: Vec<String>,
-    },
-    Qualified {
-        prefix: String,
-        selector: Vec<String>,
-    },
+    Package { name: String },
+    Qualified { prefix: String },
     File(PathBuf),
 }
 
@@ -28,8 +22,11 @@ struct Options {
 enum Emit {
     Ast,
     Typed,
-    Binary,
-    Program,
+    MiniMl,
+    Egg,
+    Tegg,
+    Rust,
+    Lean,
 }
 
 fn options() -> Result<Options, Error> {
@@ -51,24 +48,27 @@ fn options() -> Result<Options, Error> {
                 file = Some(PathBuf::from(
                     args.next()
                         .ok_or_else(|| Error("--input needs a file".into()))?,
-                ))
+                ));
             }
             "--emit" => {
                 emit = Some(
                     args.next()
                         .ok_or_else(|| Error("--emit needs a format".into()))?,
-                )
+                );
             }
-            "--output" => {
+            "--output" | "--out" => {
                 output = Some(
                     args.next()
-                        .ok_or_else(|| Error("--output needs a destination".into()))?,
-                )
+                        .ok_or_else(|| Error(format!("{arg} needs a destination")))?,
+                );
             }
             value if value.starts_with("::") || value.ends_with("::*") => {
                 if selector.replace(value.to_owned()).is_some() {
                     return Err(Error("only one module selector is allowed".into()));
                 }
+            }
+            value if !value.starts_with('-') && file.is_none() => {
+                file = Some(PathBuf::from(value));
             }
             _ => return Err(Error(format!("unknown argument {arg}"))),
         }
@@ -76,30 +76,35 @@ fn options() -> Result<Options, Error> {
     let emit = match emit.as_deref() {
         Some("ast") => Emit::Ast,
         Some("typed") => Emit::Typed,
-        Some("bin") | Some("binary") => Emit::Binary,
-        Some("program") => Emit::Program,
-        _ => return Err(Error("expected --emit ast, typed, bin or program".into())),
-    };
-    let output = output.ok_or_else(|| Error("expected --output <file or ->".into()))?;
-    let input = match (package, file, selector) {
-        (Some(name), None, Some(selector)) if selector.starts_with("::") => {
-            let selector = module_selector(&selector[2..])?;
-            Input::Package { name, selector }
+        Some("miniml") => Emit::MiniMl,
+        Some("egg") => Emit::Egg,
+        Some("bin") | Some("binary") | Some("tegg") => Emit::Tegg,
+        Some("rust") | Some("program") => Emit::Rust,
+        Some("lean") => Emit::Lean,
+        _ => {
+            return Err(Error(
+                "expected --emit ast, typed, miniml, egg, tegg|bin, rust|program, or lean".into(),
+            ));
         }
-        (None, None, Some(selector)) => {
-            let (prefix, module) = selector
+    };
+    let output = output.unwrap_or_else(|| "-".into());
+    let input = match (package, file, selector) {
+        (Some(name), None, Some(sel)) if sel.starts_with("::") => Input::Package { name },
+        (Some(name), None, None) => Input::Package { name },
+        (None, None, Some(sel)) => {
+            let (prefix, _) = sel
                 .split_once("::")
                 .filter(|(prefix, _)| !prefix.is_empty())
                 .ok_or_else(|| Error("expected a package-qualified selector".into()))?;
             Input::Qualified {
                 prefix: prefix.into(),
-                selector: module_selector(module)?,
             }
         }
         (None, Some(file), None) => Input::File(file),
         _ => {
             return Err(Error(
-                "choose <package>::module::*, --crate <package> ::module::*, or --input <file.cdsl>".into(),
+                "choose <package>::module::*, --crate <package> ::module::*, or --input <file.cdsl>"
+                    .into(),
             ));
         }
     };
@@ -110,37 +115,34 @@ fn options() -> Result<Options, Error> {
     })
 }
 
-fn module_selector(input: &str) -> Result<Vec<String>, Error> {
-    if input == "*" {
-        return Ok(Vec::new());
-    }
-    let module = input
-        .strip_suffix("::*")
-        .ok_or_else(|| Error("selector must end in ::*".into()))?;
-    let selector = module.split("::").map(str::to_owned).collect::<Vec<_>>();
-    if selector.iter().any(String::is_empty) {
-        return Err(Error("invalid module selector".into()));
-    }
-    Ok(selector)
-}
-
 fn run() -> Result<(), Error> {
     let options = options()?;
-    let (program, selector) = match options.input {
-        Input::Package { name, selector } => (resolve_crate(&name)?, selector),
-        Input::Qualified { prefix, selector } => (resolve_program_package(&prefix)?, selector),
-        Input::File(file) => (compile_file(&file)?, Vec::new()),
+    let mut program = match options.input {
+        Input::Package { name } => resolve_crate(&name)?,
+        Input::Qualified { prefix } => resolve_program_package(&prefix)?,
+        Input::File(file) => compile_file(&file)?,
     };
-    let bytes = if matches!(options.emit, Emit::Program) {
-        program.lower()?.render_program(&selector)?.into_bytes()
-    } else {
-        let program = program.select(&selector)?;
-        match options.emit {
-            Emit::Ast => program.render().into_bytes(),
-            Emit::Typed => program.lower()?.render()?.into_bytes(),
-            Emit::Binary => program.lower()?.to_binary()?,
-            Emit::Program => unreachable!(),
+    let bytes = match options.emit {
+        Emit::Ast => program.render_typed().into_bytes(),
+        Emit::Typed => format!(
+            "Typechecked {} declarations cleanly (kernel OK).\n{}",
+            program.signature.decl_order.len(),
+            program.render_typed()
+        )
+        .into_bytes(),
+        Emit::MiniMl => {
+            let ml = program.erase()?;
+            format!(
+                "Erased to MiniML: {} decls, {} TEGG bytecode blobs.\n",
+                ml.decls.len(),
+                ml.bytecodes.len()
+            )
+            .into_bytes()
         }
+        Emit::Egg => program.emit_egg()?.into_bytes(),
+        Emit::Tegg => program.emit_tegg()?,
+        Emit::Rust => program.emit_rust()?.into_bytes(),
+        Emit::Lean => program.emit_lean().into_bytes(),
     };
     if options.output == "-" {
         io::stdout()

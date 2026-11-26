@@ -278,6 +278,21 @@ fn instruction_values(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<(Str
     values
 }
 
+fn imm_brand_name(rust_name: &proc_macro2::Ident, field: &str) -> String {
+    let suffix: String = field
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect();
+    format!("{rust_name}{suffix}")
+}
+
 fn operation_cdsl(
     rust_name: &proc_macro2::Ident,
     dialect: &str,
@@ -287,24 +302,26 @@ fn operation_cdsl(
     terminator: bool,
     text_only: bool,
 ) -> String {
-    let uses = values
+    let mut op_ports: Vec<String> = values
         .iter()
         .filter(|(_, def)| !def)
-        .map(|(name, _)| format!("{name}: \"backend.reg<_, _>\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let results = if values.iter().any(|(_, def)| *def) {
-        "regs: \"*backend.reg<_, _>\""
-    } else {
-        ""
-    };
+        .map(|(name, _)| format!("{name}: Option<BackendReg>"))
+        .collect();
+    op_ports.push("state: ..State".to_owned());
+    let has_defs = values.iter().any(|(_, def)| *def);
+    let mut res_ports = Vec::new();
+    if has_defs {
+        res_ports.push("results: ..BackendReg".to_owned());
+    }
+    res_ports.push("out_state: ..State".to_owned());
+
     let mut attrs = Vec::new();
     let mut assembly_attrs = Vec::new();
     let mut immediates = Vec::new();
     for (name, ty) in ctx.ops {
         match ty {
             Type::Struct(_) => {
-                assembly_attrs.push(format!("{name}: \"Register\""));
+                assembly_attrs.push(format!("{name}: Register"));
             }
             Type::Integer | Type::Bits(_) => {
                 let bits = match ty {
@@ -319,32 +336,55 @@ fn operation_cdsl(
                 let allow_fixups = fixup_operands.contains(name);
                 let align = constraint.align;
                 let nonzero = constraint.nonzero;
-                attrs.push(format!("{name}: \"Int\""));
-                assembly_attrs.push(format!("{name}: \"any\""));
+                let attr_kind = if allow_fixups || text_only {
+                    "Any"
+                } else {
+                    "Int"
+                };
+                attrs.push(format!("{name}: {attr_kind}"));
+                assembly_attrs.push(format!("{name}: Any"));
+                let imm_ty = imm_brand_name(rust_name, name);
                 immediates.push(format!(
-                    "{name}: {{ bits: {bits}, align: {align}, nonzero: {nonzero}, allow_fixups: {allow_fixups}, allow_text: {text_only} }}"
+                    "ImmSpec::Imm({name:?}, {imm_ty:?}, {bits}, {align}, {nonzero}, {allow_fixups}, {text_only})"
                 ));
             }
             Type::String => {
-                attrs.push(format!("{name}: \"Str\""));
-                assembly_attrs.push(format!("{name}: \"Str\""));
+                attrs.push(format!("{name}: String"));
+                assembly_attrs.push(format!("{name}: String"));
             }
             _ => {}
         }
     }
     let name = ctx.op_name;
-    let attrs = attrs.join(", ");
-    let assembly_attrs = assembly_attrs.join(", ");
-    let immediates = immediates.join(", ");
-    let terminator = if terminator { ", Terminator" } else { "" };
-    format!(
-        "pub let {rust_name} = {{ rust_name: \"{rust_name}\", name: {name:?}, dialect: {dialect:?}, \
-         operands: {{ {uses} }}, results: {{ {results} }}, attributes: {{ {attrs} }}, \
-         machine: true, assembly: {{ attributes: {{ {assembly_attrs} }} }}, \
-         immediates: {{ {immediates} }}, \
-         interfaces: (ResourceEffects{terminator}), \
-         state: \"in_out\", custom_format: true }};\n"
-    )
+    let rname = rust_name.to_string();
+    let let_ident = format!("op_{}", name.replace('.', "_"));
+    let mut body = format!(
+        "pub let {let_ident} = op {{\n    dialect: {dialect:?},\n    name: {name:?},\n    rust_name: {rname:?},\n    signature: ({}) -> ({}),\n",
+        op_ports.join(", "),
+        res_ports.join(", "),
+    );
+    if !attrs.is_empty() {
+        body.push_str(&format!("    attributes: {{ {} }},\n", attrs.join(", ")));
+    }
+    if !assembly_attrs.is_empty() {
+        body.push_str(&format!(
+            "    assembly: {{ {} }},\n",
+            assembly_attrs.join(", ")
+        ));
+    }
+    if !immediates.is_empty() {
+        body.push_str(&format!(
+            "    immediates: List({}),\n",
+            immediates.join(", ")
+        ));
+    }
+    if terminator {
+        body.push_str("    interfaces: (ResourceEffects, Terminator),\n");
+    } else {
+        body.push_str("    interfaces: (ResourceEffects,),\n");
+    }
+    body.push_str("    custom_format: true,\n    machine: true,\n    macro_def: true,\n};\n\n");
+    body
 }
 
 fn instruction_program_ts(
