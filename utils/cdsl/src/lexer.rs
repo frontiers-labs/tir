@@ -1,3 +1,5 @@
+//! Zero-copy Logos lexer for CDSL v3 with significant and lossless modes.
+
 use std::ops::Range;
 
 use logos::Logos;
@@ -27,9 +29,10 @@ pub enum LexMode {
     Lossless,
 }
 
-#[derive(Clone, Debug, PartialEq, Logos)]
+/// Zero-copy token referencing slices of the input source directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Logos)]
 #[logos(extras = LexMode)]
-pub enum Token {
+pub enum Token<'src> {
     #[regex(r"[\x09-\x0D\x20\x85\u200E\u200F\u2028\u2029]+", trivia)]
     Whitespace,
     #[token("//", line_comment)]
@@ -37,52 +40,45 @@ pub enum Token {
     #[token("/*", block_comment)]
     BlockComment,
     #[regex(r"(\p{XID_Start}|_)(\p{XID_Continue})*", |lex| identifier(lex.slice()))]
+    Ident(&'src str),
     #[regex(r"r#(\p{XID_Start}|_)(\p{XID_Continue})*", |lex| raw_identifier(lex.slice()))]
-    Ident(String),
-    #[regex(r"[0-9][0-9_]*", |lex| lex.slice().to_owned())]
-    Natural(String),
-    #[regex(r#""([^"\\]|\\(?s:.))*""#, |lex| decode_string(lex.slice()))]
-    String(String),
+    RawIdent(&'src str),
+    #[regex(r"[0-9][0-9_]*", |lex| lex.slice())]
+    Natural(&'src str),
+    #[regex(r#""([^"\\]|\\(?s:.))*""#, |lex| validate_string(lex.slice()))]
+    Str(&'src str),
     #[token("_", priority = 3)]
     Wildcard,
     #[token("pub")]
     Pub,
     #[token("mod")]
     Mod,
-    #[token("let")]
-    Let,
-    #[token("enum")]
-    Enum,
     #[token("use")]
     Use,
     #[token("as")]
     As,
+    #[token("type")]
+    Type,
+    #[token("enum")]
+    Enum,
+    #[token("let")]
+    Let,
+    #[token("rec")]
+    Rec,
+    #[token("match")]
+    Match,
+    #[token("memo")]
+    Memo,
+    #[token("op")]
+    Op,
+    #[token("extract")]
+    Extract,
+    #[token("Prop")]
+    Prop,
     #[token("if")]
     If,
     #[token("else")]
     Else,
-    #[token("match")]
-    Match,
-    #[token("op")]
-    Op,
-    #[token("signature")]
-    Signature,
-    #[token("attributes")]
-    Attributes,
-    #[token("exec")]
-    Exec,
-    #[token("ir")]
-    Ir,
-    #[token("yield")]
-    Yield,
-    #[token("limit")]
-    Limit,
-    #[token("decreases")]
-    Decreases,
-    #[token("memo")]
-    Memo,
-    #[token("?")]
-    Question,
     #[token("true")]
     True,
     #[token("false")]
@@ -91,18 +87,28 @@ pub enum Token {
     PathSep,
     #[token("->")]
     Arrow,
+    #[token("~>")]
+    TildeArrow,
     #[token("=>")]
     FatArrow,
+    #[token("..")]
+    DotDot,
+    #[token("++")]
+    PlusPlus,
     #[token("||")]
-    Or,
+    OrOr,
+    #[token("&&")]
+    AndAnd,
+    #[token("==")]
+    EqEq,
+    #[token("!=")]
+    NotEq,
+    #[token("<=")]
+    LessEq,
+    #[token(">=")]
+    GreaterEq,
     #[token("|")]
     Pipe,
-    #[token("&&")]
-    And,
-    #[token("==")]
-    Equal,
-    #[token("!=")]
-    NotEqual,
     #[token("+")]
     Plus,
     #[token("-")]
@@ -125,6 +131,8 @@ pub enum Token {
     Comma,
     #[token(".")]
     Dot,
+    #[token("?")]
+    Question,
     #[token("<")]
     Less,
     #[token(">")]
@@ -143,23 +151,26 @@ pub enum Token {
     RBrace,
 }
 
-fn trivia(lex: &mut logos::Lexer<'_, Token>) -> logos::Filter<()> {
+#[inline]
+fn trivia<'src>(lex: &mut logos::Lexer<'src, Token<'src>>) -> logos::Filter<()> {
     match lex.extras {
         LexMode::Significant => logos::Filter::Skip,
         LexMode::Lossless => logos::Filter::Emit(()),
     }
 }
 
-fn line_comment(lex: &mut logos::Lexer<'_, Token>) -> logos::Filter<()> {
-    let length = lex
-        .remainder()
-        .find(['\r', '\n'])
-        .unwrap_or(lex.remainder().len());
-    lex.bump(length);
+#[inline]
+fn line_comment<'src>(lex: &mut logos::Lexer<'src, Token<'src>>) -> logos::Filter<()> {
+    let bytes = lex.remainder().as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
+        i += 1;
+    }
+    lex.bump(i);
     trivia(lex)
 }
 
-fn block_comment(lex: &mut logos::Lexer<'_, Token>) -> logos::FilterResult<(), ()> {
+fn block_comment<'src>(lex: &mut logos::Lexer<'src, Token<'src>>) -> logos::FilterResult<(), ()> {
     let bytes = lex.remainder().as_bytes();
     let mut depth = 1usize;
     let mut index = 0;
@@ -187,65 +198,18 @@ fn block_comment(lex: &mut logos::Lexer<'_, Token>) -> logos::FilterResult<(), (
     logos::FilterResult::Error(())
 }
 
-impl Token {
-    /// Whether this token carries source trivia rather than grammar input.
-    pub fn is_trivia(&self) -> bool {
-        matches!(
-            self,
-            Self::Whitespace | Self::LineComment | Self::BlockComment
-        )
-    }
-}
-
-/// One source token, with UTF-8 byte coordinates rather than parser indices.
-#[derive(Clone, Debug)]
-pub struct SourceToken {
-    /// Decoded token classification. Source spelling remains in the input.
-    pub token: Token,
-    /// Exact source byte range, including all comment delimiters.
-    pub range: Range<usize>,
-}
-
-/// Lexes all source tokens, retaining trivia and reporting malformed literals/comments.
-pub fn lex_source(source: &str) -> Result<Vec<SourceToken>, Vec<LexError>> {
-    let mut tokens = Vec::new();
-    scan_source(source, LexMode::Lossless, |token, range| {
-        tokens.push(SourceToken { token, range })
-    })?;
-    Ok(tokens)
-}
-
-fn scan_source(
-    source: &str,
-    mode: LexMode,
-    mut emit: impl FnMut(Token, Range<usize>),
-) -> Result<(), Vec<LexError>> {
-    let mut errors = Vec::new();
-    for (token, range) in Token::lexer_with_extras(source, mode).spanned() {
-        match token {
-            Ok(token) => emit(token, range),
-            Err(()) => errors.push(LexError {
-                message: if source[range.clone()].starts_with("/*") {
-                    "unterminated block comment".into()
-                } else {
-                    "invalid CDSL token or literal".into()
-                },
-                span: Span::Source(range),
-            }),
-        }
-    }
-    if errors.is_empty() {
-        Ok(())
+#[inline]
+fn identifier(text: &str) -> Option<&str> {
+    // Fast path for pure ASCII identifiers.
+    if text.is_ascii() || !text.contains(['\u{200c}', '\u{200d}']) {
+        Some(text)
     } else {
-        Err(errors)
+        None
     }
 }
 
-fn identifier(text: &str) -> Option<String> {
-    (!text.contains(['\u{200c}', '\u{200d}'])).then(|| text.to_owned())
-}
-
-fn raw_identifier(text: &str) -> Option<String> {
+#[inline]
+fn raw_identifier(text: &str) -> Option<&str> {
     let name = &text[2..];
     if matches!(name, "_" | "crate" | "self" | "super" | "Self") {
         None
@@ -254,64 +218,72 @@ fn raw_identifier(text: &str) -> Option<String> {
     }
 }
 
-fn decode_string(text: &str) -> Option<String> {
-    let mut chars = text
-        .strip_prefix('"')?
-        .strip_suffix('"')?
-        .chars()
-        .peekable();
-    let mut result = String::new();
+#[inline]
+fn validate_string(text: &str) -> Option<&str> {
+    let inner = text.strip_prefix('"')?.strip_suffix('"')?;
+    // Fast path: no escapes and no bare CR.
+    let bytes = inner.as_bytes();
+    if !bytes.contains(&b'\\') && !bytes.contains(&b'\r') {
+        return Some(inner);
+    }
+    validate_string_slow(inner).then_some(inner)
+}
+
+fn validate_string_slow(inner: &str) -> bool {
+    let mut chars = inner.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '\\' {
-            if ch == '\r' {
-                if chars.next()? != '\n' {
-                    return None;
-                }
-                result.push('\n');
-                continue;
+            if ch == '\r' && chars.next() != Some('\n') {
+                return false;
             }
-            result.push(ch);
             continue;
         }
-        match chars.next()? {
-            'n' => result.push('\n'),
-            'r' => result.push('\r'),
-            't' => result.push('\t'),
-            '0' => result.push('\0'),
-            '\\' => result.push('\\'),
-            '\'' => result.push('\''),
-            '"' => result.push('"'),
+        let Some(esc) = chars.next() else {
+            return false;
+        };
+        match esc {
+            'n' | 'r' | 't' | '0' | '\\' | '\'' | '"' => {}
             'x' => {
-                let high = chars.next()?.to_digit(16)?;
-                let low = chars.next()?.to_digit(16)?;
-                let value = high * 16 + low;
-                if value > 0x7f {
-                    return None;
+                let (Some(hi), Some(lo)) = (chars.next(), chars.next()) else {
+                    return false;
+                };
+                let (Some(h), Some(l)) = (hi.to_digit(16), lo.to_digit(16)) else {
+                    return false;
+                };
+                if h * 16 + l > 0x7f {
+                    return false;
                 }
-                result.push(char::from_u32(value)?);
             }
             'u' => {
-                if chars.next()? != '{' {
-                    return None;
+                if chars.next() != Some('{') {
+                    return false;
                 }
                 let mut digits = 0;
-                let mut value = 0;
+                let mut value = 0u32;
                 loop {
-                    match chars.next()? {
+                    let Some(c) = chars.next() else {
+                        return false;
+                    };
+                    match c {
                         '}' if digits > 0 => break,
                         '_' if digits > 0 => {}
                         digit if digits < 6 => {
-                            value = value * 16 + digit.to_digit(16)?;
+                            let Some(d) = digit.to_digit(16) else {
+                                return false;
+                            };
+                            value = value * 16 + d;
                             digits += 1;
                         }
-                        _ => return None,
+                        _ => return false,
                     }
                 }
-                result.push(char::from_u32(value)?);
+                if char::from_u32(value).is_none() {
+                    return false;
+                }
             }
             '\r' => {
-                if chars.next()? != '\n' {
-                    return None;
+                if chars.next() != Some('\n') {
+                    return false;
                 }
                 while chars
                     .peek()
@@ -328,122 +300,256 @@ fn decode_string(text: &str) -> Option<String> {
                     chars.next();
                 }
             }
-            _ => return None,
+            _ => return false,
         }
     }
-    Some(result)
+    true
 }
 
-#[derive(Clone, Debug)]
-pub struct TokenStream {
-    pub tokens: Vec<Token>,
-    pub spans: Vec<Span>,
-    pub end: Span,
-}
-
-impl TokenStream {
-    pub fn from_source(source: &str) -> Result<Self, Vec<LexError>> {
-        let mut stream = Self {
-            tokens: Vec::new(),
-            spans: Vec::new(),
-            end: Span::Source(source.len()..source.len()),
-        };
-        scan_source(source, LexMode::Significant, |token, range| {
-            stream.tokens.push(token);
-            stream.spans.push(Span::Source(range));
-        })?;
-        Ok(stream)
+/// Decodes a validated string literal's inner slice (without surrounding quotes).
+pub fn decode_string_inner(inner: &str) -> std::borrow::Cow<'_, str> {
+    if !inner.as_bytes().contains(&b'\\') && !inner.as_bytes().contains(&b'\r') {
+        return std::borrow::Cow::Borrowed(inner);
     }
+    let mut chars = inner.chars().peekable();
+    let mut result = String::with_capacity(inner.len());
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            if ch == '\r' {
+                let _ = chars.next();
+                result.push('\n');
+            } else {
+                result.push(ch);
+            }
+            continue;
+        }
+        match chars.next().unwrap_or('\\') {
+            'n' => result.push('\n'),
+            'r' => result.push('\r'),
+            't' => result.push('\t'),
+            '0' => result.push('\0'),
+            '\\' => result.push('\\'),
+            '\'' => result.push('\''),
+            '"' => result.push('"'),
+            'x' => {
+                let h = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+                let l = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+                if let Some(c) = char::from_u32(h * 16 + l) {
+                    result.push(c);
+                }
+            }
+            'u' => {
+                let _ = chars.next(); // '{'
+                let mut value = 0u32;
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                    if c != '_'
+                        && let Some(d) = c.to_digit(16)
+                    {
+                        value = value * 16 + d;
+                    }
+                }
+                if let Some(c) = char::from_u32(value) {
+                    result.push(c);
+                }
+            }
+            '\r' => {
+                let _ = chars.next();
+                while chars
+                    .peek()
+                    .is_some_and(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r'))
+                {
+                    chars.next();
+                }
+            }
+            '\n' => {
+                while chars
+                    .peek()
+                    .is_some_and(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r'))
+                {
+                    chars.next();
+                }
+            }
+            other => result.push(other),
+        }
+    }
+    std::borrow::Cow::Owned(result)
+}
 
-    pub fn from_proc_macro(input: proc_macro::TokenStream) -> Result<Self, Vec<LexError>> {
-        let mut stream = Self {
-            tokens: Vec::new(),
-            spans: Vec::new(),
-            end: Span::Macro {
-                start: proc_macro::Span::call_site(),
-                end: proc_macro::Span::call_site(),
-            },
-        };
+/// Decodes a natural literal slice (stripping `_` separators).
+pub fn parse_natural(raw: &str) -> Result<i64, String> {
+    if !raw.as_bytes().contains(&b'_') {
+        raw.parse::<i64>()
+            .map_err(|_| format!("integer literal out of range: {raw}"))
+    } else {
+        let mut acc: i64 = 0;
+        for b in raw.bytes() {
+            if b == b'_' {
+                continue;
+            }
+            acc = acc
+                .checked_mul(10)
+                .and_then(|v| v.checked_add(i64::from(b - b'0')))
+                .ok_or_else(|| format!("integer literal out of range: {raw}"))?;
+        }
+        Ok(acc)
+    }
+}
+
+impl Token<'_> {
+    /// Whether this token carries source trivia rather than grammar input.
+    #[inline]
+    pub fn is_trivia(&self) -> bool {
+        matches!(
+            self,
+            Self::Whitespace | Self::LineComment | Self::BlockComment
+        )
+    }
+}
+
+/// One source token, with UTF-8 byte coordinates rather than parser indices.
+#[derive(Clone, Copy, Debug)]
+pub struct SourceToken<'src> {
+    /// Zero-copy token classification.
+    pub token: Token<'src>,
+    /// Exact source byte start.
+    pub start: usize,
+    /// Exact source byte end.
+    pub end: usize,
+}
+
+impl SourceToken<'_> {
+    #[inline]
+    pub fn range(&self) -> Range<usize> {
+        self.start..self.end
+    }
+}
+
+/// Lexes all source tokens, retaining trivia and reporting malformed literals/comments.
+pub fn lex_source(source: &str) -> Result<Vec<SourceToken<'_>>, Vec<LexError>> {
+    let mut tokens = Vec::with_capacity(source.len() / 4 + 8);
+    let mut errors = Vec::new();
+    let mut lexer = Token::lexer_with_extras(source, LexMode::Lossless);
+    while let Some(res) = lexer.next() {
+        let range = lexer.span();
+        match res {
+            Ok(token) => tokens.push(SourceToken {
+                token,
+                start: range.start,
+                end: range.end,
+            }),
+            Err(()) => errors.push(LexError {
+                message: if source[range.clone()].starts_with("/*") {
+                    "unterminated block comment".into()
+                } else {
+                    "invalid CDSL token or literal".into()
+                },
+                span: Span::Source(range),
+            }),
+        }
+    }
+    if errors.is_empty() {
+        Ok(tokens)
+    } else {
+        Err(errors)
+    }
+}
+
+/// Compact token stream referencing the original source string without copying.
+#[derive(Clone, Debug)]
+pub struct TokenStream<'src> {
+    pub tokens: Vec<Token<'src>>,
+    pub spans: Vec<(u32, u32)>,
+    pub end: u32,
+}
+
+impl<'src> TokenStream<'src> {
+    /// Fast zero-copy scan skipping trivia.
+    pub fn from_source(source: &'src str) -> Result<Self, Vec<LexError>> {
+        let cap = source.len() / 5 + 8;
+        let mut tokens = Vec::with_capacity(cap);
+        let mut spans = Vec::with_capacity(cap);
         let mut errors = Vec::new();
-        stream.extend_macro(input, &mut errors);
+        let mut lexer = Token::lexer_with_extras(source, LexMode::Significant);
+        while let Some(res) = lexer.next() {
+            let range = lexer.span();
+            match res {
+                Ok(token) => {
+                    tokens.push(token);
+                    spans.push((range.start as u32, range.end as u32));
+                }
+                Err(()) => errors.push(LexError {
+                    message: if source[range.clone()].starts_with("/*") {
+                        "unterminated block comment".into()
+                    } else {
+                        "invalid CDSL token or literal".into()
+                    },
+                    span: Span::Source(range),
+                }),
+            }
+        }
         if errors.is_empty() {
-            Ok(stream)
+            Ok(Self {
+                tokens,
+                spans,
+                end: source.len() as u32,
+            })
         } else {
             Err(errors)
         }
     }
 
-    fn push_macro(&mut self, token: Token, start: proc_macro::Span, end: proc_macro::Span) {
-        self.tokens.push(token);
-        self.spans.push(Span::Macro { start, end });
-        self.end = Span::Macro { start: end, end };
+    #[inline]
+    pub fn span_at(&self, index: usize) -> Range<usize> {
+        self.spans
+            .get(index)
+            .map_or(self.end as usize..self.end as usize, |&(s, e)| {
+                s as usize..e as usize
+            })
     }
+}
 
-    fn extend_macro(&mut self, input: proc_macro::TokenStream, errors: &mut Vec<LexError>) {
-        use proc_macro::{Delimiter, Spacing, TokenTree};
-        let mut trees = input.into_iter().peekable();
-        while let Some(tree) = trees.next() {
-            match tree {
-                TokenTree::Group(group) => {
-                    let delimiters = match group.delimiter() {
-                        Delimiter::Parenthesis => Some((Token::LParen, Token::RParen)),
-                        Delimiter::Bracket => Some((Token::LBracket, Token::RBracket)),
-                        Delimiter::Brace => Some((Token::LBrace, Token::RBrace)),
-                        Delimiter::None => None,
-                    };
-                    if let Some((open, _)) = &delimiters {
-                        self.push_macro(open.clone(), group.span_open(), group.span_open());
-                    }
-                    self.extend_macro(group.stream(), errors);
-                    if let Some((_, close)) = delimiters {
-                        self.push_macro(close, group.span_close(), group.span_close());
-                    }
-                }
-                TokenTree::Punct(punct) => {
-                    let mut spelling = punct.as_char().to_string();
-                    let mut end = punct.span();
-                    if punct.spacing() == Spacing::Joint
-                        && let Some(TokenTree::Punct(next)) = trees.peek()
-                    {
-                        let pair = format!("{}{}", punct.as_char(), next.as_char());
-                        if matches!(
-                            pair.as_str(),
-                            "::" | "->" | "=>" | "||" | "&&" | "==" | "!="
-                        ) {
-                            spelling = pair;
-                            end = next.span();
-                            trees.next();
-                        }
-                    }
-                    self.macro_token(&spelling, punct.span(), end, errors);
-                }
-                TokenTree::Ident(ident) => {
-                    self.macro_token(&ident.to_string(), ident.span(), ident.span(), errors)
-                }
-                TokenTree::Literal(literal) => {
-                    self.macro_token(&literal.to_string(), literal.span(), literal.span(), errors)
+/// Converts a `proc_macro::TokenStream` into normalized CDSL source text so the
+/// proc-macro entry point shares the exact same zero-copy lexer and parser.
+pub fn source_from_proc_macro(input: proc_macro::TokenStream) -> String {
+    let mut out = String::new();
+    append_macro_tokens(input, &mut out);
+    out
+}
+
+fn append_macro_tokens(input: proc_macro::TokenStream, out: &mut String) {
+    use proc_macro::{Delimiter, Spacing, TokenTree};
+    let mut trees = input.into_iter().peekable();
+    for tree in trees.by_ref() {
+        match tree {
+            TokenTree::Group(group) => {
+                let (open, close) = match group.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::None => ("", ""),
+                };
+                out.push_str(open);
+                append_macro_tokens(group.stream(), out);
+                out.push_str(close);
+                out.push(' ');
+            }
+            TokenTree::Punct(punct) => {
+                out.push(punct.as_char());
+                if punct.spacing() == Spacing::Alone {
+                    out.push(' ');
                 }
             }
-        }
-    }
-
-    fn macro_token(
-        &mut self,
-        spelling: &str,
-        start: proc_macro::Span,
-        end: proc_macro::Span,
-        errors: &mut Vec<LexError>,
-    ) {
-        match Self::from_source(spelling) {
-            Ok(mut stream) if stream.tokens.len() == 1 => {
-                if let Some(token) = stream.tokens.pop() {
-                    self.push_macro(token, start, end);
-                }
+            TokenTree::Ident(ident) => {
+                out.push_str(&ident.to_string());
+                out.push(' ');
             }
-            _ => errors.push(LexError {
-                span: Span::Macro { start, end },
-                message: format!("invalid CDSL token: {spelling}"),
-            }),
+            TokenTree::Literal(literal) => {
+                out.push_str(&literal.to_string());
+                out.push(' ');
+            }
         }
     }
 }

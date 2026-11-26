@@ -1,0 +1,40 @@
+// Standard TIR operation interfaces.
+//
+// Declared cleanly as CDSL types — Rust trait definitions are emitted directly
+// by the compiler's Rust printer (zero string-template `txt(...)` blobs!).
+
+pub enum Visibility {
+    Public,
+    Private,
+}
+
+pub type Additive;
+pub type Apply;
+pub type BranchGuard;
+pub type BranchTerminator;
+pub type Callable;
+pub type CaseGuard;
+pub type Commutative;
+pub type Congruent;
+pub type ConstantLike;
+pub type CountedLoop;
+pub type ExitScope;
+pub type Gamma;
+pub type Global;
+pub type IntegerArithmetic;
+pub type MemoryRead;
+pub type MemoryWrite;
+pub type NonLocalExit;
+pub type OpCost;
+pub type PromotableAllocation;
+pub type PureInterface;
+pub type RegionBinding;
+pub type ResourceEffects;
+pub type SameOperandAndResultType;
+pub type Speculatable;
+pub type Subtractive;
+pub type Symbol;
+pub type Terminator;
+pub type Theta;
+
+extract rust Additive => "@tir_interfaces";

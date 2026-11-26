@@ -2047,8 +2047,14 @@ dependencies = [
  "serde",
  "serde_json",
  "tir-bench",
+ "tir-cdsl-core",
  "tir-cst",
+ "tir-egglog",
 ]
+
+[[package]]
+name = "tir-cdsl-core"
+version = "0.1.0"
 
 [[package]]
 name = "tir-cli"

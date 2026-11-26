@@ -8,6 +8,7 @@ chumsky.workspace = true
 logos.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tir-cdsl-core.workspace = true
 tir-cst.workspace = true
 
 [lints]
@@ -24,6 +25,7 @@ path = "bin/main.rs"
 [dev-dependencies]
 criterion.workspace = true
 tir-bench.workspace = true
+tir-egglog.workspace = true
 
 [[bench]]
 name = "baseline"

@@ -1,7 +1,0 @@
-pub enum Merge<V: Type> {
-    Union,
-    Unique,
-    With((V, V) -> V),
-}
-
-pub let Table<K: Type, V: Type, m: Merge<V>>: Type;
