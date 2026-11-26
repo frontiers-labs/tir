@@ -1,18 +1,19 @@
-use std::Bits;
-use std::El;
+use std::core::*;
+use std::ir::Bits;
 use std::bits;
 
 pub let keep_left = op {
-    signature: (lhs: El<Bits<8>>, rhs: El<Bits<8>>) -> El<Bits<8>>,
-    exec: |lhs: El<Bits<8>>, rhs: El<Bits<8>>| -> El<Bits<8>> { lhs },
+    signature: (lhs: Bits<8>, rhs: Bits<8>) -> (result: Bits<8>),
+    exec: |lhs, rhs| lhs,
 };
 
 pub let deferred_add = op {
-    signature: (lhs: El<Bits<8>>, rhs: El<Bits<8>>) -> El<Bits<8>>,
-    exec: |lhs: El<Bits<8>>, rhs: El<Bits<8>>| -> El<Bits<8>> { bits::add_wrapping(lhs, rhs) },
+    signature: (lhs: Bits<8>, rhs: Bits<8>) -> (result: Bits<8>),
+    exec: |lhs, rhs| bits::add_wrapping(lhs, rhs),
 };
 
 pub let deferred_xor = op {
-    signature: (lhs: El<Bits<8>>, rhs: El<Bits<8>>) -> El<Bits<8>>,
-    exec: |lhs: El<Bits<8>>, rhs: El<Bits<8>>| -> El<Bits<8>> { bits::xor(lhs, rhs) },
+    rust_name: "DeferredXOrOp",
+    signature: (lhs: Bits<8>, rhs: Bits<8>) -> (result: Bits<8>),
+    exec: |lhs, rhs| bits::xor(lhs, rhs),
 };

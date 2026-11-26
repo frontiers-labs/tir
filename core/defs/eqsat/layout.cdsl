@@ -1,76 +1,92 @@
-use std::bigint::BigInt;
-use std::list::List::Cons as cons;
-use std::list::List::Nil as nil;
+// Data-layout queries and pointer-address equivalence rules.
+// (`ptr::ptradd(p, constant(0)) -> p` lives in `rewrites.cdsl` as a 1-line `Rewrite`.)
 
-pub let EqSatLayoutKind: std::ir::OperationKind -> Prop;
-pub let EqSatLayoutQuery: (std::ir::OperationId, std::ir::OperationKind) -> Prop;
-pub let EqSatLayoutValue: (std::ir::OperationId, BigInt) -> Prop;
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use dialects::layout;
+use dialects::ptr;
 
-pub let layout_queries: std::List<Prop> = {
-    let size: EqSatLayoutKind(dialects::layout::sizeof.kind);
-    let alignment: EqSatLayoutKind(dialects::layout::alignof.kind);
-    let offset: EqSatLayoutKind(dialects::layout::offsetof.kind);
-    let pointer: EqSatLayoutKind(dialects::ptr::ptradd.kind);
-    let write: EqSatLayoutKind(dialects::ptr::store.kind);
-    let read: EqSatLayoutKind(dialects::ptr::load.kind);
-    let query<node, kind, place, home, pos, display, loc>:
-        (EqSatLive(node), EqSatLayoutKind(kind), ir::Operation{ id: node, kind: kind, placement: place, container: home, position: pos, display: display, location: loc }())
-        -> EqSatLayoutQuery(node, kind);
-    cons(size, cons(alignment, cons(offset, cons(pointer, cons(write, cons(read, cons(query,
-        nil)))))))
+pub let layout_queries: List<Rule> = {
+    let size:      Rule(() -> EqSatLayoutKind(layout::sizeof.kind));
+    let alignment: Rule(() -> EqSatLayoutKind(layout::alignof.kind));
+    let offset:    Rule(() -> EqSatLayoutKind(layout::offsetof.kind));
+    let pointer:   Rule(() -> EqSatLayoutKind(ptr::ptradd.kind));
+    let write:     Rule(() -> EqSatLayoutKind(ptr::store.kind));
+    let read:      Rule(() -> EqSatLayoutKind(ptr::load.kind));
+    let query<node, kind, place, home, pos, display, loc>: Rule(
+        (
+            EqSatLive(node),
+            EqSatLayoutKind(kind),
+            Operation(node, kind, place, home, pos, display, loc),
+        ) -> EqSatLayoutQuery(node, kind)
+    );
+    List(size, alignment, offset, pointer, write, read, query)
 };
 
-pub let layout_values: std::List<Prop> = {
-    let fold<node, value, result, ty, declared, mask, bits>:
-        (EqSatLayoutValue(node, value), ir::result(result, ty, node, 0, declared),
-         EqSatAllBits(ty, mask), bits == std::bigint::bit_and(value, mask))
-        -> (EqSatFolded(result, bits), EqSatConstant(node, result, bits));
-    cons(fold, nil)
+pub let layout_values: List<Rule> = {
+    let fold<node, value, result, ty, declared, mask, bits>: Rule(
+        (
+            EqSatLayoutValue(node, value),
+            Value(result, ty, "result", node, 0, declared),
+            EqSatAllBits(ty, mask),
+            bits == bit_and(value, mask),
+        ) -> (EqSatFolded(result, bits), EqSatConstant(node, result, bits))
+    );
+    List(fold)
 };
 
-pub let EqSatLayoutScoped: std::ir::OperationId -> Prop;
-pub let layout_pointer: std::List<Prop> = {
-    let identity<node, place, home, pos, display, loc, ptr, offset, result, ty, pk, po, ps, pd, rd>:
-        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::ptradd.kind, placement: place, container: home, position: pos, display: display, location: loc }(),
-         EqSatLayoutScoped(node), ir::Operand(node, 0, ptr), ir::Operand(node, 1, offset),
-         EqSatFolded(offset, std::bigint::bigint(0)),
-         ir::Value(ptr, ty, pk, po, ps, pd), ir::result(result, ty, node, 0, rd))
-        -> (EqSatReplace(node, result, ptr), EqSatErase(node));
-    cons(identity, nil)
+pub let address_keys: List<Rule> = {
+    let step<node, place, home, p, d, l, base, disp, address, ty, decl, index, kind, owner, slot, id, width, offset, mask>: Rule(
+        (
+            EqSatLive(node),
+            Operation(node, ptr::ptradd.kind, place, home, p, d, l),
+            EqSatLayoutScoped(node),
+            EqSatPointerSize(node, width),
+            Operand(node, 0, base),
+            Operand(node, 1, disp),
+            Value(address, ty, "result", node, 0, decl),
+            Value(disp, index, kind, owner, slot, id),
+            EqSatFolded(disp, offset),
+            EqSatAllBits(index, mask),
+            big_le(big_add(offset, offset), mask) == true,
+            !EqSatHasAttr(node, "inbounds"),
+            !EqSatHasAttr(node, "nuw"),
+            !EqSatHasAttr(node, "nsw"),
+        ) -> EqSatOffsetStep(address, base, ty, index, width, offset, mask)
+    );
+    let direct<address, base, ty, index, width, offset, mask>: Rule(
+        EqSatOffsetStep(address, base, ty, index, width, offset, mask)
+        -> EqSatAddress(address, base, ty, index, width, offset)
+    );
+    let add<address, parent, base, ty, index, width, offset, prior, total, mask>: Rule(
+        (
+            EqSatOffsetStep(address, parent, ty, index, width, offset, mask),
+            EqSatAddress(parent, base, ty, index, width, prior),
+            total == big_add(offset, prior),
+            big_le(big_add(total, total), mask) == true,
+        ) -> EqSatAddress(address, base, ty, index, width, total)
+    );
+    let twins<a, b, base, ty, index, width, offset>: Rule(
+        (
+            EqSatAddress(a, base, ty, index, width, offset),
+            EqSatAddress(b, base, ty, index, width, offset),
+        ) -> EqSatAddressEquals(a, b)
+    );
+    let same_cell<a, b, state, ty, data>: Rule(
+        (EqSatAddressEquals(a, b), EqSatStored(state, a, ty, data))
+        -> EqSatStored(state, b, ty, data)
+    );
+    let root<base>: Rule(
+        EqSatAllocation(base) -> EqSatLocalAddress(base, base, bigint(0))
+    );
+    let local<address, base, ty, index, width, offset>: Rule(
+        (EqSatAddress(address, base, ty, index, width, offset), EqSatAllocation(base))
+        -> EqSatLocalAddress(address, base, offset)
+    );
+    List(step, direct, add, twins, same_cell, root, local)
 };
 
-pub let EqSatOffsetStep: (std::ir::ValueId, std::ir::ValueId, Int, Int, Int, BigInt, BigInt) -> Prop;
-pub let EqSatAddress: (std::ir::ValueId, std::ir::ValueId, Int, Int, Int, BigInt) -> Prop;
-pub let EqSatAddressEquals: (std::ir::ValueId, std::ir::ValueId) -> Prop;
-pub let EqSatLocalAddress: (std::ir::ValueId, std::ir::ValueId, BigInt) -> Prop;
-pub let address_keys: std::List<Prop> = {
-    let step<node,place,home,p,d,l,base,disp,address,ty,decl,index,kind,owner,slot,id,
-                 width,offset,mask>:
-        (EqSatLive(node), ir::Operation{ id: node, kind: dialects::ptr::ptradd.kind, placement: place, container: home, position: p, display: d, location: l }(),
-         EqSatLayoutScoped(node), EqSatPointerSize(node,width),
-         ir::Operand(node,0,base), ir::Operand(node,1,disp), ir::result(address, ty, node,0,decl),
-         ir::Value(disp,index,kind,owner,slot,id), EqSatFolded(disp,offset), EqSatAllBits(index,mask),
-         std::bigint::le((offset + offset),mask) == true,
-         !EqSatHasAttr(node,"inbounds"), !EqSatHasAttr(node,"nuw"), !EqSatHasAttr(node,"nsw"))
-        -> EqSatOffsetStep(address,base,ty,index,width,offset,mask);
-    let direct<address,base,ty,index,width,offset,mask>:
-        EqSatOffsetStep(address,base,ty,index,width,offset,mask)
-        -> EqSatAddress(address,base,ty,index,width,offset);
-    let add<address,parent,base,ty,index,width,offset,prior,total,mask>:
-        (EqSatOffsetStep(address,parent,ty,index,width,offset,mask),
-         EqSatAddress(parent,base,ty,index,width,prior), total == (offset + prior),
-         std::bigint::le((total + total),mask) == true)
-        -> EqSatAddress(address,base,ty,index,width,total);
-
-    let twins<a,b,base,ty,index,width,offset>:
-        (EqSatAddress(a,base,ty,index,width,offset), EqSatAddress(b,base,ty,index,width,offset))
-        -> EqSatAddressEquals(a,b);
-    let same_cell<a,b,state,ty,data>:
-        (EqSatAddressEquals(a,b), EqSatStored(state,a,ty,data))
-        -> EqSatStored(state,b,ty,data);
-    let root<base>: EqSatAllocation(base) -> EqSatLocalAddress(base,base,std::bigint::bigint(0));
-    let local<address,base,ty,index,width,offset>:
-        (EqSatAddress(address,base,ty,index,width,offset), EqSatAllocation(base))
-        -> EqSatLocalAddress(address,base,offset);
-    cons(step, cons(direct, cons(add, cons(twins, cons(same_cell, cons(root, cons(local, nil)))))))
-};
+extract rust layout_queries => "@ct";
+extract rust layout_values  => "@ct";
+extract rust address_keys   => "@ct";

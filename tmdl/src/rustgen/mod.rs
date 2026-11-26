@@ -200,7 +200,8 @@ fn render_operation_cdsl(
     if source.is_empty() {
         return Ok(proc_macro2::TokenStream::new());
     }
-    source.insert_str(0, "use std::ir::interfaces::*;\n\n");
+    let body = std::mem::take(source);
+    *source = format!("use std::core::*;\nuse std::ir::{{BackendReg, Register, State}};\n\n{body}");
     let rust = writer(source, dialect).map_err(|error| TMDLError::Codegen(error.to_string()))?;
     rust.parse()
         .map_err(|error: proc_macro2::LexError| TMDLError::Codegen(error.to_string()))

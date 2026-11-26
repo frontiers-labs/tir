@@ -19,7 +19,6 @@ fn main() -> Result<(), Error> {
         ("core::dialects::type_def::*", OpDef("type_def_ops.rs")),
         ("core::dialects::vector::*", OpDef("vector_ops.rs")),
         ("core::eqsat::*", Program("eqsat.rs")),
-        ("core::eqsat::masks::*", Program("eqsat_masks.rs")),
         ("core::analysis::*", Program("analyses.rs")),
         ("core::passes::restructure::*", Program("restructure.rs")),
     ])

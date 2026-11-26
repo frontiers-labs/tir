@@ -1,69 +1,70 @@
-use std::ir::interfaces::*;
+use std::core::*;
+use std::ir::BackendReg;
 
 pub mod dialects;
 pub mod eqsat;
 
-pub let def_reg = {
-    rust_name: "DefOp",
+pub let def_reg = op {
+    dialect: "dep",
     name: "def",
-    dialect: "dep",
-    results: { regs: "*backend.reg<_, _>" },
-    state: "none",
+    rust_name: "DefOp",
+    signature: () -> (regs: ..BackendReg),
+    macro_def: true,
 };
 
-pub let update_param = {
+pub let update_param = op {
+    dialect: "dep",
     rust_name: "UpdateParamOp",
-    name: "update_param",
-    dialect: "dep",
-    operands: { rs: "?backend.reg<_, _>" },
-    results: { regs: "*backend.reg<_, _>" },
-    state: "none",
+    signature: (rs: Option<BackendReg>) -> (regs: ..BackendReg),
+    macro_def: true,
 };
 
-pub let set_flags = {
+pub let set_flags = op {
+    dialect: "dep",
     rust_name: "SetFlagsOp",
-    name: "set_flags",
-    dialect: "dep",
-    operands: { rs: "?backend.reg<_, _>" },
-    results: { regs: "*backend.reg<_, _>" },
-    state: "none",
+    signature: (rs: Option<BackendReg>) -> (regs: ..BackendReg),
+    macro_def: true,
 };
 
-pub let read_flags = {
+pub let read_flags = op {
+    dialect: "dep",
     rust_name: "ReadFlagsOp",
-    name: "read_flags",
-    dialect: "dep",
-    operands: { rs: "?backend.reg<_, _>" },
-    results: { regs: "*backend.reg<_, _>" },
-    state: "none",
+    signature: (rs: Option<BackendReg>) -> (regs: ..BackendReg),
+    macro_def: true,
 };
 
-pub let add = {
+pub let add = op {
+    dialect: "test",
     rust_name: "AddTestOp",
-    name: "add",
-    dialect: "test",
-    operands: { rs: "backend.reg<_, _>" },
-    results: { rd: "backend.reg<_, _>" },
-    state: "none",
+    signature: (rs: BackendReg) -> (rd: BackendReg),
+    macro_def: true,
 };
 
-pub let exit = {
+pub let exit = op {
+    dialect: "test",
     rust_name: "ExitOp",
-    name: "exit",
-    dialect: "test",
-    operands: { values: "*_" },
+    signature: (values: ..Any) -> (),
     interfaces: (Terminator, NonLocalExit),
-    state: "none",
+    macro_def: true,
 };
 
-pub let beq = {
-    rust_name: "BeqDecodeOp", name: "beq", dialect: "test", state: "none",
+pub let beq = op {
+    dialect: "test",
+    rust_name: "BeqDecodeOp",
+    signature: () -> (),
+    macro_def: true,
 };
 
-pub let cmv = {
-    rust_name: "CmvDecodeOp", name: "cmv", dialect: "test", state: "none",
+pub let cmv = op {
+    dialect: "test",
+    rust_name: "CmvDecodeOp",
+    signature: () -> (),
+    macro_def: true,
 };
 
-pub let narrow = {
-    rust_name: "NarrowDecodeOp", name: "narrow", dialect: "test", state: "none",
+pub let narrow = op {
+    dialect: "test",
+    rust_name: "NarrowDecodeOp",
+    signature: () -> (),
+    macro_def: true,
 };

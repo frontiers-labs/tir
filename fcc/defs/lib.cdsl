@@ -1,99 +1,75 @@
-use std::ir::interfaces::*;
+use std::core::*;
+use std::ir::{Bits, Cfg, VaList};
 
-pub let va_start = {
-    rust_name: "VaStartOp",
-    name: "va_start",
+pub let va_start = op {
     dialect: "cir",
-    results: { result: "cir.va_list" },
-    state: "none",
+    signature: () -> (result: VaList),
+    macro_def: true,
 };
 
-pub let va_arg = {
-    rust_name: "VaArgOp",
-    name: "va_arg",
+pub let va_arg = op {
     dialect: "cir",
-    operands: { list: "cir.va_list" },
-    results: { result: "_" },
-    state: "none",
+    signature: (list: VaList) -> (result: Any),
+    macro_def: true,
 };
 
-pub let va_end = {
-    rust_name: "VaEndOp",
-    name: "va_end",
+pub let va_end = op {
     dialect: "cir",
-    operands: { list: "cir.va_list" },
-    state: "none",
+    signature: (list: VaList) -> (),
+    macro_def: true,
 };
 
-pub let r#for = {
-    rust_name: "ForOp",
-    name: "for",
+pub let r#for = op {
     dialect: "cir",
-    regions: {
-        condition_region: { kind: "Blocks", variadic: false },
-        step_region: { kind: "Blocks", variadic: false },
-        body_region: { kind: "Blocks", variadic: false },
-    },
-    interfaces: ExitScope,
+    signature: () -> (),
+    regions: (condition_region: Cfg, step_region: Cfg, body_region: Cfg),
+    interfaces: (ExitScope,),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };
 
-pub let r#while = {
-    rust_name: "WhileOp",
-    name: "while",
+pub let r#while = op {
     dialect: "cir",
-    regions: {
-        condition_region: { kind: "Blocks", variadic: false },
-        body_region: { kind: "Blocks", variadic: false },
-    },
-    interfaces: ExitScope,
+    signature: () -> (),
+    regions: (condition_region: Cfg, body_region: Cfg),
+    interfaces: (ExitScope,),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };
 
-pub let r#do = {
-    rust_name: "DoOp",
-    name: "do",
+pub let r#do = op {
     dialect: "cir",
-    regions: {
-        body_region: { kind: "Blocks", variadic: false },
-        condition_region: { kind: "Blocks", variadic: false },
-    },
-    interfaces: ExitScope,
+    signature: () -> (),
+    regions: (body_region: Cfg, condition_region: Cfg),
+    interfaces: (ExitScope,),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };
 
-pub let condition = {
-    rust_name: "ConditionOp",
-    name: "condition",
+pub let condition = op {
     dialect: "cir",
-    operands: { condition: "int<1>" },
-    interfaces: Terminator,
-    state: "none",
+    signature: (condition: Bits<1>) -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
 };
 
-pub let r#yield = {
-    rust_name: "YieldOp",
-    name: "yield",
+pub let r#yield = op {
     dialect: "cir",
-    interfaces: Terminator,
-    state: "none",
+    signature: () -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
 };
 
-pub let r#break = {
-    rust_name: "BreakOp",
-    name: "break",
+pub let r#break = op {
     dialect: "cir",
+    signature: () -> (),
     interfaces: (Terminator, NonLocalExit),
-    state: "none",
+    macro_def: true,
 };
 
-pub let r#continue = {
-    rust_name: "ContinueOp",
-    name: "continue",
+pub let r#continue = op {
     dialect: "cir",
+    signature: () -> (),
     interfaces: (Terminator, NonLocalExit),
-    state: "none",
+    macro_def: true,
 };

@@ -1,0 +1,19 @@
+enum TrueP: Prop {
+    Triv,
+}
+
+enum OrP: Prop {
+    Inl,
+    Inr,
+}
+
+pub let swap_or = |p: OrP| -> OrP {
+    match p {
+        OrP::Inl => OrP::Inr,
+        OrP::Inr => OrP::Inl,
+    }
+};
+
+pub let use_witness = |x: Int, _p: TrueP| -> Int {
+    x + 1
+};
