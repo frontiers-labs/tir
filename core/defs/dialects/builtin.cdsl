@@ -1,55 +1,9 @@
-use std::Bits;
-use std::El;
+use std::core::*;
+use std::ir::{Bits, Cfg, El, Function, Ptr};
 use std::bits;
-use std::List;
-use std::Option;
-use std::Optional;
-use std::Vec;
 use std::option;
-use std::EffectSet;
-use std::Cfg;
-use std::Region;
-use std::Function;
-use std::Ptr;
-use std::State;
-use std::ExclusiveResource;
-use std::Ty as IrTy;
-
-pub enum Bound<Size: Nat, Offset: Nat, Width: Nat> {
-    Within<Offset: Nat, Width: Nat, Rest: Nat>: Bound<Offset + Width + Rest, Offset, Width>,
-}
-pub let Alignment: Type = {
-    log2: Nat,
-    bound: Bound<63, log2, 0>,
-};
-
-pub enum DifferenceWidth<Width: Nat> {
-    W1: DifferenceWidth<1>,
-    W2: DifferenceWidth<2>,
-    W4: DifferenceWidth<4>,
-    W8: DifferenceWidth<8>,
-}
-pub let SymbolDifference<Size: Nat>: Type = {
-    offset: Nat,
-    width: Nat,
-    width_proof: DifferenceWidth<width>,
-    bounds: Bound<Size, offset, width>,
-    symbol: String,
-    base: String,
-};
-pub enum GlobalStorage<Kind: Nat, Size: Nat> {
-    External: GlobalStorage<0, 0>,
-    Bytes<Size: Nat>(Alignment, Vec<El<Bits<8>>, Size>): GlobalStorage<1, Size>,
-    Zero<Size: Nat>(Alignment): GlobalStorage<2, Size>,
-}
-pub enum DifferenceSet<Kind: Nat, Size: Nat> {
-    None<Kind: Nat, Size: Nat>: DifferenceSet<Kind, Size>,
-    Bytes<Size: Nat>(List<SymbolDifference<Size>>): DifferenceSet<1, Size>,
-    Zero<Size: Nat>(List<SymbolDifference<Size>>): DifferenceSet<2, Size>,
-}
 
 pub use std::ir::interfaces::*;
-use PureInterface as Pure;
 
 pub enum StateResource {
     Memory,
@@ -61,264 +15,184 @@ pub enum AggregateKind {
     Variant,
 }
 
-let ConstantAttributes: Type = { value: Int };
+pub enum IntegerPredicate {
+    Eq,
+    Ne,
+    Slt,
+    Sgt,
+    Sle,
+    Sge,
+    Ult,
+    Ugt,
+    Ule,
+    Uge,
+}
 
 pub let constant<w: Nat> = op {
-    signature: () -> El<Bits<w>>,
-    attributes: ConstantAttributes,
-    exec: |self: ConstantAttributes| -> El<Bits<w>> { bits::from_int<w>(self.value) },
-
-    interfaces: {
-        ConstantLike: { constant_value: || -> El<Bits<w>> { bits::from_int<w>(self.value) } },
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    signature: () -> (result: Bits<w>),
+    attributes: { value: Int },
+    exec: |self| bits::from_int(self.value),
+    interfaces: (ConstantLike, Speculatable),
 };
-
-let AddiAttributes: Type = { nsw: Optional<Bool>, nuw: Optional<Bool> };
 
 pub let addi<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    attributes: AddiAttributes,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> {
-        bits::add_wrapping(lhs, rhs)
+    rust_name: "AddIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    attributes: { nsw: Option<Bool>, nuw: Option<Bool> },
+    exec: |lhs, rhs| bits::add_wrapping(lhs, rhs),
+    poison: |self, lhs, rhs| {
+        (option::get_or(self.nsw, false) && bits::signed_add_overflows(lhs, rhs))
+            || (option::get_or(self.nuw, false) && bits::unsigned_add_overflows(lhs, rhs))
     },
-    poison: |self: AddiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool {
-        (option::get_or(self.nsw, false) && bits::signed_add_overflows(lhs, rhs)) ||
-        (option::get_or(self.nuw, false) && bits::unsigned_add_overflows(lhs, rhs))
-    },
-
-    interfaces: {
-        Additive: {},
-        Commutative: { is_commutative: || -> Bool { true } },
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    interfaces: (Additive, Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable),
 };
 
-let SubiAttributes: Type = { nsw: Optional<Bool>, nuw: Optional<Bool> };
-
 pub let subi<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    attributes: SubiAttributes,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::sub_wrapping(lhs, rhs) },
-    poison: |self: SubiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool {
-        (option::get_or(self.nsw, false) && bits::signed_sub_overflows(lhs, rhs)) ||
-        (option::get_or(self.nuw, false) && bits::unsigned_sub_overflows(lhs, rhs))
+    rust_name: "SubIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    attributes: { nsw: Option<Bool>, nuw: Option<Bool> },
+    exec: |lhs, rhs| bits::sub_wrapping(lhs, rhs),
+    poison: |self, lhs, rhs| {
+        (option::get_or(self.nsw, false) && bits::signed_sub_overflows(lhs, rhs))
+            || (option::get_or(self.nuw, false) && bits::unsigned_sub_overflows(lhs, rhs))
     },
-
-    interfaces: {
-        Subtractive: {},
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    interfaces: (Subtractive, SameOperandAndResultType, IntegerArithmetic, Speculatable),
 };
 
 pub let muli<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::mul_wrapping(lhs, rhs) },
-
-    interfaces: {
-        Commutative: { is_commutative: || -> Bool { true } },
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-        OpCost: { cost: || -> El<Bits<32>> { bits::literal<32>(4) } },
-    },
+    rust_name: "MulIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::mul_wrapping(lhs, rhs),
+    interfaces: (Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable, OpCost(4)),
 };
 
 pub let divsi<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::sdiv(lhs, rhs) },
-    requires: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::signed_div_defined(lhs, rhs) },
-
-    interfaces: {
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-    },
+    rust_name: "DivSIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::sdiv(lhs, rhs),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic),
 };
 
 pub let divui<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::udiv(lhs, rhs) },
-    requires: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::ne(rhs, bits::zero<w>()) },
-
-    interfaces: {
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-    },
+    rust_name: "DivUIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::udiv(lhs, rhs),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic),
 };
 
 pub let remsi<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::srem(lhs, rhs) },
-    requires: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::signed_div_defined(lhs, rhs) },
-
-    interfaces: {
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-    },
+    rust_name: "RemSIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::srem(lhs, rhs),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic),
 };
 
 pub let remui<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::urem(lhs, rhs) },
-    requires: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::ne(rhs, bits::zero<w>()) },
-
-    interfaces: {
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-    },
+    rust_name: "RemUIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::urem(lhs, rhs),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic),
 };
 
 pub let andi<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::and(lhs, rhs) },
-
-    interfaces: {
-        Commutative: { is_commutative: || -> Bool { true } },
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "AndIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::and(lhs, rhs),
+    interfaces: (Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable),
 };
 
 pub let ori<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::or(lhs, rhs) },
-
-    interfaces: {
-        Commutative: { is_commutative: || -> Bool { true } },
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "OrIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::or(lhs, rhs),
+    interfaces: (Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable),
 };
 
 pub let xori<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::xor(lhs, rhs) },
-
-    interfaces: {
-        Commutative: { is_commutative: || -> Bool { true } },
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "XOrIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::xor(lhs, rhs),
+    interfaces: (Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable),
 };
 
 pub let shli<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::shl(lhs, rhs) },
-    poison: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::uge(rhs, bits::width_value<w>()) },
-
-    interfaces: {
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "ShlIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::shl(lhs, rhs),
+    poison: |lhs, rhs| bits::uge(rhs, bits::width_value()),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, Speculatable),
 };
 
 pub let shrui<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::lshr(lhs, rhs) },
-    poison: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::uge(rhs, bits::width_value<w>()) },
-
-    interfaces: {
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "ShrUIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::lshr(lhs, rhs),
+    poison: |lhs, rhs| bits::uge(rhs, bits::width_value()),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, Speculatable),
 };
 
 pub let shrsi<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<w>> { bits::ashr(lhs, rhs) },
-    poison: |lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> Bool { bits::uge(rhs, bits::width_value<w>()) },
-
-    interfaces: {
-        SameOperandAndResultType: {},
-        IntegerArithmetic: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "ShrSIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::ashr(lhs, rhs),
+    poison: |lhs, rhs| bits::uge(rhs, bits::width_value()),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, Speculatable),
 };
 
 pub let extsi<In: Nat, Out: Nat> = op {
-    signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
-    exec: |input: El<Bits<In>>| -> El<Bits<Out>> { bits::sext<In, Out>(input) },
-
-    interfaces: {
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "ExtSIOp",
+    signature: (input: Bits<In>) -> (result: Bits<Out>),
+    exec: |input| bits::sext(input),
+    interfaces: (Speculatable,),
 };
 
 pub let extui<In: Nat, Out: Nat> = op {
-    signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
-    exec: |input: El<Bits<In>>| -> El<Bits<Out>> { bits::zext<In, Out>(input) },
-
-    interfaces: {
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "ExtUIOp",
+    signature: (input: Bits<In>) -> (result: Bits<Out>),
+    exec: |input| bits::zext(input),
+    interfaces: (Speculatable,),
 };
 
 pub let trunci<In: Nat, Out: Nat> = op {
-    signature: (input: El<Bits<In>>) -> El<Bits<Out>>,
-    exec: |input: El<Bits<In>>| -> El<Bits<Out>> { bits::trunc<In, Out>(input) },
-
-    interfaces: {
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    rust_name: "TruncIOp",
+    signature: (input: Bits<In>) -> (result: Bits<Out>),
+    exec: |input| bits::trunc(input),
+    interfaces: (Speculatable,),
 };
 
-let bitcast_rust = { widened: true };
-
 pub let bitcast<w: Nat> = op {
-    signature: (input: El<Bits<w>>) -> El<Bits<w>>,
-    exec: |input: El<Bits<w>>| -> El<Bits<w>> { bits::bitcast<w, w>(input) },
-    interfaces: {
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    signature: (input: Bits<w>) -> (result: Bits<w>),
+    exec: |input| bits::bitcast(input),
+    interfaces: (Speculatable,),
+    widened: true,
 };
 
 pub let assume = op {
-    signature: (condition: El<Bits<1>>) -> (),
-    exec: |condition: El<Bits<1>>| -> () { () },
-    requires: |condition: El<Bits<1>>| -> Bool { bits::ne(condition, bits::zero<1>()) },
+    signature: (condition: Bits<1>) -> (),
+    exec: |condition| (),
 };
 
-pub let freeze<T: Type> = op {
-    signature: (input: T) -> T,
-    interfaces: {
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+pub let freeze<T> = op {
+    signature: (input: T) -> (result: T),
+    interfaces: (Speculatable,),
 };
 
-pub let refine<T: Type> = op {
-    signature: (input: T, predicate: El<Bits<1>>) -> T,
-    exec: |input: T, predicate: El<Bits<1>>| -> T { input },
-    interfaces: {
-        Congruent: {},
-    },
+pub let refine<T> = op {
+    signature: (input: T, predicate: Bits<1>) -> (result: T),
+    exec: |input, predicate| input,
+    interfaces: (Congruent,),
 };
 
 pub let module_end = op {
     signature: () -> (),
-    interfaces: {
-        Terminator: { successors: || -> List<std::ir::BlockId> { List::Nil<std::ir::BlockId> } },
-    },
+    interfaces: (Terminator,),
 };
 
-pub enum IntegerPredicate {
-    Eq, Ne, Slt, Sgt, Sle, Sge, Ult, Ugt, Ule, Uge,
-}
-
-let CmpiAttributes: Type = { predicate: IntegerPredicate };
-
 pub let cmpi<w: Nat> = op {
-    signature: (lhs: El<Bits<w>>, rhs: El<Bits<w>>) -> El<Bits<1>>,
-    attributes: CmpiAttributes,
-    exec: |self: CmpiAttributes, lhs: El<Bits<w>>, rhs: El<Bits<w>>| -> El<Bits<1>> {
+    rust_name: "CmpIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<1>),
+    attributes: { predicate: IntegerPredicate },
+    exec: |self, lhs, rhs| {
         bits::from_bool(match self.predicate {
             IntegerPredicate::Eq => bits::eq(lhs, rhs),
             IntegerPredicate::Ne => bits::ne(lhs, rhs),
@@ -332,101 +206,51 @@ pub let cmpi<w: Nat> = op {
             IntegerPredicate::Uge => bits::uge(lhs, rhs),
         })
     },
-
-    interfaces: {
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+    interfaces: (Speculatable,),
 };
 
-pub let Integer<w: Nat> = Bits<w>;
-
-let ModuleOperation = {
-    signature: Type,
-    regions: { body: Type },
-};
-
-pub let module<Params: Type, Results: Type, Input: Type, Trace: Type>: ModuleOperation = op {
+pub let module = op {
     signature: () -> (),
-    regions: { body: Region<Cfg, Params, Results, Input, Trace> },
+    regions: (body: Cfg),
 };
 
-let global_rust = {
+pub let global<P> = op {
+    signature: () -> (result: Ptr<P>),
     attributes: { sym_name: String },
+    interfaces: (Symbol, Global),
     format: true,
-    interfaces: Global,
 };
 
-pub let global<P: IrTy> = op {
-    signature: () -> Ptr<P>,
-    attributes: {
-        sym_name: String,
-        sym_visibility: Optional<String>,
-        kind: Nat,
-        size: Nat,
-        storage: GlobalStorage<kind, size>,
-        size_bound: Bound<18446744073709551615, 0, size>,
-        section: Optional<String>,
-        relocations: Optional<List<{ offset: Nat, symbol: String, addend: Int, width: Nat }>>,
-        symbol_differences: DifferenceSet<kind, size>,
-    },
-    interfaces: {
-        Symbol: {
-                symbol_name: || -> String { self.sym_name },
-                symbol_signature: || -> Option<List<IrTy>> { option::none<List<IrTy>> },
-                symbol_result_type: || -> Option<IrTy> { option::none<IrTy> },
-                symbol_visibility: || -> Visibility {
-                    if option::get_or(self.sym_visibility, "") == "private" {
-                        Visibility::Private
-                    } else {
-                        Visibility::Public
-                    }
-                },
-                is_definition: || -> Bool { self.kind != 0 },
-            },
-    },
+pub let fn_to_ptr<A, R, P> = op {
+    signature: (callee: Function<A, R>) -> (result: Ptr<P>),
+    interfaces: (Pure, Speculatable),
 };
 
-pub let fn_to_ptr<Args: List<IrTy>, Ret: IrTy, E: EffectSet, P: IrTy> = op {
-    signature: (callee: Function<Args, std::list::singleton<IrTy>(Ret), E>) -> Ptr<P>,
-    interfaces: {
-        Pure: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+pub let ptr_to_fn<A, R, P> = op {
+    signature: (address: Ptr<P>) -> (result: Function<A, R>),
+    interfaces: (Pure, Speculatable),
 };
 
-pub let ptr_to_fn<Args: List<IrTy>, Ret: IrTy, E: EffectSet, P: IrTy> = op {
-    signature: (address: Ptr<P>) -> Function<Args, std::list::singleton<IrTy>(Ret), E>,
-    interfaces: {
-        Pure: {},
-        Speculatable: { is_speculatable: || -> Bool { true } },
-    },
+pub let make_tuple = op {
+    signature: (elements: ..Any) -> (result: std::ir::Tuple<Any>),
+    interfaces: (Speculatable,),
+    macro_def: true,
 };
 
-
-
-pub let InterpInterface<V: Type, S: Type, R: Type> = {
-    evaluate: (List<V>, S) -> (R, S),
+pub let tuple_get = op {
+    signature: (tuple: std::ir::Tuple<Any>) -> (result: Any),
+    attributes: { index: std::ir::UInt },
+    interfaces: (Speculatable,),
+    macro_def: true,
 };
 
-pub let MemoryState = State<ExclusiveResource<"memory">>;
+pub let all_ops: List<OpDef> = List(
+    constant::<64>, addi::<64>, subi::<64>, muli::<64>,
+    divsi::<64>, divui::<64>, remsi::<64>, remui::<64>,
+    andi::<64>, ori::<64>, xori::<64>,
+    shli::<64>, shrui::<64>, shrsi::<64>,
+    extsi::<32, 64>, extui::<32, 64>, trunci::<64, 32>,
+    bitcast::<64>, freeze::<Bits<64>>, cmpi::<64>,
+);
 
-pub let make_tuple = {
-    rust_name: "MakeTupleOp",
-    name: "make_tuple",
-    dialect: "builtin",
-    operands: { elements: "*_" },
-    results: { result: "tuple<_>" },
-    interfaces: Speculatable,
-    state: "none",
-};
-
-pub let tuple_get = {
-    rust_name: "TupleGetOp",
-    name: "tuple_get",
-    dialect: "builtin",
-    operands: { tuple: "tuple<_>" },
-    results: { result: "_" },
-    attributes: { index: "UInt" },
-    interfaces: Speculatable,
-    state: "none",
-};
+extract rust all_ops => "@ct";

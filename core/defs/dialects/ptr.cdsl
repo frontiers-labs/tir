@@ -1,117 +1,78 @@
-use std::ir::interfaces::*;
+use std::core::*;
+use std::ir::{Bits, PointerPred, Predicate, Ptr, State, TypeAttr, UInt};
 
-pub let alloca<P0: std::ir::Ty> = {
-    rust_name: "AllocaOp",
-    name: "alloca",
-    dialect: "ptr",
-    results: { result: std::ir::El<std::ir::Ptr<P0>> },
-    attributes: { size: "UInt", align: "UInt" },
-    interfaces: PromotableAllocation,
-    state: "out",
+pub let alloca<P> = op {
+    signature: () -> (result: Ptr<P>, state: ..State),
+    attributes: { size: UInt, align: UInt },
+    interfaces: (PromotableAllocation,),
+    macro_def: true,
 };
 
-pub let null<P0: std::ir::Ty> = {
-    rust_name: "NullOp",
-    name: "null",
-    dialect: "ptr",
-    results: { result: std::ir::El<std::ir::Ptr<P0>> },
-    interfaces: ConstantLike,
-    state: "none",
+pub let null<P> = op {
+    signature: () -> (result: Ptr<P>),
+    interfaces: (ConstantLike,),
+    macro_def: true,
 };
 
-pub let cmp<P0: std::ir::Ty, P1: std::ir::Ty> = {
-    rust_name: "CmpOp",
-    name: "cmp",
-    dialect: "ptr",
-    operands: { lhs: std::ir::El<std::ir::Ptr<P0>>, rhs: std::ir::El<std::ir::Ptr<P1>> },
-    results: { result: std::ir::El<std::ir::Bits<1>> },
-    attributes: { predicate: "Predicate in POINTER" },
-    state: "none",
+pub let cmp<P0, P1> = op {
+    signature: (lhs: Ptr<P0>, rhs: Ptr<P1>) -> (result: Bits<1>),
+    attributes: { predicate: Predicate<PointerPred> },
+    macro_def: true,
 };
 
-pub let ptradd<P0: std::ir::Ty, W1: Nat, P2: std::ir::Ty> = {
+pub let ptradd<P0, W: Nat, P1> = op {
     rust_name: "PtrAddOp",
-    name: "ptradd",
-    dialect: "ptr",
-    operands: { base: std::ir::El<std::ir::Ptr<P0>>, offset: std::ir::El<std::ir::Bits<W1>> },
-    results: { result: std::ir::El<std::ir::Ptr<P2>> },
-    interfaces: Additive,
-    state: "none",
+    signature: (base: Ptr<P0>, offset: Bits<W>) -> (result: Ptr<P1>),
+    interfaces: (Additive,),
+    macro_def: true,
 };
 
-pub let ptrdiff<P0: std::ir::Ty, P1: std::ir::Ty, W2: Nat> = {
+pub let ptrdiff<P0, P1, W: Nat> = op {
     rust_name: "PtrDiffOp",
-    name: "ptrdiff",
-    dialect: "ptr",
-    operands: { lhs: std::ir::El<std::ir::Ptr<P0>>, rhs: std::ir::El<std::ir::Ptr<P1>> },
-    results: { result: std::ir::El<std::ir::Bits<W2>> },
-    interfaces: Subtractive,
-    state: "none",
+    signature: (lhs: Ptr<P0>, rhs: Ptr<P1>) -> (result: Bits<W>),
+    interfaces: (Subtractive,),
+    macro_def: true,
 };
 
-pub let disjoint<P0: std::ir::Ty, W1: Nat, P2: std::ir::Ty, W3: Nat> = {
-    rust_name: "DisjointOp",
-    name: "disjoint",
-    dialect: "ptr",
-    operands: { lhs: std::ir::El<std::ir::Ptr<P0>>, lhs_size: std::ir::El<std::ir::Bits<W1>>, rhs: std::ir::El<std::ir::Ptr<P2>>, rhs_size: std::ir::El<std::ir::Bits<W3>> },
-    results: { result: std::ir::El<std::ir::Bits<1>> },
-    state: "none",
+pub let disjoint<P0, W0: Nat, P1, W1: Nat> = op {
+    signature: (lhs: Ptr<P0>, lhs_size: Bits<W0>, rhs: Ptr<P1>, rhs_size: Bits<W1>) -> (result: Bits<1>),
+    macro_def: true,
 };
 
-pub let load<P0: std::ir::Ty, T1: Type> = {
-    rust_name: "LoadOp",
-    name: "load",
-    dialect: "ptr",
-    operands: { ptr: std::ir::El<std::ir::Ptr<P0>> },
-    results: { result: T1 },
+pub let load<P, T> = op {
+    signature: (ptr: Ptr<P>, state: ..State) -> (result: T, out_state: ..State),
     interfaces: (MemoryRead, ResourceEffects),
-    state: "in_out",
+    macro_def: true,
 };
 
-pub let store<T0: Type, P1: std::ir::Ty> = {
-    rust_name: "StoreOp",
-    name: "store",
-    dialect: "ptr",
-    operands: { value: T0, ptr: std::ir::El<std::ir::Ptr<P1>> },
+pub let store<T, P> = op {
+    signature: (value: T, ptr: Ptr<P>, state: ..State) -> (out_state: ..State),
     interfaces: (MemoryWrite, ResourceEffects),
-    state: "in_out",
+    macro_def: true,
 };
 
-pub let memcpy<P0: std::ir::Ty, P1: std::ir::Ty> = {
-    rust_name: "MemcpyOp",
-    name: "memcpy",
-    dialect: "ptr",
-    operands: { destination: std::ir::El<std::ir::Ptr<P0>>, source: std::ir::El<std::ir::Ptr<P1>>, size: std::ir::El<std::ir::Bits<64>> },
-    interfaces: ResourceEffects,
-    state: "in_out",
+pub let memcpy<P0, P1> = op {
+    signature: (destination: Ptr<P0>, source: Ptr<P1>, size: Bits<64>, state: ..State) -> (out_state: ..State),
+    interfaces: (ResourceEffects,),
+    macro_def: true,
 };
 
-pub let memset<P0: std::ir::Ty> = {
-    rust_name: "MemsetOp",
-    name: "memset",
-    dialect: "ptr",
-    operands: { destination: std::ir::El<std::ir::Ptr<P0>>, value: std::ir::El<std::ir::Bits<8>>, size: std::ir::El<std::ir::Bits<64>> },
+pub let memset<P> = op {
+    signature: (destination: Ptr<P>, value: Bits<8>, size: Bits<64>, state: ..State) -> (out_state: ..State),
     interfaces: (MemoryWrite, ResourceEffects),
-    state: "in_out",
+    macro_def: true,
 };
 
-pub let field<P0: std::ir::Ty, P1: std::ir::Ty> = {
-    rust_name: "FieldOp",
-    name: "field",
-    dialect: "ptr",
-    operands: { base: std::ir::El<std::ir::Ptr<P0>> },
-    results: { result: std::ir::El<std::ir::Ptr<P1>> },
-    attributes: { ty: "Type", field: "Str" },
-    interfaces: Speculatable,
-    state: "none",
+pub let field<P0, P1> = op {
+    signature: (base: Ptr<P0>) -> (result: Ptr<P1>),
+    attributes: { ty: TypeAttr, field: String },
+    interfaces: (Speculatable,),
+    macro_def: true,
 };
 
-pub let copy<P0: std::ir::Ty, P1: std::ir::Ty> = {
-    rust_name: "CopyOp",
-    name: "copy",
-    dialect: "ptr",
-    operands: { destination: std::ir::El<std::ir::Ptr<P0>>, source: std::ir::El<std::ir::Ptr<P1>> },
-    attributes: { ty: "Type" },
+pub let copy<P0, P1> = op {
+    signature: (destination: Ptr<P0>, source: Ptr<P1>, state: ..State) -> (out_state: ..State),
+    attributes: { ty: TypeAttr },
     interfaces: (ResourceEffects, Congruent),
-    state: "in_out",
+    macro_def: true,
 };
