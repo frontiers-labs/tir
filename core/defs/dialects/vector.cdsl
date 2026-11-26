@@ -1,39 +1,23 @@
-pub let vector_len = {
-    rust_name: "VectorLenOp",
-    name: "vector_len",
-    dialect: "vector",
-    operands: { avl: "index" },
-    results: { result: "index" },
-    attributes: { sew: "Int" },
-    state: "none",
+use std::core::*;
+use std::ir::{Index, Vector};
+
+pub let vector_len = op {
+    signature: (avl: Index) -> (result: Index),
+    attributes: { sew: Int },
+    macro_def: true,
 };
 
-pub let add = {
-    rust_name: "AddOp",
-    name: "add",
-    dialect: "vector",
-    quantified: "forall N: nat, T.",
-    operands: { lhs: "vector.v<N, T>", rhs: "vector.v<N, T>", vl: "?index" },
-    results: { result: "vector.v<N, T>" },
-    state: "none",
+pub let add<N: Nat, T> = op {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Option<Index>) -> (result: Vector<N, T>),
+    macro_def: true,
 };
 
-pub let sub = {
-    rust_name: "SubOp",
-    name: "sub",
-    dialect: "vector",
-    quantified: "forall N: nat, T.",
-    operands: { lhs: "vector.v<N, T>", rhs: "vector.v<N, T>", vl: "?index" },
-    results: { result: "vector.v<N, T>" },
-    state: "none",
+pub let sub<N: Nat, T> = op {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Option<Index>) -> (result: Vector<N, T>),
+    macro_def: true,
 };
 
-pub let mul = {
-    rust_name: "MulOp",
-    name: "mul",
-    dialect: "vector",
-    quantified: "forall N: nat, T.",
-    operands: { lhs: "vector.v<N, T>", rhs: "vector.v<N, T>", vl: "?index" },
-    results: { result: "vector.v<N, T>" },
-    state: "none",
+pub let mul<N: Nat, T> = op {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Option<Index>) -> (result: Vector<N, T>),
+    macro_def: true,
 };
