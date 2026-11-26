@@ -1,97 +1,106 @@
+// Unit-test EqSat rules, rewrite collection, and memoized scalar/query tests.
+
+use std::core::*;
+use std::ir::{OperationId, OperationKind, ValueId};
 use dialects::test::keep_left;
-use std::Rewrite;
-use std::bigint::BigInt;
-use std::ir::OperationId;
-use std::ir::OperationKind;
-use std::ir::ValueId;
 
-// The test package has tir as a dev-dependency. These declarations link the
-// collection to the live IR and EqSat tables by their engine names.
-let Operation: { id: OperationId, kind: OperationKind, placement: String, container: Int, position: Int, display: Int, location: Int } -> Prop;
-let Operand: std::Table<(OperationId, Int), ValueId, std::Merge::Unique>;
-let Value: (ValueId, Int, String, Int, Int, Int) -> Prop;
-let TypeTerm: (Int, Int, Int) -> Prop;
-let TypeCtor: (Int, String, String, Int, Int) -> Prop;
-let Attribute: std::Table<(String, Int, String), Int, std::Merge::Unique>;
-let EqSatLive: OperationId -> Prop;
-let EqSatPinnedOp: OperationId -> Prop;
-let EqSatPinned: ValueId -> Prop;
-let EqSatReplace: (OperationId, ValueId, ValueId) -> Prop;
-let EqSatErase: OperationId -> Prop;
-let EqSatDefinition: (OperationId, ValueId, Form) -> Prop;
-let eqsat_attr_int: Int -> BigInt;
-enum Form { Constant(OperationKind, String, BigInt), }
+// Link live IR and EqSat tables by engine name (dev-dependency test crate).
+pub enum Form {
+    Constant(OperationKind, String, BigInt),
+}
 
-let policy = {
-    live: EqSatLive,
-    pinned_operation: EqSatPinnedOp,
-    pinned_value: EqSatPinned,
-    replace: EqSatReplace,
-    erase: EqSatErase,
-    definition: EqSatDefinition,
-    constant: Form::Constant,
-    attributes: Attribute,
-    attribute_integer: eqsat_attr_int,
-};
+let Operation: Relation<{
+    id: OperationId,
+    kind: OperationKind,
+    placement: String,
+    container: Int,
+    position: Int,
+    display: Int,
+    location: Int,
+}>;
+let Operand: Table<(OperationId, Int), ValueId, Merge::Unique>;
+let Value: Relation<(ValueId, Int, String, Int, Int, Int)>;
+let TypeTerm: Relation<(Int, Int, Int)>;
+let TypeCtor: Relation<(Int, String, String, Int, Int)>;
+let Attribute: Table<(String, Int, String), Int, Merge::Unique>;
+let EqSatLive: Relation<(OperationId,)>;
+let EqSatPinnedOp: Relation<(OperationId,)>;
+let EqSatPinned: Relation<(ValueId,)>;
+let EqSatReplace: Relation<(OperationId, ValueId, ValueId)>;
+let EqSatErase: Relation<(OperationId,)>;
+let EqSatDefinition: Relation<(OperationId, ValueId, Form)>;
+pub let eqsat_attr_int: Int -> BigInt;
 
 let same<x>: Rewrite(keep_left(x, x) -> x);
+extract rust same => "@ct";
 
-pub let keep_left_rewrites = || { std::rewrite::collect(same, policy) };
+pub let keep_left_rewrites = || -> List<Rewrite> { List(same) };
 
-let input = 2;
+pub enum ProbeTerm {
+    Original,
+    Input,
+}
+
+let ScratchVal: Relation<Int>;
+let ScratchOff: Relation<(Int, Int)>;
+let ScratchProbe: Relation<ProbeTerm>;
+let AltProbe: Relation<ProbeTerm>;
 
 pub let scoped_value = memo |input: Int| {
-    let Scratch: Int -> Prop;
-    let seed: Scratch(input);
-    std::schedule::saturate(seed)?;
-    let next = input + 1;
-    if next == 8 { next } else { next + 1 }
+    let seed: Rule(() -> ScratchVal(arg(0)));
+    (
+        Schedule::Saturate(List(seed)),
+        {
+            let next = input + 1;
+            if next == 8 { next } else { next + 1 }
+        },
+    )
 };
-
-let rows = 2;
 
 pub let scoped_offset = memo |rows: Int| {
-    let Scratch: (Int, Int) -> Prop;
-    let seed: Scratch(rows, rows);
-    std::schedule::saturate(seed)?;
-    let offset = rows - 5;
-    |x: Int, next: Bool| {
-        if next {
-            let key = x + 1;
-            Scratch(rows, key + offset)
-        } else {
-            Scratch(rows, x)
-        }
-    }
+    let seed: Rule(() -> ScratchOff(arg(0), arg(0)));
+    (
+        Schedule::Saturate(List(seed)),
+        { scratch: "ScratchOff" },
+        |x: Int, next: Bool| -> Bool {
+            let offset = rows - 5;
+            if next {
+                let key = x + 1;
+                has_row(ScratchOff, (rows, key + offset))
+            } else {
+                has_row(ScratchOff, (rows, x))
+            }
+        },
+    )
 };
 
-pub enum ProbeTerm { Original, Input }
-pub let ProbeSeen: ProbeTerm -> Prop;
-pub let ProbeAlternate: ProbeTerm -> Prop;
+pub let ProbeSeen: Relation<(ProbeTerm,)>;
+pub let ProbeAlternate: Relation<(ProbeTerm,)>;
 
 pub let scoped_query = memo || {
-    let Scratch: ProbeTerm -> Prop;
-    let Alternate: ProbeTerm -> Prop;
-    let copy<term>: ProbeSeen(term) -> Scratch(term);
-    let copy_alternate<term>: ProbeAlternate(term) -> Alternate(term);
-    std::schedule::saturate((copy, copy_alternate))?;
-    |term: ProbeTerm, first: Bool| {
-        if first { Scratch(term) } else {
-            let query = Alternate;
-            query(term)
-        }
-    }
+    let copy<term>: Rule(ProbeSeen(term) -> ScratchProbe(term));
+    let copy_alt<term>: Rule(ProbeAlternate(term) -> AltProbe(term));
+    (
+        Schedule::Saturate(List(copy, copy_alt)),
+        { rows: "ScratchProbe", alternate: "AltProbe" },
+        |term: ProbeTerm, first: Bool| -> Bool {
+            if first { has_row(ScratchProbe, term) } else { has_row(AltProbe, term) }
+        },
+    )
 };
 
 pub let scoped_pair = memo |x: Int| {
-    let Scratch: Int -> Prop;
-    let seed: Scratch(x);
-    std::schedule::saturate(seed)?;
-    let pair = (x + 1, true);
-    (pair.0, 2)
+    let seed: Rule(() -> ScratchVal(arg(0)));
+    (
+        Schedule::Saturate(List(seed)),
+        {
+            let pair = (x + 1, true);
+            (pair._0, 2)
+        },
+    )
 };
 
 pub let scoped_projection = memo |x: Int, flag: Bool| {
     let pair = if flag { (x + 1, 2) } else { (x + 2, 4) };
-    pair.1
+    pair._1
 };

@@ -1,0 +1,236 @@
+// Pure-CDSL v3 Integer Constant-Folding Rule Derivation over `List<OpDef>`.
+//
+// Derives constant-folding rules directly by inspecting each `OpDef` in the
+// dialect's op list (`dialects::builtin::all_ops`) — zero positional 19-arg lists!
+
+use std::core::*;
+use std::bigint::{bigint, bigint_of, bit_and, bit_or, bit_xor, shl, shr};
+use std::bigint::add as big_add;
+use std::bigint::sub as big_sub;
+use std::bigint::mul as big_mul;
+use std::bigint::div as big_div;
+use std::bigint::rem as big_rem;
+use std::int::{bool_lt, equal, ge, log_and, log_not, log_or};
+use std::ir::{attribute, op_decl, op_has_attr, op_is_constant_like, op_name};
+
+let eqsat_attr_int = |h: Atom| -> Atom { Atom::Call("eqsat_attr_int", List(h)) };
+let eqsat_attr_case = |h: Atom| -> Atom { Atom::Call("eqsat_attr_case", List(h)) };
+let eqsat_shift_amount = |x: Atom| -> Atom { Atom::Call("eqsat_shift_amount", List(x)) };
+let eqsat_bool_bit = |b: Atom| -> Atom { Atom::Call("eqsat_bool_bit", List(b)) };
+let eqsat_pick_case = |p: Atom, n: Atom, c: Atom, f: Atom| -> Atom {
+    Atom::Call("eqsat_pick_case", List(p, n, c, f))
+};
+
+let width_pow2 = |w: Atom| -> Atom { shl(bigint(1), w) };
+let width_mask = |w: Atom| -> Atom { big_sub(width_pow2(w), bigint(1)) };
+let sign_bit = |w: Atom| -> Atom { shr(width_pow2(w), int_lit(1)) };
+let wrap_bits = |x: Atom, w: Atom| -> Atom { bit_and(x, width_mask(w)) };
+let to_signed = |x: Atom, w: Atom| -> Atom {
+    let sb = sign_bit(w);
+    big_sub(bit_xor(x, sb), sb)
+};
+
+let signed_add_overflow = |a: Atom, b: Atom, w: Atom| -> Atom {
+    let sum = big_add(to_signed(a, w), to_signed(b, w));
+    log_not(equal(sum, to_signed(wrap_bits(sum, w), w)))
+};
+let unsigned_add_overflow = |a: Atom, b: Atom, w: Atom| -> Atom {
+    ge(big_add(a, b), width_pow2(w))
+};
+let signed_sub_overflow = |a: Atom, b: Atom, w: Atom| -> Atom {
+    let diff = big_sub(to_signed(a, w), to_signed(b, w));
+    log_not(equal(diff, to_signed(wrap_bits(diff, w), w)))
+};
+let unsigned_sub_overflow = |a: Atom, b: Atom| -> Atom { bool_lt(a, b) };
+
+let signed_div_defined = |a: Atom, b: Atom, w: Atom| -> Atom {
+    let neg1 = wrap_bits(bigint(-1), w);
+    log_and(
+        log_not(equal(b, bigint(0))),
+        log_not(log_and(equal(a, sign_bit(w)), equal(b, neg1))),
+    )
+};
+let unsigned_div_defined = |b: Atom| -> Atom { log_not(equal(b, bigint(0))) };
+
+let fold_bin = |rname: String, op: OpDef, extra_facts: List<Fact>, result_expr: Atom| -> Rule {
+    let op_v = Atom::Var("op");
+    let val_v = Atom::Var("val");
+    let w_v = Atom::Var("w");
+    let o0 = Atom::Var("o0");
+    let o1 = Atom::Var("o1");
+    let b0 = Atom::Var("b0");
+    let b1 = Atom::Var("b1");
+    let base: List<Fact> = List(
+        Fact::Row("EqSatIntegerResult", List(op_v, op_decl(op), val_v, w_v)),
+        Fact::Row("EqSatIntegerOperand", List(op_v, int_lit(0), o0, w_v)),
+        Fact::Row("EqSatFolded", List(o0, b0)),
+        Fact::Row("EqSatIntegerOperand", List(op_v, int_lit(1), o1, w_v)),
+        Fact::Row("EqSatFolded", List(o1, b1)),
+    );
+    Rule::Clause(
+        rname,
+        append(base, extra_facts),
+        List(
+            Action::Insert("EqSatFolded", List(val_v, result_expr)),
+            Action::Insert("EqSatConstant", List(op_v, val_v, result_expr)),
+        ),
+    )
+};
+
+let fold_unary = |rname: String, op: OpDef, same_width: Bool, result_expr: Atom| -> Rule {
+    let op_v = Atom::Var("op");
+    let val_v = Atom::Var("val");
+    let w_out = Atom::Var("w_out");
+    let w_in = if same_width { w_out } else { Atom::Var("w_in") };
+    let o0 = Atom::Var("o0");
+    let b0 = Atom::Var("b0");
+    Rule::Clause(
+        rname,
+        List(
+            Fact::Row("EqSatIntegerResult", List(op_v, op_decl(op), val_v, w_out)),
+            Fact::Row("EqSatIntegerOperand", List(op_v, int_lit(0), o0, w_in)),
+            Fact::Row("EqSatFolded", List(o0, b0)),
+        ),
+        List(
+            Action::Insert("EqSatFolded", List(val_v, result_expr)),
+            Action::Insert("EqSatConstant", List(op_v, val_v, result_expr)),
+        ),
+    )
+};
+
+let op_fold_rule = |op: OpDef| -> List<Rule> {
+    let nm = op_name(op);
+    let op_v = Atom::Var("op");
+    let val_v = Atom::Var("val");
+    let w_v = Atom::Var("w");
+    let b0 = Atom::Var("b0");
+    let b1 = Atom::Var("b1");
+    let nsw = Atom::Var("nsw");
+    let nuw = Atom::Var("nuw");
+    let w_in = Atom::Var("w_in");
+    let w_out = Atom::Var("w_out");
+    let shift_ok = List(Fact::Eq(ge(b1, bigint_of(w_v)), bool_lit(false)));
+
+    if op_is_constant_like(op) && op_has_attr(op, "value") {
+        List(Rule::Clause(
+            "fold::" ++ nm,
+            List(
+                Fact::Row("EqSatIntegerResult", List(op_v, op_decl(op), val_v, w_v)),
+                Fact::Row("EqSatConstantImplementation", List(op_decl(op))),
+                Fact::Eq(Atom::Var("h_val"), attribute(str_lit("operation"), op_v, str_lit("value"))),
+                Fact::Eq(Atom::Var("a_val"), eqsat_attr_int(Atom::Var("h_val"))),
+            ),
+            List(Action::Insert("EqSatFolded", List(val_v, wrap_bits(Atom::Var("a_val"), w_v)))),
+        ))
+    } else if nm == "addi" {
+        List(fold_bin(
+            "fold::addi", op,
+            List(
+                Fact::Row("EqSatFlag", List(op_v, str_lit("nsw"), bool_lit(false), nsw)),
+                Fact::Row("EqSatFlag", List(op_v, str_lit("nuw"), bool_lit(false), nuw)),
+                Fact::Eq(log_or(log_and(nsw, signed_add_overflow(b0, b1, w_v)), log_and(nuw, unsigned_add_overflow(b0, b1, w_v))), bool_lit(false)),
+            ),
+            wrap_bits(big_add(b0, b1), w_v),
+        ))
+    } else if nm == "subi" {
+        List(fold_bin(
+            "fold::subi", op,
+            List(
+                Fact::Row("EqSatFlag", List(op_v, str_lit("nsw"), bool_lit(false), nsw)),
+                Fact::Row("EqSatFlag", List(op_v, str_lit("nuw"), bool_lit(false), nuw)),
+                Fact::Eq(log_or(log_and(nsw, signed_sub_overflow(b0, b1, w_v)), log_and(nuw, unsigned_sub_overflow(b0, b1))), bool_lit(false)),
+            ),
+            wrap_bits(big_sub(b0, b1), w_v),
+        ))
+    } else if nm == "muli" {
+        List(fold_bin("fold::muli", op, List(), wrap_bits(big_mul(b0, b1), w_v)))
+    } else if nm == "divsi" {
+        List(fold_bin("fold::divsi", op, List(Fact::Eq(signed_div_defined(b0, b1, w_v), bool_lit(true))), wrap_bits(big_div(to_signed(b0, w_v), to_signed(b1, w_v)), w_v)))
+    } else if nm == "divui" {
+        List(fold_bin("fold::divui", op, List(Fact::Eq(unsigned_div_defined(b1), bool_lit(true))), big_div(b0, b1)))
+    } else if nm == "remsi" {
+        List(fold_bin("fold::remsi", op, List(Fact::Eq(signed_div_defined(b0, b1, w_v), bool_lit(true))), wrap_bits(big_rem(to_signed(b0, w_v), to_signed(b1, w_v)), w_v)))
+    } else if nm == "remui" {
+        List(fold_bin("fold::remui", op, List(Fact::Eq(unsigned_div_defined(b1), bool_lit(true))), big_rem(b0, b1)))
+    } else if nm == "andi" {
+        List(fold_bin("fold::andi", op, List(), bit_and(b0, b1)))
+    } else if nm == "ori" {
+        List(fold_bin("fold::ori", op, List(), bit_or(b0, b1)))
+    } else if nm == "xori" {
+        List(fold_bin("fold::xori", op, List(), bit_xor(b0, b1)))
+    } else if nm == "shli" {
+        List(fold_bin("fold::shli", op, shift_ok, wrap_bits(shl(b0, eqsat_shift_amount(b1)), w_v)))
+    } else if nm == "shrui" {
+        List(fold_bin("fold::shrui", op, shift_ok, wrap_bits(shr(b0, eqsat_shift_amount(b1)), w_v)))
+    } else if nm == "shrsi" {
+        List(fold_bin("fold::shrsi", op, shift_ok, wrap_bits(shr(to_signed(b0, w_v), eqsat_shift_amount(b1)), w_v)))
+    } else if nm == "extsi" {
+        List(fold_unary("fold::extsi", op, false, wrap_bits(to_signed(b0, w_in), w_out)))
+    } else if nm == "extui" {
+        List(fold_unary("fold::extui", op, false, wrap_bits(b0, w_out)))
+    } else if nm == "trunci" {
+        List(fold_unary("fold::trunci", op, false, wrap_bits(b0, w_out)))
+    } else if nm == "bitcast" {
+        List(fold_unary("fold::bitcast", op, true, wrap_bits(b0, w_out)))
+    } else if nm == "cmpi" {
+        let pred_v = Atom::Var("pred");
+        let s0 = to_signed(b0, w_v);
+        let s1 = to_signed(b1, w_v);
+        let cmp_chain = eqsat_pick_case(
+            pred_v, str_lit("eq"), equal(b0, b1),
+            eqsat_pick_case(pred_v, str_lit("ne"), log_not(equal(b0, b1)),
+            eqsat_pick_case(pred_v, str_lit("slt"), bool_lt(s0, s1),
+            eqsat_pick_case(pred_v, str_lit("sgt"), bool_lt(s1, s0),
+            eqsat_pick_case(pred_v, str_lit("sle"), log_not(bool_lt(s1, s0)),
+            eqsat_pick_case(pred_v, str_lit("sge"), log_not(bool_lt(s0, s1)),
+            eqsat_pick_case(pred_v, str_lit("ult"), bool_lt(b0, b1),
+            eqsat_pick_case(pred_v, str_lit("ugt"), bool_lt(b1, b0),
+            eqsat_pick_case(pred_v, str_lit("ule"), log_not(bool_lt(b1, b0)),
+            log_not(bool_lt(b0, b1)))))))))),
+        );
+        let cmp_bit = eqsat_bool_bit(cmp_chain);
+        List(Rule::Clause(
+            "fold::cmpi",
+            List(
+                Fact::Row("EqSatIntegerResult", List(op_v, op_decl(op), val_v, int_lit(1))),
+                Fact::Row("EqSatIntegerOperand", List(op_v, int_lit(0), Atom::Var("o0"), w_v)),
+                Fact::Row("EqSatFolded", List(Atom::Var("o0"), b0)),
+                Fact::Row("EqSatIntegerOperand", List(op_v, int_lit(1), Atom::Var("o1"), w_v)),
+                Fact::Row("EqSatFolded", List(Atom::Var("o1"), b1)),
+                Fact::Eq(Atom::Var("h_pred"), attribute(str_lit("operation"), op_v, str_lit("predicate"))),
+                Fact::Eq(pred_v, eqsat_attr_case(Atom::Var("h_pred"))),
+            ),
+            List(
+                Action::Insert("EqSatFolded", List(val_v, cmp_bit)),
+                Action::Insert("EqSatConstant", List(op_v, val_v, cmp_bit)),
+            ),
+        ))
+    } else {
+        List()
+    }
+};
+
+pub let integer_fold_rules = |ops: List<OpDef>| -> List<Rule> {
+    flat_map(op_fold_rule, ops)
+};
+
+extract rust eqsat_attr_int        => "@ct";
+extract rust eqsat_attr_case       => "@ct";
+extract rust eqsat_shift_amount    => "@ct";
+extract rust eqsat_bool_bit        => "@ct";
+extract rust eqsat_pick_case       => "@ct";
+extract rust width_pow2            => "@ct";
+extract rust width_mask            => "@ct";
+extract rust sign_bit              => "@ct";
+extract rust wrap_bits             => "@ct";
+extract rust to_signed             => "@ct";
+extract rust signed_add_overflow   => "@ct";
+extract rust unsigned_add_overflow => "@ct";
+extract rust signed_sub_overflow   => "@ct";
+extract rust unsigned_sub_overflow => "@ct";
+extract rust signed_div_defined    => "@ct";
+extract rust unsigned_div_defined  => "@ct";
+extract rust fold_bin              => "@ct";
+extract rust fold_unary            => "@ct";
+extract rust op_fold_rule          => "@ct";
+extract rust integer_fold_rules    => "@ct";

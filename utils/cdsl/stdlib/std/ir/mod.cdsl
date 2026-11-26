@@ -1,0 +1,369 @@
+// Standard TIR type constructors, IR handles, and pure-CDSL op/rewrite combinators.
+//
+// ZERO string templates. Every IR type here is a first-class CDSL dependent type
+// checked directly by the kernel.
+
+use std::core::*;
+
+// ── IR Entity Handles & Sorts ────────────────────────────────────────────────
+
+pub type OperationId;
+pub type ValueId;
+pub type RegionId;
+pub type BlockId;
+pub type TypeId;
+pub type AttrHandle;
+pub type OperationKind;
+pub type ValueRef<T>;
+pub type BinaryIntegerOperation;
+
+pub let IntegerRef: Type = ValueId;
+
+extract rust OperationId            => "OperationId";
+extract rust ValueId                => "ValueId";
+extract rust RegionId               => "i64";
+extract rust BlockId                => "i64";
+extract rust TypeId                 => "i64";
+extract rust AttrHandle             => "i64";
+extract rust OperationKind          => "OperationKind";
+extract rust BinaryIntegerOperation => "OperationKind";
+
+extract egglog OperationId            => "i64";
+extract egglog ValueId                => "i64";
+extract egglog RegionId               => "i64";
+extract egglog BlockId                => "i64";
+extract egglog TypeId                 => "i64";
+extract egglog AttrHandle             => "i64";
+extract egglog OperationKind          => "NativeIdentity";
+extract egglog BinaryIntegerOperation => "NativeIdentity";
+
+// ── Pass Driver Runtime Types (Mapped via Rocq-Style `extract rust`) ─────────
+
+pub type Session;
+pub type EditSummary;
+pub type RuleCollection;
+pub type RuleSlice;
+
+extract rust Session        => "&mut super::session::Session<'_>";
+extract rust EditSummary    => "super::session::EditSummary";
+extract rust RuleCollection => "&::tir_egglog::RuleCollection";
+extract rust RuleSlice      => "&[::tir_egglog::RuleCollection]";
+
+pub let seed_root: (Session, OperationId) -> ();
+pub let run_stage: (Session, Schedule) -> ();
+pub let resolve_layouts: Session -> ();
+pub let saturate_with_masks: (Session, Schedule, String, RuleSlice, Schedule) -> ();
+pub let run_collection: (Session, RuleCollection, Int) -> ();
+pub let propagate_scoped: (Session, Schedule) -> ();
+pub let publish_rewrites: Session -> EditSummary;
+pub let sweep_dead: (Session, OperationId, Schedule, Schedule) -> EditSummary;
+
+extract rust seed_root           => "super::session::seed_root";
+extract rust run_stage           => "super::session::run_stage";
+extract rust resolve_layouts     => "super::session::resolve_layouts";
+extract rust saturate_with_masks => "super::session::saturate_with_masks";
+extract rust run_collection      => "super::session::run_collection";
+extract rust propagate_scoped    => "super::session::propagate_scoped";
+extract rust publish_rewrites    => "super::session::publish_rewrites";
+extract rust sweep_dead          => "super::session::sweep_dead";
+
+// ── TIR Dependent Value, Attribute, and Region Types ─────────────────────────
+
+pub type Bits<W: Nat>;
+pub type El<T>;
+pub type Ptr<T>;
+pub type State;
+pub type Float<F>;
+pub type Vector<N: Nat, T>;
+pub type Tuple<Ts>;
+pub type Array<T, N: Nat>;
+pub type Function<Ins, Outs>;
+pub type Index;
+pub type UnitTy;
+pub type NamedType;
+pub type Aggregate;
+
+pub type Cfg;
+pub type Nodes;
+pub type Graph;
+pub type AnyRegion;
+pub type Region<K>;
+pub type Block;
+pub type BackendReg;
+pub type VaList;
+pub type IndexOrInt;
+pub type Counter<C: IndexOrInt>;
+
+pub type ExclusiveResource<R>;
+pub type EffectSet;
+pub type Symbol;
+pub type Ty;
+pub type UInt;
+pub type Flag;
+pub type Str;
+pub type DataType;
+pub type TypeAttr;
+pub type BytesAttr;
+pub type IntArray;
+pub type StrArray;
+pub type IntTuple;
+pub type NamedAttr;
+pub type DictAttr;
+pub type ArrayAttr;
+pub type Register;
+
+pub type IntegerPred;
+pub type FloatPred;
+pub type PointerPred;
+pub type Predicate<V>;
+
+// ── OpDef Introspection Helpers (Pure CDSL, Evaluated via NbE) ───────────────
+
+pub let op_dialect = |op: OpDef| -> String {
+    match op { OpDef::Define(d, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => d }
+};
+
+pub let op_name = |op: OpDef| -> String {
+    match op { OpDef::Define(_, n, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => n }
+};
+
+pub let op_tag = |op: OpDef| -> String {
+    match op { OpDef::Define(d, n, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => d ++ "." ++ n }
+};
+
+pub let op_operands = |op: OpDef| -> List<Port> {
+    match op { OpDef::Define(_, _, _, ops, _, _, _, _, _, _, _, _, _, _, _, _) => ops }
+};
+
+pub let op_results = |op: OpDef| -> List<Port> {
+    match op { OpDef::Define(_, _, _, _, res, _, _, _, _, _, _, _, _, _, _, _) => res }
+};
+
+pub let op_attrs = |op: OpDef| -> List<Port> {
+    match op { OpDef::Define(_, _, _, _, _, attrs, _, _, _, _, _, _, _, _, _, _) => attrs }
+};
+
+pub let op_interfaces = |op: OpDef| -> List<Interface> {
+    match op { OpDef::Define(_, _, _, _, _, _, _, _, ifaces, _, _, _, _, _, _, _) => ifaces }
+};
+
+pub let op_decl_sym = |op: OpDef| -> String {
+    "@cdsl:decl:" ++ op_tag(op)
+};
+
+pub let op_decl = |op: OpDef| -> Atom {
+    Atom::Call(op_decl_sym(op), List())
+};
+
+pub let port_list_has = rec |name: String, ps: List<Port>| -> Bool {
+    match ps {
+        List::Nil => false,
+        List::Cons(h, t) => match h {
+            Port::Port(n, _) => if n == name { true } else { port_list_has(name, t) },
+        },
+    }
+};
+
+pub let op_has_attr = |op: OpDef, name: String| -> Bool {
+    port_list_has(name, op_attrs(op))
+};
+
+let has_commutative = rec |xs: List<Interface>| -> Bool {
+    match xs {
+        List::Nil => false,
+        List::Cons(h, t) => match h { Interface::Commutative => true, _ => has_commutative(t) },
+    }
+};
+
+let has_constant_like = rec |xs: List<Interface>| -> Bool {
+    match xs {
+        List::Nil => false,
+        List::Cons(h, t) => match h { Interface::ConstantLike => true, _ => has_constant_like(t) },
+    }
+};
+
+let has_speculatable = rec |xs: List<Interface>| -> Bool {
+    match xs {
+        List::Nil => false,
+        List::Cons(h, t) => match h { Interface::Speculatable => true, _ => has_speculatable(t) },
+    }
+};
+
+let has_integer_arith = rec |xs: List<Interface>| -> Bool {
+    match xs {
+        List::Nil => false,
+        List::Cons(h, t) => match h { Interface::IntegerArithmetic => true, _ => has_integer_arith(t) },
+    }
+};
+
+let has_additive = rec |xs: List<Interface>| -> Bool {
+    match xs {
+        List::Nil => false,
+        List::Cons(h, t) => match h { Interface::Additive => true, _ => has_additive(t) },
+    }
+};
+
+let has_subtractive = rec |xs: List<Interface>| -> Bool {
+    match xs {
+        List::Nil => false,
+        List::Cons(h, t) => match h { Interface::Subtractive => true, _ => has_subtractive(t) },
+    }
+};
+
+pub let op_is_commutative = |op: OpDef| -> Bool { has_commutative(op_interfaces(op)) };
+pub let op_is_constant_like = |op: OpDef| -> Bool { has_constant_like(op_interfaces(op)) };
+pub let op_is_speculatable = |op: OpDef| -> Bool { has_speculatable(op_interfaces(op)) };
+pub let op_is_integer_arith = |op: OpDef| -> Bool { has_integer_arith(op_interfaces(op)) };
+pub let op_is_additive = |op: OpDef| -> Bool { has_additive(op_interfaces(op)) };
+pub let op_is_subtractive = |op: OpDef| -> Bool { has_subtractive(op_interfaces(op)) };
+
+pub let op_is_binary_int = |op: OpDef| -> Bool {
+    op_is_integer_arith(op) && length(op_operands(op)) == 2 && length(op_results(op)) == 1
+};
+
+pub let op_is_pure_binary_int = |op: OpDef| -> Bool {
+    op_is_binary_int(op)
+        && op_is_speculatable(op)
+        && !op_has_attr(op, "nsw")
+        && !op_has_attr(op, "nuw")
+};
+
+// ── Schema-Driven OpDef -> EqSat Fact Derivation ─────────────────────────────
+// Every op classification (binary integer, commutative, pure binary, droppable
+// speculatable, flag attributes, constant-like, unary/binary FP) is derived
+// directly from `OpDef` declarations — zero duplicated op tables!
+
+pub let dialect_flag_rules = |ops: List<OpDef>| -> List<Rule> {
+    let bin_rules = flat_map(|op: OpDef| -> List<Rule> {
+        if op_is_binary_int(op) {
+            List(Rule::Clause(
+                "op_bin::" ++ op_name(op),
+                List(),
+                List(Action::Insert("EqSatBinaryKind", List(op_decl(op)))),
+            ))
+        } else {
+            List()
+        }
+    }, ops);
+    let nsw_rules = flat_map(|op: OpDef| -> List<Rule> {
+        if op_has_attr(op, "nsw") && op_is_additive(op) {
+            List(
+                Rule::Clause("op_flag::nsw", List(), List(Action::Insert("EqSatFlagField", List(str_lit("nsw"), bool_lit(false))))),
+                Rule::Clause("op_flag::nuw", List(), List(Action::Insert("EqSatFlagField", List(str_lit("nuw"), bool_lit(false))))),
+            )
+        } else {
+            List()
+        }
+    }, ops);
+    append(bin_rules, nsw_rules)
+};
+
+pub let dialect_commute_rules = |ops: List<OpDef>| -> List<Rule> {
+    flat_map(|op: OpDef| -> List<Rule> {
+        if op_is_commutative(op) && op_is_binary_int(op) {
+            List(Rule::Clause(
+                "op_comm::" ++ op_name(op),
+                List(),
+                List(Action::Insert("EqSatCommutative", List(op_decl(op)))),
+            ))
+        } else {
+            List()
+        }
+    }, ops)
+};
+
+pub let dialect_pure_binary_rules = |ops: List<OpDef>| -> List<Rule> {
+    flat_map(|op: OpDef| -> List<Rule> {
+        if op_is_pure_binary_int(op) {
+            List(Rule::Clause(
+                "op_pure_bin::" ++ op_name(op),
+                List(),
+                List(Action::Insert("EqSatPureBinary", List(op_decl(op)))),
+            ))
+        } else {
+            List()
+        }
+    }, ops)
+};
+
+pub let dialect_drop_rules = |ops: List<OpDef>| -> List<Rule> {
+    flat_map(|op: OpDef| -> List<Rule> {
+        if op_is_speculatable(op) && length(op_results(op)) == 1 && op_name(op) != "freeze" && op_name(op) != "bitcast" {
+            List(Rule::Clause(
+                "op_drop::" ++ op_name(op),
+                List(),
+                List(Action::Insert("EqSatDropKind", List(op_decl(op)))),
+            ))
+        } else {
+            List()
+        }
+    }, ops)
+};
+
+pub let fp_op_rules = |ops: List<OpDef>| -> List<Rule> {
+    flat_map(|op: OpDef| -> List<Rule> {
+        let n_in = length(op_operands(op));
+        let n_out = length(op_results(op));
+        if n_in == 1 && n_out == 1 {
+            List(Rule::Clause(
+                "fp_unary::" ++ op_name(op),
+                List(),
+                List(Action::Insert("EqSatFpUnary", List(op_decl(op)))),
+            ))
+        } else if n_in == 2 && n_out == 1 {
+            List(Rule::Clause(
+                "fp_binary::" ++ op_name(op),
+                List(),
+                List(Action::Insert("EqSatFpBinary", List(op_decl(op)))),
+            ))
+        } else {
+            List()
+        }
+    }, ops)
+};
+
+// Typed IR host primitives (automatically emit `bind_std_ir_*` in Rust!)
+pub let integer_width: Int -> Int;
+pub let fp_format: Int -> Int;
+pub let type_argument: (Int, Int) -> Int;
+
+// Egglog IR helper calls for rules
+pub let operand = |op: Atom, slot: Atom| -> Atom { Atom::Call("Operand", List(op, slot)) };
+pub let attribute = |kind: Atom, owner: Atom, name: Atom| -> Atom { Atom::Call("Attribute", List(kind, owner, name)) };
+
+extract rust op_dialect               => "@ct";
+extract rust op_name                  => "@ct";
+extract rust op_tag                   => "@ct";
+extract rust op_operands              => "@ct";
+extract rust op_results               => "@ct";
+extract rust op_attrs                 => "@ct";
+extract rust op_interfaces            => "@ct";
+extract rust op_decl_sym              => "@ct";
+extract rust op_decl                  => "@ct";
+extract rust port_list_has            => "@ct";
+extract rust op_has_attr              => "@ct";
+extract rust has_commutative          => "@ct";
+extract rust has_constant_like        => "@ct";
+extract rust has_speculatable         => "@ct";
+extract rust has_integer_arith        => "@ct";
+extract rust has_additive             => "@ct";
+extract rust has_subtractive          => "@ct";
+extract rust op_is_commutative        => "@ct";
+extract rust op_is_constant_like      => "@ct";
+extract rust op_is_speculatable       => "@ct";
+extract rust op_is_integer_arith      => "@ct";
+extract rust op_is_additive           => "@ct";
+extract rust op_is_subtractive        => "@ct";
+extract rust op_is_binary_int         => "@ct";
+extract rust op_is_pure_binary_int    => "@ct";
+extract rust dialect_flag_rules       => "@ct";
+extract rust dialect_commute_rules    => "@ct";
+extract rust dialect_pure_binary_rules => "@ct";
+extract rust dialect_drop_rules       => "@ct";
+extract rust fp_op_rules              => "@ct";
+extract rust operand                  => "@ct";
+extract rust attribute                => "@ct";
+
+pub mod interfaces;
+pub mod rewrites;
+pub mod integers;

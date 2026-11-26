@@ -1,0 +1,11 @@
+enum OrP: Prop {
+    Inl,
+    Inr,
+}
+
+pub let bad_elim = |p: OrP| -> Int {
+    match p {
+        OrP::Inl => 1,
+        OrP::Inr => 2,
+    }
+};

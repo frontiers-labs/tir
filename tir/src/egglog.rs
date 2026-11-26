@@ -5,19 +5,19 @@ use std::time::Instant;
 
 use clap::Args;
 use tir::Context;
-use tir_cdsl::{Schema, lexer::TokenStream};
-use tir_egglog::{EGraph, Program};
+use tir_cdsl::lexer::TokenStream;
+use tir_egglog::{EGraph, Program, Schedule};
 
 #[derive(Args)]
 #[command(
-    after_help = "Declare the script's schema in CDSL and define `let execute = || { std::schedule::saturate((rule_a, rule_b)) };`. Relations and tables use their declared names. REPL declarations accumulate; each accepted revision runs the selected schedule when it exists."
+    after_help = "Write a CDSL v3 file defining relations, rules, and a `Schedule` (e.g. `pub let execute: Schedule = ...;`). REPL declarations accumulate; each accepted revision compiles to TEGG v15 bytecode and runs the selected schedule when it exists."
 )]
 pub struct ToolArgs {
     /// Input TIR file
     input: PathBuf,
     /// CDSL file to execute; omit to read CDSL declarations interactively
     rules: Option<PathBuf>,
-    /// Named CDSL schedule to run
+    /// Named CDSL schedule/program binding to run
     #[arg(long, default_value = "execute")]
     schedule: String,
 }
@@ -30,60 +30,86 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     crate::common::parse_tir(&context, &input)
         .map_err(|err| format!("{}: {err}", args.input.display()))?;
     let mut egraph = context.egraph();
-    let schedule = args
-        .schedule
-        .split("::")
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
     if let Some(path) = args.rules {
-        let source =
+        let mut program =
             tir_cdsl::compile_file(&path).map_err(|err| format!("{}: {err}", path.display()))?;
-        execute(&mut egraph, &source, &schedule, false)
+        execute(&mut egraph, &mut program, &args.schedule, false)
             .map_err(|err| format!("{}: {err}", path.display()))?;
     } else {
-        repl(&mut egraph, &schedule)?;
+        repl(&mut egraph, &args.schedule)?;
     }
     Ok(())
 }
 
+fn ir_schedule_to_egglog(sched: &tir_cdsl::tegg::IrSchedule) -> Schedule {
+    match sched {
+        tir_cdsl::tegg::IrSchedule::Run(rs, 0) => Schedule::saturate(Schedule::run(rs)),
+        tir_cdsl::tegg::IrSchedule::Run(rs, 1) => Schedule::run(rs),
+        tir_cdsl::tegg::IrSchedule::Run(rs, n) => Schedule::repeat(*n, Schedule::run(rs)),
+        tir_cdsl::tegg::IrSchedule::Seq(steps) => {
+            Schedule::seq(steps.iter().map(ir_schedule_to_egglog))
+        }
+        tir_cdsl::tegg::IrSchedule::Repeat(0, inner) => {
+            Schedule::saturate(ir_schedule_to_egglog(inner))
+        }
+        tir_cdsl::tegg::IrSchedule::Repeat(n, inner) => {
+            Schedule::repeat(*n, ir_schedule_to_egglog(inner))
+        }
+    }
+}
+
 fn execute(
     egraph: &mut EGraph,
-    source: &tir_cdsl::Program,
-    schedule: &[String],
+    checked: &mut tir_cdsl::CheckedProgram,
+    schedule: &str,
     allow_missing_schedule: bool,
 ) -> Result<(), Box<dyn Error>> {
     let start = Instant::now();
-    let module = &schedule[..schedule.len().saturating_sub(1)];
-    let selected;
-    let source = if !module.is_empty() && source.modules.iter().any(|part| part.path == module) {
-        selected = source.clone().select(module)?;
-        &selected
-    } else {
-        source
-    };
-    let checked = source.lower()?;
-    let schema = Schema::with_engine(&checked, EGraph::from_database(egraph.database().clone()))?;
-    if schema
-        .run_local_schedule(&checked, schedule, egraph.database_mut())?
-        .is_some()
-    {
-        eprintln!("egglog: total={:.6}s", start.elapsed().as_secs_f64());
-        return Ok(());
-    }
-    let lowered = schema.lower(&checked)?;
-    let Some(selected) = lowered.schedules().get(schedule) else {
+    let ml = checked.erase_for_mode(None, tir_cdsl::erase::EraseMode::Program)?;
+    let selected = ml.decls.iter().find_map(|decl| match decl {
+        tir_cdsl::erase::MlDecl::ProgramBundle(bundle) => {
+            let sched = bundle
+                .schedules
+                .iter()
+                .find(|s| checked.signature.interner.resolve(s.qname) == schedule)?;
+            let code = bundle
+                .code_bytes
+                .as_deref()
+                .unwrap_or(bundle.catalog_bytes.as_slice());
+            Some((
+                Some(bundle.catalog_bytes.as_slice()),
+                code,
+                ir_schedule_to_egglog(&sched.schedule),
+            ))
+        }
+        tir_cdsl::erase::MlDecl::Def(
+            name,
+            tir_cdsl::erase::MlExpr::Bytecode {
+                bc_bytes,
+                bc_schedule,
+                ..
+            },
+        ) if checked.signature.interner.resolve(*name) == schedule => Some((
+            None,
+            bc_bytes.as_slice(),
+            ir_schedule_to_egglog(bc_schedule),
+        )),
+        _ => None,
+    });
+    let Some((catalog, bytes, sched)) = selected else {
         if allow_missing_schedule {
             return Ok(());
         }
-        return Err(format!("CDSL schedule {} does not exist", schedule.join("::")).into());
+        return Err(format!("CDSL schedule {schedule} does not exist").into());
     };
-    let bytes = lowered.compile(schema.database())?.to_bytes();
     let database = egraph.database_mut();
-    Program::from_bytes(&schema.to_bytes()?, database)?;
-    let mut program = Program::from_bytes(&bytes, database)?;
+    if let Some(catalog) = catalog {
+        let _ = Program::from_bytes(catalog, database)?;
+    }
+    let mut program = Program::from_bytes(bytes, database)?;
     let compilation = start.elapsed();
     let start = Instant::now();
-    program.run(database, selected, &[])?;
+    program.run(database, &sched, &[])?;
     eprintln!(
         "egglog: compile={:.6}s exec={:.6}s",
         compilation.as_secs_f64(),
@@ -92,7 +118,7 @@ fn execute(
     Ok(())
 }
 
-fn repl(egraph: &mut EGraph, schedule: &[String]) -> Result<(), Box<dyn Error>> {
+fn repl(egraph: &mut EGraph, schedule: &str) -> Result<(), Box<dyn Error>> {
     let stdin = io::stdin();
     let interactive = stdin.is_terminal();
     let mut input = stdin.lock();
@@ -132,16 +158,15 @@ fn repl(egraph: &mut EGraph, schedule: &[String]) -> Result<(), Box<dyn Error>> 
                 continue;
             }
         };
-        match tir_cdsl::parser::parse(stream) {
+        match tir_cdsl::parser::parse(&stream) {
             Err(errors) if errors.iter().all(|error| error.found.is_none()) => continue,
             Err(errors) => eprintln!("{errors:?}"),
-            Ok(ast) if ast.declarations.is_empty() => {}
+            Ok(ast) if ast.root_decls().is_empty() => {}
             Ok(_) => {
                 let revision = format!("{accepted}{pending}");
                 match tir_cdsl::compile_source(&revision) {
-                    Ok(program) => {
-                        // Loading and running can change the database before an error.
-                        execute(egraph, &program, schedule, true)
+                    Ok(mut program) => {
+                        execute(egraph, &mut program, schedule, true)
                             .map_err(|error| error.to_string())?;
                         accepted = revision;
                     }

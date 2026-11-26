@@ -1,33 +1,98 @@
-use dialects::builtin::addi;
-use dialects::builtin::constant;
-use dialects::builtin::xori;
-use integer::EqSatDefined as defined;
-use std::List;
-use std::Rewrite;
+// Algebraic, bitwise, cast, floating-point, and pointer rewrite rules.
+//
+// Every rule below is written directly over typed dialect `OpDef`s and
+// lowered via `std::ir::rewrites::lower_eqsat_rewrites` during EqSat
+// compilation (and reused for standalone `RuleCollection`s like
+// `add_zero_rewrites` / `builtin_rewrites`).
 
-pub let rewrite_policy = {
-    live: context::EqSatLive,
-    pinned_operation: loops::EqSatPinnedOp,
-    pinned_value: loops::EqSatPinned,
-    replace: context::EqSatReplace,
-    erase: context::EqSatErase,
-    definition: integer::EqSatDefinition,
-    constant: Form::Constant,
-    attributes: ir::Attribute,
-    attribute_integer: eqsat_attr_int,
+use std::core::*;
+use std::ir::rewrites::{
+    all_ones, defined, layout_scoped, no_attr, not_i1, same_type, wrapping,
 };
-
-let xor_self<x>: Rewrite((xori(x, x), defined(x)) -> constant(0));
-let add_zero<x>: Rewrite((addi(x, constant(0)), defined(x)) -> x);
-
-let add_zero_rules = || -> List<Rewrite> {
-    List::Cons(add_zero, List::Nil)
+use dialects::builtin::{
+    addi, andi, constant, divsi, divui, extsi, extui, muli, ori, remsi,
+    shli, shrsi, shrui, subi, trunci, xori,
 };
+use dialects::fp;
+use dialects::ptr;
 
-pub let builtin_rewrites = || {
-    std::rewrite::collect(List::Cons(xor_self, add_zero_rules()), rewrite_policy)
-};
+// ── 1. Identities & Idempotence ──────────────────────────────────────────────
 
-pub let add_zero_rewrites = || {
-    std::rewrite::collect(add_zero_rules(), rewrite_policy)
-};
+let add_zero<x>:   Rewrite(addi(x, constant(0)) -> x);
+let or_zero<x>:    Rewrite(ori(x, constant(0)) -> x);
+let xor_zero<x>:   Rewrite(xori(x, constant(0)) -> x);
+let sub_zero<x>:   Rewrite(subi(x, constant(0)) -> x);
+let shl_zero<x>:   Rewrite(shli(x, constant(0)) -> x);
+let shrui_zero<x>: Rewrite(shrui(x, constant(0)) -> x);
+let shrsi_zero<x>: Rewrite(shrsi(x, constant(0)) -> x);
+let and_self<x>:   Rewrite(andi(x, x) -> x);
+let or_self<x>:    Rewrite(ori(x, x) -> x);
+let mul_one<x>:    Rewrite(muli(x, constant(1)) -> x);
+let and_all<x>:    Rewrite(andi(x, all_ones) -> x);
+let divui_one<x>:  Rewrite(divui(x, constant(1)) -> x);
+let divsi_one<x>:  Rewrite((divsi(x, constant(1)), not_i1(x)) -> x);
+
+// ── 2. Definedness-Guarded Folds & Complements ───────────────────────────────
+
+let and_zero<x>:       Rewrite((andi(x, constant(0)), defined(x)) -> constant(0));
+let mul_zero<x>:       Rewrite((muli(x, constant(0)), defined(x)) -> constant(0));
+let xor_self<x>:       Rewrite((xori(x, x), defined(x)) -> constant(0));
+let sub_self<x>:       Rewrite((subi(x, x), defined(x)) -> constant(0));
+let or_all<x>:         Rewrite((ori(x, all_ones), defined(x)) -> all_ones);
+let and_complement<x>: Rewrite((andi(x, xori(x, all_ones)), defined(x)) -> constant(0));
+let or_complement<x>:  Rewrite((ori(x, xori(x, all_ones)), defined(x)) -> all_ones);
+let remsi_one<x>:      Rewrite((remsi(x, constant(1)), not_i1(x)) -> andi(x, constant(0)));
+
+// ── 3. Absorption & Cancellation ─────────────────────────────────────────────
+
+let and_absorb<x, y>:  Rewrite((andi(x, ori(x, y)), defined(y)) -> x);
+let or_absorb<x, y>:   Rewrite((ori(x, andi(x, y)), defined(y)) -> x);
+let xor_cancel<x, y>:  Rewrite((xori(xori(x, y), y), defined(y)) -> x);
+let undo_add<x, y>:    Rewrite((subi(addi(x, y), y), wrapping, defined(y)) -> x);
+let undo_sub<x, y>:    Rewrite((addi(subi(x, y), y), wrapping, defined(y)) -> x);
+let sub_diff<x, y>:    Rewrite((subi(y, subi(y, x)), wrapping, defined(y)) -> x);
+let double_neg<x>:     Rewrite((subi(constant(0), subi(constant(0), x)), wrapping) -> x);
+
+// ── 4. Algebraic Reconstructions (Nested RHS Expressions) ────────────────────
+
+let bit_or_and<x, y>:           Rewrite(xori(ori(x, y), andi(x, y)) -> xori(x, y));
+let bit_xor_and<x, y>:          Rewrite(xori(xori(x, y), andi(x, y)) -> ori(x, y));
+let factor_mul<x, y, f>:        Rewrite((addi(muli(x, f), muli(y, f)), wrapping) -> muli(addi(x, y), f));
+let mul_neg_one<x>:             Rewrite(muli(x, all_ones) -> subi(constant(0), x));
+let common_addend<x, y, z>:     Rewrite((subi(addi(x, y), addi(x, z)), wrapping, defined(x)) -> subi(y, z));
+let common_minuend<x, y, z>:    Rewrite((subi(subi(x, y), subi(x, z)), wrapping, defined(x)) -> subi(z, y));
+let common_subtrahend<x, y, z>: Rewrite((subi(subi(x, y), subi(z, y)), wrapping, defined(y)) -> subi(x, z));
+let negate_addend<x, y>:        Rewrite((subi(x, addi(x, y)), wrapping, defined(x)) -> subi(constant(0), y));
+let negate_subtrahend<x, y>:    Rewrite((subi(subi(x, y), x), wrapping, defined(x)) -> subi(constant(0), y));
+let cancel_pair<x, y, z>:       Rewrite((addi(addi(x, y), subi(z, y)), wrapping, defined(y)) -> addi(x, z));
+let telescope<x, y, z>:         Rewrite((addi(subi(x, y), subi(y, z)), wrapping, defined(y)) -> subi(x, z));
+
+// ── 5. Cast, Floating-Point, and Pointer Round-Trips ─────────────────────────
+
+let trunc_extui<x>:  Rewrite((trunci(extui(x)), same_type) -> x);
+let trunc_extsi<x>:  Rewrite((trunci(extsi(x)), same_type) -> x);
+let fp_roundtrip<x>: Rewrite((fp::materialize(fp::capture(x)), no_attr("semantics")) -> x);
+let ptradd_zero<p>:  Rewrite((ptr::ptradd(p, constant(0)), layout_scoped, same_type) -> p);
+
+// ── 6. Composed Rewrite Collections ──────────────────────────────────────────
+
+// Full algebraic + cast + FP + pointer rewrite suite run by the built-in EqSat pass.
+pub let algebraic_rewrites: List<Rewrite> = List(
+    add_zero, or_zero, xor_zero, sub_zero, shl_zero, shrui_zero, shrsi_zero,
+    and_self, or_self, mul_one, and_all, divui_one, divsi_one,
+    and_zero, mul_zero, xor_self, sub_self, or_all, and_complement, or_complement, remsi_one,
+    and_absorb, or_absorb, xor_cancel, undo_add, undo_sub, sub_diff, double_neg,
+    bit_or_and, bit_xor_and, factor_mul, mul_neg_one,
+    common_addend, common_minuend, common_subtrahend, negate_addend, negate_subtrahend,
+    cancel_pair, telescope,
+    trunc_extui, trunc_extsi, fp_roundtrip, ptradd_zero,
+);
+
+// Standalone `RuleCollection` subsets (reusing the exact same `Rewrite` values!).
+let add_zero_guarded<x>: Rewrite((addi(x, constant(0)), defined(x)) -> x);
+pub let add_zero_list: List<Rewrite> = List(add_zero_guarded);
+pub let builtin_list: List<Rewrite> = List(xor_self, add_zero_guarded);
+
+extract rust algebraic_rewrites => "@ct";
+extract rust add_zero_list      => "@ct";
+extract rust builtin_list       => "@ct";

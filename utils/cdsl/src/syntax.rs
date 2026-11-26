@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use tir_cst::{BuildError, GreenElement, GreenNode, NodeCache, NodeOrToken};
 
-use crate::lexer::{SourceToken, Token};
+use crate::lexer::{SourceToken, Token, TokenStream};
 
 /// CDSL node and trivia classifications.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -48,13 +48,13 @@ pub(crate) struct Fragment {
 /// Source data used only by the lossless output constructors.
 pub(crate) struct SyntaxInput<'a> {
     pub source: &'a str,
-    pub tokens: &'a [SourceToken],
+    pub tokens: &'a [SourceToken<'a>],
     /// Significant token index to raw token index, with an end sentinel.
     pub significant: Vec<usize>,
 }
 
 impl<'a> SyntaxInput<'a> {
-    pub fn new(source: &'a str, tokens: &'a [SourceToken]) -> Self {
+    pub fn new(source: &'a str, tokens: &'a [SourceToken<'a>]) -> Self {
         let mut significant: Vec<_> = tokens
             .iter()
             .enumerate()
@@ -117,7 +117,7 @@ impl<'a> SyntaxInput<'a> {
                 _ => SyntaxKind::Token,
             };
             elements.push(NodeOrToken::Token(
-                cache.token(kind, &self.source[token.range.clone()])?,
+                cache.token(kind, &self.source[token.range()])?,
             ));
         }
         Ok(())
@@ -147,21 +147,20 @@ impl std::fmt::Display for SyntaxError {
 impl std::error::Error for SyntaxError {}
 
 /// Parses a complete source with a retained sharing cache.
-/// This reparses the complete file; sharing is not incremental reparsing.
 pub fn parse_source(source: &str, cache: &mut SyntaxCache) -> Result<SyntaxTree, SyntaxError> {
     let tokens = crate::lexer::lex_source(source).map_err(SyntaxError::Lex)?;
-    let stream = crate::lexer::TokenStream {
+    let stream = TokenStream {
         tokens: tokens
             .iter()
             .filter(|token| !token.token.is_trivia())
-            .map(|token| token.token.clone())
+            .map(|token| token.token)
             .collect(),
         spans: tokens
             .iter()
             .filter(|token| !token.token.is_trivia())
-            .map(|token| crate::lexer::Span::Source(token.range.clone()))
+            .map(|token| (token.start as u32, token.end as u32))
             .collect(),
-        end: crate::lexer::Span::Source(source.len()..source.len()),
+        end: source.len() as u32,
     };
     let context = crate::parser_syntax::Context {
         input: SyntaxInput::new(source, &tokens),
@@ -201,38 +200,30 @@ macro_rules! typed_node {
             fn can_cast(kind: SyntaxKind) -> bool {
                 matches!(kind, $(SyntaxKind::$kind)|+)
             }
-            fn cast(node: SyntaxNode) -> Option<Self> {
-                Self::can_cast(node.kind()).then_some(Self(node))
+            fn cast(syntax: SyntaxNode) -> Option<Self> {
+                Self::can_cast(syntax.kind()).then_some(Self(syntax))
             }
             fn syntax(&self) -> &SyntaxNode {
                 &self.0
             }
         }
-        impl $name {
-            /// Casts an owned node after checking its CDSL syntax kind.
-            pub fn cast(node: SyntaxNode) -> Option<Self> {
-                <Self as tir_cst::AstNode>::cast(node)
-            }
-            /// The underlying positioned node, retained by this view.
-            pub fn syntax(&self) -> &SyntaxNode {
-                &self.0
-            }
-        }
     };
 }
+
+typed_node!(ModuleNode, Module, "Typed view over a CDSL module root.");
 typed_node!(
-    ModuleSyntax,
-    Module,
-    "Typed view of a complete CDSL source."
-);
-typed_node!(
-    DeclarationSyntax,
+    DeclarationNode,
     Declaration,
-    "Typed view of a declaration."
+    "Typed view over a CDSL top-level declaration."
 );
 typed_node!(
-    ExpressionSyntax,
+    ExpressionNode,
     Expression | BinaryExpression,
-    "Typed view of an expression."
+    "Typed view over a CDSL expression."
 );
-typed_node!(PatternSyntax, Pattern, "Typed view of a pattern.");
+typed_node!(PatternNode, Pattern, "Typed view over a CDSL pattern.");
+typed_node!(
+    BindingNode,
+    Binding,
+    "Typed view over a CDSL binder or local binding."
+);

@@ -5,10 +5,7 @@ use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenSt
 /// Compile CDSL with the file compiler's grammar and checks, yielding a diagnostic string literal.
 #[proc_macro]
 pub fn cdsl(input: TokenStream) -> TokenStream {
-    match tir_cdsl::compile_tokens(input)
-        .and_then(|program| program.lower())
-        .and_then(|program| program.render())
-    {
+    match tir_cdsl::compile_tokens(input).map(|program| program.render_typed()) {
         Ok(artifact) => TokenStream::from(TokenTree::Literal(Literal::string(&artifact))),
         Err(error) => TokenStream::from_iter([
             TokenTree::Ident(Ident::new("compile_error", Span::call_site())),
