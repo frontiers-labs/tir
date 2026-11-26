@@ -1,7 +1,0 @@
-pub enum Equal<A: Type, B: Type> {
-    Refl<T: Type> : Equal<T, T>,
-}
-
-pub enum Holds<P: Bool> {
-    True : Holds<true>,
-}

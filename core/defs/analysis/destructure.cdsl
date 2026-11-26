@@ -1,420 +1,346 @@
 // Demand and dependency order for the graph regions recovered inside a function.
-pub let RecoveryRegion: Int -> Prop;
-pub let GraphPathLength: (Int, std::ir::OperationId, Int) -> Prop;
-pub let GraphDepth: std::Table<(Int, std::ir::OperationId), Int, std::Merge::Max>;
-pub let GraphNeededValue: std::ir::ValueId -> Prop;
-pub let GraphControlOp: std::ir::OperationId -> Prop;
-pub let GraphNeededPort: (Int, Int) -> Prop;
-pub let GraphStrictInput: (std::ir::OperationId, Int) -> Prop;
-pub let GraphNeededResult: (std::ir::OperationId, Int) -> Prop;
-pub let GraphActiveControl: std::ir::OperationId -> Prop;
-pub let GraphLiveYield: (Int, Int, String) -> Prop;
-pub let GraphDemand: (Int, std::ir::OperationId, String) -> Prop;
-pub let GraphExecution: (Int, String, Int, std::ir::OperationId) -> Prop;
-pub let GraphLocalState: (Int, String, std::ir::ValueId) -> Prop;
-pub let GraphLiveInState: (Int, String, std::ir::ValueId) -> Prop;
-pub let GraphReplayOp: (Int, std::ir::OperationId) -> Prop;
-pub let DeferredGraphOp: (Int, std::ir::OperationId) -> Prop;
-pub let DeferredRead: (Int, std::ir::OperationId, Int, String) -> Prop;
-pub let ThetaGraph: (Int, Int, std::ir::OperationId) -> Prop; // defining region, body, loop
-pub let ThetaBody: Int -> Prop;
-pub let CapturedGraphOp: (Int, std::ir::OperationId) -> Prop;
-pub let DeferredArmInput: (Int, std::ir::OperationId) -> Prop;
-pub let EagerGraphRead: (Int, std::ir::OperationId) -> Prop;
-pub let FeedbackCapture: (Int, std::ir::OperationId) -> Prop;
-pub let FeedbackOwner: std::Table<(Int, std::ir::OperationId), Int, std::Merge::Min>;
-pub let UnsupportedGraphCapture: std::ir::OperationId -> Prop;
-pub let GraphFeedbackCapture: (std::ir::OperationId, Int, std::ir::OperationId, Bool) -> Prop;
-pub let UndemandedGraphEffect: std::ir::OperationId -> Prop;
 
-let recovery_scope = |root: std::ir::OperationId| {
-    let function_body<r, mode, entry>:
-        (ir::Region(r, mode, root, 0, entry)) ->
-        RecoveryRegion(r);
-    let nested<r, node, gamma, sel, theta, body, pred, polarity, child, mode, slot, entry>:
-        (
-            RecoveryRegion(r), ir::ReaderAt(node, r, node),
-            ir::Control(node, gamma, sel, theta, body, pred, polarity),
-            ir::Region(child, mode, node, slot, entry)
-        ) -> RecoveryRegion(child);
-    let control<r, node, gamma, sel, theta, body, pred, polarity>:
-        (RecoveryRegion(r), ir::ReaderAt(node, r, node), ir::Control(node, gamma, sel, theta, body, pred, polarity)) ->
-        GraphControlOp(node);
-    std::schedule::saturate((function_body, nested, control,))
+use std::core::*;
+use std::ir::{OperationId, ValueId};
+
+pub let RecoveryRegion: Relation<Int>;
+pub let GraphPathLength: Relation<(Int, OperationId, Int)>;
+pub let GraphDepth: Table<(Int, OperationId), Int, Merge::Max>;
+pub let GraphNeededValue: Relation<ValueId>;
+pub let GraphControlOp: Relation<OperationId>;
+pub let GraphNeededPort: Relation<(Int, Int)>;
+pub let GraphStrictInput: Relation<(OperationId, Int)>;
+pub let GraphNeededResult: Relation<(OperationId, Int)>;
+pub let GraphActiveControl: Relation<OperationId>;
+pub let GraphLiveYield: Relation<(Int, Int, String)>;
+pub let GraphDemand: Relation<(Int, OperationId, String)>;
+pub let GraphExecution: Relation<(Int, String, Int, OperationId)>;
+pub let GraphLocalState: Relation<(Int, String, ValueId)>;
+pub let GraphLiveInState: Relation<(Int, String, ValueId)>;
+pub let GraphReplayOp: Relation<(Int, OperationId)>;
+pub let DeferredGraphOp: Relation<(Int, OperationId)>;
+pub let DeferredRead: Relation<(Int, OperationId, Int, String)>;
+pub let ThetaGraph: Relation<(Int, Int, OperationId)>;
+pub let ThetaBody: Relation<Int>;
+pub let CapturedGraphOp: Relation<(Int, OperationId)>;
+pub let DeferredArmInput: Relation<(Int, OperationId)>;
+pub let EagerGraphRead: Relation<(Int, OperationId)>;
+pub let FeedbackCapture: Relation<(Int, OperationId)>;
+pub let FeedbackOwner: Table<(Int, OperationId), Int, Merge::Min>;
+pub let UnsupportedGraphCapture: Relation<OperationId>;
+pub let GraphFeedbackCapture: Relation<(OperationId, Int, OperationId, Bool)>;
+pub let UndemandedGraphEffect: Relation<OperationId>;
+pub let DelayedGraphOp: Relation<OperationId>;
+
+pub let recovery_scope: List<Rule> = {
+    let function_body<r, mode, entry>: Rule((Region(r, mode, arg(0), 0, entry)) -> RecoveryRegion(r));
+    let nested<r, node, gamma, sel, theta, body, pred, polarity, child, mode, slot, entry>: Rule((
+            RecoveryRegion(r), ReaderAt(node, r, node),
+            Control(node, gamma, sel, theta, body, pred, polarity),
+            Region(child, mode, node, slot, entry)
+        ) -> RecoveryRegion(child));
+    let control<r, node, gamma, sel, theta, body, pred, polarity>: Rule((RecoveryRegion(r), ReaderAt(node, r, node), Control(node, gamma, sel, theta, body, pred, polarity)) -> GraphControlOp(node));
+    List(function_body, nested, control)
 };
 
-let dependency_paths = || {
-    let member<r, node, kind, pos, display, loc>:
-        (
+pub let dependency_paths: List<Rule> = {
+    let member<r, node, kind, pos, display, loc>: Rule((
             RecoveryRegion(r),
-            ir::Operation{ id: node, kind: kind, placement: "graph", container: r, position: pos, display: display, location: loc }()
-        ) -> GraphPathLength(r, node, 0);
-    let dependency<r, consumer, producer, d>:
-        (ir::DependsOn(r, consumer, producer), GraphPathLength(r, producer, d), !ir::CyclePath(r, consumer, consumer)) ->
-        GraphPathLength(r, consumer, (d + 1));
-    std::schedule::saturate((member, dependency,))
+            Operation(node, kind, "graph", r, pos, display, loc)
+        ) -> GraphPathLength(r, node, 0));
+    let dependency<r, consumer, producer, d>: Rule((DependsOn(r, consumer, producer), GraphPathLength(r, producer, d), !CyclePath(r, consumer, consumer)) -> GraphPathLength(r, consumer, (d + 1)));
+    List(member, dependency)
 };
 
-let dependency_depth = || {
-    let longest<r, node, d>: GraphPathLength(r, node, d) -> GraphDepth(r, node, d);
-    std::schedule::saturate((longest,))
+pub let dependency_depth: List<Rule> = {
+    let longest<r, node, d>: Rule(GraphPathLength(r, node, d) -> GraphDepth(r, node, d));
+    List(longest)
 };
 
-let live_result_bindings = |root: std::ir::OperationId| {
-    let function_yield<r, mode, entry, slot, val>:
-        (
-            ir::Region(r, mode, root, 0, entry),
-            ir::Yield(r, slot, val)
-        ) -> GraphLiveYield(r, slot, "yield");
-    let cfg_read<r, block, layout, reader, kind, pos, display, loc, slot, val>:
-        (
-            RecoveryRegion(r), ir::Block(block, r, layout),
-            ir::Operation{ id: reader, kind: kind, placement: "block", container: block, position: pos, display: display, location: loc }(),
-            ir::Operand(reader, slot, val), !GraphControlOp(reader)
-        ) -> GraphStrictInput(reader, slot);
-    let cfg_control<r, block, layout, node, kind, pos, display, loc, gamma, sel, theta, body, pred, polarity>:
-        (
-            RecoveryRegion(r), ir::Block(block, r, layout),
-            ir::Operation{ id: node, kind: kind, placement: "block", container: block, position: pos, display: display, location: loc }(),
-            ir::Control(node, gamma, sel, theta, body, pred, polarity)
-        ) -> GraphActiveControl(node);
-    let result<node, val, ty, slot, declared>:
-        (GraphNeededValue(val), ir::result(val, ty, node, slot, declared)) -> GraphNeededResult(node, slot);
-    let operands<r, node, d, result, operand, val>:
-        (GraphDepth(r, node, d), GraphNeededResult(node, result), ir::Operand(node, operand, val), !GraphControlOp(node)) ->
-        GraphStrictInput(node, operand);
-    let graph_control<r, node, d, slot, gamma, sel, theta, body, pred, polarity>:
-        (GraphDepth(r, node, d), GraphNeededResult(node, slot), ir::Control(node, gamma, sel, theta, body, pred, polarity)) ->
-        GraphActiveControl(node);
-    let selector<node, sel, theta, body, pred, polarity>:
-        (GraphActiveControl(node), ir::Control(node, true, sel, theta, body, pred, polarity)) ->
-        GraphStrictInput(node, sel);
-    let port<r, port, val, ty, declared>:
-        (RecoveryRegion(r), GraphNeededValue(val), ir::Value(val, ty, "region", r, port, declared)) ->
-        GraphNeededPort(r, port);
-    let theta_init<node, gamma, sel, body, pred, polarity, port, slot>:
-        (
-            GraphActiveControl(node), ir::Control(node, gamma, sel, true, body, pred, polarity),
-            GraphNeededPort(body, port), ir::Binding(body, "entry", port, slot)
-        ) -> GraphStrictInput(node, slot);
-    let strict_operand<node, slot, val>:
-        (GraphStrictInput(node, slot), ir::Operand(node, slot, val)) -> GraphNeededValue(val);
-    let gamma_init<node, default, key, arm, port, slot, val>:
-        (
-            GraphActiveControl(node), ir::Arm(node, default, key, arm),
-            GraphNeededPort(arm, port), ir::Binding(arm, "entry", port, slot), ir::Operand(node, slot, val)
-        ) -> GraphNeededValue(val);
-    let arm<node, slot, body, default, key, index>:
-        (
+pub let live_result_bindings: List<Rule> = {
+    let function_yield<r, mode, entry, slot, val>: Rule((
+            Region(r, mode, arg(0), 0, entry),
+            Yield(r, slot, val)
+        ) -> GraphLiveYield(r, slot, "yield"));
+    let cfg_read<r, block, layout, reader, kind, pos, display, loc, slot, val>: Rule((
+            RecoveryRegion(r), Block(block, r, layout),
+            Operation(reader, kind, "block", block, pos, display, loc),
+            Operand(reader, slot, val), !GraphControlOp(reader)
+        ) -> GraphStrictInput(reader, slot));
+    let cfg_control<r, block, layout, node, kind, pos, display, loc, gamma, sel, theta, body, pred, polarity>: Rule((
+            RecoveryRegion(r), Block(block, r, layout),
+            Operation(node, kind, "block", block, pos, display, loc),
+            Control(node, gamma, sel, theta, body, pred, polarity)
+        ) -> GraphActiveControl(node));
+    let result<node, val, ty, slot, declared>: Rule((GraphNeededValue(val), Value(val, ty, "result", node, slot, declared)) -> GraphNeededResult(node, slot));
+    let operands<r, node, d, result, operand, val>: Rule((GraphDepth(r, node, d), GraphNeededResult(node, result), Operand(node, operand, val), !GraphControlOp(node)) -> GraphStrictInput(node, operand));
+    let graph_control<r, node, d, slot, gamma, sel, theta, body, pred, polarity>: Rule((GraphDepth(r, node, d), GraphNeededResult(node, slot), Control(node, gamma, sel, theta, body, pred, polarity)) -> GraphActiveControl(node));
+    let selector<node, sel, theta, body, pred, polarity>: Rule((GraphActiveControl(node), Control(node, true, sel, theta, body, pred, polarity)) -> GraphStrictInput(node, sel));
+    let port<r, port, val, ty, declared>: Rule((RecoveryRegion(r), GraphNeededValue(val), Value(val, ty, "region", r, port, declared)) -> GraphNeededPort(r, port));
+    let theta_init<node, gamma, sel, body, pred, polarity, port, slot>: Rule((
+            GraphActiveControl(node), Control(node, gamma, sel, true, body, pred, polarity),
+            GraphNeededPort(body, port), Binding(body, "entry", port, slot)
+        ) -> GraphStrictInput(node, slot));
+    let strict_operand<node, slot, val>: Rule((GraphStrictInput(node, slot), Operand(node, slot, val)) -> GraphNeededValue(val));
+    let gamma_init<node, default, key, arm, port, slot, val>: Rule((
+            GraphActiveControl(node), Arm(node, default, key, arm),
+            GraphNeededPort(arm, port), Binding(arm, "entry", port, slot), Operand(node, slot, val)
+        ) -> GraphNeededValue(val));
+    let arm<node, slot, body, default, key, index>: Rule((
             GraphActiveControl(node), GraphNeededResult(node, slot),
-            ir::Arm(node, default, key, body), ir::Binding(body, "exit", slot, index)
-        ) -> GraphLiveYield(body, index, "yield");
-    let predicate<node, gamma, sel, body, pred, polarity>:
-        (GraphActiveControl(node), ir::Control(node, gamma, sel, true, body, pred, polarity)) ->
-        GraphLiveYield(body, pred, "head");
-    let feedback<node, gamma, sel, body, pred, polarity, port, index>:
-        (
-            GraphActiveControl(node), ir::Control(node, gamma, sel, true, body, pred, polarity),
-            GraphNeededPort(body, port), ir::Binding(body, "feedback", port, index)
-        ) -> GraphLiveYield(body, index, "feedback");
-    let exit<node, slot, gamma, sel, body, pred, polarity, index>:
-        (
-            GraphActiveControl(node), GraphNeededResult(node, slot), ir::Control(node, gamma, sel, true, body, pred, polarity),
-            ir::Binding(body, "exit", slot, index)
-        ) -> GraphLiveYield(body, index, "exit");
-    let yield_value<r, slot, part, val>:
-        (GraphLiveYield(r, slot, part), ir::Yield(r, slot, val)) -> GraphNeededValue(val);
-    std::schedule::saturate((
-        function_yield, cfg_read, cfg_control, result, operands,
-        graph_control, selector, port, theta_init, strict_operand,
-        gamma_init, arm, predicate, feedback, exit,
-        yield_value,
-    ))
+            Arm(node, default, key, body), Binding(body, "exit", slot, index)
+        ) -> GraphLiveYield(body, index, "yield"));
+    let predicate<node, gamma, sel, body, pred, polarity>: Rule((GraphActiveControl(node), Control(node, gamma, sel, true, body, pred, polarity)) -> GraphLiveYield(body, pred, "head"));
+    let feedback<node, gamma, sel, body, pred, polarity, port, index>: Rule((
+            GraphActiveControl(node), Control(node, gamma, sel, true, body, pred, polarity),
+            GraphNeededPort(body, port), Binding(body, "feedback", port, index)
+        ) -> GraphLiveYield(body, index, "feedback"));
+    let exit<node, slot, gamma, sel, body, pred, polarity, index>: Rule((
+            GraphActiveControl(node), GraphNeededResult(node, slot), Control(node, gamma, sel, true, body, pred, polarity),
+            Binding(body, "exit", slot, index)
+        ) -> GraphLiveYield(body, index, "exit"));
+    let yield_value<r, slot, part, val>: Rule((GraphLiveYield(r, slot, part), Yield(r, slot, val)) -> GraphNeededValue(val));
+    List(function_yield, cfg_read, cfg_control, result, operands, graph_control, selector, port, theta_init, strict_operand, gamma_init, arm, predicate, feedback, exit, yield_value)
 };
 
-let graph_demand_producer = || {
-    let yielded<r, slot, part, val, ty, producer, output, declared, d>:
-        (
-            GraphLiveYield(r, slot, part), ir::Yield(r, slot, val),
-            ir::result(val, ty, producer, output, declared), GraphDepth(r, producer, d)
-        ) -> (GraphDemand(r, producer, part), GraphDemand(r, producer, "yield"));
-    let operand<r, member, part, reader, operand, val, ty, producer, slot, declared, d>:
-        (
-            GraphDemand(r, member, part), ir::ReaderAt(reader, r, member),
-            GraphStrictInput(reader, operand), ir::Operand(reader, operand, val),
-            ir::result(val, ty, producer, slot, declared), GraphDepth(r, producer, d)
-        ) -> GraphDemand(r, producer, part);
-    let forwarded<r, member, part, reader, arm, default, key, port, operand, val, ty, producer, slot, declared, d>:
-        (
-            GraphDemand(r, member, part), ir::ReaderAt(reader, r, member),
-            ir::Arm(reader, default, key, arm), GraphNeededPort(arm, port),
-            ir::Binding(arm, "entry", port, operand), ir::Operand(reader, operand, val),
-            ir::result(val, ty, producer, slot, declared), GraphDepth(r, producer, d)
-        ) -> GraphDemand(r, producer, part);
-    let nested_yield<r, member, part, reader, child, mode, regslot, entry, index, yield_part, val, ty, producer, slot, declared, d>:
-        (
-            GraphDemand(r, member, part), ir::ReaderAt(reader, r, member),
-            ir::Region(child, mode, reader, regslot, entry), GraphLiveYield(child, index, yield_part),
-            ir::Yield(child, index, val), ir::result(val, ty, producer, slot, declared),
+pub let graph_demand_producer: List<Rule> = {
+    let yielded<r, slot, part, val, ty, producer, output, declared, d>: Rule((
+            GraphLiveYield(r, slot, part), Yield(r, slot, val),
+            Value(val, ty, "result", producer, output, declared), GraphDepth(r, producer, d)
+        ) -> (GraphDemand(r, producer, part), GraphDemand(r, producer, "yield")));
+    let operand<r, member, part, reader, operand, val, ty, producer, slot, declared, d>: Rule((
+            GraphDemand(r, member, part), ReaderAt(reader, r, member),
+            GraphStrictInput(reader, operand), Operand(reader, operand, val),
+            Value(val, ty, "result", producer, slot, declared), GraphDepth(r, producer, d)
+        ) -> GraphDemand(r, producer, part));
+    let forwarded<r, member, part, reader, arm, default, key, port, operand, val, ty, producer, slot, declared, d>: Rule((
+            GraphDemand(r, member, part), ReaderAt(reader, r, member),
+            Arm(reader, default, key, arm), GraphNeededPort(arm, port),
+            Binding(arm, "entry", port, operand), Operand(reader, operand, val),
+            Value(val, ty, "result", producer, slot, declared), GraphDepth(r, producer, d)
+        ) -> GraphDemand(r, producer, part));
+    let nested_yield<r, member, part, reader, child, mode, regslot, entry, index, yield_part, val, ty, producer, slot, declared, d>: Rule((
+            GraphDemand(r, member, part), ReaderAt(reader, r, member),
+            Region(child, mode, reader, regslot, entry), GraphLiveYield(child, index, yield_part),
+            Yield(child, index, val), Value(val, ty, "result", producer, slot, declared),
             GraphDepth(r, producer, d)
-        ) -> GraphDemand(r, producer, part);
-    std::schedule::saturate((yielded, operand, forwarded, nested_yield,))
+        ) -> GraphDemand(r, producer, part));
+    List(yielded, operand, forwarded, nested_yield)
 };
 
-// Dependency edges also order computations whose evaluation is deferred
-// across a region boundary. Only the live read determines the first demand.
-let deferred_ops = || {
-    let read<r, node, d, pos, display, loc>:
-        (
+pub let deferred_ops: List<Rule> = {
+    let read<r, node, d, pos, display, loc>: Rule((
             GraphDepth(r, node, d),
-            ir::Operation{ id: node, kind: dialects::ptr::load.kind, placement: "graph", container: r, position: pos, display: display, location: loc }()
-        ) -> DeferredGraphOp(r, node);
-    let call<r, node, d, pos, display, loc>:
-        (
+            Operation(node, dialects::ptr::load.kind, "graph", r, pos, display, loc)
+        ) -> DeferredGraphOp(r, node));
+    let call<r, node, d, pos, display, loc>: Rule((
             GraphDepth(r, node, d),
-            ir::Operation{ id: node, kind: dialects::func::call.kind, placement: "graph", container: r, position: pos, display: display, location: loc }()
-        ) -> DeferredGraphOp(r, node);
-    let loop_node<r, node, d, flag, sel, body, pred, polarity>:
-        (GraphDepth(r, node, d), ir::Control(node, flag, sel, true, body, pred, polarity)) ->
-        (DeferredGraphOp(r, node), ThetaGraph(r, body, node));
-    let gamma_yield<r, node, d, default, key, arm, slot, val, ty, home, producer, output, declared>:
-        (
-            GraphDepth(r, node, d), ir::Arm(node, default, key, arm),
-            GraphLiveYield(arm, slot, "yield"), ir::Yield(arm, slot, val),
-            ir::result(val, ty, producer, output, declared), DeferredGraphOp(home, producer)
-        ) -> (DeferredGraphOp(r, node), GraphReplayOp(r, node));
-    let gamma_selector<r, node, d, sel, theta, body, pred, polarity, val, ty, home, producer, output, declared>:
-        (
-            GraphDepth(r, node, d), ir::Control(node, true, sel, theta, body, pred, polarity),
-            ir::Operand(node, sel, val), ir::result(val, ty, producer, output, declared),
+            Operation(node, dialects::func::call.kind, "graph", r, pos, display, loc)
+        ) -> DeferredGraphOp(r, node));
+    let loop_node<r, node, d, flag, sel, body, pred, polarity>: Rule((GraphDepth(r, node, d), Control(node, flag, sel, true, body, pred, polarity)) -> (DeferredGraphOp(r, node), ThetaGraph(r, body, node)));
+    let gamma_yield<r, node, d, default, key, arm, slot, val, ty, home, producer, output, declared>: Rule((
+            GraphDepth(r, node, d), Arm(node, default, key, arm),
+            GraphLiveYield(arm, slot, "yield"), Yield(arm, slot, val),
+            Value(val, ty, "result", producer, output, declared), DeferredGraphOp(home, producer)
+        ) -> (DeferredGraphOp(r, node), GraphReplayOp(r, node)));
+    let gamma_selector<r, node, d, sel, theta, body, pred, polarity, val, ty, home, producer, output, declared>: Rule((
+            GraphDepth(r, node, d), Control(node, true, sel, theta, body, pred, polarity),
+            Operand(node, sel, val), Value(val, ty, "result", producer, output, declared),
             DeferredGraphOp(home, producer)
-        ) -> (DeferredGraphOp(r, node), GraphReplayOp(r, node));
-    let dependent<r, node, d, operand, value, ty, home, producer, slot, declared>:
-        (
-            GraphDepth(r, node, d), GraphStrictInput(node, operand), ir::Operand(node, operand, value),
-            ir::result(value, ty, producer, slot, declared), DeferredGraphOp(home, producer)
-        ) -> DeferredGraphOp(r, node);
-    std::schedule::saturate((
-        read, call, loop_node, gamma_yield, gamma_selector,
-        dependent,
-    ))
+        ) -> (DeferredGraphOp(r, node), GraphReplayOp(r, node)));
+    let dependent<r, node, d, operand, value, ty, home, producer, slot, declared>: Rule((
+            GraphDepth(r, node, d), GraphStrictInput(node, operand), Operand(node, operand, value),
+            Value(value, ty, "result", producer, slot, declared), DeferredGraphOp(home, producer)
+        ) -> DeferredGraphOp(r, node));
+    List(read, call, loop_node, gamma_yield, gamma_selector, dependent)
 };
 
-let theta_bodies = || {
-    let body<node, flag, sel, body, pred, polarity>:
-        ir::Control(node, flag, sel, true, body, pred, polarity) -> ThetaBody(body);
-    std::schedule::saturate((body,))
+pub let theta_bodies: List<Rule> = {
+    let body<node, flag, sel, body, pred, polarity>: Rule(Control(node, flag, sel, true, body, pred, polarity) -> ThetaBody(body));
+    List(body)
 };
 
-let deferred_reads = || {
-    let read<home, producer, site, reader, operand, value, ty, slot, declared, part>:
-        (
+pub let deferred_reads: List<Rule> = {
+    let read<home, producer, site, reader, operand, value, ty, slot, declared, part>: Rule((
             GraphDemand(site, reader, part), part != "yield",
-            GraphStrictInput(reader, operand), ir::Operand(reader, operand, value),
-            ir::result(value, ty, producer, slot, declared),
+            GraphStrictInput(reader, operand), Operand(reader, operand, value),
+            Value(value, ty, "result", producer, slot, declared),
             DeferredGraphOp(home, producer), !DeferredGraphOp(site, reader)
-        ) -> DeferredRead(home, producer, site, part);
-    let region_read<home, producer, site, reader, operand, value, ty, slot, declared>:
-        (
+        ) -> DeferredRead(home, producer, site, part));
+    let region_read<home, producer, site, reader, operand, value, ty, slot, declared>: Rule((
             GraphDemand(site, reader, "yield"), !ThetaBody(site),
-            GraphStrictInput(reader, operand), ir::Operand(reader, operand, value),
-            ir::result(value, ty, producer, slot, declared),
+            GraphStrictInput(reader, operand), Operand(reader, operand, value),
+            Value(value, ty, "result", producer, slot, declared),
             DeferredGraphOp(home, producer), !DeferredGraphOp(site, reader)
-        ) -> DeferredRead(home, producer, site, "yield");
-    let yielded<home, producer, site, index, part, value, ty, slot, declared>:
-        (
-            GraphLiveYield(site, index, part), ir::Yield(site, index, value),
-            ir::result(value, ty, producer, slot, declared), DeferredGraphOp(home, producer)
-        ) -> DeferredRead(home, producer, site, part);
-    let dependent<home, reader_home, producer, site, reader, operand, value, ty, slot, declared, part>:
-        (
+        ) -> DeferredRead(home, producer, site, "yield"));
+    let yielded<home, producer, site, index, part, value, ty, slot, declared>: Rule((
+            GraphLiveYield(site, index, part), Yield(site, index, value),
+            Value(value, ty, "result", producer, slot, declared), DeferredGraphOp(home, producer)
+        ) -> DeferredRead(home, producer, site, part));
+    let dependent<home, reader_home, producer, site, reader, operand, value, ty, slot, declared, part>: Rule((
             DeferredRead(reader_home, reader, site, part), GraphStrictInput(reader, operand),
-            ir::Operand(reader, operand, value),
-            ir::result(value, ty, producer, slot, declared), DeferredGraphOp(home, producer)
-        ) -> DeferredRead(home, producer, site, part);
-    std::schedule::saturate((read, region_read, yielded, dependent,))
+            Operand(reader, operand, value),
+            Value(value, ty, "result", producer, slot, declared), DeferredGraphOp(home, producer)
+        ) -> DeferredRead(home, producer, site, part));
+    List(read, region_read, yielded, dependent)
 };
 
-let capture_sites = || {
-    let captured<home, node, site, part>:
-        (DeferredRead(home, node, site, part), home != site) -> CapturedGraphOp(home, node);
-    let feedback<home, node, site, loop>:
-        (DeferredRead(home, node, site, "feedback"), ThetaGraph(home, site, loop)) ->
-        (FeedbackOwner(home, node, site), FeedbackCapture(home, node));
-    let local_yield<home, node>:
-        DeferredRead(home, node, home, "yield") -> EagerGraphRead(home, node);
-    let local_header<home, node>:
-        DeferredRead(home, node, home, "head") -> EagerGraphRead(home, node);
-    let arm_input<home, node, gamma, default, key, arm, port, slot, val, ty, result, declared>:
-        (
-            GraphActiveControl(gamma), ir::Arm(gamma, default, key, arm),
-            GraphNeededPort(arm, port), ir::Binding(arm, "entry", port, slot), ir::Operand(gamma, slot, val),
-            ir::result(val, ty, node, result, declared), DeferredGraphOp(home, node)
-        ) -> DeferredArmInput(home, node);
-    std::schedule::saturate((captured, feedback, local_yield, local_header, arm_input,))
+pub let capture_sites: List<Rule> = {
+    let captured<home, node, site, part>: Rule((DeferredRead(home, node, site, part), home != site) -> CapturedGraphOp(home, node));
+    let feedback<home, node, site, loop>: Rule((DeferredRead(home, node, site, "feedback"), ThetaGraph(home, site, loop)) -> (FeedbackOwner(home, node, site), FeedbackCapture(home, node)));
+    let local_yield<home, node>: Rule(DeferredRead(home, node, home, "yield") -> EagerGraphRead(home, node));
+    let local_header<home, node>: Rule(DeferredRead(home, node, home, "head") -> EagerGraphRead(home, node));
+    let arm_input<home, node, gamma, default, key, arm, port, slot, val, ty, result, declared>: Rule((
+            GraphActiveControl(gamma), Arm(gamma, default, key, arm),
+            GraphNeededPort(arm, port), Binding(arm, "entry", port, slot), Operand(gamma, slot, val),
+            Value(val, ty, "result", node, result, declared), DeferredGraphOp(home, node)
+        ) -> DeferredArmInput(home, node));
+    List(captured, feedback, local_yield, local_header, arm_input)
 };
 
-let capture_legality = || {
-    let no_cut<home, node>:
-        (CapturedGraphOp(home, node), !EagerGraphRead(home, node), !FeedbackCapture(home, node)) ->
-        UnsupportedGraphCapture(node);
-    let other_phase<home, node, site, other, part>:
-        (FeedbackOwner(home, node, site), DeferredRead(home, node, other, part), part != "feedback") ->
-        UnsupportedGraphCapture(node);
-    let different<home, node, site, other>:
-        (FeedbackOwner(home, node, site), DeferredRead(home, node, other, "feedback"), site != other) ->
-        UnsupportedGraphCapture(node);
-    let type<home, node, site, value, ty, slot, declared, ctor, args, dialect, name, decl, default>:
-        (
-            FeedbackOwner(home, node, site), GraphNeededResult(node, slot), ir::result(value, ty, node, slot, declared),
-            ir::TypeTerm(ty, ctor, args), ir::TypeCtor(ctor, dialect, name, decl, default),
-            !ir::TypeCtor(ctor, "builtin", "i", decl, default)
-        ) -> UnsupportedGraphCapture(node);
-    let conditional_input<home, node>:
-        (DeferredArmInput(home, node), !EagerGraphRead(home, node)) -> UnsupportedGraphCapture(node);
-    let replay_input<home, node, site, replay>:
-        (
+pub let capture_legality: List<Rule> = {
+    let no_cut<home, node>: Rule((CapturedGraphOp(home, node), !EagerGraphRead(home, node), !FeedbackCapture(home, node)) -> UnsupportedGraphCapture(node));
+    let other_phase<home, node, site, other, part>: Rule((FeedbackOwner(home, node, site), DeferredRead(home, node, other, part), part != "feedback") -> UnsupportedGraphCapture(node));
+    let different<home, node, site, other>: Rule((FeedbackOwner(home, node, site), DeferredRead(home, node, other, "feedback"), site != other) -> UnsupportedGraphCapture(node));
+    let value_type<home, node, site, value, ty, slot, declared, ctor, args, dialect, name, decl, default>: Rule((
+            FeedbackOwner(home, node, site), GraphNeededResult(node, slot), Value(value, ty, "result", node, slot, declared),
+            TypeTerm(ty, ctor, args), TypeCtor(ctor, dialect, name, decl, default),
+            !TypeCtor(ctor, "builtin", "i", decl, default)
+        ) -> UnsupportedGraphCapture(node));
+    let conditional_input<home, node>: Rule((DeferredArmInput(home, node), !EagerGraphRead(home, node)) -> UnsupportedGraphCapture(node));
+    let replay_input<home, node, site, replay>: Rule((
             FeedbackOwner(home, node, site), FeedbackOwner(home, replay, site),
-            ir::DependsOn(home, node, replay), GraphReplayOp(home, replay), !GraphReplayOp(home, node)
-        ) -> UnsupportedGraphCapture(node);
-    let state_input<home, node, site, reader, slot, value, ty, def, owner, vslot, declared>:
-        (
-            FeedbackOwner(home, node, site), ir::ReaderAt(reader, home, node),
-            ir::Operand(reader, slot, value), ir::Value(value, ty, def, owner, vslot, declared),
-            analysis::cfg::StateTypeId(ty)
-        ) -> UnsupportedGraphCapture(node);
-    std::schedule::saturate((
-        no_cut, other_phase, different, type, conditional_input,
-        replay_input, state_input,
-    ))
+            DependsOn(home, node, replay), GraphReplayOp(home, replay), !GraphReplayOp(home, node)
+        ) -> UnsupportedGraphCapture(node));
+    let state_input<home, node, site, reader, slot, value, ty, def, owner, vslot, declared>: Rule((
+            FeedbackOwner(home, node, site), ReaderAt(reader, home, node),
+            Operand(reader, slot, value), Value(value, ty, def, owner, vslot, declared),
+            StateTypeId(ty)
+        ) -> UnsupportedGraphCapture(node));
+    List(no_cut, other_phase, different, value_type, conditional_input, replay_input, state_input)
 };
 
-let feedback_captures = || {
-    let delay<home, node, site, loop, rank>:
-        (
+pub let feedback_captures: List<Rule> = {
+    let delay<home, node, site, loop, rank>: Rule((
             FeedbackOwner(home, node, site), ThetaGraph(home, site, loop),
             GraphDepth(home, node, rank), !UnsupportedGraphCapture(node), !GraphReplayOp(home, node)
-        ) -> GraphFeedbackCapture(loop, rank, node, false);
-    let replay<home, node, site, loop, rank>:
-        (
+        ) -> GraphFeedbackCapture(loop, rank, node, false));
+    let replay<home, node, site, loop, rank>: Rule((
             FeedbackOwner(home, node, site), ThetaGraph(home, site, loop),
             GraphDepth(home, node, rank), !UnsupportedGraphCapture(node), GraphReplayOp(home, node)
-        ) -> GraphFeedbackCapture(loop, rank, node, true);
-    std::schedule::saturate((delay, replay,))
+        ) -> GraphFeedbackCapture(loop, rank, node, true));
+    List(delay, replay)
 };
 
-pub let DelayedGraphOp: std::ir::OperationId -> Prop;
-let delayed_ops = || {
-    let delayed<loop, rank, node, replay>: GraphFeedbackCapture(loop, rank, node, replay) -> DelayedGraphOp(node);
-    std::schedule::saturate((delayed,))
+pub let delayed_ops: List<Rule> = {
+    let delayed<loop, rank, node, replay>: Rule(GraphFeedbackCapture(loop, rank, node, replay) -> DelayedGraphOp(node));
+    List(delayed)
 };
-let execution_parts = || {
-    let yielded<r, node, d>:
-        (GraphDepth(r, node, d), GraphDemand(r, node, "yield"), !DelayedGraphOp(node)) ->
-        GraphExecution(r, "yield", d, node);
-    let header<r, node, d>:
-        (GraphDepth(r, node, d), GraphDemand(r, node, "head"), !DelayedGraphOp(node)) ->
-        GraphExecution(r, "head", d, node);
-    let shared<r, node, d>:
-        (GraphDepth(r, node, d), GraphDemand(r, node, "feedback"), GraphDemand(r, node, "exit"), !DelayedGraphOp(node)) ->
-        GraphExecution(r, "head", d, node);
-    let feedback<r, node, d>:
-        (GraphDepth(r, node, d), GraphDemand(r, node, "feedback"), !GraphDemand(r, node, "head"), !GraphDemand(r, node, "exit"), !DelayedGraphOp(node)) ->
-        GraphExecution(r, "feedback", d, node);
-    let exit<r, node, d>:
-        (GraphDepth(r, node, d), GraphDemand(r, node, "exit"), !GraphDemand(r, node, "head"), !GraphDemand(r, node, "feedback"), !DelayedGraphOp(node)) ->
-        GraphExecution(r, "exit", d, node);
-    let undemanded<r, node, d, v, ty, slot, declared>:
-        (
+
+pub let execution_parts: List<Rule> = {
+    let yielded<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "yield"), !DelayedGraphOp(node)) -> GraphExecution(r, "yield", d, node));
+    let header<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "head"), !DelayedGraphOp(node)) -> GraphExecution(r, "head", d, node));
+    let shared<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "feedback"), GraphDemand(r, node, "exit"), !DelayedGraphOp(node)) -> GraphExecution(r, "head", d, node));
+    let feedback<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "feedback"), !GraphDemand(r, node, "head"), !GraphDemand(r, node, "exit"), !DelayedGraphOp(node)) -> GraphExecution(r, "feedback", d, node));
+    let exit<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "exit"), !GraphDemand(r, node, "head"), !GraphDemand(r, node, "feedback"), !DelayedGraphOp(node)) -> GraphExecution(r, "exit", d, node));
+    let undemanded<r, node, d, v, ty, slot, declared>: Rule((
             GraphDepth(r, node, d), !GraphDemand(r, node, "yield"),
-            ir::result(v, ty, node, slot, declared), analysis::cfg::StateTypeId(ty)
-        ) -> UndemandedGraphEffect(node);
-    std::schedule::saturate((
-        yielded, header, shared, feedback, exit,
-        undemanded,
-    ))
+            Value(v, ty, "result", node, slot, declared), StateTypeId(ty)
+        ) -> UndemandedGraphEffect(node));
+    List(yielded, header, shared, feedback, exit, undemanded)
 };
 
-let local_state = || {
-    let result<r, part, d, member, node, v, ty, slot, declared>:
-        (
-            GraphExecution(r, part, d, member), ir::ReaderAt(node, r, member),
-            ir::result(v, ty, node, slot, declared), analysis::cfg::StateTypeId(ty)
-        ) -> GraphLocalState(r, part, v);
-    let nested_port<r, part, d, member, owner, body, mode, regslot, entry, v, ty, slot, declared>:
-        (
-            GraphExecution(r, part, d, member), ir::ReaderAt(owner, r, member),
-            ir::Region(body, mode, owner, regslot, entry),
-            ir::Value(v, ty, "region", body, slot, declared), analysis::cfg::StateTypeId(ty)
-        ) -> GraphLocalState(r, part, v);
-    let nested_block_arg<r, part, d, member, owner, body, mode, regslot, entry, block, layout, v, ty, slot, declared>:
-        (
-            GraphExecution(r, part, d, member), ir::ReaderAt(owner, r, member),
-            ir::Region(body, mode, owner, regslot, entry), ir::Block(block, body, layout),
-            ir::Value(v, ty, "block", block, slot, declared), analysis::cfg::StateTypeId(ty)
-        ) -> GraphLocalState(r, part, v);
-    std::schedule::saturate((result, nested_port, nested_block_arg,))
+pub let local_state: List<Rule> = {
+    let result<r, part, d, member, node, v, ty, slot, declared>: Rule((
+            GraphExecution(r, part, d, member), ReaderAt(node, r, member),
+            Value(v, ty, "result", node, slot, declared), StateTypeId(ty)
+        ) -> GraphLocalState(r, part, v));
+    let nested_port<r, part, d, member, owner, body, mode, regslot, entry, v, ty, slot, declared>: Rule((
+            GraphExecution(r, part, d, member), ReaderAt(owner, r, member),
+            Region(body, mode, owner, regslot, entry),
+            Value(v, ty, "region", body, slot, declared), StateTypeId(ty)
+        ) -> GraphLocalState(r, part, v));
+    let nested_block_arg<r, part, d, member, owner, body, mode, regslot, entry, block, layout, v, ty, slot, declared>: Rule((
+            GraphExecution(r, part, d, member), ReaderAt(owner, r, member),
+            Region(body, mode, owner, regslot, entry), Block(block, body, layout),
+            Value(v, ty, "block", block, slot, declared), StateTypeId(ty)
+        ) -> GraphLocalState(r, part, v));
+    List(result, nested_port, nested_block_arg)
 };
 
-let live_in_state = || {
-    let read<r, part, d, member, reader, slot, v, ty, definition, owner, port, declared>:
-        (
+pub let live_in_state: List<Rule> = {
+    let read<r, part, d, member, reader, slot, v, ty, definition, owner, port, declared>: Rule((
             GraphExecution(r, part, d, member), part != "head", part != "yield",
-            ir::ReaderAt(reader, r, member), GraphStrictInput(reader, slot), ir::Operand(reader, slot, v),
-            ir::Value(v, ty, definition, owner, port, declared), analysis::cfg::StateTypeId(ty),
+            ReaderAt(reader, r, member), GraphStrictInput(reader, slot), Operand(reader, slot, v),
+            Value(v, ty, definition, owner, port, declared), StateTypeId(ty),
             !GraphLocalState(r, part, v)
-        ) -> GraphLiveInState(r, part, v);
-    let forwarded<r, part, d, member, reader, arm, default, key, port, slot, v, ty, definition, owner, value_slot, declared>:
-        (
+        ) -> GraphLiveInState(r, part, v));
+    let forwarded<r, part, d, member, reader, arm, default, key, port, slot, v, ty, definition, owner, value_slot, declared>: Rule((
             GraphExecution(r, part, d, member), part != "head", part != "yield",
-            ir::ReaderAt(reader, r, member), ir::Arm(reader, default, key, arm),
-            GraphNeededPort(arm, port), ir::Binding(arm, "entry", port, slot), ir::Operand(reader, slot, v),
-            ir::Value(v, ty, definition, owner, value_slot, declared), analysis::cfg::StateTypeId(ty),
+            ReaderAt(reader, r, member), Arm(reader, default, key, arm),
+            GraphNeededPort(arm, port), Binding(arm, "entry", port, slot), Operand(reader, slot, v),
+            Value(v, ty, definition, owner, value_slot, declared), StateTypeId(ty),
             !GraphLocalState(r, part, v)
-        ) -> GraphLiveInState(r, part, v);
-    let nested_yield<r, part, d, member, reader, body, mode, regslot, entry, slot, yield_part, v, ty, definition, owner, port, declared>:
-        (
+        ) -> GraphLiveInState(r, part, v));
+    let nested_yield<r, part, d, member, reader, body, mode, regslot, entry, slot, yield_part, v, ty, definition, owner, port, declared>: Rule((
             GraphExecution(r, part, d, member), part != "head", part != "yield",
-            ir::ReaderAt(reader, r, member), ir::Region(body, mode, reader, regslot, entry),
-            GraphLiveYield(body, slot, yield_part), ir::Yield(body, slot, v), ir::Value(v, ty, definition, owner, port, declared),
-            analysis::cfg::StateTypeId(ty), !GraphLocalState(r, part, v)
-        ) -> GraphLiveInState(r, part, v);
-    let outgoing<r, part, d, member, slot, v, ty, definition, owner, value_slot, declared>:
-        (
+            ReaderAt(reader, r, member), Region(body, mode, reader, regslot, entry),
+            GraphLiveYield(body, slot, yield_part), Yield(body, slot, v), Value(v, ty, definition, owner, port, declared),
+            StateTypeId(ty), !GraphLocalState(r, part, v)
+        ) -> GraphLiveInState(r, part, v));
+    let outgoing<r, part, d, member, slot, v, ty, definition, owner, value_slot, declared>: Rule((
             GraphExecution(r, part, d, member), part != "head", part != "yield",
-            GraphLiveYield(r, slot, part), ir::Yield(r, slot, v),
-            ir::Value(v, ty, definition, owner, value_slot, declared), analysis::cfg::StateTypeId(ty),
+            GraphLiveYield(r, slot, part), Yield(r, slot, v),
+            Value(v, ty, definition, owner, value_slot, declared), StateTypeId(ty),
             !GraphLocalState(r, part, v)
-        ) -> GraphLiveInState(r, part, v);
-    std::schedule::saturate((read, forwarded, nested_yield, outgoing,))
+        ) -> GraphLiveInState(r, part, v));
+    List(read, forwarded, nested_yield, outgoing)
 };
 
-pub let recover = memo |root: std::ir::OperationId| {
-    std::schedule::sequence((
-        analysis::cfg::state_types(),
-        recovery_scope(root),
-        dependency_paths(),
-        dependency_depth(),
-        live_result_bindings(root),
-        graph_demand_producer(),
-        deferred_ops(),
-        theta_bodies(),
-        deferred_reads(),
-        capture_sites(),
-        capture_legality(),
-        feedback_captures(),
-        delayed_ops(),
-        execution_parts(),
-        local_state(),
-        live_in_state(),
-    ))?;
-    {
-        GraphExecution: GraphExecution,
-        GraphFeedbackCapture: GraphFeedbackCapture,
-        GraphLiveInState: GraphLiveInState,
-        GraphNeededPort: GraphNeededPort,
-        GraphNeededResult: GraphNeededResult,
-        UndemandedGraphEffect: UndemandedGraphEffect,
-        UnsupportedGraphCapture: UnsupportedGraphCapture,
-    }
+extract rust recovery_scope => "@ct";
+extract rust dependency_paths => "@ct";
+extract rust dependency_depth => "@ct";
+extract rust live_result_bindings => "@ct";
+extract rust graph_demand_producer => "@ct";
+extract rust deferred_ops => "@ct";
+extract rust theta_bodies => "@ct";
+extract rust deferred_reads => "@ct";
+extract rust capture_sites => "@ct";
+extract rust capture_legality => "@ct";
+extract rust feedback_captures => "@ct";
+extract rust delayed_ops => "@ct";
+extract rust execution_parts => "@ct";
+extract rust local_state => "@ct";
+extract rust live_in_state => "@ct";
+
+pub let recover = memo |root: OperationId| {
+    (
+        Schedule::Seq(List(
+            Schedule::Saturate(analysis::cfg::state_types),
+            Schedule::Saturate(recovery_scope),
+            Schedule::Saturate(dependency_paths),
+            Schedule::Saturate(dependency_depth),
+            Schedule::Saturate(live_result_bindings),
+            Schedule::Saturate(graph_demand_producer),
+            Schedule::Saturate(deferred_ops),
+            Schedule::Saturate(theta_bodies),
+            Schedule::Saturate(deferred_reads),
+            Schedule::Saturate(capture_sites),
+            Schedule::Saturate(capture_legality),
+            Schedule::Saturate(feedback_captures),
+            Schedule::Saturate(delayed_ops),
+            Schedule::Saturate(execution_parts),
+            Schedule::Saturate(local_state),
+            Schedule::Saturate(live_in_state),
+        )),
+        {
+            GraphExecution: "GraphExecution",
+            GraphFeedbackCapture: "GraphFeedbackCapture",
+            GraphLiveInState: "GraphLiveInState",
+            GraphNeededPort: "GraphNeededPort",
+            GraphNeededResult: "GraphNeededResult",
+            UndemandedGraphEffect: "UndemandedGraphEffect",
+            UnsupportedGraphCapture: "UnsupportedGraphCapture",
+        },
+    )
 };

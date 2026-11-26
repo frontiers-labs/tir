@@ -1,44 +1,32 @@
-use std::ir::interfaces::*;
+use std::core::*;
+use std::ir::{AnyRegion, Function, State, TypeAttr};
 
-pub let call = {
-    rust_name: "CallOp",
-    name: "call",
-    dialect: "func",
-    operands: { callee: "fn<_, _>", args: "*_" },
-    results: { result: "_" },
+pub let call = op {
+    signature: (callee: Function<Any, Any>, args: ..Any, state: ..State) -> (result: Any, out_state: ..State),
     interfaces: (Apply, ResourceEffects),
     custom_format: true,
-    state: "in_out",
+    macro_def: true,
 };
 
-pub let declare = {
-    rust_name: "DeclareOp",
-    name: "declare",
-    dialect: "func",
-    results: { result: "fn<_, _>" },
-    attributes: { sym_name: "Str" },
+pub let declare = op {
+    signature: () -> (result: Function<Any, Any>),
+    attributes: { sym_name: String },
     interfaces: (Symbol, Callable),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };
 
-pub let func = {
-    rust_name: "FuncOp",
-    name: "func",
-    dialect: "func",
-    results: { result: "fn<_, _>" },
-    attributes: { sym_name: "Str", ret_type: "Type" },
+pub let func = op {
+    signature: () -> (result: Function<Any, Any>),
+    attributes: { sym_name: String, ret_type: TypeAttr },
+    regions: (body: AnyRegion),
     interfaces: (Symbol, Callable),
-    regions: { body: { kind: "Any", variadic: false } },
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };
 
-pub let r#return = {
-    rust_name: "ReturnOp",
-    name: "return",
-    dialect: "func",
-    operands: { value: "?_" },
-    interfaces: Terminator,
-    state: "in",
+pub let r#return = op {
+    signature: (value: Option<Any>, state: ..State) -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
 };

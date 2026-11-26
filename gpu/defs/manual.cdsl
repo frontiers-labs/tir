@@ -1,122 +1,109 @@
-use std::ir::interfaces::*;
+use std::core::*;
+use std::ir::{ArrayAttr, Cfg, DictAttr};
 
-pub let module = {
-    rust_name: "ModuleOp",
-    name: "module",
+pub let module = op {
     dialect: "spirv",
-    attributes: { version: "Str", addressing_model: "Str", memory_model: "Str" },
-    regions: { body: { kind: "Blocks", variadic: false } },
-    state: "none",
+    signature: () -> (),
+    attributes: { version: String, addressing_model: String, memory_model: String },
+    regions: (body: Cfg),
+    macro_def: true,
 };
 
-pub let module_end = {
-    rust_name: "ModuleEndOp",
-    name: "module_end",
+pub let module_end = op {
     dialect: "spirv",
-    interfaces: Terminator,
-    state: "none",
+    signature: () -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
 };
 
-pub let Capability = {
+pub let Capability = op {
+    dialect: "spirv",
     rust_name: "CapabilityOp",
-    name: "Capability",
-    dialect: "spirv",
-    attributes: { name: "Str" },
-    state: "none",
+    signature: () -> (),
+    attributes: { name: String },
+    macro_def: true,
 };
 
-pub let GlobalVariable = {
+pub let GlobalVariable = op {
+    dialect: "spirv",
     rust_name: "GlobalVariableOp",
-    name: "GlobalVariable",
-    dialect: "spirv",
-    results: { result: "_" },
-    attributes: { sym_name: "Str", storage_class: "Str", decorations: "Dict" },
-    state: "none",
+    signature: () -> (result: Any),
+    attributes: { sym_name: String, storage_class: String, decorations: DictAttr },
+    macro_def: true,
 };
 
-pub let EntryPoint = {
+pub let EntryPoint = op {
+    dialect: "spirv",
     rust_name: "EntryPointOp",
-    name: "EntryPoint",
-    dialect: "spirv",
-    attributes: { execution_model: "Str", function: "Str", interfaces: "Array" },
-    state: "none",
+    signature: () -> (),
+    attributes: { execution_model: String, function: String, interfaces: ArrayAttr },
+    macro_def: true,
 };
 
-pub let ExecutionMode = {
+pub let ExecutionMode = op {
+    dialect: "spirv",
     rust_name: "ExecutionModeOp",
-    name: "ExecutionMode",
-    dialect: "spirv",
-    attributes: { function: "Str", mode: "Str", values: "Array" },
-    state: "none",
+    signature: () -> (),
+    attributes: { function: String, mode: String, values: ArrayAttr },
+    macro_def: true,
 };
 
-pub let Constant = {
+pub let Constant = op {
+    dialect: "spirv",
     rust_name: "ConstantOp",
-    name: "Constant",
-    dialect: "spirv",
-    results: { result: "_" },
-    attributes: { value: "any" },
-    state: "none",
+    signature: () -> (result: Any),
+    attributes: { value: Any },
+    macro_def: true,
 };
 
-pub let Load = {
+pub let Load = op {
+    dialect: "spirv",
     rust_name: "LoadOp",
-    name: "Load",
-    dialect: "spirv",
-    operands: { pointer: "_" },
-    results: { result: "_" },
-    state: "none",
+    signature: (pointer: Any) -> (result: Any),
+    macro_def: true,
 };
 
-pub let Store = {
+pub let Store = op {
+    dialect: "spirv",
     rust_name: "StoreOp",
-    name: "Store",
-    dialect: "spirv",
-    operands: { pointer: "_", value: "_" },
-    state: "none",
+    signature: (pointer: Any, value: Any) -> (),
+    macro_def: true,
 };
 
-pub let ControlBarrier = {
+pub let ControlBarrier = op {
+    dialect: "spirv",
     rust_name: "ControlBarrierOp",
-    name: "ControlBarrier",
-    dialect: "spirv",
-    operands: { execution_scope: "_", memory_scope: "_", memory_semantics: "_" },
-    state: "none",
+    signature: (execution_scope: Any, memory_scope: Any, memory_semantics: Any) -> (),
+    macro_def: true,
 };
 
-pub let MemoryBarrier = {
+pub let MemoryBarrier = op {
+    dialect: "spirv",
     rust_name: "MemoryBarrierOp",
-    name: "MemoryBarrier",
-    dialect: "spirv",
-    operands: { memory_scope: "_", memory_semantics: "_" },
-    state: "none",
+    signature: (memory_scope: Any, memory_semantics: Any) -> (),
+    macro_def: true,
 };
 
-pub let CompositeExtract = {
+pub let CompositeExtract = op {
+    dialect: "spirv",
     rust_name: "CompositeExtractOp",
-    name: "CompositeExtract",
-    dialect: "spirv",
-    operands: { composite: "_" },
-    results: { result: "_" },
-    attributes: { indices: "Array" },
-    state: "none",
+    signature: (composite: Any) -> (result: Any),
+    attributes: { indices: ArrayAttr },
+    macro_def: true,
 };
 
-pub let AccessChain = {
+pub let AccessChain = op {
+    dialect: "spirv",
     rust_name: "AccessChainOp",
-    name: "AccessChain",
-    dialect: "spirv",
-    operands: { base: "_", indices: "*_" },
-    results: { result: "_" },
+    signature: (base: Any, indices: ..Any) -> (result: Any),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };
 
-pub let Return = {
-    rust_name: "ReturnOp",
-    name: "Return",
+pub let Return = op {
     dialect: "spirv",
-    operands: { value: "?_" },
-    interfaces: Terminator,
-    state: "none",
+    rust_name: "ReturnOp",
+    signature: (value: Option<Any>) -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
 };

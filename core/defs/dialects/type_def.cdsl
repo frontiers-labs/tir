@@ -1,11 +1,17 @@
-use std::ir::interfaces::*;
+use std::core::*;
+use std::ir::{ArrayAttr, DictAttr, TypeAttr};
 
-pub let def = {
-    rust_name: "TypeDefOp",
-    name: "def",
+pub let def = op {
     dialect: "type",
-    attributes: { sym_name: "Str", params: "?Array", layout: "?Dict", body: "?Type" },
-    interfaces: Symbol,
+    rust_name: "TypeDefOp",
+    signature: () -> (),
+    attributes: {
+        sym_name: String,
+        params: Option<ArrayAttr>,
+        layout: Option<DictAttr>,
+        body: Option<TypeAttr>,
+    },
+    interfaces: (Symbol,),
     custom_format: true,
-    state: "none",
+    macro_def: true,
 };

@@ -6,14 +6,10 @@ edition = "2024"
 [dependencies]
 chumsky.workspace = true
 logos.workspace = true
-prettyplease.workspace = true
-proc-macro2.workspace = true
-quote.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-syn.workspace = true
+tir-cdsl-core.workspace = true
 tir-cst.workspace = true
-tir-egglog.workspace = true
 
 [lints]
 workspace = true
@@ -29,6 +25,7 @@ path = "bin/main.rs"
 [dev-dependencies]
 criterion.workspace = true
 tir-bench.workspace = true
+tir-egglog.workspace = true
 
 [[bench]]
 name = "baseline"

@@ -1,23 +1,18 @@
-pub let entry_state = {
-    rust_name: "EntryStateOp",
-    name: "entry_state",
-    dialect: "state",
+use std::core::*;
+use std::ir::State;
+
+pub let entry_state = op {
+    signature: () -> (state: ..State),
     custom_format: true,
-    state: "out",
+    macro_def: true,
 };
 
-pub let join = {
-    rust_name: "JoinOp",
-    name: "join",
-    dialect: "state",
-    operands: { states: "*state<_>" },
-    state: "out",
+pub let join = op {
+    signature: (states: ..State) -> (state: ..State),
+    macro_def: true,
 };
 
-pub let split = {
-    rust_name: "SplitOp",
-    name: "split",
-    dialect: "state",
-    results: { states: "*state<_>" },
-    state: "in",
+pub let split = op {
+    signature: (state: ..State) -> (states: ..State),
+    macro_def: true,
 };

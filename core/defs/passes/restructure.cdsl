@@ -2,9 +2,12 @@
 // Reads IR and the completed CFG tables (core/defs/analysis/cfg.cdsl) and computes the complete
 // restructured Nodes region tree, value/state dataflow, switch folding, and emission plan.
 
-use std::bigint::BigInt;
 
 // Symbolic RVSDG sorts.
+use std::core::*;
+use std::int::less;
+use std::ir::{OperationKind, integer_width};
+
 pub enum Reg {
     Orig(Int),
     LoopBody(Int, Int),
@@ -42,668 +45,576 @@ pub enum Val {
 }
 
 // Keyed aggregation tables.
-pub let OrdNext: std::Table<(String, Int, Int, Int, Int), Int, std::Merge::Min>;
-pub let RegDepth: std::Table<Reg, Int, std::Merge::Max>;
-pub let SeseDupMin: std::Table<(Int, Int, Int, Int), Int, std::Merge::Min>;
+pub let OrdNext: Table<(String, Int, Int, Int, Int), Int, Merge::Min>;
+pub let RegDepth: Table<Reg, Int, Merge::Max>;
+pub let SeseDupMin: Table<(Int, Int, Int, Int), Int, Merge::Min>;
 
 
 // Generic dense-ordering relations.
-pub let OrdItem: (String, Int, Int, Int, Int, Int) -> Prop;
-pub let OrdHasPrev: (String, Int, Int, Int, Int) -> Prop;
-pub let OrdHasNext: (String, Int, Int, Int, Int) -> Prop;
-pub let OrdIdx: (String, Int, Int, Int, Int, Int, Int) -> Prop;
-pub let OrdCount: (String, Int, Int, Int, Int) -> Prop;
+pub let OrdItem: Relation<(String, Int, Int, Int, Int, Int)>;
+pub let OrdHasPrev: Relation<(String, Int, Int, Int, Int)>;
+pub let OrdHasNext: Relation<(String, Int, Int, Int, Int)>;
+pub let OrdIdx: Relation<(String, Int, Int, Int, Int, Int, Int)>;
+pub let OrdCount: Relation<(String, Int, Int, Int, Int)>;
 
 // Target regions, classification, homes, linear chains.
-pub let TargetRegion: (Int, Int, Int) -> Prop;
-pub let IsForBody: Int -> Prop;
-pub let IsForOp: Int -> Prop;
-pub let ForOpInfo: (Int, Int, Int, Int, Int, Int) -> Prop;
-pub let ForOrigRes: (Int, Int, Int, Int) -> Prop;
-pub let IsTailLoop: (Int, Int) -> Prop;
-pub let IsTailLatch: (Int, Int, Int) -> Prop;
-pub let ActiveSese: (Int, Int, Int) -> Prop;
-pub let ActiveHammock: (Int, Int, Int) -> Prop;
-pub let IsLoopDagNode: (Int, Int, Int) -> Prop;
-pub let IsCondBranch: (Int, Int, Int) -> Prop;
-pub let BranchArm: (Int, Int, Int, Int, Int, Int) -> Prop;
-pub let BlockTerm: (Int, Int, Int, std::ir::OperationKind) -> Prop;
-pub let BlockIsBr: (Int, Int) -> Prop;
-pub let TermOp: Int -> Prop;
-pub let TermOperand: (Int, Int, Int) -> Prop;
-pub let IsLiveParam: (Int, Int) -> Prop;
-pub let LiveEdgeAssign: (Int, Int, Int, Int, Int) -> Prop;
-pub let OrigConstBit: (Int, Int) -> Prop;
-pub let IsConstBit: (Val, Int) -> Prop;
+pub let TargetRegion: Relation<(Int, Int, Int)>;
+pub let IsForBody: Relation<Int>;
+pub let IsForOp: Relation<Int>;
+pub let ForOpInfo: Relation<(Int, Int, Int, Int, Int, Int)>;
+pub let ForOrigRes: Relation<(Int, Int, Int, Int)>;
+pub let IsTailLoop: Relation<(Int, Int)>;
+pub let IsTailLatch: Relation<(Int, Int, Int)>;
+pub let ActiveSese: Relation<(Int, Int, Int)>;
+pub let ActiveHammock: Relation<(Int, Int, Int)>;
+pub let IsLoopDagNode: Relation<(Int, Int, Int)>;
+pub let IsCondBranch: Relation<(Int, Int, Int)>;
+pub let BranchArm: Relation<(Int, Int, Int, Int, Int, Int)>;
+pub let BlockTerm: Relation<(Int, Int, Int, OperationKind)>;
+pub let BlockIsBr: Relation<(Int, Int)>;
+pub let TermOp: Relation<Int>;
+pub let TermOperand: Relation<(Int, Int, Int)>;
+pub let IsLiveParam: Relation<(Int, Int)>;
+pub let LiveEdgeAssign: Relation<(Int, Int, Int, Int, Int)>;
+pub let OrigConstBit: Relation<(Int, Int)>;
+pub let IsConstBit: Relation<(Val, Int)>;
 
-pub let ScopeBaseReg: (Int, Int, Reg) -> Prop;
-pub let NonInnerSese: (Int, Int, Int, Int) -> Prop;
-pub let InnerSese: (Int, Int, Int, Int, Int) -> Prop;
-pub let NodeInSese: (Int, Int, Int) -> Prop;
-pub let NodeInHammock: (Int, Int, Int) -> Prop;
-pub let NodeHome: (Int, Int, Int, Reg) -> Prop;
-pub let BlockHome: (Int, Int, Reg) -> Prop;
-pub let BlockScope: (Int, Int, Int) -> Prop;
-pub let LoopHome: (Int, Int, Reg) -> Prop;
-pub let GuardHome: (Int, Int, Int, Reg) -> Prop;
-pub let StepHome: (Int, Int, Int, Int, Reg) -> Prop;
-pub let RegParent: (Reg, Reg) -> Prop;
-pub let RegDepthStep: (Reg, Int) -> Prop;
-pub let ChildReg: Reg -> Prop;
+pub let ScopeBaseReg: Relation<(Int, Int, Reg)>;
+pub let NonInnerSese: Relation<(Int, Int, Int, Int)>;
+pub let InnerSese: Relation<(Int, Int, Int, Int, Int)>;
+pub let NodeInSese: Relation<(Int, Int, Int)>;
+pub let NodeInHammock: Relation<(Int, Int, Int)>;
+pub let NodeHome: Relation<(Int, Int, Int, Reg)>;
+pub let BlockHome: Relation<(Int, Int, Reg)>;
+pub let BlockScope: Relation<(Int, Int, Int)>;
+pub let LoopHome: Relation<(Int, Int, Reg)>;
+pub let GuardHome: Relation<(Int, Int, Int, Reg)>;
+pub let StepHome: Relation<(Int, Int, Int, Int, Reg)>;
+pub let RegParent: Relation<(Reg, Reg)>;
+pub let RegDepthStep: Relation<(Reg, Int)>;
+pub let ChildReg: Relation<Reg>;
 
-pub let StructStep: (Int, Int, Int, Int) -> Prop;
-pub let HasStructPrev: (Int, Int, Int) -> Prop;
-pub let HasStructNext: (Int, Int, Int) -> Prop;
-pub let ChainHead: (Reg, Int, Int, Int) -> Prop;
-pub let ChainTail: (Reg, Int, Int, Int) -> Prop;
-pub let ChainPos: (Reg, Int, Int) -> Prop;
-pub let SeseArmHasBody: (Int, Int, Int, Int) -> Prop;
+pub let StructStep: Relation<(Int, Int, Int, Int)>;
+pub let HasStructPrev: Relation<(Int, Int, Int)>;
+pub let HasStructNext: Relation<(Int, Int, Int)>;
+pub let ChainHead: Relation<(Reg, Int, Int, Int)>;
+pub let ChainTail: Relation<(Reg, Int, Int, Int)>;
+pub let ChainPos: Relation<(Reg, Int, Int)>;
+pub let SeseArmHasBody: Relation<(Int, Int, Int, Int)>;
 
 // Variables, types, ports, switches, target codes, static overwrite sets.
-pub let TrackedVar: (Int, Int) -> Prop;
-pub let VarScope: (Int, Int) -> Prop;
-pub let BlockBaseOrder: (Int, Int, Int) -> Prop;
-pub let ExitSelTy: (Int, Int, Ty) -> Prop;
-pub let ExitSelWidth: (Int, Int, Int) -> Prop;
-pub let LoopHasExit: (Int, Int) -> Prop;
-pub let VarTy: (Int, Int, Int, Ty) -> Prop;
-pub let VarIsI1: (Int, Int, Int) -> Prop;
-pub let LoopPortVar: (Int, Int, Int) -> Prop;
-pub let LoopExitCount: (Int, Int, Int) -> Prop;
-pub let LoopSingleExit: (Int, Int, Int) -> Prop;
-pub let SeseOutVar: (Int, Int, Int, Int) -> Prop;
-pub let SeseFwdChain: (Int, Int, Int, Int) -> Prop;
-pub let GuardVar: (Int, Int, Int, Int) -> Prop;
-pub let GuardMem: (Int, Int, Int, Int) -> Prop;
-pub let StepSite: (Int, Int, Int, Int, Int, Int) -> Prop;
-pub let StepSiteArm: (Int, Int, Int, Int, Int, Int, Int) -> Prop;
-pub let StepVar: (Int, Int, Int, Int, Int) -> Prop;
-pub let GenLoopTarget: (Int, Int, Int, Int, Int, Int) -> Prop; // r, lh, dst, var, width, const_val
-pub let GuardTarget: (Int, Int, Int, Int, Int) -> Prop; // r, s, owner, dst, code
-pub let BlockHasMemOp: (Int, Int, Int) -> Prop;
-pub let BlockWritesVar: (Int, Int, Int) -> Prop;
-pub let BlockEdgeWrites: (Int, Int, Int, Int) -> Prop;
-pub let BlockTermSetsCtrl: (Int, Int, Int) -> Prop;
-pub let LoopWritesPort: (Int, Int, Int) -> Prop;
-pub let LoopSetsOuterCtrl: (Int, Int, Int, Int) -> Prop;
-pub let SeseArmSetsCtrl: (Int, Int, Int, Int, Int) -> Prop;
-pub let GuardMemberSetsCtrl: (Int, Int, Int, Int, Int) -> Prop;
-pub let StepArmSetsCtrl: (Int, Int, Int, Int, Int, Int) -> Prop;
+pub let TrackedVar: Relation<(Int, Int)>;
+pub let VarScope: Relation<(Int, Int)>;
+pub let BlockBaseOrder: Relation<(Int, Int, Int)>;
+pub let ExitSelTy: Relation<(Int, Int, Ty)>;
+pub let ExitSelWidth: Relation<(Int, Int, Int)>;
+pub let LoopHasExit: Relation<(Int, Int)>;
+pub let VarTy: Relation<(Int, Int, Int, Ty)>;
+pub let VarIsI1: Relation<(Int, Int, Int)>;
+pub let LoopPortVar: Relation<(Int, Int, Int)>;
+pub let LoopExitCount: Relation<(Int, Int, Int)>;
+pub let LoopSingleExit: Relation<(Int, Int, Int)>;
+pub let SeseOutVar: Relation<(Int, Int, Int, Int)>;
+pub let SeseFwdChain: Relation<(Int, Int, Int, Int)>;
+pub let GuardVar: Relation<(Int, Int, Int, Int)>;
+pub let GuardMem: Relation<(Int, Int, Int, Int)>;
+pub let StepSite: Relation<(Int, Int, Int, Int, Int, Int)>;
+pub let StepSiteArm: Relation<(Int, Int, Int, Int, Int, Int, Int)>;
+pub let StepVar: Relation<(Int, Int, Int, Int, Int)>;
+pub let GenLoopTarget: Relation<(Int, Int, Int, Int, Int, Int)>; // r, lh, dst, var, width, const_val
+pub let GuardTarget: Relation<(Int, Int, Int, Int, Int)>; // r, s, owner, dst, code
+pub let BlockHasMemOp: Relation<(Int, Int, Int)>;
+pub let BlockWritesVar: Relation<(Int, Int, Int)>;
+pub let BlockEdgeWrites: Relation<(Int, Int, Int, Int)>;
+pub let BlockTermSetsCtrl: Relation<(Int, Int, Int)>;
+pub let LoopWritesPort: Relation<(Int, Int, Int)>;
+pub let LoopSetsOuterCtrl: Relation<(Int, Int, Int, Int)>;
+pub let SeseArmSetsCtrl: Relation<(Int, Int, Int, Int, Int)>;
+pub let GuardMemberSetsCtrl: Relation<(Int, Int, Int, Int, Int)>;
+pub let StepArmSetsCtrl: Relation<(Int, Int, Int, Int, Int, Int)>;
 
 // Value & state dataflow.
-pub let ChainInit: (Int, Int, Val) -> Prop;
-pub let RegInVal: (Reg, Int, Int, Val) -> Prop;
-pub let NodeInVal: (Int, Int, Int, Int, Val) -> Prop;
-pub let BlockInVal: (Int, Int, Int, Val) -> Prop;
-pub let MemOpInState: (Int, Int, Int, Int, Val) -> Prop;
-pub let MemOpOutState: (Int, Int, Int, Int, Val) -> Prop;
-pub let BlockOutVal: (Int, Int, Int, Val) -> Prop;
-pub let TermReadVal: (Int, Int, Int, Val) -> Prop;
-pub let BlockPostBrVal: (Int, Int, Int, Val) -> Prop;
-pub let PreBranchVal: (Int, Int, Int, Int, Val) -> Prop;
-pub let NodeOutVal: (Int, Int, Int, Int, Val) -> Prop;
-pub let SesePredVal: (Int, Int, Int, Val) -> Prop;
-pub let SeseArmInVal: (Int, Int, Int, Int, Int, Val) -> Prop;
-pub let SeseArmOutVal: (Int, Int, Int, Int, Int, Val) -> Prop;
-pub let HasSeseArmOutVal: (Int, Int, Int, Int, Int) -> Prop;
-pub let GuardStepInVal: (Int, Int, Int, Int, Int, Val) -> Prop;
-pub let GuardTruePreStepVal: (Int, Int, Int, Int, Int, Val) -> Prop;
-pub let GuardTrueOutVal: (Int, Int, Int, Int, Int, Val) -> Prop;
-pub let HasGuardTrueOutVal: (Int, Int, Int, Int, Int) -> Prop;
-pub let GuardFalseOutVal: (Int, Int, Int, Int, Int, Val) -> Prop;
-pub let HasGuardFalseOutVal: (Int, Int, Int, Int, Int) -> Prop;
-pub let StepPreVal: (Int, Int, Int, Int, Int, Val) -> Prop;
-pub let StepPredVal: (Int, Int, Int, Int, Val) -> Prop;
-pub let StepArmOutVal: (Int, Int, Int, Int, Int, Int, Val) -> Prop;
-pub let HasStepArmOutVal: (Int, Int, Int, Int, Int, Int) -> Prop;
-pub let LoopExitSelVal: (Int, Int, Int, Val) -> Prop;
-pub let LoopInitVal: (Int, Int, Int, Val) -> Prop;
-pub let HasLoopInitVal: (Int, Int, Int) -> Prop;
-pub let LoopPredVal: (Int, Int, Val) -> Prop;
-pub let HasLoopPredVal: (Int, Int) -> Prop;
-pub let LoopContVal: (Int, Int, Int, Val) -> Prop;
-pub let HasLoopContVal: (Int, Int, Int) -> Prop;
-pub let LoopExitVal: (Int, Int, Int, Val) -> Prop;
-pub let HasLoopExitVal: (Int, Int, Int) -> Prop;
-pub let RootRetVal: (Int, Val) -> Prop;
-pub let RootChainVal: (Int, Int, Val) -> Prop;
-pub let ForBodyYieldVal: (Int, Int, Val) -> Prop;
-pub let ForOpChainIn: (Int, Int, Val) -> Prop;
+pub let ChainInit: Relation<(Int, Int, Val)>;
+pub let RegInVal: Relation<(Reg, Int, Int, Val)>;
+pub let NodeInVal: Relation<(Int, Int, Int, Int, Val)>;
+pub let BlockInVal: Relation<(Int, Int, Int, Val)>;
+pub let MemOpInState: Relation<(Int, Int, Int, Int, Val)>;
+pub let MemOpOutState: Relation<(Int, Int, Int, Int, Val)>;
+pub let BlockOutVal: Relation<(Int, Int, Int, Val)>;
+pub let TermReadVal: Relation<(Int, Int, Int, Val)>;
+pub let BlockPostBrVal: Relation<(Int, Int, Int, Val)>;
+pub let PreBranchVal: Relation<(Int, Int, Int, Int, Val)>;
+pub let NodeOutVal: Relation<(Int, Int, Int, Int, Val)>;
+pub let SesePredVal: Relation<(Int, Int, Int, Val)>;
+pub let SeseArmInVal: Relation<(Int, Int, Int, Int, Int, Val)>;
+pub let SeseArmOutVal: Relation<(Int, Int, Int, Int, Int, Val)>;
+pub let HasSeseArmOutVal: Relation<(Int, Int, Int, Int, Int)>;
+pub let GuardStepInVal: Relation<(Int, Int, Int, Int, Int, Val)>;
+pub let GuardTruePreStepVal: Relation<(Int, Int, Int, Int, Int, Val)>;
+pub let GuardTrueOutVal: Relation<(Int, Int, Int, Int, Int, Val)>;
+pub let HasGuardTrueOutVal: Relation<(Int, Int, Int, Int, Int)>;
+pub let GuardFalseOutVal: Relation<(Int, Int, Int, Int, Int, Val)>;
+pub let HasGuardFalseOutVal: Relation<(Int, Int, Int, Int, Int)>;
+pub let StepPreVal: Relation<(Int, Int, Int, Int, Int, Val)>;
+pub let StepPredVal: Relation<(Int, Int, Int, Int, Val)>;
+pub let StepArmOutVal: Relation<(Int, Int, Int, Int, Int, Int, Val)>;
+pub let HasStepArmOutVal: Relation<(Int, Int, Int, Int, Int, Int)>;
+pub let LoopExitSelVal: Relation<(Int, Int, Int, Val)>;
+pub let LoopInitVal: Relation<(Int, Int, Int, Val)>;
+pub let HasLoopInitVal: Relation<(Int, Int, Int)>;
+pub let LoopPredVal: Relation<(Int, Int, Val)>;
+pub let HasLoopPredVal: Relation<(Int, Int)>;
+pub let LoopContVal: Relation<(Int, Int, Int, Val)>;
+pub let HasLoopContVal: Relation<(Int, Int, Int)>;
+pub let LoopExitVal: Relation<(Int, Int, Int, Val)>;
+pub let HasLoopExitVal: Relation<(Int, Int, Int)>;
+pub let RootRetVal: Relation<(Int, Val)>;
+pub let RootChainVal: Relation<(Int, Int, Val)>;
+pub let ForBodyYieldVal: Relation<(Int, Int, Val)>;
+pub let ForOpChainIn: Relation<(Int, Int, Val)>;
 
 // SESE switch folding & value alias resolution.
-pub let SeseArmHasOps: (Int, Int, Int) -> Prop;
-pub let SeseFolded: (Int, Int, Int, Int, Val) -> Prop;
-pub let SeseIsFolded: (Int, Int, Int, Int) -> Prop;
-pub let SeseArmAgree: (Int, Int, Int, Int, Int, Int) -> Prop;
-pub let SeseArmDiff: (Int, Int, Int, Int, Int) -> Prop;
-pub let SeseIsDup: (Int, Int, Int, Int) -> Prop;
-pub let SeseHasOut: (Int, Int, Int) -> Prop;
-pub let SeseHasKept: (Int, Int, Int) -> Prop;
-pub let SeseSkipped: (Int, Int, Int) -> Prop;
-pub let SkippedReg: Reg -> Prop;
-pub let ValAlias: (Val, Val) -> Prop;
-pub let NeedVal: Val -> Prop;
-pub let SynthOrd: (Val, Int) -> Prop;
-pub let MovedOp: Int -> Prop;
+pub let SeseArmHasOps: Relation<(Int, Int, Int)>;
+pub let SeseFolded: Relation<(Int, Int, Int, Int, Val)>;
+pub let SeseIsFolded: Relation<(Int, Int, Int, Int)>;
+pub let SeseArmAgree: Relation<(Int, Int, Int, Int, Int, Int)>;
+pub let SeseArmDiff: Relation<(Int, Int, Int, Int, Int)>;
+pub let SeseIsDup: Relation<(Int, Int, Int, Int)>;
+pub let SeseHasOut: Relation<(Int, Int, Int)>;
+pub let SeseHasKept: Relation<(Int, Int, Int)>;
+pub let SeseSkipped: Relation<(Int, Int, Int)>;
+pub let SkippedReg: Relation<Reg>;
+pub let ValAlias: Relation<(Val, Val)>;
+pub let NeedVal: Relation<Val>;
+pub let SynthOrd: Relation<(Val, Int)>;
+pub let MovedOp: Relation<Int>;
 
 // Final flat materialization tables read by core/src/passes/restructure.rs.
-pub let OutOrigRegion: { original: Int, owner: Int, entry: Int, ordered_for: Int, depth: Int } -> Prop;
-pub let OutChildRegion: { region: Reg, depth: Int } -> Prop;
-pub let OutRegPort: { region: Reg, slot: Int, ty: Ty, value: Val } -> Prop;
-pub let OutChainCount: { region: Int, count: Int } -> Prop;
-pub let OutJoinState: { region: Int, slot: Int, value: Val } -> Prop;
-pub let OutLoop: { body: Reg, region: Reg, order: Int } -> Prop;
-pub let OutLoopInit: { body: Reg, slot: Int, value: Val } -> Prop;
-pub let OutLoopRes: { body: Reg, slot: Int, ty: Ty, value: Val } -> Prop;
-pub let OutSwitch: { switch: Sw, region: Reg, order: Int, terminator: Int, selector: Val } -> Prop;
-pub let OutSwitchInput: { switch: Sw, slot: Int, value: Val } -> Prop;
-pub let OutSwitchArm: { switch: Sw, slot: Int, arm: Reg } -> Prop;
-pub let OutSwitchRes: { switch: Sw, slot: Int, ty: Ty, value: Val } -> Prop;
-pub let OutFor: { loop_op: Int, region: Reg, order: Int, body: Int, lower: Val, upper: Val, step: Val } -> Prop;
-pub let OutForInit: { loop_op: Int, slot: Int, value: Val } -> Prop;
-pub let OutForRes: { loop_op: Int, slot: Int, ty: Ty, value: Val } -> Prop;
-pub let OutForPort: { region: Int, slot: Int, value: Val } -> Prop;
-pub let OutForBody: { region: Reg, induction: Val, upper: Val, step: Val } -> Prop;
-pub let OutMovedOp: { operation: Int, region: Reg, order: Int } -> Prop;
-pub let OutRewriteOperand: { operation: Int, slot: Int, value: Val } -> Prop;
-pub let OutAppendState: { operation: Int, input: Val, output: Val } -> Prop;
-pub let OutYield: { region: Reg, slot: Int, value: Val } -> Prop;
-pub let OutSynth: { value: Val, region: Reg, order: Int } -> Prop;
-pub let OutEraseOp: Int -> Prop;
-pub let OutEraseBlock: Int -> Prop;
+pub let OutOrigRegion: Relation<{ original: Int, owner: Int, entry: Int, ordered_for: Int, depth: Int }>;
+pub let OutChildRegion: Relation<{ region: Reg, depth: Int }>;
+pub let OutRegPort: Relation<{ region: Reg, slot: Int, ty: Ty, value: Val }>;
+pub let OutChainCount: Relation<{ region: Int, count: Int }>;
+pub let OutJoinState: Relation<{ region: Int, slot: Int, value: Val }>;
+pub let OutLoop: Relation<{ body: Reg, region: Reg, order: Int }>;
+pub let OutLoopInit: Relation<{ body: Reg, slot: Int, value: Val }>;
+pub let OutLoopRes: Relation<{ body: Reg, slot: Int, ty: Ty, value: Val }>;
+pub let OutSwitch: Relation<{ switch: Sw, region: Reg, order: Int, terminator: Int, selector: Val }>;
+pub let OutSwitchInput: Relation<{ switch: Sw, slot: Int, value: Val }>;
+pub let OutSwitchArm: Relation<{ switch: Sw, slot: Int, arm: Reg }>;
+pub let OutSwitchRes: Relation<{ switch: Sw, slot: Int, ty: Ty, value: Val }>;
+pub let OutFor: Relation<{ loop_op: Int, region: Reg, order: Int, body: Int, lower: Val, upper: Val, step: Val }>;
+pub let OutForInit: Relation<{ loop_op: Int, slot: Int, value: Val }>;
+pub let OutForRes: Relation<{ loop_op: Int, slot: Int, ty: Ty, value: Val }>;
+pub let OutForPort: Relation<{ region: Int, slot: Int, value: Val }>;
+pub let OutForBody: Relation<{ region: Reg, induction: Val, upper: Val, step: Val }>;
+pub let OutMovedOp: Relation<{ operation: Int, region: Reg, order: Int }>;
+pub let OutRewriteOperand: Relation<{ operation: Int, slot: Int, value: Val }>;
+pub let OutAppendState: Relation<{ operation: Int, input: Val, output: Val }>;
+pub let OutYield: Relation<{ region: Reg, slot: Int, value: Val }>;
+pub let OutSynth: Relation<{ value: Val, region: Reg, order: Int }>;
+pub let OutEraseOp: Relation<Int>;
+pub let OutEraseBlock: Relation<Int>;
 
 // ── Phase 1: Target regions, terminators, loops, branches ────────────────────
-let phase_targets = || {
-    let func_reg<r, owner, entry, p, h, pos, d, loc>:
-        (analysis::cfg::CfgRegion(r, owner, entry), ir::Operation{ id: std::ir::operation_key(owner), kind: dialects::func::r#func.kind, placement: p, container: h, position: pos, display: d, location: loc }()) -> TargetRegion(r, owner, entry);
-    let for_reg<outer, for_op, body, entry, blk, pos, d, loc, o, e>:
-        (TargetRegion(outer, o, e), analysis::cfg::OrderedForInRegion(outer, for_op, body), analysis::cfg::CfgRegion(body, for_op, entry), ir::Operation{ id: std::ir::operation_key(for_op), kind: dialects::scf::r#ordered_for.kind, placement: "block", container: blk, position: pos, display: d, location: loc }())
-        -> (TargetRegion(body, for_op, entry), IsForBody(body), IsForOp(for_op), ForOpInfo(outer, blk, for_op, pos, body, entry));
-    let for_res<outer, blk, for_op, pos, body, entry, v, ty, slot, decl>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), ir::Value(std::ir::value_key(v), ty, "result", for_op, slot, decl)) -> ForOrigRes(outer, for_op, slot, v);
-    let tail_loop<r, h, latch, exit, be, ee>: analysis::cfg::TailLoop(r, h, latch, exit, be, ee) -> (IsTailLoop(r, h), IsTailLatch(r, h, latch));
-    let term_br<r, o, e, b, node, pos, d, loc>:
-        (TargetRegion(r, o, e), analysis::cfg::CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::cfg::r#br.kind, placement: "block", container: b, position: pos, display: d, location: loc }()) -> (BlockTerm(r, b, node, dialects::cfg::r#br.kind), BlockIsBr(r, b), TermOp(node));
-    let term_cond<r, o, e, b, node, pos, d, loc>:
-        (TargetRegion(r, o, e), analysis::cfg::CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::cfg::r#cond_br.kind, placement: "block", container: b, position: pos, display: d, location: loc }()) -> (BlockTerm(r, b, node, dialects::cfg::r#cond_br.kind), TermOp(node));
-    let term_sw<r, o, e, b, node, pos, d, loc>:
-        (TargetRegion(r, o, e), analysis::cfg::CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(node), kind: dialects::cfg::r#switch.kind, placement: "block", container: b, position: pos, display: d, location: loc }()) -> (BlockTerm(r, b, node, dialects::cfg::r#switch.kind), TermOp(node));
-    let term_ret<r, o, e, b, node, kind>: (TargetRegion(r, o, e), analysis::cfg::CfgReachableExit(r, b, node, kind)) -> (BlockTerm(r, b, node, kind), TermOp(node));
-    let live_assign<r, o, e, src, edge, param, arg, dst, ty, slot, decl>:
-        (TargetRegion(r, o, e), analysis::cfg::EdgeAssign(r, src, edge, param, arg), ir::Value(std::ir::value_key(param), ty, "block", dst, slot, decl), !analysis::cfg::DeadBlockArg(r, dst, slot, param))
-        -> (LiveEdgeAssign(r, src, edge, param, arg), IsLiveParam(r, param), BlockEdgeWrites(r, src, edge, param));
-    let loop_node_nat<r, o, e, s, h>: (TargetRegion(r, o, e), analysis::cfg::DagNode(r, s, h), analysis::cfg::NatLoopHeader(r, h), h != s) -> IsLoopDagNode(r, s, h);
-    let loop_node_irred<r, o, e, s, rep>: (TargetRegion(r, o, e), analysis::cfg::IrredLoop(r, s, rep)) -> IsLoopDagNode(r, s, rep);
-    let const_bit_bool_f<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>:
-        (ir::Value(std::ir::value_key(v), ty, "result", node, 0, decl), ir::TypeTerm(ty, ctor, args), std::ir::integer_width(args) == 1, ir::Operation{ id: std::ir::operation_key(node), kind: dialects::builtin::r#constant.kind, placement: p, container: h, position: pos, display: d, location: loc }(), ir::Attribute("operation", node, "value", attr), eqsat::eqsat_attr_bool(attr) == false) -> OrigConstBit(v, 0);
-    let const_bit_bool_t<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>:
-        (ir::Value(std::ir::value_key(v), ty, "result", node, 0, decl), ir::TypeTerm(ty, ctor, args), std::ir::integer_width(args) == 1, ir::Operation{ id: std::ir::operation_key(node), kind: dialects::builtin::r#constant.kind, placement: p, container: h, position: pos, display: d, location: loc }(), ir::Attribute("operation", node, "value", attr), eqsat::eqsat_attr_bool(attr) == true) -> OrigConstBit(v, 1);
-    let const_bit_int_0<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>:
-        (ir::Value(std::ir::value_key(v), ty, "result", node, 0, decl), ir::TypeTerm(ty, ctor, args), std::ir::integer_width(args) == 1, ir::Operation{ id: std::ir::operation_key(node), kind: dialects::builtin::r#constant.kind, placement: p, container: h, position: pos, display: d, location: loc }(), ir::Attribute("operation", node, "value", attr), eqsat::eqsat_shift_amount(eqsat::eqsat_attr_int(attr)) == 0) -> OrigConstBit(v, 0);
-    let const_bit_int_1<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>:
-        (ir::Value(std::ir::value_key(v), ty, "result", node, 0, decl), ir::TypeTerm(ty, ctor, args), std::ir::integer_width(args) == 1, ir::Operation{ id: std::ir::operation_key(node), kind: dialects::builtin::r#constant.kind, placement: p, container: h, position: pos, display: d, location: loc }(), ir::Attribute("operation", node, "value", attr), eqsat::eqsat_shift_amount(eqsat::eqsat_attr_int(attr)) == 1) -> OrigConstBit(v, 1);
-    let const_bit_int_m1<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>:
-        (ir::Value(std::ir::value_key(v), ty, "result", node, 0, decl), ir::TypeTerm(ty, ctor, args), std::ir::integer_width(args) == 1, ir::Operation{ id: std::ir::operation_key(node), kind: dialects::builtin::r#constant.kind, placement: p, container: h, position: pos, display: d, location: loc }(), ir::Attribute("operation", node, "value", attr), eqsat::eqsat_shift_amount(eqsat::eqsat_attr_int(attr)) == (0 - 1)) -> OrigConstBit(v, 1);
-    std::schedule::saturate((
-        func_reg, for_reg, for_res, tail_loop, term_br, term_cond, term_sw, term_ret,
+let phase_targets = || -> Schedule {
+    let func_reg<r, owner, entry, p, h, pos, d, loc>: Rule((CfgRegion(r, owner, entry), Operation(owner, dialects::func::func.kind, p, h, pos, d, loc)) -> TargetRegion(r, owner, entry));
+    let for_reg<outer, for_op, body, entry, blk, pos, d, loc, o, e>: Rule((TargetRegion(outer, o, e), OrderedForInRegion(outer, for_op, body), CfgRegion(body, for_op, entry), Operation(for_op, dialects::scf::ordered_for.kind, "block", blk, pos, d, loc))
+        -> (TargetRegion(body, for_op, entry), IsForBody(body), IsForOp(for_op), ForOpInfo(outer, blk, for_op, pos, body, entry)));
+    let for_res<outer, blk, for_op, pos, body, entry, v, ty, slot, decl>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), Value(v, ty, "result", for_op, slot, decl)) -> ForOrigRes(outer, for_op, slot, v));
+    let tail_loop<r, h, latch, exit, be, ee>: Rule(TailLoop(r, h, latch, exit, be, ee) -> (IsTailLoop(r, h), IsTailLatch(r, h, latch)));
+    let term_br<r, o, e, b, node, pos, d, loc>: Rule((TargetRegion(r, o, e), CfgReachable(r, b), Operation(node, dialects::cfg::br.kind, "block", b, pos, d, loc)) -> (BlockTerm(r, b, node, dialects::cfg::br.kind), BlockIsBr(r, b), TermOp(node)));
+    let term_cond<r, o, e, b, node, pos, d, loc>: Rule((TargetRegion(r, o, e), CfgReachable(r, b), Operation(node, dialects::cfg::cond_br.kind, "block", b, pos, d, loc)) -> (BlockTerm(r, b, node, dialects::cfg::cond_br.kind), TermOp(node)));
+    let term_sw<r, o, e, b, node, pos, d, loc>: Rule((TargetRegion(r, o, e), CfgReachable(r, b), Operation(node, dialects::cfg::r#switch.kind, "block", b, pos, d, loc)) -> (BlockTerm(r, b, node, dialects::cfg::r#switch.kind), TermOp(node)));
+    let term_ret<r, o, e, b, node, kind>: Rule((TargetRegion(r, o, e), CfgReachableExit(r, b, node, kind)) -> (BlockTerm(r, b, node, kind), TermOp(node)));
+    let live_assign<r, o, e, src, edge, param, arg, dst, ty, slot, decl>: Rule((TargetRegion(r, o, e), EdgeAssign(r, src, edge, param, arg), Value(param, ty, "block", dst, slot, decl), !DeadBlockArg(r, dst, slot, param))
+        -> (LiveEdgeAssign(r, src, edge, param, arg), IsLiveParam(r, param), BlockEdgeWrites(r, src, edge, param)));
+    let loop_node_nat<r, o, e, s, h>: Rule((TargetRegion(r, o, e), DagNode(r, s, h), NatLoopHeader(r, h), h != s) -> IsLoopDagNode(r, s, h));
+    let loop_node_irred<r, o, e, s, rep>: Rule((TargetRegion(r, o, e), IrredLoop(r, s, rep)) -> IsLoopDagNode(r, s, rep));
+    let const_bit_bool_f<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>: Rule((Value(v, ty, "result", node, 0, decl), TypeTerm(ty, ctor, args), integer_width(args) == 1, Operation(node, dialects::builtin::constant.kind, p, h, pos, d, loc), Attribute("operation", node, "value", attr), eqsat::eqsat_attr_bool(attr) == false) -> OrigConstBit(v, 0));
+    let const_bit_bool_t<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>: Rule((Value(v, ty, "result", node, 0, decl), TypeTerm(ty, ctor, args), integer_width(args) == 1, Operation(node, dialects::builtin::constant.kind, p, h, pos, d, loc), Attribute("operation", node, "value", attr), eqsat::eqsat_attr_bool(attr) == true) -> OrigConstBit(v, 1));
+    let const_bit_int_0<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>: Rule((Value(v, ty, "result", node, 0, decl), TypeTerm(ty, ctor, args), integer_width(args) == 1, Operation(node, dialects::builtin::constant.kind, p, h, pos, d, loc), Attribute("operation", node, "value", attr), eqsat::eqsat_shift_amount(eqsat::eqsat_attr_int(attr)) == 0) -> OrigConstBit(v, 0));
+    let const_bit_int_1<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>: Rule((Value(v, ty, "result", node, 0, decl), TypeTerm(ty, ctor, args), integer_width(args) == 1, Operation(node, dialects::builtin::constant.kind, p, h, pos, d, loc), Attribute("operation", node, "value", attr), eqsat::eqsat_shift_amount(eqsat::eqsat_attr_int(attr)) == 1) -> OrigConstBit(v, 1));
+    let const_bit_int_m1<v, ty, ctor, args, node, p, h, pos, d, loc, attr, decl>: Rule((Value(v, ty, "result", node, 0, decl), TypeTerm(ty, ctor, args), integer_width(args) == 1, Operation(node, dialects::builtin::constant.kind, p, h, pos, d, loc), Attribute("operation", node, "value", attr), eqsat::eqsat_shift_amount(eqsat::eqsat_attr_int(attr)) == (0 - 1)) -> OrigConstBit(v, 1));
+    Schedule::Saturate(List(func_reg, for_reg, for_res, tail_loop, term_br, term_cond, term_sw, term_ret,
         live_assign, loop_node_nat, loop_node_irred, const_bit_bool_f, const_bit_bool_t,
-        const_bit_int_0, const_bit_int_1, const_bit_int_m1,
-    ))
+        const_bit_int_0, const_bit_int_1, const_bit_int_m1))
 };
 
-let phase_active = || {
-    let term_opnd<r, b, term, kind, sl, arg>: (BlockTerm(r, b, term, kind), ir::Operand(std::ir::operation_key(term), sl, std::ir::value_key(arg))) -> TermOperand(r, b, arg);
-    let sese_active<r, o, e, s, h>: (TargetRegion(r, o, e), analysis::cfg::SeseBranch(r, s, h), !IsTailLatch(r, s, h)) -> ActiveSese(r, s, h);
-    let hammock_active<r, o, e, s, h>: (TargetRegion(r, o, e), analysis::cfg::TopHammock(r, s, h), !IsTailLatch(r, s, h)) -> ActiveHammock(r, s, h);
-    std::schedule::Schedule::Rules((
-        term_opnd, sese_active, hammock_active,
-    ))
+let phase_active = || -> Schedule {
+    let term_opnd<r, b, term, kind, sl, arg>: Rule((BlockTerm(r, b, term, kind), Operand(term, sl, arg)) -> TermOperand(r, b, arg));
+    let sese_active<r, o, e, s, h>: Rule((TargetRegion(r, o, e), SeseBranch(r, s, h), !IsTailLatch(r, s, h)) -> ActiveSese(r, s, h));
+    let hammock_active<r, o, e, s, h>: Rule((TargetRegion(r, o, e), TopHammock(r, s, h), !IsTailLatch(r, s, h)) -> ActiveHammock(r, s, h));
+    Schedule::Once(List(term_opnd, sese_active, hammock_active))
 };
 
 // ── Phase 2a: First-stage ordering
-let phase_ord_seed1 = || {
-    let chain<r, o, e, c>: (TargetRegion(r, o, e), analysis::cfg::RegionChain(r, c)) -> OrdItem("chain", r, 0, 0, c, c);
-    let exit<r, o, e, l, x>: (TargetRegion(r, o, e), analysis::cfg::LoopExit(r, l, x)) -> OrdItem("exit", r, l, 0, x, x);
-    let gmem_irr<r, o, e, s, m, rep>: (TargetRegion(r, o, e), analysis::cfg::IrredScc(r, s, m, rep)) -> OrdItem("gmem", r, s, rep, m, m);
-    let gmem_ham<r, s, h, m, rank>:
-        (ActiveHammock(r, s, h), analysis::cfg::HammockMember(r, s, h, m), analysis::cfg::DagTopoRank(r, s, m, rank))
-        -> OrdItem("gmem", r, s, h, ((rank * 4294967296) + m), m);
-    let mem_op<r, o, e, b, oid, c, k, pos, d, loc>:
-        (TargetRegion(r, o, e), analysis::cfg::UnthreadedMemOp(r, b, oid, c), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }())
-        -> (OrdItem("mem", r, b, c, ((pos * 4294967296) + oid), oid), BlockHasMemOp(r, b, c));
-    let for_chain<outer, blk, for_op, pos, body, entry, c>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), analysis::cfg::UnthreadedMemOp(outer, blk, for_op, c)) -> OrdItem("for_ch", for_op, 0, 0, c, c);
-    let for_opnd<outer, blk, for_op, pos, body, entry, sl, arg>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), ir::Operand(std::ir::operation_key(for_op), sl, std::ir::value_key(arg))) -> OrdItem("for_opnd", for_op, 0, 0, sl, sl);
-    std::schedule::Schedule::Rules((
-        chain, exit, gmem_irr, gmem_ham, mem_op, for_chain, for_opnd,
-    ))
+let phase_ord_seed1 = || -> Schedule {
+    let chain<r, o, e, c>: Rule((TargetRegion(r, o, e), RegionChain(r, c)) -> OrdItem("chain", r, 0, 0, c, c));
+    let exit<r, o, e, l, x>: Rule((TargetRegion(r, o, e), LoopExit(r, l, x)) -> OrdItem("exit", r, l, 0, x, x));
+    let gmem_irr<r, o, e, s, m, rep>: Rule((TargetRegion(r, o, e), IrredScc(r, s, m, rep)) -> OrdItem("gmem", r, s, rep, m, m));
+    let gmem_ham<r, s, h, m, rank>: Rule((ActiveHammock(r, s, h), HammockMember(r, s, h, m), DagTopoRank(r, s, m, rank))
+        -> OrdItem("gmem", r, s, h, ((rank * 4294967296) + m), m));
+    let mem_op<r, o, e, b, oid, c, k, pos, d, loc>: Rule((TargetRegion(r, o, e), UnthreadedMemOp(r, b, oid, c), Operation(oid, k, "block", b, pos, d, loc))
+        -> (OrdItem("mem", r, b, c, ((pos * 4294967296) + oid), oid), BlockHasMemOp(r, b, c)));
+    let for_chain<outer, blk, for_op, pos, body, entry, c>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), UnthreadedMemOp(outer, blk, for_op, c)) -> OrdItem("for_ch", for_op, 0, 0, c, c));
+    let for_opnd<outer, blk, for_op, pos, body, entry, sl, arg>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), Operand(for_op, sl, arg)) -> OrdItem("for_opnd", for_op, 0, 0, sl, sl));
+    Schedule::Once(List(chain, exit, gmem_irr, gmem_ham, mem_op, for_chain, for_opnd))
 };
 
-pub mod ord_next {
-    pub let step<t, a, b, c, k1, p1, k2, p2>:
-        (OrdItem(t, a, b, c, k1, p1), OrdItem(t, a, b, c, k2, p2), std::int::less(k1, k2) == true) -> OrdNext(t, a, b, c, k1, k2);
-}
-pub mod ord_links {
-    pub let link<t, a, b, c, k1, k2>: OrdNext(t, a, b, c, k1, k2) -> (OrdHasNext(t, a, b, c, k1), OrdHasPrev(t, a, b, c, k2));
-}
-let ord_index = || {
-    let first<t, a, b, c, k, p>: (OrdItem(t, a, b, c, k, p), !OrdHasPrev(t, a, b, c, k)) -> OrdIdx(t, a, b, c, k, p, 0);
-    let next<t, a, b, c, k1, p1, i, k2, p2>:
-        (OrdIdx(t, a, b, c, k1, p1, i), OrdNext(t, a, b, c, k1, k2), OrdItem(t, a, b, c, k2, p2)) -> OrdIdx(t, a, b, c, k2, p2, (i + 1));
-    std::schedule::saturate((
-        first, next,
-    ))
+let ord_next = || -> Schedule {
+    let step<t, a, b, c, k1, p1, k2, p2>: Rule((OrdItem(t, a, b, c, k1, p1), OrdItem(t, a, b, c, k2, p2), less(k1, k2) == true) -> OrdNext(t, a, b, c, k1, k2));
+    Schedule::Once(List(step))
 };
-pub mod ord_count {
-    pub let count<t, a, b, c, k, p, i>: (OrdIdx(t, a, b, c, k, p, i), !OrdHasNext(t, a, b, c, k)) -> OrdCount(t, a, b, c, (i + 1));
-}
+let ord_links = || -> Schedule {
+    let link<t, a, b, c, k1, k2>: Rule(OrdNext(t, a, b, c, k1, k2) -> (OrdHasNext(t, a, b, c, k1), OrdHasPrev(t, a, b, c, k2)));
+    Schedule::Once(List(link))
+};
+let ord_index = || -> Schedule {
+    let first<t, a, b, c, k, p>: Rule((OrdItem(t, a, b, c, k, p), !OrdHasPrev(t, a, b, c, k)) -> OrdIdx(t, a, b, c, k, p, 0));
+    let next<t, a, b, c, k1, p1, i, k2, p2>: Rule((OrdIdx(t, a, b, c, k1, p1, i), OrdNext(t, a, b, c, k1, k2), OrdItem(t, a, b, c, k2, p2)) -> OrdIdx(t, a, b, c, k2, p2, (i + 1)));
+    Schedule::Saturate(List(first, next))
+};
+let ord_count = || -> Schedule {
+    let count<t, a, b, c, k, p, i>: Rule((OrdIdx(t, a, b, c, k, p, i), !OrdHasNext(t, a, b, c, k)) -> OrdCount(t, a, b, c, (i + 1)));
+    Schedule::Once(List(count))
+};
 
 // ── Phase 2b: Branch arms, homes, region depths, linear chains
-let phase_arms = || {
-    let exit_count<r, l, n>: OrdCount("exit", r, l, 0, n) -> LoopExitCount(r, l, n);
-    let single_exit<r, l, x>: (OrdCount("exit", r, l, 0, 1), analysis::cfg::LoopExit(r, l, x)) -> LoopSingleExit(r, l, x);
-    let cond_false<r, s, h, term, dst>:
-        (ActiveSese(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, dialects::cfg::r#cond_br.kind), ir::Successor(std::ir::operation_key(term), 1, dst))
-        -> (BranchArm(r, s, h, 0, 1, dst), IsCondBranch(r, s, h));
-    let cond_true<r, s, h, term, dst>:
-        (ActiveSese(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, dialects::cfg::r#cond_br.kind), ir::Successor(std::ir::operation_key(term), 0, dst)) -> BranchArm(r, s, h, 1, 0, dst);
-    let sw_arm<r, s, h, term, slot, dst>:
-        (ActiveSese(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, dialects::cfg::r#switch.kind), ir::Successor(std::ir::operation_key(term), slot, dst)) -> BranchArm(r, s, h, slot, slot, dst);
-    let loop_arm<r, s, l, k, x, idx>:
-        (ActiveSese(r, s, l), IsLoopDagNode(r, s, l), OrdIdx("exit", r, l, 0, k, x, idx)) -> BranchArm(r, s, l, idx, x, x);
-    let loop_cond<r, s, l>: (ActiveSese(r, s, l), IsLoopDagNode(r, s, l), OrdCount("exit", r, l, 0, 2)) -> IsCondBranch(r, s, l);
-    let non_inner<r, s, b, h1, s1, h2, s2>:
-        (ActiveSese(r, s, h1), ActiveSese(r, s, h2), analysis::cfg::ArmBlock(r, s, h1, s1, b), analysis::cfg::ArmBlock(r, s, h2, s2, b), analysis::cfg::DagStrictDom(r, s, h1, h2)) -> NonInnerSese(r, s, b, h1);
-    let in_hammock<r, s, h, m>: (ActiveHammock(r, s, h), analysis::cfg::HammockMember(r, s, h, m)) -> NodeInHammock(r, s, m);
-    let base_root<r, owner, entry>: TargetRegion(r, owner, entry) -> ScopeBaseReg(r, r, Reg::Orig(r));
-    let base_loop<r, o, e, h>: (TargetRegion(r, o, e), analysis::cfg::NatLoopHeader(r, h)) -> ScopeBaseReg(r, h, Reg::LoopBody(r, h));
-    std::schedule::Schedule::Rules((
-        exit_count, single_exit, cond_false, cond_true, sw_arm, loop_arm, loop_cond, non_inner,
-        in_hammock, base_root, base_loop,
-    ))
+let phase_arms = || -> Schedule {
+    let exit_count<r, l, n>: Rule(OrdCount("exit", r, l, 0, n) -> LoopExitCount(r, l, n));
+    let single_exit<r, l, x>: Rule((OrdCount("exit", r, l, 0, 1), LoopExit(r, l, x)) -> LoopSingleExit(r, l, x));
+    let cond_false<r, s, h, term, dst>: Rule((ActiveSese(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, dialects::cfg::cond_br.kind), Successor(term, 1, dst))
+        -> (BranchArm(r, s, h, 0, 1, dst), IsCondBranch(r, s, h)));
+    let cond_true<r, s, h, term, dst>: Rule((ActiveSese(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, dialects::cfg::cond_br.kind), Successor(term, 0, dst)) -> BranchArm(r, s, h, 1, 0, dst));
+    let sw_arm<r, s, h, term, slot, dst>: Rule((ActiveSese(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, dialects::cfg::r#switch.kind), Successor(term, slot, dst)) -> BranchArm(r, s, h, slot, slot, dst));
+    let loop_arm<r, s, l, k, x, idx>: Rule((ActiveSese(r, s, l), IsLoopDagNode(r, s, l), OrdIdx("exit", r, l, 0, k, x, idx)) -> BranchArm(r, s, l, idx, x, x));
+    let loop_cond<r, s, l>: Rule((ActiveSese(r, s, l), IsLoopDagNode(r, s, l), OrdCount("exit", r, l, 0, 2)) -> IsCondBranch(r, s, l));
+    let non_inner<r, s, b, h1, s1, h2, s2>: Rule((ActiveSese(r, s, h1), ActiveSese(r, s, h2), ArmBlock(r, s, h1, s1, b), ArmBlock(r, s, h2, s2, b), DagStrictDom(r, s, h1, h2)) -> NonInnerSese(r, s, b, h1));
+    let in_hammock<r, s, h, m>: Rule((ActiveHammock(r, s, h), HammockMember(r, s, h, m)) -> NodeInHammock(r, s, m));
+    let base_root<r, owner, entry>: Rule(TargetRegion(r, owner, entry) -> ScopeBaseReg(r, r, Reg::Orig(r)));
+    let base_loop<r, o, e, h>: Rule((TargetRegion(r, o, e), NatLoopHeader(r, h)) -> ScopeBaseReg(r, h, Reg::LoopBody(r, h)));
+    Schedule::Once(List(exit_count, single_exit, cond_false, cond_true, sw_arm, loop_arm, loop_cond, non_inner,
+        in_hammock, base_root, base_loop))
 };
 
-pub mod phase_homes_inner {
-    pub let inner_sese<r, s, b, h, slot>:
-        (ActiveSese(r, s, h), analysis::cfg::ArmBlock(r, s, h, slot, b), !NonInnerSese(r, s, b, h), !NodeInHammock(r, s, b))
-        -> (InnerSese(r, s, b, h, slot), NodeInSese(r, s, b));
-}
-
-let phase_homes = || {
-    let home_ham<r, s, h, m>: (ActiveHammock(r, s, h), analysis::cfg::HammockMember(r, s, h, m)) -> NodeHome(r, s, m, Reg::GuardArm(r, s, h, m, 1));
-    let home_sese<r, s, b, h, slot, arm, dst>: (InnerSese(r, s, b, h, slot), BranchArm(r, s, h, arm, slot, dst)) -> NodeHome(r, s, b, Reg::SeseArm(r, s, h, arm));
-    let home_base<r, o, e, s, b, reg>:
-        (TargetRegion(r, o, e), analysis::cfg::DagNode(r, s, b), ScopeBaseReg(r, s, reg), !NodeInSese(r, s, b), !NodeInHammock(r, s, b)) -> NodeHome(r, s, b, reg);
-    std::schedule::Schedule::Rules((
-        home_ham, home_sese, home_base,
-    ))
+let phase_homes_inner = || -> Schedule {
+    let inner_sese<r, s, b, h, slot>: Rule((ActiveSese(r, s, h), ArmBlock(r, s, h, slot, b), !NonInnerSese(r, s, b, h), !NodeInHammock(r, s, b))
+        -> (InnerSese(r, s, b, h, slot), NodeInSese(r, s, b)));
+    Schedule::Once(List(inner_sese))
 };
 
-let phase_home_derived = || {
-    let blk_plain<r, s, b, reg>: (NodeHome(r, s, b, reg), !IsLoopDagNode(r, s, b)) -> (BlockHome(r, b, reg), BlockScope(r, b, s));
-    let blk_irred<r, o, e, s, m, rep>:
-        (TargetRegion(r, o, e), analysis::cfg::IrredScc(r, s, m, rep), !analysis::cfg::NatLoopHeader(r, m)) -> (BlockHome(r, m, Reg::GuardArm(r, s, rep, m, 1)), BlockScope(r, m, s));
-    let loop_dag<r, s, l, reg>: (NodeHome(r, s, l, reg), IsLoopDagNode(r, s, l)) -> LoopHome(r, l, reg);
-    let loop_in_irred<r, o, e, s, m, rep>:
-        (TargetRegion(r, o, e), analysis::cfg::IrredScc(r, s, m, rep), analysis::cfg::NatLoopHeader(r, m)) -> LoopHome(r, m, Reg::GuardArm(r, s, rep, m, 1));
-    let guard_ham<r, s, h, reg>: (ActiveHammock(r, s, h), NodeHome(r, s, h, reg)) -> GuardHome(r, s, h, reg);
-    let guard_irred<r, o, e, s, rep>: (TargetRegion(r, o, e), analysis::cfg::IrredLoop(r, s, rep)) -> GuardHome(r, s, rep, Reg::LoopBody(r, rep));
+let phase_homes = || -> Schedule {
+    let home_ham<r, s, h, m>: Rule((ActiveHammock(r, s, h), HammockMember(r, s, h, m)) -> NodeHome(r, s, m, Reg::GuardArm(r, s, h, m, 1)));
+    let home_sese<r, s, b, h, slot, arm, dst>: Rule((InnerSese(r, s, b, h, slot), BranchArm(r, s, h, arm, slot, dst)) -> NodeHome(r, s, b, Reg::SeseArm(r, s, h, arm)));
+    let home_base<r, o, e, s, b, reg>: Rule((TargetRegion(r, o, e), DagNode(r, s, b), ScopeBaseReg(r, s, reg), !NodeInSese(r, s, b), !NodeInHammock(r, s, b)) -> NodeHome(r, s, b, reg));
+    Schedule::Once(List(home_ham, home_sese, home_base))
+};
 
-    let step_ham_entry_blk<r, s, h, term, kind, reg>:
-        (ActiveHammock(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, kind), NodeHome(r, s, h, reg)) -> (StepSite(r, s, h, h, 0, term), StepHome(r, s, h, h, reg));
-    let step_ham_entry_loop<r, s, h, reg>:
-        (ActiveHammock(r, s, h), IsLoopDagNode(r, s, h), NodeHome(r, s, h, reg)) -> (StepSite(r, s, h, h, 1, (0 - 1)), StepHome(r, s, h, h, reg));
-    let step_gmem_cond<r, s, o, k, m, term>:
-        (OrdItem("gmem", r, s, o, k, m), BlockHome(r, m, Reg::GuardArm(r, s, o, m, 1)), BlockTerm(r, m, term, dialects::cfg::r#cond_br.kind))
-        -> (StepSite(r, s, o, m, 0, term), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1)));
-    let step_gmem_sw<r, s, o, k, m, term>:
-        (OrdItem("gmem", r, s, o, k, m), BlockHome(r, m, Reg::GuardArm(r, s, o, m, 1)), BlockTerm(r, m, term, dialects::cfg::r#switch.kind))
-        -> (StepSite(r, s, o, m, 0, term), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1)));
-    let step_gmem_loop<r, s, o, k, m>:
-        (OrdItem("gmem", r, s, o, k, m), analysis::cfg::NatLoopHeader(r, m), m != s, analysis::cfg::LoopMultiExit(r, m))
-        -> (StepSite(r, s, o, m, 1, (0 - 1)), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1)));
+let phase_home_derived = || -> Schedule {
+    let blk_plain<r, s, b, reg>: Rule((NodeHome(r, s, b, reg), !IsLoopDagNode(r, s, b)) -> (BlockHome(r, b, reg), BlockScope(r, b, s)));
+    let blk_irred<r, o, e, s, m, rep>: Rule((TargetRegion(r, o, e), IrredScc(r, s, m, rep), !NatLoopHeader(r, m)) -> (BlockHome(r, m, Reg::GuardArm(r, s, rep, m, 1)), BlockScope(r, m, s)));
+    let loop_dag<r, s, l, reg>: Rule((NodeHome(r, s, l, reg), IsLoopDagNode(r, s, l)) -> LoopHome(r, l, reg));
+    let loop_in_irred<r, o, e, s, m, rep>: Rule((TargetRegion(r, o, e), IrredScc(r, s, m, rep), NatLoopHeader(r, m)) -> LoopHome(r, m, Reg::GuardArm(r, s, rep, m, 1)));
+    let guard_ham<r, s, h, reg>: Rule((ActiveHammock(r, s, h), NodeHome(r, s, h, reg)) -> GuardHome(r, s, h, reg));
+    let guard_irred<r, o, e, s, rep>: Rule((TargetRegion(r, o, e), IrredLoop(r, s, rep)) -> GuardHome(r, s, rep, Reg::LoopBody(r, rep)));
 
-    let step_linear<r, s, u, v, reg>:
-        (NodeHome(r, s, u, reg), NodeHome(r, s, v, reg), !ActiveSese(r, s, u), !ActiveHammock(r, s, u), analysis::cfg::DagEdge(r, s, u, v))
-        -> (StructStep(r, s, u, v), HasStructNext(r, s, u), HasStructPrev(r, s, v));
-    let step_sese<r, s, u, j, reg>:
-        (NodeHome(r, s, u, reg), NodeHome(r, s, j, reg), ActiveSese(r, s, u), analysis::cfg::DagIpdom(r, s, u, j))
-        -> (StructStep(r, s, u, j), HasStructNext(r, s, u), HasStructPrev(r, s, j));
-    let step_ham<r, s, u, j, reg>:
-        (NodeHome(r, s, u, reg), NodeHome(r, s, j, reg), ActiveHammock(r, s, u), analysis::cfg::DagIpdom(r, s, u, j))
-        -> (StructStep(r, s, u, j), HasStructNext(r, s, u), HasStructPrev(r, s, j));
-    let sese_has_body<r, s, h, arm, slot, dst>: (BranchArm(r, s, h, arm, slot, dst), analysis::cfg::ArmBlock(r, s, h, slot, dst)) -> SeseArmHasBody(r, s, h, arm);
-    std::schedule::saturate((
-        blk_plain, blk_irred, loop_dag, loop_in_irred, guard_ham, guard_irred,
+    let step_ham_entry_blk<r, s, h, term, kind, reg>: Rule((ActiveHammock(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, kind), NodeHome(r, s, h, reg)) -> (StepSite(r, s, h, h, 0, term), StepHome(r, s, h, h, reg)));
+    let step_ham_entry_loop<r, s, h, reg>: Rule((ActiveHammock(r, s, h), IsLoopDagNode(r, s, h), NodeHome(r, s, h, reg)) -> (StepSite(r, s, h, h, 1, (0 - 1)), StepHome(r, s, h, h, reg)));
+    let step_gmem_cond<r, s, o, k, m, term>: Rule((OrdItem("gmem", r, s, o, k, m), BlockHome(r, m, Reg::GuardArm(r, s, o, m, 1)), BlockTerm(r, m, term, dialects::cfg::cond_br.kind))
+        -> (StepSite(r, s, o, m, 0, term), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1))));
+    let step_gmem_sw<r, s, o, k, m, term>: Rule((OrdItem("gmem", r, s, o, k, m), BlockHome(r, m, Reg::GuardArm(r, s, o, m, 1)), BlockTerm(r, m, term, dialects::cfg::r#switch.kind))
+        -> (StepSite(r, s, o, m, 0, term), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1))));
+    let step_gmem_loop<r, s, o, k, m>: Rule((OrdItem("gmem", r, s, o, k, m), NatLoopHeader(r, m), m != s, LoopMultiExit(r, m))
+        -> (StepSite(r, s, o, m, 1, (0 - 1)), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1))));
+
+    let step_linear<r, s, u, v, reg>: Rule((NodeHome(r, s, u, reg), NodeHome(r, s, v, reg), !ActiveSese(r, s, u), !ActiveHammock(r, s, u), DagEdge(r, s, u, v))
+        -> (StructStep(r, s, u, v), HasStructNext(r, s, u), HasStructPrev(r, s, v)));
+    let step_sese<r, s, u, j, reg>: Rule((NodeHome(r, s, u, reg), NodeHome(r, s, j, reg), ActiveSese(r, s, u), DagIpdom(r, s, u, j))
+        -> (StructStep(r, s, u, j), HasStructNext(r, s, u), HasStructPrev(r, s, j)));
+    let step_ham<r, s, u, j, reg>: Rule((NodeHome(r, s, u, reg), NodeHome(r, s, j, reg), ActiveHammock(r, s, u), DagIpdom(r, s, u, j))
+        -> (StructStep(r, s, u, j), HasStructNext(r, s, u), HasStructPrev(r, s, j)));
+    let sese_has_body<r, s, h, arm, slot, dst>: Rule((BranchArm(r, s, h, arm, slot, dst), ArmBlock(r, s, h, slot, dst)) -> SeseArmHasBody(r, s, h, arm));
+    Schedule::Saturate(List(blk_plain, blk_irred, loop_dag, loop_in_irred, guard_ham, guard_irred,
         step_ham_entry_blk, step_ham_entry_loop, step_gmem_cond, step_gmem_sw, step_gmem_loop,
-        step_linear, step_sese, step_ham, sese_has_body,
-    ))
+        step_linear, step_sese, step_ham, sese_has_body))
 };
 
-let phase_reg_tree = || {
-    let step_arm_cond_f<r, s, o, src, term, dst>:
-        (StepSite(r, s, o, src, 0, term), BlockTerm(r, src, term, dialects::cfg::r#cond_br.kind), ir::Successor(std::ir::operation_key(term), 1, dst)) -> StepSiteArm(r, s, o, src, 0, 1, dst);
-    let step_arm_cond_t<r, s, o, src, term, dst>:
-        (StepSite(r, s, o, src, 0, term), BlockTerm(r, src, term, dialects::cfg::r#cond_br.kind), ir::Successor(std::ir::operation_key(term), 0, dst)) -> StepSiteArm(r, s, o, src, 1, 0, dst);
-    let step_arm_sw<r, s, o, src, term, slot, dst>:
-        (StepSite(r, s, o, src, 0, term), BlockTerm(r, src, term, dialects::cfg::r#switch.kind), ir::Successor(std::ir::operation_key(term), slot, dst)) -> StepSiteArm(r, s, o, src, slot, slot, dst);
-    let step_arm_loop<r, s, o, src, t, k, x, idx>:
-        (StepSite(r, s, o, src, 1, t), OrdIdx("exit", r, src, 0, k, x, idx)) -> StepSiteArm(r, s, o, src, idx, x, x);
-    let rp_for<outer, blk, for_op, pos, body, entry, preg>: (ForOpInfo(outer, blk, for_op, pos, body, entry), BlockHome(outer, blk, preg)) -> RegParent(Reg::Orig(body), preg);
-    let rp_loop<r, l, preg>: LoopHome(r, l, preg) -> (RegParent(Reg::LoopBody(r, l), preg), ChildReg(Reg::LoopBody(r, l)));
-    let rp_sese<r, s, h, arm, slot, dst, preg>:
-        (BranchArm(r, s, h, arm, slot, dst), NodeHome(r, s, h, preg)) -> (RegParent(Reg::SeseArm(r, s, h, arm), preg), ChildReg(Reg::SeseArm(r, s, h, arm)));
-    let rp_guard<r, s, o, k, m, preg>:
-        (OrdItem("gmem", r, s, o, k, m), GuardHome(r, s, o, preg))
+let phase_reg_tree = || -> Schedule {
+    let step_arm_cond_f<r, s, o, src, term, dst>: Rule((StepSite(r, s, o, src, 0, term), BlockTerm(r, src, term, dialects::cfg::cond_br.kind), Successor(term, 1, dst)) -> StepSiteArm(r, s, o, src, 0, 1, dst));
+    let step_arm_cond_t<r, s, o, src, term, dst>: Rule((StepSite(r, s, o, src, 0, term), BlockTerm(r, src, term, dialects::cfg::cond_br.kind), Successor(term, 0, dst)) -> StepSiteArm(r, s, o, src, 1, 0, dst));
+    let step_arm_sw<r, s, o, src, term, slot, dst>: Rule((StepSite(r, s, o, src, 0, term), BlockTerm(r, src, term, dialects::cfg::r#switch.kind), Successor(term, slot, dst)) -> StepSiteArm(r, s, o, src, slot, slot, dst));
+    let step_arm_loop<r, s, o, src, t, k, x, idx>: Rule((StepSite(r, s, o, src, 1, t), OrdIdx("exit", r, src, 0, k, x, idx)) -> StepSiteArm(r, s, o, src, idx, x, x));
+    let rp_for<outer, blk, for_op, pos, body, entry, preg>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), BlockHome(outer, blk, preg)) -> RegParent(Reg::Orig(body), preg));
+    let rp_loop<r, l, preg>: Rule(LoopHome(r, l, preg) -> (RegParent(Reg::LoopBody(r, l), preg), ChildReg(Reg::LoopBody(r, l))));
+    let rp_sese<r, s, h, arm, slot, dst, preg>: Rule((BranchArm(r, s, h, arm, slot, dst), NodeHome(r, s, h, preg)) -> (RegParent(Reg::SeseArm(r, s, h, arm), preg), ChildReg(Reg::SeseArm(r, s, h, arm))));
+    let rp_guard<r, s, o, k, m, preg>: Rule((OrdItem("gmem", r, s, o, k, m), GuardHome(r, s, o, preg))
         -> (RegParent(Reg::GuardArm(r, s, o, m, 0), preg), ChildReg(Reg::GuardArm(r, s, o, m, 0)),
-            RegParent(Reg::GuardArm(r, s, o, m, 1), preg), ChildReg(Reg::GuardArm(r, s, o, m, 1)));
-    std::schedule::Schedule::Rules((
-        step_arm_cond_f, step_arm_cond_t, step_arm_sw, step_arm_loop, rp_for, rp_loop, rp_sese,
-        rp_guard,
-    ))
+            RegParent(Reg::GuardArm(r, s, o, m, 1), preg), ChildReg(Reg::GuardArm(r, s, o, m, 1))));
+    Schedule::Once(List(step_arm_cond_f, step_arm_cond_t, step_arm_sw, step_arm_loop, rp_for, rp_loop, rp_sese,
+        rp_guard))
 };
 
-pub mod phase_reg_tree2 {
-    pub let rp_step<r, s, o, src, arm, slot, dst, preg>:
-        (StepSiteArm(r, s, o, src, arm, slot, dst), StepHome(r, s, o, src, preg))
-        -> (RegParent(Reg::StepArm(r, s, o, src, arm), preg), ChildReg(Reg::StepArm(r, s, o, src, arm)));
-}
-
-let phase_depths = || {
-    let root<r, owner, entry>: (TargetRegion(r, owner, entry), !IsForBody(r)) -> RegDepthStep(Reg::Orig(r), 0);
-    let step<p, c, d>: (RegDepthStep(p, d), RegParent(c, p)) -> RegDepthStep(c, (d + 1));
-    let head<r, s, n, reg>: (NodeHome(r, s, n, reg), !HasStructPrev(r, s, n)) -> (ChainHead(reg, r, s, n), ChainPos(reg, n, 0));
-    let pos_step<reg, r, s, u, v, p>: (ChainPos(reg, u, p), StructStep(r, s, u, v), NodeHome(r, s, v, reg)) -> ChainPos(reg, v, (p + 1));
-    let tail<r, s, n, reg>: (NodeHome(r, s, n, reg), !HasStructNext(r, s, n)) -> ChainTail(reg, r, s, n);
-    std::schedule::saturate((
-        root, step, head, pos_step, tail,
-    ))
+let phase_reg_tree2 = || -> Schedule {
+    let rp_step<r, s, o, src, arm, slot, dst, preg>: Rule((StepSiteArm(r, s, o, src, arm, slot, dst), StepHome(r, s, o, src, preg))
+        -> (RegParent(Reg::StepArm(r, s, o, src, arm), preg), ChildReg(Reg::StepArm(r, s, o, src, arm))));
+    Schedule::Once(List(rp_step))
 };
-pub mod phase_depth_max {
-    pub let max_d<reg, d>: RegDepthStep(reg, d) -> RegDepth(reg, d);
-}
+
+let phase_depths = || -> Schedule {
+    let root<r, owner, entry>: Rule((TargetRegion(r, owner, entry), !IsForBody(r)) -> RegDepthStep(Reg::Orig(r), 0));
+    let step<p, c, d>: Rule((RegDepthStep(p, d), RegParent(c, p)) -> RegDepthStep(c, (d + 1)));
+    let head<r, s, n, reg>: Rule((NodeHome(r, s, n, reg), !HasStructPrev(r, s, n)) -> (ChainHead(reg, r, s, n), ChainPos(reg, n, 0)));
+    let pos_step<reg, r, s, u, v, p>: Rule((ChainPos(reg, u, p), StructStep(r, s, u, v), NodeHome(r, s, v, reg)) -> ChainPos(reg, v, (p + 1)));
+    let tail<r, s, n, reg>: Rule((NodeHome(r, s, n, reg), !HasStructNext(r, s, n)) -> ChainTail(reg, r, s, n));
+    Schedule::Saturate(List(root, step, head, pos_step, tail))
+};
+let phase_depth_max = || -> Schedule {
+    let max_d<reg, d>: Rule(RegDepthStep(reg, d) -> RegDepth(reg, d));
+    Schedule::Once(List(max_d))
+};
 
 // ── Phase 3: Tracked vars, types, port/output sets, target codes, static overwrites
-let phase_vars = || {
-    let loop_has_ex<r, o, e, l, x>: (TargetRegion(r, o, e), analysis::cfg::LoopExit(r, l, x)) -> LoopHasExit(r, l);
-    let exit_ty_i1<r, l, n>: (LoopExitCount(r, l, n), std::int::less(2, n) == false) -> ExitSelTy(r, l, Ty::I1);
-    let exit_ty_i32<r, l, n>: (LoopExitCount(r, l, n), std::int::less(2, n) == true) -> ExitSelTy(r, l, Ty::I32);
-    let exit_ty_zero<r, o, e, h>: (TargetRegion(r, o, e), analysis::cfg::NatLoopHeader(r, h), !analysis::cfg::LoopMultiExit(r, h)) -> ExitSelTy(r, h, Ty::I1);
-    let exit_w_1<r, l>: LoopExitCount(r, l, 2) -> ExitSelWidth(r, l, 1);
-    let exit_w_32<r, l, n>: (LoopExitCount(r, l, n), std::int::less(2, n) == true) -> ExitSelWidth(r, l, 32);
+let phase_vars = || -> Schedule {
+    let loop_has_ex<r, o, e, l, x>: Rule((TargetRegion(r, o, e), LoopExit(r, l, x)) -> LoopHasExit(r, l));
+    let exit_ty_i1<r, l, n>: Rule((LoopExitCount(r, l, n), less(int_lit(2), n) == false) -> ExitSelTy(r, l, Ty::I1));
+    let exit_ty_i32<r, l, n>: Rule((LoopExitCount(r, l, n), less(int_lit(2), n) == true) -> ExitSelTy(r, l, Ty::I32));
+    let exit_ty_zero<r, o, e, h>: Rule((TargetRegion(r, o, e), NatLoopHeader(r, h), !LoopMultiExit(r, h)) -> ExitSelTy(r, h, Ty::I1));
+    let exit_w_1<r, l>: Rule(LoopExitCount(r, l, 2) -> ExitSelWidth(r, l, 1));
+    let exit_w_32<r, l, n>: Rule((LoopExitCount(r, l, n), less(int_lit(2), n) == true) -> ExitSelWidth(r, l, 32));
 
-    let tv_ctrl<r, o, e>:
-        TargetRegion(r, o, e) -> (TrackedVar(r, (0 - 1)), TrackedVar(r, (0 - 2)), TrackedVar(r, (0 - 3)), TrackedVar(r, r));
-    let tv_chain<r, o, e, c>: (TargetRegion(r, o, e), analysis::cfg::RegionChain(r, c)) -> TrackedVar(r, c);
-    let tv_loop<r, o, e, l, v>: (TargetRegion(r, o, e), analysis::cfg::LoopCarried(r, l, v)) -> TrackedVar(r, v);
-    let tv_br<r, o, e, s, h, v>: (TargetRegion(r, o, e), analysis::cfg::BranchOutput(r, s, h, v)) -> TrackedVar(r, v);
-    let tv_param<r, v>: IsLiveParam(r, v) -> TrackedVar(r, v);
-    let tv_for<r, oid, slot, v>: ForOrigRes(r, oid, slot, v) -> TrackedVar(r, v);
-    let tv_ham_w<r, s, h, m, v>: (ActiveHammock(r, s, h), analysis::cfg::HammockMember(r, s, h, m), analysis::cfg::BlockVarWrite(r, m, v)) -> TrackedVar(r, v);
-    let tv_ham_r<r, s, h, m, v>: (ActiveHammock(r, s, h), analysis::cfg::HammockMember(r, s, h, m), analysis::cfg::BlockLiveIn(r, m, v)) -> TrackedVar(r, v);
+    let tv_ctrl<r, o, e>: Rule(TargetRegion(r, o, e) -> (TrackedVar(r, (0 - 1)), TrackedVar(r, (0 - 2)), TrackedVar(r, (0 - 3)), TrackedVar(r, r)));
+    let tv_chain<r, o, e, c>: Rule((TargetRegion(r, o, e), RegionChain(r, c)) -> TrackedVar(r, c));
+    let tv_loop<r, o, e, l, v>: Rule((TargetRegion(r, o, e), LoopCarried(r, l, v)) -> TrackedVar(r, v));
+    let tv_br<r, o, e, s, h, v>: Rule((TargetRegion(r, o, e), BranchOutput(r, s, h, v)) -> TrackedVar(r, v));
+    let tv_param<r, v>: Rule(IsLiveParam(r, v) -> TrackedVar(r, v));
+    let tv_for<r, oid, slot, v>: Rule(ForOrigRes(r, oid, slot, v) -> TrackedVar(r, v));
+    let tv_ham_w<r, s, h, m, v>: Rule((ActiveHammock(r, s, h), HammockMember(r, s, h, m), BlockVarWrite(r, m, v)) -> TrackedVar(r, v));
+    let tv_ham_r<r, s, h, m, v>: Rule((ActiveHammock(r, s, h), HammockMember(r, s, h, m), BlockLiveIn(r, m, v)) -> TrackedVar(r, v));
 
     // Loop port variables (sorted: target, val, val-exit-only, chain, chain-exit-only, exit_sel).
-    let lp_val<r, o, e, l, lh, v>: (TargetRegion(r, o, e), LoopHome(r, l, lh), analysis::cfg::LoopCarried(r, l, v), !analysis::cfg::RegionChain(r, v), !analysis::cfg::LoopExitOnly(r, l, v)) -> (LoopPortVar(r, l, v), LoopWritesPort(r, l, v), OrdItem("lp", r, l, 0, (4294967296 + v), v));
-    let lp_val_ex<r, o, e, l, lh, v>: (TargetRegion(r, o, e), LoopHome(r, l, lh), analysis::cfg::LoopCarried(r, l, v), !analysis::cfg::RegionChain(r, v), analysis::cfg::LoopExitOnly(r, l, v)) -> (LoopPortVar(r, l, v), LoopWritesPort(r, l, v), OrdItem("lp", r, l, 0, (8589934592 + v), v));
-    let lp_ch<r, o, e, l, lh, c>: (TargetRegion(r, o, e), LoopHome(r, l, lh), analysis::cfg::LoopCarried(r, l, c), analysis::cfg::RegionChain(r, c), !analysis::cfg::LoopExitOnly(r, l, c)) -> (LoopPortVar(r, l, c), LoopWritesPort(r, l, c), OrdItem("lp", r, l, 0, (12884901888 + c), c));
-    let lp_ch_ex<r, o, e, l, lh, c>: (TargetRegion(r, o, e), LoopHome(r, l, lh), analysis::cfg::LoopCarried(r, l, c), analysis::cfg::RegionChain(r, c), analysis::cfg::LoopExitOnly(r, l, c)) -> (LoopPortVar(r, l, c), LoopWritesPort(r, l, c), OrdItem("lp", r, l, 0, (17179869184 + c), c));
-    let lp_nat_exsel<r, o, e, h>: (TargetRegion(r, o, e), analysis::cfg::NatLoopHeader(r, h), !IsTailLoop(r, h), analysis::cfg::LoopMultiExit(r, h)) -> (LoopPortVar(r, h, (0 - 2)), OrdItem("lp", r, h, 0, 21474836480, (0 - 2)));
-    let lp_irr_tgt<r, o, e, s, rep>: (TargetRegion(r, o, e), analysis::cfg::IrredLoop(r, s, rep)) -> (LoopPortVar(r, rep, (0 - 3)), OrdItem("lp", r, rep, 0, 0, (0 - 3)));
+    let lp_val<r, o, e, l, lh, v>: Rule((TargetRegion(r, o, e), LoopHome(r, l, lh), LoopCarried(r, l, v), !RegionChain(r, v), !LoopExitOnly(r, l, v)) -> (LoopPortVar(r, l, v), LoopWritesPort(r, l, v), OrdItem("lp", r, l, 0, (4294967296 + v), v)));
+    let lp_val_ex<r, o, e, l, lh, v>: Rule((TargetRegion(r, o, e), LoopHome(r, l, lh), LoopCarried(r, l, v), !RegionChain(r, v), LoopExitOnly(r, l, v)) -> (LoopPortVar(r, l, v), LoopWritesPort(r, l, v), OrdItem("lp", r, l, 0, (8589934592 + v), v)));
+    let lp_ch<r, o, e, l, lh, c>: Rule((TargetRegion(r, o, e), LoopHome(r, l, lh), LoopCarried(r, l, c), RegionChain(r, c), !LoopExitOnly(r, l, c)) -> (LoopPortVar(r, l, c), LoopWritesPort(r, l, c), OrdItem("lp", r, l, 0, (12884901888 + c), c)));
+    let lp_ch_ex<r, o, e, l, lh, c>: Rule((TargetRegion(r, o, e), LoopHome(r, l, lh), LoopCarried(r, l, c), RegionChain(r, c), LoopExitOnly(r, l, c)) -> (LoopPortVar(r, l, c), LoopWritesPort(r, l, c), OrdItem("lp", r, l, 0, (17179869184 + c), c)));
+    let lp_nat_exsel<r, o, e, h>: Rule((TargetRegion(r, o, e), NatLoopHeader(r, h), !IsTailLoop(r, h), LoopMultiExit(r, h)) -> (LoopPortVar(r, h, (0 - 2)), OrdItem("lp", r, h, 0, 21474836480, (0 - 2))));
+    let lp_irr_tgt<r, o, e, s, rep>: Rule((TargetRegion(r, o, e), IrredLoop(r, s, rep)) -> (LoopPortVar(r, rep, (0 - 3)), OrdItem("lp", r, rep, 0, 0, (0 - 3))));
 
     // SESE branch outputs and forwarded chains.
-    let sese_out_val<r, s, h, v>: (ActiveSese(r, s, h), analysis::cfg::BranchOutput(r, s, h, v), !analysis::cfg::RegionChain(r, v)) -> (SeseOutVar(r, s, h, v), SeseHasOut(r, s, h), OrdItem("sese_out", r, s, h, (4294967296 + v), v));
-    let sese_out_ch<r, s, h, c>: (ActiveSese(r, s, h), analysis::cfg::BranchOutput(r, s, h, c), analysis::cfg::RegionChain(r, c)) -> (SeseOutVar(r, s, h, c), SeseHasOut(r, s, h), SeseFwdChain(r, s, h, c), OrdItem("sese_out", r, s, h, (8589934592 + c), c));
-    let sese_out_rep<r, lh, h>: (ActiveSese(r, lh, h), !analysis::cfg::DagHasIpdom(r, lh, h), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh)) -> (SeseOutVar(r, lh, h, (0 - 1)), SeseHasOut(r, lh, h), OrdItem("sese_out", r, lh, h, 0, (0 - 1)));
-    let sese_out_exsel<r, lh, h>: (ActiveSese(r, lh, h), !analysis::cfg::DagHasIpdom(r, lh, h), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh), analysis::cfg::LoopMultiExit(r, lh)) -> (SeseOutVar(r, lh, h, (0 - 2)), SeseHasOut(r, lh, h), OrdItem("sese_out", r, lh, h, 12884901888, (0 - 2)));
-    let sese_out_tgt<r, s, h, arm, slot, dst, rep>: (ActiveSese(r, s, h), BranchArm(r, s, h, arm, slot, dst), analysis::cfg::IrredScc(r, s, dst, rep)) -> (SeseOutVar(r, s, h, (0 - 3)), SeseHasOut(r, s, h), OrdItem("sese_out", r, s, h, 17179869184, (0 - 3)));
-    let sese_fwd_read<r, s, h, c>: (ActiveSese(r, s, h), analysis::cfg::BranchReadsMem(r, s, h, c)) -> SeseFwdChain(r, s, h, c);
-    let sese_fwd_ord<r, s, h, c>: SeseFwdChain(r, s, h, c) -> OrdItem("sese_fwd", r, s, h, c, c);
+    let sese_out_val<r, s, h, v>: Rule((ActiveSese(r, s, h), BranchOutput(r, s, h, v), !RegionChain(r, v)) -> (SeseOutVar(r, s, h, v), SeseHasOut(r, s, h), OrdItem("sese_out", r, s, h, (4294967296 + v), v)));
+    let sese_out_ch<r, s, h, c>: Rule((ActiveSese(r, s, h), BranchOutput(r, s, h, c), RegionChain(r, c)) -> (SeseOutVar(r, s, h, c), SeseHasOut(r, s, h), SeseFwdChain(r, s, h, c), OrdItem("sese_out", r, s, h, (8589934592 + c), c)));
+    let sese_out_rep<r, lh, h>: Rule((ActiveSese(r, lh, h), !DagHasIpdom(r, lh, h), NatLoopHeader(r, lh), !IsTailLoop(r, lh)) -> (SeseOutVar(r, lh, h, (0 - 1)), SeseHasOut(r, lh, h), OrdItem("sese_out", r, lh, h, 0, (0 - 1))));
+    let sese_out_exsel<r, lh, h>: Rule((ActiveSese(r, lh, h), !DagHasIpdom(r, lh, h), NatLoopHeader(r, lh), !IsTailLoop(r, lh), LoopMultiExit(r, lh)) -> (SeseOutVar(r, lh, h, (0 - 2)), SeseHasOut(r, lh, h), OrdItem("sese_out", r, lh, h, 12884901888, (0 - 2))));
+    let sese_out_tgt<r, s, h, arm, slot, dst, rep>: Rule((ActiveSese(r, s, h), BranchArm(r, s, h, arm, slot, dst), IrredScc(r, s, dst, rep)) -> (SeseOutVar(r, s, h, (0 - 3)), SeseHasOut(r, s, h), OrdItem("sese_out", r, s, h, 17179869184, (0 - 3))));
+    let sese_fwd_read<r, s, h, c>: Rule((ActiveSese(r, s, h), BranchReadsMem(r, s, h, c)) -> SeseFwdChain(r, s, h, c));
+    let sese_fwd_ord<r, s, h, c>: Rule(SeseFwdChain(r, s, h, c) -> OrdItem("sese_fwd", r, s, h, c, c));
 
     // Guarded step vars & mems (IrredLoop + TopHammock).
-    let gv_irr<r, o, e, s, rep, k, v>: (TargetRegion(r, o, e), analysis::cfg::IrredLoop(r, s, rep), OrdItem("lp", r, rep, 0, k, v)) -> (GuardVar(r, s, rep, v), OrdItem("gv", r, s, rep, k, v));
-    let gm_irr<r, o, e, s, rep, c>: (TargetRegion(r, o, e), analysis::cfg::IrredLoop(r, s, rep), analysis::cfg::LoopCarried(r, rep, c), analysis::cfg::RegionChain(r, c)) -> (GuardMem(r, s, rep, c), OrdItem("gm", r, s, rep, c, c));
-    let gv_ham_tgt<r, s, h>: ActiveHammock(r, s, h) -> (GuardVar(r, s, h, (0 - 3)), OrdItem("gv", r, s, h, 0, (0 - 3)));
-    let gv_ham_rep<r, lh, h>: (ActiveHammock(r, lh, h), !analysis::cfg::DagHasIpdom(r, lh, h), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh)) -> (GuardVar(r, lh, h, (0 - 1)), OrdItem("gv", r, lh, h, 1, (0 - 1)));
-    let gv_ham_exsel<r, lh, h>: (ActiveHammock(r, lh, h), !analysis::cfg::DagHasIpdom(r, lh, h), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh), analysis::cfg::LoopMultiExit(r, lh)) -> (GuardVar(r, lh, h, (0 - 2)), OrdItem("gv", r, lh, h, 2, (0 - 2)));
-    let gv_ham_bo<r, s, h, v>: (ActiveHammock(r, s, h), analysis::cfg::BranchOutput(r, s, h, v)) -> (GuardVar(r, s, h, v), OrdItem("gv", r, s, h, (4294967296 + v), v));
-    let gv_ham_mw<r, s, h, m, v>: (ActiveHammock(r, s, h), analysis::cfg::HammockMember(r, s, h, m), analysis::cfg::BlockVarWrite(r, m, v)) -> (GuardVar(r, s, h, v), OrdItem("gv", r, s, h, (4294967296 + v), v));
-    let gv_ham_mr<r, s, h, m, v>: (ActiveHammock(r, s, h), analysis::cfg::HammockMember(r, s, h, m), analysis::cfg::BlockLiveIn(r, m, v)) -> (GuardVar(r, s, h, v), OrdItem("gv", r, s, h, (4294967296 + v), v));
-    let gm_ham<r, s, h, c>: (ActiveHammock(r, s, h), analysis::cfg::BranchReadsMem(r, s, h, c)) -> (GuardMem(r, s, h, c), OrdItem("gm", r, s, h, c, c));
+    let gv_irr<r, o, e, s, rep, k, v>: Rule((TargetRegion(r, o, e), IrredLoop(r, s, rep), OrdItem("lp", r, rep, 0, k, v)) -> (GuardVar(r, s, rep, v), OrdItem("gv", r, s, rep, k, v)));
+    let gm_irr<r, o, e, s, rep, c>: Rule((TargetRegion(r, o, e), IrredLoop(r, s, rep), LoopCarried(r, rep, c), RegionChain(r, c)) -> (GuardMem(r, s, rep, c), OrdItem("gm", r, s, rep, c, c)));
+    let gv_ham_tgt<r, s, h>: Rule(ActiveHammock(r, s, h) -> (GuardVar(r, s, h, (0 - 3)), OrdItem("gv", r, s, h, 0, (0 - 3))));
+    let gv_ham_rep<r, lh, h>: Rule((ActiveHammock(r, lh, h), !DagHasIpdom(r, lh, h), NatLoopHeader(r, lh), !IsTailLoop(r, lh)) -> (GuardVar(r, lh, h, (0 - 1)), OrdItem("gv", r, lh, h, 1, (0 - 1))));
+    let gv_ham_exsel<r, lh, h>: Rule((ActiveHammock(r, lh, h), !DagHasIpdom(r, lh, h), NatLoopHeader(r, lh), !IsTailLoop(r, lh), LoopMultiExit(r, lh)) -> (GuardVar(r, lh, h, (0 - 2)), OrdItem("gv", r, lh, h, 2, (0 - 2))));
+    let gv_ham_bo<r, s, h, v>: Rule((ActiveHammock(r, s, h), BranchOutput(r, s, h, v)) -> (GuardVar(r, s, h, v), OrdItem("gv", r, s, h, (4294967296 + v), v)));
+    let gv_ham_mw<r, s, h, m, v>: Rule((ActiveHammock(r, s, h), HammockMember(r, s, h, m), BlockVarWrite(r, m, v)) -> (GuardVar(r, s, h, v), OrdItem("gv", r, s, h, (4294967296 + v), v)));
+    let gv_ham_mr<r, s, h, m, v>: Rule((ActiveHammock(r, s, h), HammockMember(r, s, h, m), BlockLiveIn(r, m, v)) -> (GuardVar(r, s, h, v), OrdItem("gv", r, s, h, (4294967296 + v), v)));
+    let gm_ham<r, s, h, c>: Rule((ActiveHammock(r, s, h), BranchReadsMem(r, s, h, c)) -> (GuardMem(r, s, h, c), OrdItem("gm", r, s, h, c, c)));
 
     // Step-branch vars.
-    let sv_tgt<r, s, o, src, isl, t>: StepSite(r, s, o, src, isl, t) -> (StepVar(r, s, o, src, (0 - 3)), OrdItem("sv", s, o, src, 0, (0 - 3)));
-    let sv_rep<r, lh, h, src, isl, t>: (StepSite(r, lh, h, src, isl, t), ActiveHammock(r, lh, h), !analysis::cfg::DagHasIpdom(r, lh, h), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh)) -> (StepVar(r, lh, h, src, (0 - 1)), OrdItem("sv", lh, h, src, 1, (0 - 1)));
-    let sv_exsel<r, lh, h, src, isl, t>: (StepSite(r, lh, h, src, isl, t), ActiveHammock(r, lh, h), !analysis::cfg::DagHasIpdom(r, lh, h), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh), analysis::cfg::LoopMultiExit(r, lh)) -> (StepVar(r, lh, h, src, (0 - 2)), OrdItem("sv", lh, h, src, 2, (0 - 2)));
-    let sv_edge<r, s, o, src, t, edge, param, arg>: (StepSite(r, s, o, src, 0, t), LiveEdgeAssign(r, src, edge, param, arg)) -> (StepVar(r, s, o, src, param), OrdItem("sv", s, o, src, (4294967296 + param), param));
-    std::schedule::saturate((
-        loop_has_ex, exit_ty_i1, exit_ty_i32, exit_ty_zero, exit_w_1, exit_w_32, tv_ctrl,
+    let sv_tgt<r, s, o, src, isl, t>: Rule(StepSite(r, s, o, src, isl, t) -> (StepVar(r, s, o, src, (0 - 3)), OrdItem("sv", s, o, src, 0, (0 - 3))));
+    let sv_rep<r, lh, h, src, isl, t>: Rule((StepSite(r, lh, h, src, isl, t), ActiveHammock(r, lh, h), !DagHasIpdom(r, lh, h), NatLoopHeader(r, lh), !IsTailLoop(r, lh)) -> (StepVar(r, lh, h, src, (0 - 1)), OrdItem("sv", lh, h, src, 1, (0 - 1))));
+    let sv_exsel<r, lh, h, src, isl, t>: Rule((StepSite(r, lh, h, src, isl, t), ActiveHammock(r, lh, h), !DagHasIpdom(r, lh, h), NatLoopHeader(r, lh), !IsTailLoop(r, lh), LoopMultiExit(r, lh)) -> (StepVar(r, lh, h, src, (0 - 2)), OrdItem("sv", lh, h, src, 2, (0 - 2))));
+    let sv_edge<r, s, o, src, t, edge, param, arg>: Rule((StepSite(r, s, o, src, 0, t), LiveEdgeAssign(r, src, edge, param, arg)) -> (StepVar(r, s, o, src, param), OrdItem("sv", s, o, src, (4294967296 + param), param)));
+    Schedule::Saturate(List(loop_has_ex, exit_ty_i1, exit_ty_i32, exit_ty_zero, exit_w_1, exit_w_32, tv_ctrl,
         tv_chain, tv_loop, tv_br, tv_param, tv_for, tv_ham_w, tv_ham_r, lp_val, lp_val_ex, lp_ch,
         lp_ch_ex, lp_nat_exsel, lp_irr_tgt, sese_out_val, sese_out_ch, sese_out_rep,
         sese_out_exsel, sese_out_tgt, sese_fwd_read, sese_fwd_ord, gv_irr, gm_irr, gv_ham_tgt,
         gv_ham_rep, gv_ham_exsel, gv_ham_bo, gv_ham_mw, gv_ham_mr, gm_ham, sv_tgt, sv_rep,
-        sv_exsel, sv_edge,
-    ))
+        sv_exsel, sv_edge))
 };
 
-let phase_static_writes = || {
+let phase_static_writes = || -> Schedule {
     // Unified GeneralNat loop target constants & Guarded-step target codes.
-    let glt_hdr_rep<r, o, e, lh>:
-        (TargetRegion(r, o, e), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh)) -> GenLoopTarget(r, lh, lh, (0 - 1), 1, 1);
-    let glt_hdr_sel<r, o, e, lh, w>:
-        (TargetRegion(r, o, e), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh), ExitSelWidth(r, lh, w)) -> GenLoopTarget(r, lh, lh, (0 - 2), w, 0);
-    let glt_ex_rep<r, o, e, lh, x>:
-        (TargetRegion(r, o, e), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh), analysis::cfg::LoopExit(r, lh, x)) -> GenLoopTarget(r, lh, x, (0 - 1), 1, 0);
-    let glt_ex_sel<r, o, e, lh, x, w, k, eidx>:
-        (TargetRegion(r, o, e), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh), OrdIdx("exit", r, lh, 0, k, x, eidx), ExitSelWidth(r, lh, w)) -> GenLoopTarget(r, lh, x, (0 - 2), w, eidx);
+    let glt_hdr_rep<r, o, e, lh>: Rule((TargetRegion(r, o, e), NatLoopHeader(r, lh), !IsTailLoop(r, lh)) -> GenLoopTarget(r, lh, lh, (0 - 1), 1, 1));
+    let glt_hdr_sel<r, o, e, lh, w>: Rule((TargetRegion(r, o, e), NatLoopHeader(r, lh), !IsTailLoop(r, lh), ExitSelWidth(r, lh, w)) -> GenLoopTarget(r, lh, lh, (0 - 2), w, 0));
+    let glt_ex_rep<r, o, e, lh, x>: Rule((TargetRegion(r, o, e), NatLoopHeader(r, lh), !IsTailLoop(r, lh), LoopExit(r, lh, x)) -> GenLoopTarget(r, lh, x, (0 - 1), 1, 0));
+    let glt_ex_sel<r, o, e, lh, x, w, k, eidx>: Rule((TargetRegion(r, o, e), NatLoopHeader(r, lh), !IsTailLoop(r, lh), OrdIdx("exit", r, lh, 0, k, x, eidx), ExitSelWidth(r, lh, w)) -> GenLoopTarget(r, lh, x, (0 - 2), w, eidx));
 
-    let gt_member<r, s, o, k, dst, pos>: OrdIdx("gmem", r, s, o, k, dst, pos) -> GuardTarget(r, s, o, dst, pos);
-    let gt_ham_join<r, s, h, j, n>: (ActiveHammock(r, s, h), analysis::cfg::DagIpdom(r, s, h, j), OrdCount("gmem", r, s, h, n)) -> GuardTarget(r, s, h, j, n);
-    let gt_ham_out_blk<r, s, h, dst, n, src, slot>:
-        (ActiveHammock(r, s, h), analysis::cfg::CfgEdge(r, src, slot, dst), !analysis::cfg::HammockMember(r, s, h, dst), !analysis::cfg::DagIpdom(r, s, h, dst), OrdCount("gmem", r, s, h, n))
-        -> GuardTarget(r, s, h, dst, (n + 1));
-    let gt_irr_ex<r, s, rep, x, k, eidx, n>:
-        (analysis::cfg::IrredLoop(r, s, rep), OrdIdx("exit", r, rep, 0, k, x, eidx), OrdCount("gmem", r, s, rep, n)) -> GuardTarget(r, s, rep, x, (n + eidx));
+    let gt_member<r, s, o, k, dst, pos>: Rule(OrdIdx("gmem", r, s, o, k, dst, pos) -> GuardTarget(r, s, o, dst, pos));
+    let gt_ham_join<r, s, h, j, n>: Rule((ActiveHammock(r, s, h), DagIpdom(r, s, h, j), OrdCount("gmem", r, s, h, n)) -> GuardTarget(r, s, h, j, n));
+    let gt_ham_out_blk<r, s, h, dst, n, src, slot>: Rule((ActiveHammock(r, s, h), CfgEdge(r, src, slot, dst), !HammockMember(r, s, h, dst), !DagIpdom(r, s, h, dst), OrdCount("gmem", r, s, h, n))
+        -> GuardTarget(r, s, h, dst, (n + 1)));
+    let gt_irr_ex<r, s, rep, x, k, eidx, n>: Rule((IrredLoop(r, s, rep), OrdIdx("exit", r, rep, 0, k, x, eidx), OrdCount("gmem", r, s, rep, n)) -> GuardTarget(r, s, rep, x, (n + eidx)));
 
     // Variable types per (r, scope_or_loop, var).
-    let vs_dag<r, o, e, s, d>: (TargetRegion(r, o, e), analysis::cfg::DagEntry(r, s, d)) -> VarScope(r, s);
-    let vs_irr<r, o, e, s, rep>: (TargetRegion(r, o, e), analysis::cfg::IrredLoop(r, s, rep)) -> VarScope(r, rep);
-    let bo_dag<r, s, b, reg, p>: (NodeHome(r, s, b, reg), !IsLoopDagNode(r, s, b), ChainPos(reg, b, p)) -> BlockBaseOrder(r, b, (p * 10000000));
-    let bo_irr<r, o, e, s, m, rep>: (TargetRegion(r, o, e), analysis::cfg::IrredScc(r, s, m, rep), !analysis::cfg::NatLoopHeader(r, m)) -> BlockBaseOrder(r, m, 0);
-    let ty_rep<r, o, e, s, d>: (TargetRegion(r, o, e), analysis::cfg::DagEntry(r, s, d)) -> VarTy(r, s, (0 - 1), Ty::I1);
-    let ty_tgt<r, s>: VarScope(r, s) -> VarTy(r, s, (0 - 3), Ty::I32);
-    let ty_exsel<r, l, ty>: ExitSelTy(r, l, ty) -> VarTy(r, l, (0 - 2), ty);
-    let ty_ch<r, s, c>: (VarScope(r, s), analysis::cfg::RegionChain(r, c)) -> VarTy(r, s, c, Ty::State);
-    let ty_ret<r, owner, e, s>: (TargetRegion(r, owner, e), VarScope(r, s)) -> VarTy(r, s, r, Ty::RetType(owner));
-    let ty_ssa<r, s, v, ty, dk, o, sl, decl>: (TrackedVar(r, v), VarScope(r, s), ir::Value(std::ir::value_key(v), ty, dk, o, sl, decl)) -> VarTy(r, s, v, Ty::Exact(ty));
+    let vs_dag<r, o, e, s, d>: Rule((TargetRegion(r, o, e), DagEntry(r, s, d)) -> VarScope(r, s));
+    let vs_irr<r, o, e, s, rep>: Rule((TargetRegion(r, o, e), IrredLoop(r, s, rep)) -> VarScope(r, rep));
+    let bo_dag<r, s, b, reg, p>: Rule((NodeHome(r, s, b, reg), !IsLoopDagNode(r, s, b), ChainPos(reg, b, p)) -> BlockBaseOrder(r, b, (p * 10000000)));
+    let bo_irr<r, o, e, s, m, rep>: Rule((TargetRegion(r, o, e), IrredScc(r, s, m, rep), !NatLoopHeader(r, m)) -> BlockBaseOrder(r, m, 0));
+    let ty_rep<r, o, e, s, d>: Rule((TargetRegion(r, o, e), DagEntry(r, s, d)) -> VarTy(r, s, (0 - 1), Ty::I1));
+    let ty_tgt<r, s>: Rule(VarScope(r, s) -> VarTy(r, s, (0 - 3), Ty::I32));
+    let ty_exsel<r, l, ty>: Rule(ExitSelTy(r, l, ty) -> VarTy(r, l, (0 - 2), ty));
+    let ty_ch<r, s, c>: Rule((VarScope(r, s), RegionChain(r, c)) -> VarTy(r, s, c, Ty::State));
+    let ty_ret<r, owner, e, s>: Rule((TargetRegion(r, owner, e), VarScope(r, s)) -> VarTy(r, s, r, Ty::RetType(owner)));
+    let ty_ssa<r, s, v, ty, dk, o, sl, decl>: Rule((TrackedVar(r, v), VarScope(r, s), Value(v, ty, dk, o, sl, decl)) -> VarTy(r, s, v, Ty::Exact(ty)));
 
     // Block static write sets & control-variable overwrite flags.
-    let bw_mem<r, b, c>: BlockHasMemOp(r, b, c) -> BlockWritesVar(r, b, c);
-    let bw_res<r, o, e, b, v, oid, k, pos, d, loc, ty, sl, decl>:
-        (TargetRegion(r, o, e), TrackedVar(r, v), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }(), ir::Value(std::ir::value_key(v), ty, "result", oid, sl, decl)) -> BlockWritesVar(r, b, v);
-    let bw_ret<r, o, e, b, term, val>: (TargetRegion(r, o, e), analysis::cfg::CfgReachableExit(r, b, term, dialects::func::r#return.kind), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(val))) -> BlockWritesVar(r, b, r);
+    let bw_mem<r, b, c>: Rule(BlockHasMemOp(r, b, c) -> BlockWritesVar(r, b, c));
+    let bw_res<r, o, e, b, v, oid, k, pos, d, loc, ty, sl, decl>: Rule((TargetRegion(r, o, e), TrackedVar(r, v), Operation(oid, k, "block", b, pos, d, loc), Value(v, ty, "result", oid, sl, decl)) -> BlockWritesVar(r, b, v));
+    let bw_ret<r, o, e, b, term, val>: Rule((TargetRegion(r, o, e), CfgReachableExit(r, b, term, dialects::func::r#return.kind), Operand(term, 0, val)) -> BlockWritesVar(r, b, r));
 
-    let ctrl_br_gen<r, lh, b, term, dst, cv, w, cval>: (BlockScope(r, b, lh), BlockTerm(r, b, term, dialects::cfg::r#br.kind), ir::Successor(std::ir::operation_key(term), 0, dst), GenLoopTarget(r, lh, dst, cv, w, cval)) -> BlockTermSetsCtrl(r, b, cv);
-    let ctrl_ret_gen<r, lh, b, term>: (BlockScope(r, b, lh), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh), BlockTerm(r, b, term, dialects::func::r#return.kind)) -> BlockTermSetsCtrl(r, b, (0 - 1));
-    let ctrl_br_gmem<r, s, o, k, b, term>: (OrdItem("gmem", r, s, o, k, b), BlockTerm(r, b, term, dialects::cfg::r#br.kind)) -> BlockTermSetsCtrl(r, b, (0 - 3));
-    let ctrl_ret_gmem<r, s, o, k, b, term>: (OrdItem("gmem", r, s, o, k, b), BlockTerm(r, b, term, dialects::func::r#return.kind)) -> BlockTermSetsCtrl(r, b, (0 - 3));
-    let loop_outer<r, lh, l, dst, cv, w, cval>: (IsLoopDagNode(r, lh, l), !NodeInHammock(r, lh, l), LoopSingleExit(r, l, dst), GenLoopTarget(r, lh, dst, cv, w, cval)) -> LoopSetsOuterCtrl(r, lh, l, cv);
-    let sese_arm_irr<r, s, h, arm, slot, dst, rep>: (BranchArm(r, s, h, arm, slot, dst), !SeseArmHasBody(r, s, h, arm), analysis::cfg::IrredScc(r, s, dst, rep)) -> SeseArmSetsCtrl(r, s, h, arm, (0 - 3));
-    let sese_arm_gen<r, lh, h, arm, slot, dst, cv, w, cval>: (BranchArm(r, lh, h, arm, slot, dst), !SeseArmHasBody(r, lh, h, arm), GenLoopTarget(r, lh, dst, cv, w, cval)) -> SeseArmSetsCtrl(r, lh, h, arm, cv);
-    let gmem_loop_tgt<r, s, o, k, m, only>: (OrdItem("gmem", r, s, o, k, m), analysis::cfg::NatLoopHeader(r, m), m != s, LoopSingleExit(r, m, only)) -> GuardMemberSetsCtrl(r, s, o, m, (0 - 3));
-    let gmem_loop_outer<r, lh, h, m, only, cv, w, cval>: (ActiveHammock(r, lh, h), analysis::cfg::HammockMember(r, lh, h, m), IsLoopDagNode(r, lh, m), LoopSingleExit(r, m, only), GenLoopTarget(r, lh, only, cv, w, cval)) -> GuardMemberSetsCtrl(r, lh, h, m, cv);
-    let sarm_tgt<r, s, o, src, arm, slot, dst>: StepSiteArm(r, s, o, src, arm, slot, dst) -> StepArmSetsCtrl(r, s, o, src, arm, (0 - 3));
-    let sarm_ham_outer<r, lh, h, src, arm, slot, dst, cv, w, cval>: (StepSiteArm(r, lh, h, src, arm, slot, dst), ActiveHammock(r, lh, h), !analysis::cfg::DagHasIpdom(r, lh, h), GenLoopTarget(r, lh, dst, cv, w, cval)) -> StepArmSetsCtrl(r, lh, h, src, arm, cv);
-    std::schedule::saturate((
-        glt_hdr_rep, glt_hdr_sel, glt_ex_rep, glt_ex_sel, gt_member, gt_ham_join, gt_ham_out_blk,
+    let ctrl_br_gen<r, lh, b, term, dst, cv, w, cval>: Rule((BlockScope(r, b, lh), BlockTerm(r, b, term, dialects::cfg::br.kind), Successor(term, 0, dst), GenLoopTarget(r, lh, dst, cv, w, cval)) -> BlockTermSetsCtrl(r, b, cv));
+    let ctrl_ret_gen<r, lh, b, term>: Rule((BlockScope(r, b, lh), NatLoopHeader(r, lh), !IsTailLoop(r, lh), BlockTerm(r, b, term, dialects::func::r#return.kind)) -> BlockTermSetsCtrl(r, b, (0 - 1)));
+    let ctrl_br_gmem<r, s, o, k, b, term>: Rule((OrdItem("gmem", r, s, o, k, b), BlockTerm(r, b, term, dialects::cfg::br.kind)) -> BlockTermSetsCtrl(r, b, (0 - 3)));
+    let ctrl_ret_gmem<r, s, o, k, b, term>: Rule((OrdItem("gmem", r, s, o, k, b), BlockTerm(r, b, term, dialects::func::r#return.kind)) -> BlockTermSetsCtrl(r, b, (0 - 3)));
+    let loop_outer<r, lh, l, dst, cv, w, cval>: Rule((IsLoopDagNode(r, lh, l), !NodeInHammock(r, lh, l), LoopSingleExit(r, l, dst), GenLoopTarget(r, lh, dst, cv, w, cval)) -> LoopSetsOuterCtrl(r, lh, l, cv));
+    let sese_arm_irr<r, s, h, arm, slot, dst, rep>: Rule((BranchArm(r, s, h, arm, slot, dst), !SeseArmHasBody(r, s, h, arm), IrredScc(r, s, dst, rep)) -> SeseArmSetsCtrl(r, s, h, arm, (0 - 3)));
+    let sese_arm_gen<r, lh, h, arm, slot, dst, cv, w, cval>: Rule((BranchArm(r, lh, h, arm, slot, dst), !SeseArmHasBody(r, lh, h, arm), GenLoopTarget(r, lh, dst, cv, w, cval)) -> SeseArmSetsCtrl(r, lh, h, arm, cv));
+    let gmem_loop_tgt<r, s, o, k, m, only>: Rule((OrdItem("gmem", r, s, o, k, m), NatLoopHeader(r, m), m != s, LoopSingleExit(r, m, only)) -> GuardMemberSetsCtrl(r, s, o, m, (0 - 3)));
+    let gmem_loop_outer<r, lh, h, m, only, cv, w, cval>: Rule((ActiveHammock(r, lh, h), HammockMember(r, lh, h, m), IsLoopDagNode(r, lh, m), LoopSingleExit(r, m, only), GenLoopTarget(r, lh, only, cv, w, cval)) -> GuardMemberSetsCtrl(r, lh, h, m, cv));
+    let sarm_tgt<r, s, o, src, arm, slot, dst>: Rule(StepSiteArm(r, s, o, src, arm, slot, dst) -> StepArmSetsCtrl(r, s, o, src, arm, (0 - 3)));
+    let sarm_ham_outer<r, lh, h, src, arm, slot, dst, cv, w, cval>: Rule((StepSiteArm(r, lh, h, src, arm, slot, dst), ActiveHammock(r, lh, h), !DagHasIpdom(r, lh, h), GenLoopTarget(r, lh, dst, cv, w, cval)) -> StepArmSetsCtrl(r, lh, h, src, arm, cv));
+    Schedule::Saturate(List(glt_hdr_rep, glt_hdr_sel, glt_ex_rep, glt_ex_sel, gt_member, gt_ham_join, gt_ham_out_blk,
         gt_irr_ex, vs_dag, vs_irr, bo_dag, bo_irr, ty_rep, ty_tgt, ty_exsel, ty_ch, ty_ret,
         ty_ssa, bw_mem, bw_res, bw_ret, ctrl_br_gen, ctrl_ret_gen, ctrl_br_gmem, ctrl_ret_gmem,
         loop_outer, sese_arm_irr, sese_arm_gen, gmem_loop_tgt, gmem_loop_outer, sarm_tgt,
-        sarm_ham_outer,
-    ))
+        sarm_ham_outer))
 };
 
 // ── Phase 4: Positive monotonic value & state dataflow ───────────────────────
-let phase_flow = || {
+let phase_flow = || -> Schedule {
     // Chain entry initialization & region entry environments.
-    let ch_init_one<r, o, e, c>: (TargetRegion(r, o, e), !IsForBody(r), OrdCount("chain", r, 0, 0, 1), analysis::cfg::RegionChain(r, c)) -> ChainInit(r, c, Val::EntryState(r));
-    let ch_init_split<r, o, e, n, k, c, idx>:
-        (TargetRegion(r, o, e), !IsForBody(r), OrdCount("chain", r, 0, 0, n), std::int::less(1, n) == true, OrdIdx("chain", r, 0, 0, k, c, idx)) -> ChainInit(r, c, Val::SplitState(r, idx));
-    let ch_init_for<outer, blk, for_op, pos, body, entry, k, c, idx>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), OrdIdx("for_ch", for_op, 0, 0, k, c, idx)) -> ChainInit(body, c, Val::ForPort(for_op, idx));
-    let reg_in_arg<r, owner, entry, v, ty, sl, decl>:
-        (TargetRegion(r, owner, entry), TrackedVar(r, v), ir::Value(std::ir::value_key(v), ty, "block", entry, sl, decl)) -> RegInVal(Reg::Orig(r), r, v, Val::Orig(v));
-    let reg_in_ch<r, c, val>: ChainInit(r, c, val) -> RegInVal(Reg::Orig(r), r, c, val);
-    let reg_in_for_outer<outer, blk, for_op, pos, body, entry, v, val>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), TrackedVar(outer, v), !analysis::cfg::RegionChain(outer, v), !analysis::cfg::ValueDefBlock(body, blk, v), BlockInVal(outer, blk, v, val))
-        -> RegInVal(Reg::Orig(body), body, v, val);
-    let reg_in_loop_port<r, l, v>: LoopPortVar(r, l, v) -> RegInVal(Reg::LoopBody(r, l), r, v, Val::LoopPort(r, l, v));
-    let reg_in_loop_inv_dag<r, ps, l, v, val>:
-        (NodeInVal(r, ps, l, v, val), IsLoopDagNode(r, ps, l), !LoopPortVar(r, l, v)) -> RegInVal(Reg::LoopBody(r, l), r, v, val);
-    let reg_in_nat_inv_irr<r, ps, rep, h, v, val>:
-        (analysis::cfg::IrredScc(r, ps, h, rep), analysis::cfg::NatLoopHeader(r, h), RegInVal(Reg::GuardArm(r, ps, rep, h, 1), r, v, val), !LoopPortVar(r, h, v)) -> RegInVal(Reg::LoopBody(r, h), r, v, val);
-    let reg_in_sese_arm<r, s, h, arm, v, val>: SeseArmInVal(r, s, h, arm, v, val) -> RegInVal(Reg::SeseArm(r, s, h, arm), r, v, val);
+    let ch_init_one<r, o, e, c>: Rule((TargetRegion(r, o, e), !IsForBody(r), OrdCount("chain", r, 0, 0, 1), RegionChain(r, c)) -> ChainInit(r, c, Val::EntryState(r)));
+    let ch_init_split<r, o, e, n, k, c, idx>: Rule((TargetRegion(r, o, e), !IsForBody(r), OrdCount("chain", r, 0, 0, n), less(int_lit(1), n) == true, OrdIdx("chain", r, 0, 0, k, c, idx)) -> ChainInit(r, c, Val::SplitState(r, idx)));
+    let ch_init_for<outer, blk, for_op, pos, body, entry, k, c, idx>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), OrdIdx("for_ch", for_op, 0, 0, k, c, idx)) -> ChainInit(body, c, Val::ForPort(for_op, idx)));
+    let reg_in_arg<r, owner, entry, v, ty, sl, decl>: Rule((TargetRegion(r, owner, entry), TrackedVar(r, v), Value(v, ty, "block", entry, sl, decl)) -> RegInVal(Reg::Orig(r), r, v, Val::Orig(v)));
+    let reg_in_ch<r, c, val>: Rule(ChainInit(r, c, val) -> RegInVal(Reg::Orig(r), r, c, val));
+    let reg_in_for_outer<outer, blk, for_op, pos, body, entry, v, val>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), TrackedVar(outer, v), !RegionChain(outer, v), !ValueDefBlock(body, blk, v), BlockInVal(outer, blk, v, val))
+        -> RegInVal(Reg::Orig(body), body, v, val));
+    let reg_in_loop_port<r, l, v>: Rule(LoopPortVar(r, l, v) -> RegInVal(Reg::LoopBody(r, l), r, v, Val::LoopPort(r, l, v)));
+    let reg_in_loop_inv_dag<r, ps, l, v, val>: Rule((NodeInVal(r, ps, l, v, val), IsLoopDagNode(r, ps, l), !LoopPortVar(r, l, v)) -> RegInVal(Reg::LoopBody(r, l), r, v, val));
+    let reg_in_nat_inv_irr<r, ps, rep, h, v, val>: Rule((IrredScc(r, ps, h, rep), NatLoopHeader(r, h), RegInVal(Reg::GuardArm(r, ps, rep, h, 1), r, v, val), !LoopPortVar(r, h, v)) -> RegInVal(Reg::LoopBody(r, h), r, v, val));
+    let reg_in_sese_arm<r, s, h, arm, v, val>: Rule(SeseArmInVal(r, s, h, arm, v, val) -> RegInVal(Reg::SeseArm(r, s, h, arm), r, v, val));
 
     // ChainHead, StructStep, BlockInVal, and sequential block memory-state threading.
-    let head_in<reg, r, s, head, v, val>: (ChainHead(reg, r, s, head), RegInVal(reg, r, v, val)) -> NodeInVal(r, s, head, v, val);
-    let step_in<r, s, u, vn, var, val>: (StructStep(r, s, u, vn), NodeOutVal(r, s, u, var, val)) -> NodeInVal(r, s, vn, var, val);
-    let blk_in_dag<r, s, b, v, val>: (NodeInVal(r, s, b, v, val), !IsLoopDagNode(r, s, b)) -> BlockInVal(r, b, v, val);
-    let blk_in_irr<r, s, m, rep, v, val>:
-        (analysis::cfg::IrredScc(r, s, m, rep), !analysis::cfg::NatLoopHeader(r, m), RegInVal(Reg::GuardArm(r, s, rep, m, 1), r, v, val)) -> BlockInVal(r, m, v, val);
-    let mem_first<r, b, c, k, oid, val>: (OrdIdx("mem", r, b, c, k, oid, 0), BlockInVal(r, b, c, val)) -> MemOpInState(r, b, oid, c, val);
-    let mem_next<r, b, c, k1, prev, k2, cur, st>:
-        (OrdNext("mem", r, b, c, k1, k2), OrdItem("mem", r, b, c, k1, prev), OrdItem("mem", r, b, c, k2, cur), MemOpOutState(r, b, prev, c, st)) -> MemOpInState(r, b, cur, c, st);
-    let mem_out_plain<r, b, oid, c, st>: (MemOpInState(r, b, oid, c, st), !IsForOp(oid)) -> MemOpOutState(r, b, oid, c, Val::MemState(oid));
-    let mem_out_for<r, b, oid, c, st, k, idx>:
-        (MemOpInState(r, b, oid, c, st), IsForOp(oid), OrdIdx("for_ch", oid, 0, 0, k, c, idx))
-        -> (MemOpOutState(r, b, oid, c, Val::ForState(oid, idx)), ForOpChainIn(oid, idx, st));
+    let head_in<reg, r, s, head, v, val>: Rule((ChainHead(reg, r, s, head), RegInVal(reg, r, v, val)) -> NodeInVal(r, s, head, v, val));
+    let step_in<r, s, u, vn, var, val>: Rule((StructStep(r, s, u, vn), NodeOutVal(r, s, u, var, val)) -> NodeInVal(r, s, vn, var, val));
+    let blk_in_dag<r, s, b, v, val>: Rule((NodeInVal(r, s, b, v, val), !IsLoopDagNode(r, s, b)) -> BlockInVal(r, b, v, val));
+    let blk_in_irr<r, s, m, rep, v, val>: Rule((IrredScc(r, s, m, rep), !NatLoopHeader(r, m), RegInVal(Reg::GuardArm(r, s, rep, m, 1), r, v, val)) -> BlockInVal(r, m, v, val));
+    let mem_first<r, b, c, k, oid, val>: Rule((OrdIdx("mem", r, b, c, k, oid, 0), BlockInVal(r, b, c, val)) -> MemOpInState(r, b, oid, c, val));
+    let mem_next<r, b, c, k1, prev, k2, cur, st>: Rule((OrdNext("mem", r, b, c, k1, k2), OrdItem("mem", r, b, c, k1, prev), OrdItem("mem", r, b, c, k2, cur), MemOpOutState(r, b, prev, c, st)) -> MemOpInState(r, b, cur, c, st));
+    let mem_out_plain<r, b, oid, c, st>: Rule((MemOpInState(r, b, oid, c, st), !IsForOp(oid)) -> MemOpOutState(r, b, oid, c, Val::MemState(oid)));
+    let mem_out_for<r, b, oid, c, st, k, idx>: Rule((MemOpInState(r, b, oid, c, st), IsForOp(oid), OrdIdx("for_ch", oid, 0, 0, k, c, idx))
+        -> (MemOpOutState(r, b, oid, c, Val::ForState(oid, idx)), ForOpChainIn(oid, idx, st)));
 
     // BlockOutVal + unified TermReadVal (eliminates tracked/untracked rule pairs).
-    let blk_out_pass<r, b, v, val>: (BlockInVal(r, b, v, val), !BlockWritesVar(r, b, v)) -> BlockOutVal(r, b, v, val);
-    let blk_out_mem<r, b, c, k, oid, st>: (OrdItem("mem", r, b, c, k, oid), !OrdHasNext("mem", r, b, c, k), MemOpOutState(r, b, oid, c, st)) -> BlockOutVal(r, b, c, st);
-    let blk_out_res<r, o, e, b, oid, k, pos, d, loc, v, ty, sl, decl>:
-        (TargetRegion(r, o, e), TrackedVar(r, v), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }(), !IsForOp(oid), ir::Value(std::ir::value_key(v), ty, "result", oid, sl, decl)) -> BlockOutVal(r, b, v, Val::Orig(v));
-    let blk_out_for_res<r, b, oid, pos, body, entry, sl, v>: (ForOpInfo(r, b, oid, pos, body, entry), ForOrigRes(r, oid, sl, v)) -> BlockOutVal(r, b, v, Val::ForRes(oid, sl));
-    let tread_tr<r, b, arg, val>: (TermOperand(r, b, arg), TrackedVar(r, arg), BlockOutVal(r, b, arg, val)) -> TermReadVal(r, b, arg, val);
-    let tread_un<r, b, arg>: (TermOperand(r, b, arg), !TrackedVar(r, arg)) -> TermReadVal(r, b, arg, Val::Orig(arg));
-    let blk_out_ret<r, b, term, arg, val>: (BlockTerm(r, b, term, dialects::func::r#return.kind), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(arg)), TermReadVal(r, b, arg, val)) -> BlockOutVal(r, b, r, val);
-    let for_yield<r, b, term, slot, arg, val>: (IsForBody(r), BlockTerm(r, b, term, dialects::scf::r#yield.kind), ir::Operand(std::ir::operation_key(term), slot, std::ir::value_key(arg)), TermReadVal(r, b, arg, val)) -> ForBodyYieldVal(r, slot, val);
+    let blk_out_pass<r, b, v, val>: Rule((BlockInVal(r, b, v, val), !BlockWritesVar(r, b, v)) -> BlockOutVal(r, b, v, val));
+    let blk_out_mem<r, b, c, k, oid, st>: Rule((OrdItem("mem", r, b, c, k, oid), !OrdHasNext("mem", r, b, c, k), MemOpOutState(r, b, oid, c, st)) -> BlockOutVal(r, b, c, st));
+    let blk_out_res<r, o, e, b, oid, k, pos, d, loc, v, ty, sl, decl>: Rule((TargetRegion(r, o, e), TrackedVar(r, v), Operation(oid, k, "block", b, pos, d, loc), !IsForOp(oid), Value(v, ty, "result", oid, sl, decl)) -> BlockOutVal(r, b, v, Val::Orig(v)));
+    let blk_out_for_res<r, b, oid, pos, body, entry, sl, v>: Rule((ForOpInfo(r, b, oid, pos, body, entry), ForOrigRes(r, oid, sl, v)) -> BlockOutVal(r, b, v, Val::ForRes(oid, sl)));
+    let tread_tr<r, b, arg, val>: Rule((TermOperand(r, b, arg), TrackedVar(r, arg), BlockOutVal(r, b, arg, val)) -> TermReadVal(r, b, arg, val));
+    let tread_un<r, b, arg>: Rule((TermOperand(r, b, arg), !TrackedVar(r, arg)) -> TermReadVal(r, b, arg, Val::Orig(arg)));
+    let blk_out_ret<r, b, term, arg, val>: Rule((BlockTerm(r, b, term, dialects::func::r#return.kind), Operand(term, 0, arg), TermReadVal(r, b, arg, val)) -> BlockOutVal(r, b, r, val));
+    let for_yield<r, b, term, slot, arg, val>: Rule((IsForBody(r), BlockTerm(r, b, term, dialects::scf::r#yield.kind), Operand(term, slot, arg), TermReadVal(r, b, arg, val)) -> ForBodyYieldVal(r, slot, val));
 
     // BlockPostBrVal: cfg.br assigns & terminator control updates.
-    let br_pass<r, b, v, val>: (BlockIsBr(r, b), BlockOutVal(r, b, v, val), !BlockEdgeWrites(r, b, 0, v), !BlockTermSetsCtrl(r, b, v)) -> BlockPostBrVal(r, b, v, val);
-    let br_assign<r, b, param, arg, val>: (BlockIsBr(r, b), LiveEdgeAssign(r, b, 0, param, arg), TermReadVal(r, b, arg, val)) -> BlockPostBrVal(r, b, param, val);
-    let non_br_pass<r, b, v, val>: (!BlockIsBr(r, b), BlockOutVal(r, b, v, val), !BlockTermSetsCtrl(r, b, v)) -> BlockPostBrVal(r, b, v, val);
-    let br_gen<r, lh, b, term, dst, reg, cv, w, cval>:
-        (BlockScope(r, b, lh), BlockHome(r, b, reg), BlockTerm(r, b, term, dialects::cfg::r#br.kind), ir::Successor(std::ir::operation_key(term), 0, dst), GenLoopTarget(r, lh, dst, cv, w, cval)) -> BlockPostBrVal(r, b, cv, Val::IntConst(reg, w, cval));
-    let ret_gen<r, lh, b, term, reg>: (BlockScope(r, b, lh), BlockHome(r, b, reg), analysis::cfg::NatLoopHeader(r, lh), !IsTailLoop(r, lh), BlockTerm(r, b, term, dialects::func::r#return.kind)) -> BlockPostBrVal(r, b, (0 - 1), Val::IntConst(reg, 1, 0));
-    let br_gmem<r, s, o, k, b, term, dst, code>: (OrdItem("gmem", r, s, o, k, b), BlockTerm(r, b, term, dialects::cfg::r#br.kind), ir::Successor(std::ir::operation_key(term), 0, dst), GuardTarget(r, s, o, dst, code)) -> BlockPostBrVal(r, b, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, o, b, 1), 32, code));
-    let ret_ham<r, s, h, b, term, n>: (ActiveHammock(r, s, h), analysis::cfg::HammockMember(r, s, h, b), BlockTerm(r, b, term, dialects::func::r#return.kind), OrdCount("gmem", r, s, h, n)) -> BlockPostBrVal(r, b, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, h, b, 1), 32, n));
-    let ret_irr<r, s, m, rep, term, n, ne>: (analysis::cfg::IrredScc(r, s, m, rep), !analysis::cfg::NatLoopHeader(r, m), BlockTerm(r, m, term, dialects::func::r#return.kind), OrdCount("gmem", r, s, rep, n), LoopExitCount(r, rep, ne)) -> BlockPostBrVal(r, m, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, rep, m, 1), 32, (n + ne)));
-    let ret_irr_noex<r, s, m, rep, term, n>: (analysis::cfg::IrredScc(r, s, m, rep), !analysis::cfg::NatLoopHeader(r, m), BlockTerm(r, m, term, dialects::func::r#return.kind), OrdCount("gmem", r, s, rep, n), !LoopHasExit(r, rep)) -> BlockPostBrVal(r, m, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, rep, m, 1), 32, n));
+    let br_pass<r, b, v, val>: Rule((BlockIsBr(r, b), BlockOutVal(r, b, v, val), !BlockEdgeWrites(r, b, 0, v), !BlockTermSetsCtrl(r, b, v)) -> BlockPostBrVal(r, b, v, val));
+    let br_assign<r, b, param, arg, val>: Rule((BlockIsBr(r, b), LiveEdgeAssign(r, b, 0, param, arg), TermReadVal(r, b, arg, val)) -> BlockPostBrVal(r, b, param, val));
+    let non_br_pass<r, b, v, val>: Rule((!BlockIsBr(r, b), BlockOutVal(r, b, v, val), !BlockTermSetsCtrl(r, b, v)) -> BlockPostBrVal(r, b, v, val));
+    let br_gen<r, lh, b, term, dst, reg, cv, w, cval>: Rule((BlockScope(r, b, lh), BlockHome(r, b, reg), BlockTerm(r, b, term, dialects::cfg::br.kind), Successor(term, 0, dst), GenLoopTarget(r, lh, dst, cv, w, cval)) -> BlockPostBrVal(r, b, cv, Val::IntConst(reg, w, cval)));
+    let ret_gen<r, lh, b, term, reg>: Rule((BlockScope(r, b, lh), BlockHome(r, b, reg), NatLoopHeader(r, lh), !IsTailLoop(r, lh), BlockTerm(r, b, term, dialects::func::r#return.kind)) -> BlockPostBrVal(r, b, (0 - 1), Val::IntConst(reg, 1, 0)));
+    let br_gmem<r, s, o, k, b, term, dst, code>: Rule((OrdItem("gmem", r, s, o, k, b), BlockTerm(r, b, term, dialects::cfg::br.kind), Successor(term, 0, dst), GuardTarget(r, s, o, dst, code)) -> BlockPostBrVal(r, b, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, o, b, 1), 32, code)));
+    let ret_ham<r, s, h, b, term, n>: Rule((ActiveHammock(r, s, h), HammockMember(r, s, h, b), BlockTerm(r, b, term, dialects::func::r#return.kind), OrdCount("gmem", r, s, h, n)) -> BlockPostBrVal(r, b, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, h, b, 1), 32, n)));
+    let ret_irr<r, s, m, rep, term, n, ne>: Rule((IrredScc(r, s, m, rep), !NatLoopHeader(r, m), BlockTerm(r, m, term, dialects::func::r#return.kind), OrdCount("gmem", r, s, rep, n), LoopExitCount(r, rep, ne)) -> BlockPostBrVal(r, m, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, rep, m, 1), 32, (n + ne))));
+    let ret_irr_noex<r, s, m, rep, term, n>: Rule((IrredScc(r, s, m, rep), !NatLoopHeader(r, m), BlockTerm(r, m, term, dialects::func::r#return.kind), OrdCount("gmem", r, s, rep, n), !LoopHasExit(r, rep)) -> BlockPostBrVal(r, m, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, rep, m, 1), 32, n)));
 
     // PreBranchVal, LoopExitSelVal, NodeOutVal.
-    let pre_blk<r, s, b, reg, v, val>: (NodeHome(r, s, b, reg), !IsLoopDagNode(r, s, b), BlockPostBrVal(r, b, v, val)) -> PreBranchVal(r, s, b, v, val);
-    let pre_loop_res<r, s, l, reg, v>: (NodeHome(r, s, l, reg), IsLoopDagNode(r, s, l), LoopWritesPort(r, l, v)) -> PreBranchVal(r, s, l, v, Val::LoopRes(r, l, v));
-    let pre_loop_pass<r, s, l, v, val>: (NodeInVal(r, s, l, v, val), IsLoopDagNode(r, s, l), !LoopWritesPort(r, l, v), !LoopSetsOuterCtrl(r, s, l, v)) -> PreBranchVal(r, s, l, v, val);
-    let pre_loop_outer<r, lh, l, dst, reg, cv, w, cval>:
-        (NodeHome(r, lh, l, reg), IsLoopDagNode(r, lh, l), !NodeInHammock(r, lh, l), LoopSingleExit(r, l, dst), GenLoopTarget(r, lh, dst, cv, w, cval))
-        -> PreBranchVal(r, lh, l, cv, Val::IntConst(reg, w, cval));
-    let lsel_nat<r, h, reg>: (LoopHome(r, h, reg), analysis::cfg::NatLoopHeader(r, h), !IsTailLoop(r, h), analysis::cfg::LoopMultiExit(r, h)) -> LoopExitSelVal(r, h, 0, Val::LoopRes(r, h, (0 - 2)));
-    let lsel_irr_2<r, s, rep, reg, p, n>:
-        (LoopHome(r, rep, reg), ChainPos(reg, rep, p), analysis::cfg::IrredLoop(r, s, rep), LoopExitCount(r, rep, 2), OrdCount("gmem", r, s, rep, n))
+    let pre_blk<r, s, b, reg, v, val>: Rule((NodeHome(r, s, b, reg), !IsLoopDagNode(r, s, b), BlockPostBrVal(r, b, v, val)) -> PreBranchVal(r, s, b, v, val));
+    let pre_loop_res<r, s, l, reg, v>: Rule((NodeHome(r, s, l, reg), IsLoopDagNode(r, s, l), LoopWritesPort(r, l, v)) -> PreBranchVal(r, s, l, v, Val::LoopRes(r, l, v)));
+    let pre_loop_pass<r, s, l, v, val>: Rule((NodeInVal(r, s, l, v, val), IsLoopDagNode(r, s, l), !LoopWritesPort(r, l, v), !LoopSetsOuterCtrl(r, s, l, v)) -> PreBranchVal(r, s, l, v, val));
+    let pre_loop_outer<r, lh, l, dst, reg, cv, w, cval>: Rule((NodeHome(r, lh, l, reg), IsLoopDagNode(r, lh, l), !NodeInHammock(r, lh, l), LoopSingleExit(r, l, dst), GenLoopTarget(r, lh, dst, cv, w, cval))
+        -> PreBranchVal(r, lh, l, cv, Val::IntConst(reg, w, cval)));
+    let lsel_nat<r, h, reg>: Rule((LoopHome(r, h, reg), NatLoopHeader(r, h), !IsTailLoop(r, h), LoopMultiExit(r, h)) -> LoopExitSelVal(r, h, 0, Val::LoopRes(r, h, (0 - 2))));
+    let lsel_irr_2<r, s, rep, reg, p, n>: Rule((LoopHome(r, rep, reg), ChainPos(reg, rep, p), IrredLoop(r, s, rep), LoopExitCount(r, rep, 2), OrdCount("gmem", r, s, rep, n))
         -> (LoopExitSelVal(r, rep, 0, Val::Cmp(reg, dialects::builtin::IntegerPredicate::Eq, Val::Sub(reg, Val::LoopRes(r, rep, (0 - 3)), Val::IntConst(reg, 32, n)), Val::IntConst(reg, 32, 1))),
             SynthOrd(Val::Sub(reg, Val::LoopRes(r, rep, (0 - 3)), Val::IntConst(reg, 32, n)), ((p * 10000000) + 1000000)),
-            SynthOrd(Val::Cmp(reg, dialects::builtin::IntegerPredicate::Eq, Val::Sub(reg, Val::LoopRes(r, rep, (0 - 3)), Val::IntConst(reg, 32, n)), Val::IntConst(reg, 32, 1)), ((p * 10000000) + 2000000)));
-    let lsel_irr_many<r, s, rep, reg, p, n, ne>:
-        (LoopHome(r, rep, reg), ChainPos(reg, rep, p), analysis::cfg::IrredLoop(r, s, rep), LoopExitCount(r, rep, ne), std::int::less(2, ne) == true, OrdCount("gmem", r, s, rep, n))
+            SynthOrd(Val::Cmp(reg, dialects::builtin::IntegerPredicate::Eq, Val::Sub(reg, Val::LoopRes(r, rep, (0 - 3)), Val::IntConst(reg, 32, n)), Val::IntConst(reg, 32, 1)), ((p * 10000000) + 2000000))));
+    let lsel_irr_many<r, s, rep, reg, p, n, ne>: Rule((LoopHome(r, rep, reg), ChainPos(reg, rep, p), IrredLoop(r, s, rep), LoopExitCount(r, rep, ne), less(int_lit(2), ne) == true, OrdCount("gmem", r, s, rep, n))
         -> (LoopExitSelVal(r, rep, 0, Val::Sub(reg, Val::LoopRes(r, rep, (0 - 3)), Val::IntConst(reg, 32, n))),
-            SynthOrd(Val::Sub(reg, Val::LoopRes(r, rep, (0 - 3)), Val::IntConst(reg, 32, n)), ((p * 10000000) + 1000000)));
-    let nout_lin<r, s, u, v, val>: (PreBranchVal(r, s, u, v, val), !ActiveSese(r, s, u), !ActiveHammock(r, s, u)) -> NodeOutVal(r, s, u, v, val);
-    let nout_sese_out<r, s, h, v>: SeseOutVar(r, s, h, v) -> NodeOutVal(r, s, h, v, Val::SeseRes(r, s, h, v));
-    let nout_sese_pass<r, s, h, v, val>: (ActiveSese(r, s, h), PreBranchVal(r, s, h, v, val), !SeseOutVar(r, s, h, v)) -> NodeOutVal(r, s, h, v, val);
-    let nout_ham_out<r, s, h, v, k, last_m>:
-        (ActiveHammock(r, s, h), GuardVar(r, s, h, v), OrdItem("gmem", r, s, h, k, last_m), !OrdHasNext("gmem", r, s, h, k))
-        -> NodeOutVal(r, s, h, v, Val::GuardRes(r, s, h, last_m, v));
-    let nout_ham_pass<r, s, h, v, val>: (ActiveHammock(r, s, h), PreBranchVal(r, s, h, v, val), !GuardVar(r, s, h, v)) -> NodeOutVal(r, s, h, v, val);
+            SynthOrd(Val::Sub(reg, Val::LoopRes(r, rep, (0 - 3)), Val::IntConst(reg, 32, n)), ((p * 10000000) + 1000000))));
+    let nout_lin<r, s, u, v, val>: Rule((PreBranchVal(r, s, u, v, val), !ActiveSese(r, s, u), !ActiveHammock(r, s, u)) -> NodeOutVal(r, s, u, v, val));
+    let nout_sese_out<r, s, h, v>: Rule(SeseOutVar(r, s, h, v) -> NodeOutVal(r, s, h, v, Val::SeseRes(r, s, h, v)));
+    let nout_sese_pass<r, s, h, v, val>: Rule((ActiveSese(r, s, h), PreBranchVal(r, s, h, v, val), !SeseOutVar(r, s, h, v)) -> NodeOutVal(r, s, h, v, val));
+    let nout_ham_out<r, s, h, v, k, last_m>: Rule((ActiveHammock(r, s, h), GuardVar(r, s, h, v), OrdItem("gmem", r, s, h, k, last_m), !OrdHasNext("gmem", r, s, h, k))
+        -> NodeOutVal(r, s, h, v, Val::GuardRes(r, s, h, last_m, v)));
+    let nout_ham_pass<r, s, h, v, val>: Rule((ActiveHammock(r, s, h), PreBranchVal(r, s, h, v, val), !GuardVar(r, s, h, v)) -> NodeOutVal(r, s, h, v, val));
 
     // SESE branch predicate & arm entry/exit values.
-    let sese_pred_loop<r, s, l, val>: (ActiveSese(r, s, l), IsLoopDagNode(r, s, l), LoopExitSelVal(r, l, 0, val)) -> SesePredVal(r, s, l, val);
-    let sese_pred_blk<r, s, h, term, kind, arg, val>:
-        (ActiveSese(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, kind), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(arg)), TermReadVal(r, h, arg, val)) -> SesePredVal(r, s, h, val);
-    let sarm_in_port<r, s, h, arm, slot, dst, c>: (BranchArm(r, s, h, arm, slot, dst), SeseFwdChain(r, s, h, c)) -> SeseArmInVal(r, s, h, arm, c, Val::SesePort(r, s, h, arm, c));
-    let sarm_in_edge<r, s, h, arm, slot, dst, param, arg, val>:
-        (BranchArm(r, s, h, arm, slot, dst), !IsLoopDagNode(r, s, h), LiveEdgeAssign(r, h, slot, param, arg), TermReadVal(r, h, arg, val)) -> SeseArmInVal(r, s, h, arm, param, val);
-    let sarm_in_pass_blk<r, s, h, arm, slot, dst, v, val>:
-        (BranchArm(r, s, h, arm, slot, dst), !IsLoopDagNode(r, s, h), PreBranchVal(r, s, h, v, val), !SeseFwdChain(r, s, h, v), !BlockEdgeWrites(r, h, slot, v), !SeseArmSetsCtrl(r, s, h, arm, v))
-        -> SeseArmInVal(r, s, h, arm, v, val);
-    let sarm_in_pass_loop<r, s, h, arm, slot, dst, v, val>:
-        (BranchArm(r, s, h, arm, slot, dst), IsLoopDagNode(r, s, h), PreBranchVal(r, s, h, v, val), !SeseFwdChain(r, s, h, v), !SeseArmSetsCtrl(r, s, h, arm, v))
-        -> SeseArmInVal(r, s, h, arm, v, val);
-    let sarm_in_irr<r, s, h, arm, slot, dst, rep, k, pos>:
-        (BranchArm(r, s, h, arm, slot, dst), !SeseArmHasBody(r, s, h, arm), analysis::cfg::IrredScc(r, s, dst, rep), OrdIdx("gmem", r, s, rep, k, dst, pos))
-        -> SeseArmInVal(r, s, h, arm, (0 - 3), Val::IntConst(Reg::SeseArm(r, s, h, arm), 32, pos));
-    let sarm_in_gen<r, lh, h, arm, slot, dst, cv, w, cval>:
-        (BranchArm(r, lh, h, arm, slot, dst), !SeseArmHasBody(r, lh, h, arm), GenLoopTarget(r, lh, dst, cv, w, cval))
-        -> SeseArmInVal(r, lh, h, arm, cv, Val::IntConst(Reg::SeseArm(r, lh, h, arm), w, cval));
-    let sarm_out_empty<r, s, h, arm, v, val>:
-        (SeseOutVar(r, s, h, v), !SeseArmHasBody(r, s, h, arm), SeseArmInVal(r, s, h, arm, v, val)) -> (SeseArmOutVal(r, s, h, arm, v, val), HasSeseArmOutVal(r, s, h, arm, v));
-    let sarm_out_body<r, s, h, arm, tail, v, val>:
-        (SeseOutVar(r, s, h, v), ChainTail(Reg::SeseArm(r, s, h, arm), r, s, tail), NodeOutVal(r, s, tail, v, val))
-        -> (SeseArmOutVal(r, s, h, arm, v, val), HasSeseArmOutVal(r, s, h, arm, v));
+    let sese_pred_loop<r, s, l, val>: Rule((ActiveSese(r, s, l), IsLoopDagNode(r, s, l), LoopExitSelVal(r, l, 0, val)) -> SesePredVal(r, s, l, val));
+    let sese_pred_blk<r, s, h, term, kind, arg, val>: Rule((ActiveSese(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, kind), Operand(term, 0, arg), TermReadVal(r, h, arg, val)) -> SesePredVal(r, s, h, val));
+    let sarm_in_port<r, s, h, arm, slot, dst, c>: Rule((BranchArm(r, s, h, arm, slot, dst), SeseFwdChain(r, s, h, c)) -> SeseArmInVal(r, s, h, arm, c, Val::SesePort(r, s, h, arm, c)));
+    let sarm_in_edge<r, s, h, arm, slot, dst, param, arg, val>: Rule((BranchArm(r, s, h, arm, slot, dst), !IsLoopDagNode(r, s, h), LiveEdgeAssign(r, h, slot, param, arg), TermReadVal(r, h, arg, val)) -> SeseArmInVal(r, s, h, arm, param, val));
+    let sarm_in_pass_blk<r, s, h, arm, slot, dst, v, val>: Rule((BranchArm(r, s, h, arm, slot, dst), !IsLoopDagNode(r, s, h), PreBranchVal(r, s, h, v, val), !SeseFwdChain(r, s, h, v), !BlockEdgeWrites(r, h, slot, v), !SeseArmSetsCtrl(r, s, h, arm, v))
+        -> SeseArmInVal(r, s, h, arm, v, val));
+    let sarm_in_pass_loop<r, s, h, arm, slot, dst, v, val>: Rule((BranchArm(r, s, h, arm, slot, dst), IsLoopDagNode(r, s, h), PreBranchVal(r, s, h, v, val), !SeseFwdChain(r, s, h, v), !SeseArmSetsCtrl(r, s, h, arm, v))
+        -> SeseArmInVal(r, s, h, arm, v, val));
+    let sarm_in_irr<r, s, h, arm, slot, dst, rep, k, pos>: Rule((BranchArm(r, s, h, arm, slot, dst), !SeseArmHasBody(r, s, h, arm), IrredScc(r, s, dst, rep), OrdIdx("gmem", r, s, rep, k, dst, pos))
+        -> SeseArmInVal(r, s, h, arm, (0 - 3), Val::IntConst(Reg::SeseArm(r, s, h, arm), 32, pos)));
+    let sarm_in_gen<r, lh, h, arm, slot, dst, cv, w, cval>: Rule((BranchArm(r, lh, h, arm, slot, dst), !SeseArmHasBody(r, lh, h, arm), GenLoopTarget(r, lh, dst, cv, w, cval))
+        -> SeseArmInVal(r, lh, h, arm, cv, Val::IntConst(Reg::SeseArm(r, lh, h, arm), w, cval)));
+    let sarm_out_empty<r, s, h, arm, v, val>: Rule((SeseOutVar(r, s, h, v), !SeseArmHasBody(r, s, h, arm), SeseArmInVal(r, s, h, arm, v, val)) -> (SeseArmOutVal(r, s, h, arm, v, val), HasSeseArmOutVal(r, s, h, arm, v)));
+    let sarm_out_body<r, s, h, arm, tail, v, val>: Rule((SeseOutVar(r, s, h, v), ChainTail(Reg::SeseArm(r, s, h, arm), r, s, tail), NodeOutVal(r, s, tail, v, val))
+        -> (SeseArmOutVal(r, s, h, arm, v, val), HasSeseArmOutVal(r, s, h, arm, v)));
 
     // Unified Guarded Steps (IrredLoop + ActiveHammock).
-    let gstep_irr_first<r, s, rep, k, m, v, val>:
-        (analysis::cfg::IrredLoop(r, s, rep), OrdIdx("gmem", r, s, rep, k, m, 0), RegInVal(Reg::LoopBody(r, rep), r, v, val)) -> GuardStepInVal(r, s, rep, m, v, val);
-    let gstep_ham_first_sv<r, s, h, k, m, v>:
-        (ActiveHammock(r, s, h), OrdIdx("gmem", r, s, h, k, m, 0), StepVar(r, s, h, h, v)) -> GuardStepInVal(r, s, h, m, v, Val::StepRes(r, s, h, h, v));
-    let gstep_ham_first_pass<r, s, h, k, m, v, val>: (ActiveHammock(r, s, h), OrdIdx("gmem", r, s, h, k, m, 0), PreBranchVal(r, s, h, v, val), !StepVar(r, s, h, h, v)) -> GuardStepInVal(r, s, h, m, v, val);
-    let gstep_next_gv<r, s, o, k1, prev, k2, cur, v>: (OrdNext("gmem", r, s, o, k1, k2), OrdItem("gmem", r, s, o, k1, prev), OrdItem("gmem", r, s, o, k2, cur), GuardVar(r, s, o, v)) -> GuardStepInVal(r, s, o, cur, v, Val::GuardRes(r, s, o, prev, v));
-    let gstep_next_pass<r, s, o, k1, prev, k2, cur, v, val>: (OrdNext("gmem", r, s, o, k1, k2), OrdItem("gmem", r, s, o, k1, prev), OrdItem("gmem", r, s, o, k2, cur), GuardStepInVal(r, s, o, prev, v, val), !GuardVar(r, s, o, v)) -> GuardStepInVal(r, s, o, cur, v, val);
-    let gfalse_port<r, s, o, m, c>: (GuardMem(r, s, o, c), ChildReg(Reg::GuardArm(r, s, o, m, 0))) -> (GuardFalseOutVal(r, s, o, m, c, Val::GuardPort(r, s, o, m, 0, c)), HasGuardFalseOutVal(r, s, o, m, c));
-    let gfalse_pass<r, s, o, m, v, val>: (GuardVar(r, s, o, v), !GuardMem(r, s, o, v), GuardStepInVal(r, s, o, m, v, val)) -> (GuardFalseOutVal(r, s, o, m, v, val), HasGuardFalseOutVal(r, s, o, m, v));
-    let gtrue_in_port<r, s, o, m, c>: (GuardMem(r, s, o, c), ChildReg(Reg::GuardArm(r, s, o, m, 1))) -> RegInVal(Reg::GuardArm(r, s, o, m, 1), r, c, Val::GuardPort(r, s, o, m, 1, c));
-    let gtrue_in_pass<r, s, o, m, v, val>: (GuardStepInVal(r, s, o, m, v, val), !GuardMem(r, s, o, v)) -> RegInVal(Reg::GuardArm(r, s, o, m, 1), r, v, val);
-    let gtrue_pre_blk<r, s, o, k, m, v, val>: (OrdItem("gmem", r, s, o, k, m), BlockHome(r, m, Reg::GuardArm(r, s, o, m, 1)), BlockPostBrVal(r, m, v, val)) -> GuardTruePreStepVal(r, s, o, m, v, val);
-    let gtrue_pre_loop_res<r, s, o, m, v>: (ChildReg(Reg::GuardArm(r, s, o, m, 1)), analysis::cfg::NatLoopHeader(r, m), m != s, LoopWritesPort(r, m, v)) -> GuardTruePreStepVal(r, s, o, m, v, Val::LoopRes(r, m, v));
-    let gtrue_pre_loop_pass<r, s, o, m, v, val>: (RegInVal(Reg::GuardArm(r, s, o, m, 1), r, v, val), analysis::cfg::NatLoopHeader(r, m), m != s, !LoopWritesPort(r, m, v), !GuardMemberSetsCtrl(r, s, o, m, v)) -> GuardTruePreStepVal(r, s, o, m, v, val);
-    let gtrue_loop_tgt<r, s, o, k, m, only, code>: (OrdItem("gmem", r, s, o, k, m), analysis::cfg::NatLoopHeader(r, m), m != s, LoopSingleExit(r, m, only), GuardTarget(r, s, o, only, code)) -> GuardTruePreStepVal(r, s, o, m, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, o, m, 1), 32, code));
-    let gtrue_loop_outer<r, lh, h, m, only, cv, w, cval>: (ActiveHammock(r, lh, h), analysis::cfg::HammockMember(r, lh, h, m), IsLoopDagNode(r, lh, m), LoopSingleExit(r, m, only), GenLoopTarget(r, lh, only, cv, w, cval)) -> GuardTruePreStepVal(r, lh, h, m, cv, Val::IntConst(Reg::GuardArm(r, lh, h, m, 1), w, cval));
-    let gtrue_out_sv<r, s, o, m, v>: (GuardVar(r, s, o, v), StepVar(r, s, o, m, v)) -> (GuardTrueOutVal(r, s, o, m, v, Val::StepRes(r, s, o, m, v)), HasGuardTrueOutVal(r, s, o, m, v));
-    let gtrue_out_pass<r, s, o, m, v, val>: (GuardVar(r, s, o, v), GuardTruePreStepVal(r, s, o, m, v, val), !StepVar(r, s, o, m, v)) -> (GuardTrueOutVal(r, s, o, m, v, val), HasGuardTrueOutVal(r, s, o, m, v));
+    let gstep_irr_first<r, s, rep, k, m, v, val>: Rule((IrredLoop(r, s, rep), OrdIdx("gmem", r, s, rep, k, m, 0), RegInVal(Reg::LoopBody(r, rep), r, v, val)) -> GuardStepInVal(r, s, rep, m, v, val));
+    let gstep_ham_first_sv<r, s, h, k, m, v>: Rule((ActiveHammock(r, s, h), OrdIdx("gmem", r, s, h, k, m, 0), StepVar(r, s, h, h, v)) -> GuardStepInVal(r, s, h, m, v, Val::StepRes(r, s, h, h, v)));
+    let gstep_ham_first_pass<r, s, h, k, m, v, val>: Rule((ActiveHammock(r, s, h), OrdIdx("gmem", r, s, h, k, m, 0), PreBranchVal(r, s, h, v, val), !StepVar(r, s, h, h, v)) -> GuardStepInVal(r, s, h, m, v, val));
+    let gstep_next_gv<r, s, o, k1, prev, k2, cur, v>: Rule((OrdNext("gmem", r, s, o, k1, k2), OrdItem("gmem", r, s, o, k1, prev), OrdItem("gmem", r, s, o, k2, cur), GuardVar(r, s, o, v)) -> GuardStepInVal(r, s, o, cur, v, Val::GuardRes(r, s, o, prev, v)));
+    let gstep_next_pass<r, s, o, k1, prev, k2, cur, v, val>: Rule((OrdNext("gmem", r, s, o, k1, k2), OrdItem("gmem", r, s, o, k1, prev), OrdItem("gmem", r, s, o, k2, cur), GuardStepInVal(r, s, o, prev, v, val), !GuardVar(r, s, o, v)) -> GuardStepInVal(r, s, o, cur, v, val));
+    let gfalse_port<r, s, o, m, c>: Rule((GuardMem(r, s, o, c), ChildReg(Reg::GuardArm(r, s, o, m, 0))) -> (GuardFalseOutVal(r, s, o, m, c, Val::GuardPort(r, s, o, m, 0, c)), HasGuardFalseOutVal(r, s, o, m, c)));
+    let gfalse_pass<r, s, o, m, v, val>: Rule((GuardVar(r, s, o, v), !GuardMem(r, s, o, v), GuardStepInVal(r, s, o, m, v, val)) -> (GuardFalseOutVal(r, s, o, m, v, val), HasGuardFalseOutVal(r, s, o, m, v)));
+    let gtrue_in_port<r, s, o, m, c>: Rule((GuardMem(r, s, o, c), ChildReg(Reg::GuardArm(r, s, o, m, 1))) -> RegInVal(Reg::GuardArm(r, s, o, m, 1), r, c, Val::GuardPort(r, s, o, m, 1, c)));
+    let gtrue_in_pass<r, s, o, m, v, val>: Rule((GuardStepInVal(r, s, o, m, v, val), !GuardMem(r, s, o, v)) -> RegInVal(Reg::GuardArm(r, s, o, m, 1), r, v, val));
+    let gtrue_pre_blk<r, s, o, k, m, v, val>: Rule((OrdItem("gmem", r, s, o, k, m), BlockHome(r, m, Reg::GuardArm(r, s, o, m, 1)), BlockPostBrVal(r, m, v, val)) -> GuardTruePreStepVal(r, s, o, m, v, val));
+    let gtrue_pre_loop_res<r, s, o, m, v>: Rule((ChildReg(Reg::GuardArm(r, s, o, m, 1)), NatLoopHeader(r, m), m != s, LoopWritesPort(r, m, v)) -> GuardTruePreStepVal(r, s, o, m, v, Val::LoopRes(r, m, v)));
+    let gtrue_pre_loop_pass<r, s, o, m, v, val>: Rule((RegInVal(Reg::GuardArm(r, s, o, m, 1), r, v, val), NatLoopHeader(r, m), m != s, !LoopWritesPort(r, m, v), !GuardMemberSetsCtrl(r, s, o, m, v)) -> GuardTruePreStepVal(r, s, o, m, v, val));
+    let gtrue_loop_tgt<r, s, o, k, m, only, code>: Rule((OrdItem("gmem", r, s, o, k, m), NatLoopHeader(r, m), m != s, LoopSingleExit(r, m, only), GuardTarget(r, s, o, only, code)) -> GuardTruePreStepVal(r, s, o, m, (0 - 3), Val::IntConst(Reg::GuardArm(r, s, o, m, 1), 32, code)));
+    let gtrue_loop_outer<r, lh, h, m, only, cv, w, cval>: Rule((ActiveHammock(r, lh, h), HammockMember(r, lh, h, m), IsLoopDagNode(r, lh, m), LoopSingleExit(r, m, only), GenLoopTarget(r, lh, only, cv, w, cval)) -> GuardTruePreStepVal(r, lh, h, m, cv, Val::IntConst(Reg::GuardArm(r, lh, h, m, 1), w, cval)));
+    let gtrue_out_sv<r, s, o, m, v>: Rule((GuardVar(r, s, o, v), StepVar(r, s, o, m, v)) -> (GuardTrueOutVal(r, s, o, m, v, Val::StepRes(r, s, o, m, v)), HasGuardTrueOutVal(r, s, o, m, v)));
+    let gtrue_out_pass<r, s, o, m, v, val>: Rule((GuardVar(r, s, o, v), GuardTruePreStepVal(r, s, o, m, v, val), !StepVar(r, s, o, m, v)) -> (GuardTrueOutVal(r, s, o, m, v, val), HasGuardTrueOutVal(r, s, o, m, v)));
 
     // Step-branch pre-env, predicate, and arm outputs.
-    let step_pre_ham_entry<r, s, h, isl, t, v, val>: (ActiveHammock(r, s, h), StepSite(r, s, h, h, isl, t), PreBranchVal(r, s, h, v, val)) -> StepPreVal(r, s, h, h, v, val);
-    let step_pre_mem<r, s, o, m, isl, t, v, val>: (StepSite(r, s, o, m, isl, t), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1)), GuardTruePreStepVal(r, s, o, m, v, val)) -> StepPreVal(r, s, o, m, v, val);
-    let step_pred_loop<r, s, o, src, t, val>: (StepSite(r, s, o, src, 1, t), LoopExitSelVal(r, src, 0, val)) -> StepPredVal(r, s, o, src, val);
-    let step_pred_blk<r, s, o, src, term, arg, val>: (StepSite(r, s, o, src, 0, term), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(arg)), TermReadVal(r, src, arg, val)) -> StepPredVal(r, s, o, src, val);
-    let sarm_edge<r, s, o, src, arm, slot, dst, term, param, arg, val>: (StepSite(r, s, o, src, 0, term), StepSiteArm(r, s, o, src, arm, slot, dst), StepVar(r, s, o, src, param), LiveEdgeAssign(r, src, slot, param, arg), TermReadVal(r, src, arg, val)) -> (StepArmOutVal(r, s, o, src, arm, param, val), HasStepArmOutVal(r, s, o, src, arm, param));
-    let sarm_pass_blk<r, s, o, src, arm, slot, dst, term, v, val>: (StepSite(r, s, o, src, 0, term), StepSiteArm(r, s, o, src, arm, slot, dst), StepVar(r, s, o, src, v), StepPreVal(r, s, o, src, v, val), !BlockEdgeWrites(r, src, slot, v), !StepArmSetsCtrl(r, s, o, src, arm, v)) -> (StepArmOutVal(r, s, o, src, arm, v, val), HasStepArmOutVal(r, s, o, src, arm, v));
-    let sarm_pass_loop<r, s, o, src, arm, slot, dst, t, v, val>: (StepSite(r, s, o, src, 1, t), StepSiteArm(r, s, o, src, arm, slot, dst), StepVar(r, s, o, src, v), StepPreVal(r, s, o, src, v, val), !StepArmSetsCtrl(r, s, o, src, arm, v)) -> (StepArmOutVal(r, s, o, src, arm, v, val), HasStepArmOutVal(r, s, o, src, arm, v));
-    let sarm_tgt<r, s, o, src, arm, slot, dst, code>: (StepSiteArm(r, s, o, src, arm, slot, dst), GuardTarget(r, s, o, dst, code)) -> (StepArmOutVal(r, s, o, src, arm, (0 - 3), Val::IntConst(Reg::StepArm(r, s, o, src, arm), 32, code)), HasStepArmOutVal(r, s, o, src, arm, (0 - 3)));
-    let sarm_ham_outer<r, lh, h, src, arm, slot, dst, cv, w, cval>: (ActiveHammock(r, lh, h), !analysis::cfg::DagHasIpdom(r, lh, h), StepSiteArm(r, lh, h, src, arm, slot, dst), GenLoopTarget(r, lh, dst, cv, w, cval)) -> (StepArmOutVal(r, lh, h, src, arm, cv, Val::IntConst(Reg::StepArm(r, lh, h, src, arm), w, cval)), HasStepArmOutVal(r, lh, h, src, arm, cv));
+    let step_pre_ham_entry<r, s, h, isl, t, v, val>: Rule((ActiveHammock(r, s, h), StepSite(r, s, h, h, isl, t), PreBranchVal(r, s, h, v, val)) -> StepPreVal(r, s, h, h, v, val));
+    let step_pre_mem<r, s, o, m, isl, t, v, val>: Rule((StepSite(r, s, o, m, isl, t), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1)), GuardTruePreStepVal(r, s, o, m, v, val)) -> StepPreVal(r, s, o, m, v, val));
+    let step_pred_loop<r, s, o, src, t, val>: Rule((StepSite(r, s, o, src, 1, t), LoopExitSelVal(r, src, 0, val)) -> StepPredVal(r, s, o, src, val));
+    let step_pred_blk<r, s, o, src, term, arg, val>: Rule((StepSite(r, s, o, src, 0, term), Operand(term, 0, arg), TermReadVal(r, src, arg, val)) -> StepPredVal(r, s, o, src, val));
+    let sarm_edge<r, s, o, src, arm, slot, dst, term, param, arg, val>: Rule((StepSite(r, s, o, src, 0, term), StepSiteArm(r, s, o, src, arm, slot, dst), StepVar(r, s, o, src, param), LiveEdgeAssign(r, src, slot, param, arg), TermReadVal(r, src, arg, val)) -> (StepArmOutVal(r, s, o, src, arm, param, val), HasStepArmOutVal(r, s, o, src, arm, param)));
+    let sarm_pass_blk<r, s, o, src, arm, slot, dst, term, v, val>: Rule((StepSite(r, s, o, src, 0, term), StepSiteArm(r, s, o, src, arm, slot, dst), StepVar(r, s, o, src, v), StepPreVal(r, s, o, src, v, val), !BlockEdgeWrites(r, src, slot, v), !StepArmSetsCtrl(r, s, o, src, arm, v)) -> (StepArmOutVal(r, s, o, src, arm, v, val), HasStepArmOutVal(r, s, o, src, arm, v)));
+    let sarm_pass_loop<r, s, o, src, arm, slot, dst, t, v, val>: Rule((StepSite(r, s, o, src, 1, t), StepSiteArm(r, s, o, src, arm, slot, dst), StepVar(r, s, o, src, v), StepPreVal(r, s, o, src, v, val), !StepArmSetsCtrl(r, s, o, src, arm, v)) -> (StepArmOutVal(r, s, o, src, arm, v, val), HasStepArmOutVal(r, s, o, src, arm, v)));
+    let sarm_tgt<r, s, o, src, arm, slot, dst, code>: Rule((StepSiteArm(r, s, o, src, arm, slot, dst), GuardTarget(r, s, o, dst, code)) -> (StepArmOutVal(r, s, o, src, arm, (0 - 3), Val::IntConst(Reg::StepArm(r, s, o, src, arm), 32, code)), HasStepArmOutVal(r, s, o, src, arm, (0 - 3))));
+    let sarm_ham_outer<r, lh, h, src, arm, slot, dst, cv, w, cval>: Rule((ActiveHammock(r, lh, h), !DagHasIpdom(r, lh, h), StepSiteArm(r, lh, h, src, arm, slot, dst), GenLoopTarget(r, lh, dst, cv, w, cval)) -> (StepArmOutVal(r, lh, h, src, arm, cv, Val::IntConst(Reg::StepArm(r, lh, h, src, arm), w, cval)), HasStepArmOutVal(r, lh, h, src, arm, cv)));
 
     // Loop init, predicate, continue, exit, and root region return/chains.
-    let linit_exonly<r, l, v, home, ty>: (LoopPortVar(r, l, v), LoopHome(r, l, home), analysis::cfg::LoopExitOnly(r, l, v), VarTy(r, l, v, ty)) -> (LoopInitVal(r, l, v, Val::Zero(home, ty)), HasLoopInitVal(r, l, v));
-    let linit_exsel<r, l, home, ty>: (LoopPortVar(r, l, (0 - 2)), LoopHome(r, l, home), VarTy(r, l, (0 - 2), ty)) -> (LoopInitVal(r, l, (0 - 2), Val::Zero(home, ty)), HasLoopInitVal(r, l, (0 - 2)));
-    let linit_dag<r, ps, l, v, val>: (LoopPortVar(r, l, v), !analysis::cfg::LoopExitOnly(r, l, v), v != (0 - 2), NodeInVal(r, ps, l, v, val), l != ps) -> (LoopInitVal(r, l, v, val), HasLoopInitVal(r, l, v));
-    let linit_in_irr<r, ps, rep, h, v, val>: (LoopPortVar(r, h, v), !analysis::cfg::LoopExitOnly(r, h, v), v != (0 - 2), analysis::cfg::IrredScc(r, ps, h, rep), analysis::cfg::NatLoopHeader(r, h), RegInVal(Reg::GuardArm(r, ps, rep, h, 1), r, v, val)) -> (LoopInitVal(r, h, v, val), HasLoopInitVal(r, h, v));
-    let lpred_tail_0<r, h, latch, ex, ee, term, arg, val>: (analysis::cfg::TailLoop(r, h, latch, ex, 0, ee), BlockTerm(r, latch, term, dialects::cfg::r#cond_br.kind), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(arg)), TermReadVal(r, latch, arg, val)) -> (LoopPredVal(r, h, val), HasLoopPredVal(r, h));
-    let lpred_tail_1<r, h, latch, ex, ee, term, arg, val>: (analysis::cfg::TailLoop(r, h, latch, ex, 1, ee), BlockTerm(r, latch, term, dialects::cfg::r#cond_br.kind), ir::Operand(std::ir::operation_key(term), 0, std::ir::value_key(arg)), TermReadVal(r, latch, arg, val)) -> (LoopPredVal(r, h, Val::Not(Reg::LoopBody(r, h), val)), HasLoopPredVal(r, h), SynthOrd(Val::Not(Reg::LoopBody(r, h), val), 900000000));
-    let lcont_tail_exonly<r, h, v, z>: (IsTailLoop(r, h), analysis::cfg::LoopExitOnly(r, h, v), LoopInitVal(r, h, v, z)) -> (LoopContVal(r, h, v, z), HasLoopContVal(r, h, v));
-    let lcont_tail_assign<r, h, latch, ex, be, ee, v, arg, val>: (analysis::cfg::TailLoop(r, h, latch, ex, be, ee), LoopPortVar(r, h, v), !analysis::cfg::LoopExitOnly(r, h, v), LiveEdgeAssign(r, latch, be, v, arg), TermReadVal(r, latch, arg, val)) -> (LoopContVal(r, h, v, val), HasLoopContVal(r, h, v));
-    let lcont_tail_pass<r, h, latch, ex, be, ee, v, val>: (analysis::cfg::TailLoop(r, h, latch, ex, be, ee), LoopPortVar(r, h, v), !analysis::cfg::LoopExitOnly(r, h, v), !BlockEdgeWrites(r, latch, be, v), BlockOutVal(r, latch, v, val)) -> (LoopContVal(r, h, v, val), HasLoopContVal(r, h, v));
-    let lexit_tail_assign<r, h, latch, ex, be, ee, v, arg, val>: (analysis::cfg::TailLoop(r, h, latch, ex, be, ee), LoopPortVar(r, h, v), LiveEdgeAssign(r, latch, ee, v, arg), TermReadVal(r, latch, arg, val)) -> (LoopExitVal(r, h, v, val), HasLoopExitVal(r, h, v));
-    let lexit_tail_pass<r, h, latch, ex, be, ee, v, val>: (analysis::cfg::TailLoop(r, h, latch, ex, be, ee), LoopPortVar(r, h, v), !BlockEdgeWrites(r, latch, ee, v), BlockOutVal(r, latch, v, val)) -> (LoopExitVal(r, h, v, val), HasLoopExitVal(r, h, v));
-    let lpred_gen<r, h, tail, val>: (analysis::cfg::NatLoopHeader(r, h), !IsTailLoop(r, h), ChainTail(Reg::LoopBody(r, h), r, h, tail), NodeOutVal(r, h, tail, (0 - 1), val)) -> (LoopPredVal(r, h, val), HasLoopPredVal(r, h));
-    let lcont_gen_exsel<r, h, z>: (analysis::cfg::NatLoopHeader(r, h), !IsTailLoop(r, h), LoopPortVar(r, h, (0 - 2)), LoopInitVal(r, h, (0 - 2), z)) -> (LoopContVal(r, h, (0 - 2), z), HasLoopContVal(r, h, (0 - 2)));
-    let lcont_gen<r, h, tail, v, val>: (analysis::cfg::NatLoopHeader(r, h), !IsTailLoop(r, h), LoopPortVar(r, h, v), v != (0 - 2), ChainTail(Reg::LoopBody(r, h), r, h, tail), NodeOutVal(r, h, tail, v, val)) -> (LoopContVal(r, h, v, val), HasLoopContVal(r, h, v));
-    let lexit_gen<r, h, tail, v, val>: (analysis::cfg::NatLoopHeader(r, h), !IsTailLoop(r, h), LoopPortVar(r, h, v), ChainTail(Reg::LoopBody(r, h), r, h, tail), NodeOutVal(r, h, tail, v, val)) -> (LoopExitVal(r, h, v, val), HasLoopExitVal(r, h, v));
-    let lpred_irr<r, s, rep, k, last_m, n>: (analysis::cfg::IrredLoop(r, s, rep), OrdItem("gmem", r, s, rep, k, last_m), !OrdHasNext("gmem", r, s, rep, k), OrdCount("gmem", r, s, rep, n)) -> (LoopPredVal(r, rep, Val::Cmp(Reg::LoopBody(r, rep), dialects::builtin::IntegerPredicate::Slt, Val::GuardRes(r, s, rep, last_m, (0 - 3)), Val::IntConst(Reg::LoopBody(r, rep), 32, n))), HasLoopPredVal(r, rep), SynthOrd(Val::Cmp(Reg::LoopBody(r, rep), dialects::builtin::IntegerPredicate::Slt, Val::GuardRes(r, s, rep, last_m, (0 - 3)), Val::IntConst(Reg::LoopBody(r, rep), 32, n)), 900000000));
-    let lcont_exit_irr<r, s, rep, k, last_m, v>: (analysis::cfg::IrredLoop(r, s, rep), LoopPortVar(r, rep, v), OrdItem("gmem", r, s, rep, k, last_m), !OrdHasNext("gmem", r, s, rep, k)) -> (LoopContVal(r, rep, v, Val::GuardRes(r, s, rep, last_m, v)), HasLoopContVal(r, rep, v), LoopExitVal(r, rep, v, Val::GuardRes(r, s, rep, last_m, v)), HasLoopExitVal(r, rep, v));
-    let root_ret<r, tail, val>: (!IsForBody(r), ChainTail(Reg::Orig(r), r, r, tail), NodeOutVal(r, r, tail, r, val)) -> RootRetVal(r, val);
-    let root_ch<r, tail, c, val>: (analysis::cfg::RegionChain(r, c), ChainTail(Reg::Orig(r), r, r, tail), NodeOutVal(r, r, tail, c, val)) -> RootChainVal(r, c, val);
-    std::schedule::saturate((
-        ch_init_one, ch_init_split, ch_init_for, reg_in_arg, reg_in_ch, reg_in_for_outer,
+    let linit_exonly<r, l, v, home, ty>: Rule((LoopPortVar(r, l, v), LoopHome(r, l, home), LoopExitOnly(r, l, v), VarTy(r, l, v, ty)) -> (LoopInitVal(r, l, v, Val::Zero(home, ty)), HasLoopInitVal(r, l, v)));
+    let linit_exsel<r, l, home, ty>: Rule((LoopPortVar(r, l, (0 - 2)), LoopHome(r, l, home), VarTy(r, l, (0 - 2), ty)) -> (LoopInitVal(r, l, (0 - 2), Val::Zero(home, ty)), HasLoopInitVal(r, l, (0 - 2))));
+    let linit_dag<r, ps, l, v, val>: Rule((LoopPortVar(r, l, v), !LoopExitOnly(r, l, v), v != (0 - 2), NodeInVal(r, ps, l, v, val), l != ps) -> (LoopInitVal(r, l, v, val), HasLoopInitVal(r, l, v)));
+    let linit_in_irr<r, ps, rep, h, v, val>: Rule((LoopPortVar(r, h, v), !LoopExitOnly(r, h, v), v != (0 - 2), IrredScc(r, ps, h, rep), NatLoopHeader(r, h), RegInVal(Reg::GuardArm(r, ps, rep, h, 1), r, v, val)) -> (LoopInitVal(r, h, v, val), HasLoopInitVal(r, h, v)));
+    let lpred_tail_0<r, h, latch, ex, ee, term, arg, val>: Rule((TailLoop(r, h, latch, ex, 0, ee), BlockTerm(r, latch, term, dialects::cfg::cond_br.kind), Operand(term, 0, arg), TermReadVal(r, latch, arg, val)) -> (LoopPredVal(r, h, val), HasLoopPredVal(r, h)));
+    let lpred_tail_1<r, h, latch, ex, ee, term, arg, val>: Rule((TailLoop(r, h, latch, ex, 1, ee), BlockTerm(r, latch, term, dialects::cfg::cond_br.kind), Operand(term, 0, arg), TermReadVal(r, latch, arg, val)) -> (LoopPredVal(r, h, Val::Not(Reg::LoopBody(r, h), val)), HasLoopPredVal(r, h), SynthOrd(Val::Not(Reg::LoopBody(r, h), val), 900000000)));
+    let lcont_tail_exonly<r, h, v, z>: Rule((IsTailLoop(r, h), LoopExitOnly(r, h, v), LoopInitVal(r, h, v, z)) -> (LoopContVal(r, h, v, z), HasLoopContVal(r, h, v)));
+    let lcont_tail_assign<r, h, latch, ex, be, ee, v, arg, val>: Rule((TailLoop(r, h, latch, ex, be, ee), LoopPortVar(r, h, v), !LoopExitOnly(r, h, v), LiveEdgeAssign(r, latch, be, v, arg), TermReadVal(r, latch, arg, val)) -> (LoopContVal(r, h, v, val), HasLoopContVal(r, h, v)));
+    let lcont_tail_pass<r, h, latch, ex, be, ee, v, val>: Rule((TailLoop(r, h, latch, ex, be, ee), LoopPortVar(r, h, v), !LoopExitOnly(r, h, v), !BlockEdgeWrites(r, latch, be, v), BlockOutVal(r, latch, v, val)) -> (LoopContVal(r, h, v, val), HasLoopContVal(r, h, v)));
+    let lexit_tail_assign<r, h, latch, ex, be, ee, v, arg, val>: Rule((TailLoop(r, h, latch, ex, be, ee), LoopPortVar(r, h, v), LiveEdgeAssign(r, latch, ee, v, arg), TermReadVal(r, latch, arg, val)) -> (LoopExitVal(r, h, v, val), HasLoopExitVal(r, h, v)));
+    let lexit_tail_pass<r, h, latch, ex, be, ee, v, val>: Rule((TailLoop(r, h, latch, ex, be, ee), LoopPortVar(r, h, v), !BlockEdgeWrites(r, latch, ee, v), BlockOutVal(r, latch, v, val)) -> (LoopExitVal(r, h, v, val), HasLoopExitVal(r, h, v)));
+    let lpred_gen<r, h, tail, val>: Rule((NatLoopHeader(r, h), !IsTailLoop(r, h), ChainTail(Reg::LoopBody(r, h), r, h, tail), NodeOutVal(r, h, tail, (0 - 1), val)) -> (LoopPredVal(r, h, val), HasLoopPredVal(r, h)));
+    let lcont_gen_exsel<r, h, z>: Rule((NatLoopHeader(r, h), !IsTailLoop(r, h), LoopPortVar(r, h, (0 - 2)), LoopInitVal(r, h, (0 - 2), z)) -> (LoopContVal(r, h, (0 - 2), z), HasLoopContVal(r, h, (0 - 2))));
+    let lcont_gen<r, h, tail, v, val>: Rule((NatLoopHeader(r, h), !IsTailLoop(r, h), LoopPortVar(r, h, v), v != (0 - 2), ChainTail(Reg::LoopBody(r, h), r, h, tail), NodeOutVal(r, h, tail, v, val)) -> (LoopContVal(r, h, v, val), HasLoopContVal(r, h, v)));
+    let lexit_gen<r, h, tail, v, val>: Rule((NatLoopHeader(r, h), !IsTailLoop(r, h), LoopPortVar(r, h, v), ChainTail(Reg::LoopBody(r, h), r, h, tail), NodeOutVal(r, h, tail, v, val)) -> (LoopExitVal(r, h, v, val), HasLoopExitVal(r, h, v)));
+    let lpred_irr<r, s, rep, k, last_m, n>: Rule((IrredLoop(r, s, rep), OrdItem("gmem", r, s, rep, k, last_m), !OrdHasNext("gmem", r, s, rep, k), OrdCount("gmem", r, s, rep, n)) -> (LoopPredVal(r, rep, Val::Cmp(Reg::LoopBody(r, rep), dialects::builtin::IntegerPredicate::Slt, Val::GuardRes(r, s, rep, last_m, (0 - 3)), Val::IntConst(Reg::LoopBody(r, rep), 32, n))), HasLoopPredVal(r, rep), SynthOrd(Val::Cmp(Reg::LoopBody(r, rep), dialects::builtin::IntegerPredicate::Slt, Val::GuardRes(r, s, rep, last_m, (0 - 3)), Val::IntConst(Reg::LoopBody(r, rep), 32, n)), 900000000)));
+    let lcont_exit_irr<r, s, rep, k, last_m, v>: Rule((IrredLoop(r, s, rep), LoopPortVar(r, rep, v), OrdItem("gmem", r, s, rep, k, last_m), !OrdHasNext("gmem", r, s, rep, k)) -> (LoopContVal(r, rep, v, Val::GuardRes(r, s, rep, last_m, v)), HasLoopContVal(r, rep, v), LoopExitVal(r, rep, v, Val::GuardRes(r, s, rep, last_m, v)), HasLoopExitVal(r, rep, v)));
+    let root_ret<r, tail, val>: Rule((!IsForBody(r), ChainTail(Reg::Orig(r), r, r, tail), NodeOutVal(r, r, tail, r, val)) -> RootRetVal(r, val));
+    let root_ch<r, tail, c, val>: Rule((RegionChain(r, c), ChainTail(Reg::Orig(r), r, r, tail), NodeOutVal(r, r, tail, c, val)) -> RootChainVal(r, c, val));
+    Schedule::Saturate(List(ch_init_one, ch_init_split, ch_init_for, reg_in_arg, reg_in_ch, reg_in_for_outer,
         reg_in_loop_port, reg_in_loop_inv_dag, reg_in_nat_inv_irr, reg_in_sese_arm, head_in,
         step_in, blk_in_dag, blk_in_irr, mem_first, mem_next, mem_out_plain, mem_out_for,
         blk_out_pass, blk_out_mem, blk_out_res, blk_out_for_res, tread_tr, tread_un, blk_out_ret,
@@ -719,258 +630,200 @@ let phase_flow = || {
         sarm_edge, sarm_pass_blk, sarm_pass_loop, sarm_tgt, sarm_ham_outer, linit_exonly,
         linit_exsel, linit_dag, linit_in_irr, lpred_tail_0, lpred_tail_1, lcont_tail_exonly,
         lcont_tail_assign, lcont_tail_pass, lexit_tail_assign, lexit_tail_pass, lpred_gen,
-        lcont_gen_exsel, lcont_gen, lexit_gen, lpred_irr, lcont_exit_irr, root_ret, root_ch,
-    ))
+        lcont_gen_exsel, lcont_gen, lexit_gen, lpred_irr, lcont_exit_irr, root_ret, root_ch))
 };
 
 // ── Phase 5: Undefined / missing fallbacks (Zero / LoopPort / IntConst(0)) ───
-let phase_fill = || {
-    let linit_z<r, l, v, home, ty>: (LoopPortVar(r, l, v), LoopHome(r, l, home), VarTy(r, l, v, ty), !HasLoopInitVal(r, l, v)) -> LoopInitVal(r, l, v, Val::Zero(home, ty));
-    let lpred_z<r, o, e, h>: (TargetRegion(r, o, e), analysis::cfg::NatLoopHeader(r, h), !HasLoopPredVal(r, h)) -> LoopPredVal(r, h, Val::IntConst(Reg::LoopBody(r, h), 1, 0));
-    let lcont_p<r, l, v>: (LoopPortVar(r, l, v), !HasLoopContVal(r, l, v)) -> LoopContVal(r, l, v, Val::LoopPort(r, l, v));
-    let lexit_p<r, l, v>: (LoopPortVar(r, l, v), !HasLoopExitVal(r, l, v)) -> LoopExitVal(r, l, v, Val::LoopPort(r, l, v));
-    let sarm_z<r, s, h, arm, slot, dst, v, ty>:
-        (BranchArm(r, s, h, arm, slot, dst), SeseOutVar(r, s, h, v), VarTy(r, s, v, ty), !HasSeseArmOutVal(r, s, h, arm, v))
-        -> SeseArmOutVal(r, s, h, arm, v, Val::Zero(Reg::SeseArm(r, s, h, arm), ty));
-    let gfalse_z<r, s, o, m, v, ty>:
-        (ChildReg(Reg::GuardArm(r, s, o, m, 0)), GuardVar(r, s, o, v), VarTy(r, s, v, ty), !HasGuardFalseOutVal(r, s, o, m, v))
-        -> GuardFalseOutVal(r, s, o, m, v, Val::Zero(Reg::GuardArm(r, s, o, m, 0), ty));
-    let gtrue_z<r, s, o, m, v, ty>:
-        (ChildReg(Reg::GuardArm(r, s, o, m, 1)), GuardVar(r, s, o, v), VarTy(r, s, v, ty), !HasGuardTrueOutVal(r, s, o, m, v))
-        -> GuardTrueOutVal(r, s, o, m, v, Val::Zero(Reg::GuardArm(r, s, o, m, 1), ty));
-    let step_z<r, s, o, src, arm, slot, dst, v, ty>:
-        (StepSiteArm(r, s, o, src, arm, slot, dst), StepVar(r, s, o, src, v), VarTy(r, s, v, ty), !HasStepArmOutVal(r, s, o, src, arm, v))
-        -> StepArmOutVal(r, s, o, src, arm, v, Val::Zero(Reg::StepArm(r, s, o, src, arm), ty));
-    std::schedule::Schedule::Rules((
-        linit_z, lpred_z, lcont_p, lexit_p, sarm_z, gfalse_z, gtrue_z, step_z,
-    ))
+let phase_fill = || -> Schedule {
+    let linit_z<r, l, v, home, ty>: Rule((LoopPortVar(r, l, v), LoopHome(r, l, home), VarTy(r, l, v, ty), !HasLoopInitVal(r, l, v)) -> LoopInitVal(r, l, v, Val::Zero(home, ty)));
+    let lpred_z<r, o, e, h>: Rule((TargetRegion(r, o, e), NatLoopHeader(r, h), !HasLoopPredVal(r, h)) -> LoopPredVal(r, h, Val::IntConst(Reg::LoopBody(r, h), 1, 0)));
+    let lcont_p<r, l, v>: Rule((LoopPortVar(r, l, v), !HasLoopContVal(r, l, v)) -> LoopContVal(r, l, v, Val::LoopPort(r, l, v)));
+    let lexit_p<r, l, v>: Rule((LoopPortVar(r, l, v), !HasLoopExitVal(r, l, v)) -> LoopExitVal(r, l, v, Val::LoopPort(r, l, v)));
+    let sarm_z<r, s, h, arm, slot, dst, v, ty>: Rule((BranchArm(r, s, h, arm, slot, dst), SeseOutVar(r, s, h, v), VarTy(r, s, v, ty), !HasSeseArmOutVal(r, s, h, arm, v))
+        -> SeseArmOutVal(r, s, h, arm, v, Val::Zero(Reg::SeseArm(r, s, h, arm), ty)));
+    let gfalse_z<r, s, o, m, v, ty>: Rule((ChildReg(Reg::GuardArm(r, s, o, m, 0)), GuardVar(r, s, o, v), VarTy(r, s, v, ty), !HasGuardFalseOutVal(r, s, o, m, v))
+        -> GuardFalseOutVal(r, s, o, m, v, Val::Zero(Reg::GuardArm(r, s, o, m, 0), ty)));
+    let gtrue_z<r, s, o, m, v, ty>: Rule((ChildReg(Reg::GuardArm(r, s, o, m, 1)), GuardVar(r, s, o, v), VarTy(r, s, v, ty), !HasGuardTrueOutVal(r, s, o, m, v))
+        -> GuardTrueOutVal(r, s, o, m, v, Val::Zero(Reg::GuardArm(r, s, o, m, 1), ty)));
+    let step_z<r, s, o, src, arm, slot, dst, v, ty>: Rule((StepSiteArm(r, s, o, src, arm, slot, dst), StepVar(r, s, o, src, v), VarTy(r, s, v, ty), !HasStepArmOutVal(r, s, o, src, arm, v))
+        -> StepArmOutVal(r, s, o, src, arm, v, Val::Zero(Reg::StepArm(r, s, o, src, arm), ty)));
+    Schedule::Once(List(linit_z, lpred_z, lcont_p, lexit_p, sarm_z, gfalse_z, gtrue_z, step_z))
 };
 
 // ── Phase 6: SESE switch predicate folding, deduplication & ValAlias resolution
-let phase_fold_prep = || {
-    let const_c0<reg>: ChildReg(reg) -> IsConstBit(Val::IntConst(reg, 1, 0), 0);
-    let const_c1<reg>: ChildReg(reg) -> IsConstBit(Val::IntConst(reg, 1, 1), 1);
-    let const_z0<reg>: ChildReg(reg) -> IsConstBit(Val::Zero(reg, Ty::I1), 0);
-    let const_orig<v, bit>: OrigConstBit(v, bit) -> IsConstBit(Val::Orig(v), bit);
-    let var_i1_lit<r, s, v>: VarTy(r, s, v, Ty::I1) -> VarIsI1(r, s, v);
-    let var_i1_exact<r, s, v, ty, ctor, args>:
-        (VarTy(r, s, v, Ty::Exact(ty)), ir::TypeTerm(ty, ctor, args), std::ir::integer_width(args) == 1) -> VarIsI1(r, s, v);
-    let arm_op_blk<r, s, h, arm, b, oid, k, pos, d, loc>:
-        (BlockHome(r, b, Reg::SeseArm(r, s, h, arm)), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }(), !TermOp(oid)) -> SeseArmHasOps(r, s, h);
-    let arm_op_loop<r, s, h, arm, l>: LoopHome(r, l, Reg::SeseArm(r, s, h, arm)) -> SeseArmHasOps(r, s, h);
-    let arm_op_sese<r, s, h, arm, h2>: (ActiveSese(r, s, h2), NodeHome(r, s, h2, Reg::SeseArm(r, s, h, arm))) -> SeseArmHasOps(r, s, h);
-    let arm_op_ham<r, s, h, arm, h2>: (ActiveHammock(r, s, h2), NodeHome(r, s, h2, Reg::SeseArm(r, s, h, arm))) -> SeseArmHasOps(r, s, h);
-    let agree<r, s, h, arm, k1, v1, i1, k2, v2, i2, val>:
-        (OrdIdx("sese_out", r, s, h, k1, v1, i1), OrdIdx("sese_out", r, s, h, k2, v2, i2), std::int::less(i1, i2) == true, SeseArmOutVal(r, s, h, arm, v1, val), SeseArmOutVal(r, s, h, arm, v2, val))
-        -> SeseArmAgree(r, s, h, arm, i1, i2);
-    std::schedule::Schedule::Rules((
-        const_c0, const_c1, const_z0, const_orig, var_i1_lit, var_i1_exact, arm_op_blk,
-        arm_op_loop, arm_op_sese, arm_op_ham, agree,
-    ))
+let phase_fold_prep = || -> Schedule {
+    let const_c0<reg>: Rule(ChildReg(reg) -> IsConstBit(Val::IntConst(reg, 1, 0), 0));
+    let const_c1<reg>: Rule(ChildReg(reg) -> IsConstBit(Val::IntConst(reg, 1, 1), 1));
+    let const_z0<reg>: Rule(ChildReg(reg) -> IsConstBit(Val::Zero(reg, Ty::I1), 0));
+    let const_orig<v, bit>: Rule(OrigConstBit(v, bit) -> IsConstBit(Val::Orig(v), bit));
+    let var_i1_lit<r, s, v>: Rule(VarTy(r, s, v, Ty::I1) -> VarIsI1(r, s, v));
+    let var_i1_exact<r, s, v, ty, ctor, args>: Rule((VarTy(r, s, v, Ty::Exact(ty)), TypeTerm(ty, ctor, args), integer_width(args) == 1) -> VarIsI1(r, s, v));
+    let arm_op_blk<r, s, h, arm, b, oid, k, pos, d, loc>: Rule((BlockHome(r, b, Reg::SeseArm(r, s, h, arm)), Operation(oid, k, "block", b, pos, d, loc), !TermOp(oid)) -> SeseArmHasOps(r, s, h));
+    let arm_op_loop<r, s, h, arm, l>: Rule(LoopHome(r, l, Reg::SeseArm(r, s, h, arm)) -> SeseArmHasOps(r, s, h));
+    let arm_op_sese<r, s, h, arm, h2>: Rule((ActiveSese(r, s, h2), NodeHome(r, s, h2, Reg::SeseArm(r, s, h, arm))) -> SeseArmHasOps(r, s, h));
+    let arm_op_ham<r, s, h, arm, h2>: Rule((ActiveHammock(r, s, h2), NodeHome(r, s, h2, Reg::SeseArm(r, s, h, arm))) -> SeseArmHasOps(r, s, h));
+    let agree<r, s, h, arm, k1, v1, i1, k2, v2, i2, val>: Rule((OrdIdx("sese_out", r, s, h, k1, v1, i1), OrdIdx("sese_out", r, s, h, k2, v2, i2), less(i1, i2) == true, SeseArmOutVal(r, s, h, arm, v1, val), SeseArmOutVal(r, s, h, arm, v2, val))
+        -> SeseArmAgree(r, s, h, arm, i1, i2));
+    Schedule::Once(List(const_c0, const_c1, const_z0, const_orig, var_i1_lit, var_i1_exact, arm_op_blk,
+        arm_op_loop, arm_op_sese, arm_op_ham, agree))
 };
-let phase_fold_match = || {
-    let fold_id<r, s, h, v, pred, v0, v1>:
-        (IsCondBranch(r, s, h), SeseOutVar(r, s, h, v), VarIsI1(r, s, v), SesePredVal(r, s, h, pred),
+let phase_fold_match = || -> Schedule {
+    let fold_id<r, s, h, v, pred, v0, v1>: Rule((IsCondBranch(r, s, h), SeseOutVar(r, s, h, v), VarIsI1(r, s, v), SesePredVal(r, s, h, pred),
          SeseArmOutVal(r, s, h, 0, v, v0), SeseArmOutVal(r, s, h, 1, v, v1), IsConstBit(v0, 0), IsConstBit(v1, 1))
-        -> (SeseFolded(r, s, h, v, pred), SeseIsFolded(r, s, h, v));
-    let fold_not<r, s, h, v, pred, home, p, v0, v1>:
-        (IsCondBranch(r, s, h), OrdCount("sese_out", r, s, h, 1), !SeseArmHasOps(r, s, h),
+        -> (SeseFolded(r, s, h, v, pred), SeseIsFolded(r, s, h, v)));
+    let fold_not<r, s, h, v, pred, home, p, v0, v1>: Rule((IsCondBranch(r, s, h), OrdCount("sese_out", r, s, h, 1), !SeseArmHasOps(r, s, h),
          SeseOutVar(r, s, h, v), VarIsI1(r, s, v), SesePredVal(r, s, h, pred), NodeHome(r, s, h, home), ChainPos(home, h, p),
          SeseArmOutVal(r, s, h, 0, v, v0), SeseArmOutVal(r, s, h, 1, v, v1), IsConstBit(v0, 1), IsConstBit(v1, 0))
-        -> (SeseFolded(r, s, h, v, Val::Not(home, pred)), SeseIsFolded(r, s, h, v), SynthOrd(Val::Not(home, pred), ((p * 10000000) + 5000000)));
-    std::schedule::Schedule::Rules((
-        fold_id, fold_not,
-    ))
+        -> (SeseFolded(r, s, h, v, Val::Not(home, pred)), SeseIsFolded(r, s, h, v), SynthOrd(Val::Not(home, pred), ((p * 10000000) + 5000000))));
+    Schedule::Once(List(fold_id, fold_not))
 };
-pub mod phase_fold_diff {
-    pub let diff<r, s, h, arm, slot, dst, k1, v1, i1, k2, v2, i2>:
-        (BranchArm(r, s, h, arm, slot, dst), OrdIdx("sese_out", r, s, h, k1, v1, i1), OrdIdx("sese_out", r, s, h, k2, v2, i2), std::int::less(i1, i2) == true, !SeseArmAgree(r, s, h, arm, i1, i2))
-        -> SeseArmDiff(r, s, h, i1, i2);
-}
-pub mod phase_fold_dup {
-    pub let dup_min<r, s, h, k1, v1, i1, k2, v2, i2>:
-        (OrdIdx("sese_out", r, s, h, k1, v1, i1), OrdIdx("sese_out", r, s, h, k2, v2, i2), std::int::less(i1, i2) == true, !SeseIsFolded(r, s, h, v1), !SeseIsFolded(r, s, h, v2), !SeseArmDiff(r, s, h, i1, i2))
-        -> (SeseDupMin(r, s, h, i2, i1), SeseIsDup(r, s, h, v2));
-}
-let phase_fold_keep = || {
-    let kept<r, s, h, k, v, idx>:
-        (OrdIdx("sese_out", r, s, h, k, v, idx), !SeseIsFolded(r, s, h, v), !SeseIsDup(r, s, h, v))
-        -> (SeseHasKept(r, s, h), OrdItem("sese_kept", r, s, h, k, v));
-    let alias_fold<r, s, h, v, rep>: SeseFolded(r, s, h, v, rep) -> ValAlias(Val::SeseRes(r, s, h, v), rep);
-    let alias_dup<r, s, h, i2, i1, k1, v1, k2, v2>:
-        (SeseDupMin(r, s, h, i2, i1), OrdIdx("sese_out", r, s, h, k1, v1, i1), OrdIdx("sese_out", r, s, h, k2, v2, i2))
-        -> ValAlias(Val::SeseRes(r, s, h, v2), Val::SeseRes(r, s, h, v1));
-    std::schedule::Schedule::Rules((
-        kept, alias_fold, alias_dup,
-    ))
+let phase_fold_diff = || -> Schedule {
+    let diff<r, s, h, arm, slot, dst, k1, v1, i1, k2, v2, i2>: Rule((BranchArm(r, s, h, arm, slot, dst), OrdIdx("sese_out", r, s, h, k1, v1, i1), OrdIdx("sese_out", r, s, h, k2, v2, i2), less(i1, i2) == true, !SeseArmAgree(r, s, h, arm, i1, i2))
+        -> SeseArmDiff(r, s, h, i1, i2));
+    Schedule::Once(List(diff))
 };
-let phase_fold_skip = || {
-    let skip<r, s, h>: (ActiveSese(r, s, h), SeseHasOut(r, s, h), !SeseHasKept(r, s, h), !SeseArmHasOps(r, s, h)) -> SeseSkipped(r, s, h);
-    let skip_reg<r, s, h, arm, slot, dst>: (SeseSkipped(r, s, h), BranchArm(r, s, h, arm, slot, dst)) -> SkippedReg(Reg::SeseArm(r, s, h, arm));
-    let union_alias<a, b>: ValAlias(a, b) -> a == b;
-    std::schedule::saturate((
-        skip, skip_reg, union_alias,
-    ))
+let phase_fold_dup = || -> Schedule {
+    let dup_min<r, s, h, k1, v1, i1, k2, v2, i2>: Rule((OrdIdx("sese_out", r, s, h, k1, v1, i1), OrdIdx("sese_out", r, s, h, k2, v2, i2), less(i1, i2) == true, !SeseIsFolded(r, s, h, v1), !SeseIsFolded(r, s, h, v2), !SeseArmDiff(r, s, h, i1, i2))
+        -> (SeseDupMin(r, s, h, i2, i1), SeseIsDup(r, s, h, v2)));
+    Schedule::Once(List(dup_min))
+};
+let phase_fold_keep = || -> Schedule {
+    let kept<r, s, h, k, v, idx>: Rule((OrdIdx("sese_out", r, s, h, k, v, idx), !SeseIsFolded(r, s, h, v), !SeseIsDup(r, s, h, v))
+        -> (SeseHasKept(r, s, h), OrdItem("sese_kept", r, s, h, k, v)));
+    let alias_fold<r, s, h, v, rep>: Rule(SeseFolded(r, s, h, v, rep) -> ValAlias(Val::SeseRes(r, s, h, v), rep));
+    let alias_dup<r, s, h, i2, i1, k1, v1, k2, v2>: Rule((SeseDupMin(r, s, h, i2, i1), OrdIdx("sese_out", r, s, h, k1, v1, i1), OrdIdx("sese_out", r, s, h, k2, v2, i2))
+        -> ValAlias(Val::SeseRes(r, s, h, v2), Val::SeseRes(r, s, h, v1)));
+    Schedule::Once(List(kept, alias_fold, alias_dup))
+};
+let phase_fold_skip = || -> Schedule {
+    let skip<r, s, h>: Rule((ActiveSese(r, s, h), SeseHasOut(r, s, h), !SeseHasKept(r, s, h), !SeseArmHasOps(r, s, h)) -> SeseSkipped(r, s, h));
+    let skip_reg<r, s, h, arm, slot, dst>: Rule((SeseSkipped(r, s, h), BranchArm(r, s, h, arm, slot, dst)) -> SkippedReg(Reg::SeseArm(r, s, h, arm)));
+    let union_alias<a, b>: Rule(ValAlias(a, b) -> a == b);
+    Schedule::Saturate(List(skip, skip_reg, union_alias))
 };
 
 // ── Phase 7: Emit flat output materialization tables ─────────────────────────
-let phase_emit_raw = || {
-    let orig_fn<r, owner, entry, d>: (TargetRegion(r, owner, entry), !IsForBody(r), RegDepth(Reg::Orig(r), d)) -> OutOrigRegion{ original: r, owner: owner, entry: entry, ordered_for: 0, depth: d }();
-    let orig_for<r, owner, entry, d>: (TargetRegion(r, owner, entry), IsForBody(r), RegDepth(Reg::Orig(r), d)) -> OutOrigRegion{ original: r, owner: owner, entry: entry, ordered_for: 1, depth: d }();
-    let ch_cnt<r, o, e, n>: (TargetRegion(r, o, e), !IsForBody(r), OrdCount("chain", r, 0, 0, n)) -> OutChainCount{ region: r, count: n }();
-    let child_reg<reg, d>: (ChildReg(reg), !SkippedReg(reg), RegDepth(reg, d)) -> OutChildRegion{ region: reg, depth: d }();
+let phase_emit_raw = || -> Schedule {
+    let orig_fn<r, owner, entry, d>: Rule((TargetRegion(r, owner, entry), !IsForBody(r), RegDepth(Reg::Orig(r), d)) -> OutOrigRegion(r, owner, entry, 0, d));
+    let orig_for<r, owner, entry, d>: Rule((TargetRegion(r, owner, entry), IsForBody(r), RegDepth(Reg::Orig(r), d)) -> OutOrigRegion(r, owner, entry, 1, d));
+    let ch_cnt<r, o, e, n>: Rule((TargetRegion(r, o, e), !IsForBody(r), OrdCount("chain", r, 0, 0, n)) -> OutChainCount(r, n));
+    let child_reg<reg, d>: Rule((ChildReg(reg), !SkippedReg(reg), RegDepth(reg, d)) -> OutChildRegion(reg, d));
 
-    let port_loop<r, l, k, v, idx, ty>: (OrdIdx("lp", r, l, 0, k, v, idx), VarTy(r, l, v, ty)) -> OutRegPort{ region: Reg::LoopBody(r, l), slot: idx, ty: ty, value: Val::LoopPort(r, l, v) }();
-    let port_sese<r, s, h, arm, slot, dst, k, c, idx>:
-        (BranchArm(r, s, h, arm, slot, dst), !SeseSkipped(r, s, h), OrdIdx("sese_fwd", r, s, h, k, c, idx)) -> OutRegPort{ region: Reg::SeseArm(r, s, h, arm), slot: idx, ty: Ty::State, value: Val::SesePort(r, s, h, arm, c) }();
-    let port_guard<r, s, o, m, bit, k, c, idx>:
-        (ChildReg(Reg::GuardArm(r, s, o, m, bit)), OrdIdx("gm", r, s, o, k, c, idx)) -> OutRegPort{ region: Reg::GuardArm(r, s, o, m, bit), slot: idx, ty: Ty::State, value: Val::GuardPort(r, s, o, m, bit, c) }();
-    let port_for<outer, blk, for_op, pos, body, entry, k, c, idx>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), OrdIdx("for_ch", for_op, 0, 0, k, c, idx)) -> OutForPort{ region: body, slot: idx, value: Val::ForPort(for_op, idx) }();
+    let port_loop<r, l, k, v, idx, ty>: Rule((OrdIdx("lp", r, l, 0, k, v, idx), VarTy(r, l, v, ty)) -> OutRegPort(Reg::LoopBody(r, l), idx, ty, Val::LoopPort(r, l, v)));
+    let port_sese<r, s, h, arm, slot, dst, k, c, idx>: Rule((BranchArm(r, s, h, arm, slot, dst), !SeseSkipped(r, s, h), OrdIdx("sese_fwd", r, s, h, k, c, idx)) -> OutRegPort(Reg::SeseArm(r, s, h, arm), idx, Ty::State, Val::SesePort(r, s, h, arm, c)));
+    let port_guard<r, s, o, m, bit, k, c, idx>: Rule((ChildReg(Reg::GuardArm(r, s, o, m, bit)), OrdIdx("gm", r, s, o, k, c, idx)) -> OutRegPort(Reg::GuardArm(r, s, o, m, bit), idx, Ty::State, Val::GuardPort(r, s, o, m, bit, c)));
+    let port_for<outer, blk, for_op, pos, body, entry, k, c, idx>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), OrdIdx("for_ch", for_op, 0, 0, k, c, idx)) -> OutForPort(body, idx, Val::ForPort(for_op, idx)));
 
-    let loop_dag<r, l, home, p, pred>: (LoopHome(r, l, home), ChainPos(home, l, p), LoopPredVal(r, l, pred)) -> (OutLoop{ body: Reg::LoopBody(r, l), region: home, order: (p * 10000000) }(), OutYield{ region: Reg::LoopBody(r, l), slot: 0, value: pred }());
-    let loop_in_irr<r, s, rep, h, pred>:
-        (analysis::cfg::IrredScc(r, s, h, rep), analysis::cfg::NatLoopHeader(r, h), LoopPredVal(r, h, pred)) -> (OutLoop{ body: Reg::LoopBody(r, h), region: Reg::GuardArm(r, s, rep, h, 1), order: 0 }(), OutYield{ region: Reg::LoopBody(r, h), slot: 0, value: pred }());
-    let loop_slots<r, l, k, v, idx, ty, init_v, cont_v, exit_v>:
-        (OrdIdx("lp", r, l, 0, k, v, idx), VarTy(r, l, v, ty), LoopInitVal(r, l, v, init_v), LoopContVal(r, l, v, cont_v), LoopExitVal(r, l, v, exit_v))
-        -> (OutLoopInit{ body: Reg::LoopBody(r, l), slot: idx, value: init_v }(), OutLoopRes{ body: Reg::LoopBody(r, l), slot: idx, ty: ty, value: Val::LoopRes(r, l, v) }(), OutYield{ region: Reg::LoopBody(r, l), slot: (1 + idx), value: cont_v }(), OutYield{ region: Reg::LoopBody(r, l), slot: (1000000 + idx), value: exit_v }());
+    let loop_dag<r, l, home, p, pred>: Rule((LoopHome(r, l, home), ChainPos(home, l, p), LoopPredVal(r, l, pred)) -> (OutLoop(Reg::LoopBody(r, l), home, (p * 10000000)), OutYield(Reg::LoopBody(r, l), 0, pred)));
+    let loop_in_irr<r, s, rep, h, pred>: Rule((IrredScc(r, s, h, rep), NatLoopHeader(r, h), LoopPredVal(r, h, pred)) -> (OutLoop(Reg::LoopBody(r, h), Reg::GuardArm(r, s, rep, h, 1), 0), OutYield(Reg::LoopBody(r, h), 0, pred)));
+    let loop_slots<r, l, k, v, idx, ty, init_v, cont_v, exit_v>: Rule((OrdIdx("lp", r, l, 0, k, v, idx), VarTy(r, l, v, ty), LoopInitVal(r, l, v, init_v), LoopContVal(r, l, v, cont_v), LoopExitVal(r, l, v, exit_v))
+        -> (OutLoopInit(Reg::LoopBody(r, l), idx, init_v), OutLoopRes(Reg::LoopBody(r, l), idx, ty, Val::LoopRes(r, l, v)), OutYield(Reg::LoopBody(r, l), (1 + idx), cont_v), OutYield(Reg::LoopBody(r, l), (1000000 + idx), exit_v)));
 
-    let sw_sese_blk<r, s, h, home, p, term, kind, pred>:
-        (ActiveSese(r, s, h), !SeseSkipped(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, kind), NodeHome(r, s, h, home), ChainPos(home, h, p), SesePredVal(r, s, h, pred))
-        -> OutSwitch{ switch: Sw::Sese(r, s, h), region: home, order: ((p * 10000000) + 5000000), terminator: term, selector: pred }();
-    let sw_sese_loop<r, s, l, home, p, pred>:
-        (ActiveSese(r, s, l), !SeseSkipped(r, s, l), IsLoopDagNode(r, s, l), NodeHome(r, s, l, home), ChainPos(home, l, p), SesePredVal(r, s, l, pred))
-        -> OutSwitch{ switch: Sw::Sese(r, s, l), region: home, order: ((p * 10000000) + 5000000), terminator: (0 - 1), selector: pred }();
-    let sw_sese_in<r, s, h, k, c, idx, val>: (!SeseSkipped(r, s, h), OrdIdx("sese_fwd", r, s, h, k, c, idx), PreBranchVal(r, s, h, c, val)) -> OutSwitchInput{ switch: Sw::Sese(r, s, h), slot: idx, value: val }();
-    let sw_sese_arm<r, s, h, arm, slot, dst>: (BranchArm(r, s, h, arm, slot, dst), !SeseSkipped(r, s, h)) -> OutSwitchArm{ switch: Sw::Sese(r, s, h), slot: arm, arm: Reg::SeseArm(r, s, h, arm) }();
-    let sw_sese_res<r, s, h, k, v, idx, ty>: (!SeseSkipped(r, s, h), OrdIdx("sese_kept", r, s, h, k, v, idx), VarTy(r, s, v, ty)) -> OutSwitchRes{ switch: Sw::Sese(r, s, h), slot: idx, ty: ty, value: Val::SeseRes(r, s, h, v) }();
-    let sw_sese_yield<r, s, h, arm, slot, dst, k, v, idx, val>:
-        (BranchArm(r, s, h, arm, slot, dst), !SeseSkipped(r, s, h), OrdIdx("sese_kept", r, s, h, k, v, idx), SeseArmOutVal(r, s, h, arm, v, val)) -> OutYield{ region: Reg::SeseArm(r, s, h, arm), slot: idx, value: val }();
+    let sw_sese_blk<r, s, h, home, p, term, kind, pred>: Rule((ActiveSese(r, s, h), !SeseSkipped(r, s, h), !IsLoopDagNode(r, s, h), BlockTerm(r, h, term, kind), NodeHome(r, s, h, home), ChainPos(home, h, p), SesePredVal(r, s, h, pred))
+        -> OutSwitch(Sw::Sese(r, s, h), home, ((p * 10000000) + 5000000), term, pred));
+    let sw_sese_loop<r, s, l, home, p, pred>: Rule((ActiveSese(r, s, l), !SeseSkipped(r, s, l), IsLoopDagNode(r, s, l), NodeHome(r, s, l, home), ChainPos(home, l, p), SesePredVal(r, s, l, pred))
+        -> OutSwitch(Sw::Sese(r, s, l), home, ((p * 10000000) + 5000000), (0 - 1), pred));
+    let sw_sese_in<r, s, h, k, c, idx, val>: Rule((!SeseSkipped(r, s, h), OrdIdx("sese_fwd", r, s, h, k, c, idx), PreBranchVal(r, s, h, c, val)) -> OutSwitchInput(Sw::Sese(r, s, h), idx, val));
+    let sw_sese_arm<r, s, h, arm, slot, dst>: Rule((BranchArm(r, s, h, arm, slot, dst), !SeseSkipped(r, s, h)) -> OutSwitchArm(Sw::Sese(r, s, h), arm, Reg::SeseArm(r, s, h, arm)));
+    let sw_sese_res<r, s, h, k, v, idx, ty>: Rule((!SeseSkipped(r, s, h), OrdIdx("sese_kept", r, s, h, k, v, idx), VarTy(r, s, v, ty)) -> OutSwitchRes(Sw::Sese(r, s, h), idx, ty, Val::SeseRes(r, s, h, v)));
+    let sw_sese_yield<r, s, h, arm, slot, dst, k, v, idx, val>: Rule((BranchArm(r, s, h, arm, slot, dst), !SeseSkipped(r, s, h), OrdIdx("sese_kept", r, s, h, k, v, idx), SeseArmOutVal(r, s, h, arm, v, val)) -> OutYield(Reg::SeseArm(r, s, h, arm), idx, val));
 
-    let sw_guard_irr<r, s, rep, k, m, idx, tval>:
-        (analysis::cfg::IrredLoop(r, s, rep), OrdIdx("gmem", r, s, rep, k, m, idx), GuardStepInVal(r, s, rep, m, (0 - 3), tval))
-        -> (OutSwitch{ switch: Sw::Guard(r, s, rep, m), region: Reg::LoopBody(r, rep), order: ((idx * 2) + 1), terminator: (0 - 1), selector: Val::Cmp(Reg::LoopBody(r, rep), dialects::builtin::IntegerPredicate::Eq, tval, Val::IntConst(Reg::LoopBody(r, rep), 32, idx)) }(),
+    let sw_guard_irr<r, s, rep, k, m, idx, tval>: Rule((IrredLoop(r, s, rep), OrdIdx("gmem", r, s, rep, k, m, idx), GuardStepInVal(r, s, rep, m, (0 - 3), tval))
+        -> (OutSwitch(Sw::Guard(r, s, rep, m), Reg::LoopBody(r, rep), ((idx * 2) + 1), (0 - 1), Val::Cmp(Reg::LoopBody(r, rep), dialects::builtin::IntegerPredicate::Eq, tval, Val::IntConst(Reg::LoopBody(r, rep), 32, idx))),
             SynthOrd(Val::Cmp(Reg::LoopBody(r, rep), dialects::builtin::IntegerPredicate::Eq, tval, Val::IntConst(Reg::LoopBody(r, rep), 32, idx)), (idx * 2)),
-            OutSwitchArm{ switch: Sw::Guard(r, s, rep, m), slot: 0, arm: Reg::GuardArm(r, s, rep, m, 0) }(), OutSwitchArm{ switch: Sw::Guard(r, s, rep, m), slot: 1, arm: Reg::GuardArm(r, s, rep, m, 1) }());
-    let sw_guard_ham<r, s, h, home, p, k, m, idx, tval>:
-        (ActiveHammock(r, s, h), NodeHome(r, s, h, home), ChainPos(home, h, p), OrdIdx("gmem", r, s, h, k, m, idx), GuardStepInVal(r, s, h, m, (0 - 3), tval))
-        -> (OutSwitch{ switch: Sw::Guard(r, s, h, m), region: home, order: (((p * 10000000) + 6000000) + ((idx * 2) + 1)), terminator: (0 - 1), selector: Val::Cmp(home, dialects::builtin::IntegerPredicate::Eq, tval, Val::IntConst(home, 32, idx)) }(),
+            OutSwitchArm(Sw::Guard(r, s, rep, m), 0, Reg::GuardArm(r, s, rep, m, 0)), OutSwitchArm(Sw::Guard(r, s, rep, m), 1, Reg::GuardArm(r, s, rep, m, 1))));
+    let sw_guard_ham<r, s, h, home, p, k, m, idx, tval>: Rule((ActiveHammock(r, s, h), NodeHome(r, s, h, home), ChainPos(home, h, p), OrdIdx("gmem", r, s, h, k, m, idx), GuardStepInVal(r, s, h, m, (0 - 3), tval))
+        -> (OutSwitch(Sw::Guard(r, s, h, m), home, (((p * 10000000) + 6000000) + ((idx * 2) + 1)), (0 - 1), Val::Cmp(home, dialects::builtin::IntegerPredicate::Eq, tval, Val::IntConst(home, 32, idx))),
             SynthOrd(Val::Cmp(home, dialects::builtin::IntegerPredicate::Eq, tval, Val::IntConst(home, 32, idx)), (((p * 10000000) + 6000000) + (idx * 2))),
-            OutSwitchArm{ switch: Sw::Guard(r, s, h, m), slot: 0, arm: Reg::GuardArm(r, s, h, m, 0) }(), OutSwitchArm{ switch: Sw::Guard(r, s, h, m), slot: 1, arm: Reg::GuardArm(r, s, h, m, 1) }());
-    let sw_guard_in<r, s, o, m, k, c, idx, val>:
-        (ChildReg(Reg::GuardArm(r, s, o, m, 0)), OrdIdx("gm", r, s, o, k, c, idx), GuardStepInVal(r, s, o, m, c, val)) -> OutSwitchInput{ switch: Sw::Guard(r, s, o, m), slot: idx, value: val }();
-    let sw_guard_res<r, s, o, m, k, v, idx, ty, fval, tval>:
-        (ChildReg(Reg::GuardArm(r, s, o, m, 0)), OrdIdx("gv", r, s, o, k, v, idx), VarTy(r, s, v, ty), GuardFalseOutVal(r, s, o, m, v, fval), GuardTrueOutVal(r, s, o, m, v, tval))
-        -> (OutSwitchRes{ switch: Sw::Guard(r, s, o, m), slot: idx, ty: ty, value: Val::GuardRes(r, s, o, m, v) }(), OutYield{ region: Reg::GuardArm(r, s, o, m, 0), slot: idx, value: fval }(), OutYield{ region: Reg::GuardArm(r, s, o, m, 1), slot: idx, value: tval }());
+            OutSwitchArm(Sw::Guard(r, s, h, m), 0, Reg::GuardArm(r, s, h, m, 0)), OutSwitchArm(Sw::Guard(r, s, h, m), 1, Reg::GuardArm(r, s, h, m, 1))));
+    let sw_guard_in<r, s, o, m, k, c, idx, val>: Rule((ChildReg(Reg::GuardArm(r, s, o, m, 0)), OrdIdx("gm", r, s, o, k, c, idx), GuardStepInVal(r, s, o, m, c, val)) -> OutSwitchInput(Sw::Guard(r, s, o, m), idx, val));
+    let sw_guard_res<r, s, o, m, k, v, idx, ty, fval, tval>: Rule((ChildReg(Reg::GuardArm(r, s, o, m, 0)), OrdIdx("gv", r, s, o, k, v, idx), VarTy(r, s, v, ty), GuardFalseOutVal(r, s, o, m, v, fval), GuardTrueOutVal(r, s, o, m, v, tval))
+        -> (OutSwitchRes(Sw::Guard(r, s, o, m), idx, ty, Val::GuardRes(r, s, o, m, v)), OutYield(Reg::GuardArm(r, s, o, m, 0), idx, fval), OutYield(Reg::GuardArm(r, s, o, m, 1), idx, tval)));
 
-    let sw_step_ham<r, s, h, isl, term, home, p, pred>:
-        (ActiveHammock(r, s, h), StepSite(r, s, h, h, isl, term), NodeHome(r, s, h, home), ChainPos(home, h, p), StepPredVal(r, s, h, h, pred))
-        -> OutSwitch{ switch: Sw::Step(r, s, h, h), region: home, order: ((p * 10000000) + 5000000), terminator: term, selector: pred }();
-    let sw_step_mem<r, s, o, m, isl, term, pred>:
-        (StepSite(r, s, o, m, isl, term), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1)), StepPredVal(r, s, o, m, pred))
-        -> OutSwitch{ switch: Sw::Step(r, s, o, m), region: Reg::GuardArm(r, s, o, m, 1), order: 5000000, terminator: term, selector: pred }();
-    let sw_step_arm<r, s, o, src, arm, slot, dst>: StepSiteArm(r, s, o, src, arm, slot, dst) -> OutSwitchArm{ switch: Sw::Step(r, s, o, src), slot: arm, arm: Reg::StepArm(r, s, o, src, arm) }();
-    let sw_step_res<r, s, o, src, isl, t, k, v, idx, ty>:
-        (StepSite(r, s, o, src, isl, t), OrdIdx("sv", s, o, src, k, v, idx), VarTy(r, s, v, ty)) -> OutSwitchRes{ switch: Sw::Step(r, s, o, src), slot: idx, ty: ty, value: Val::StepRes(r, s, o, src, v) }();
-    let sw_step_yield<r, s, o, src, arm, slot, dst, k, v, idx, val>:
-        (StepSiteArm(r, s, o, src, arm, slot, dst), OrdIdx("sv", s, o, src, k, v, idx), StepArmOutVal(r, s, o, src, arm, v, val)) -> OutYield{ region: Reg::StepArm(r, s, o, src, arm), slot: idx, value: val }();
+    let sw_step_ham<r, s, h, isl, term, home, p, pred>: Rule((ActiveHammock(r, s, h), StepSite(r, s, h, h, isl, term), NodeHome(r, s, h, home), ChainPos(home, h, p), StepPredVal(r, s, h, h, pred))
+        -> OutSwitch(Sw::Step(r, s, h, h), home, ((p * 10000000) + 5000000), term, pred));
+    let sw_step_mem<r, s, o, m, isl, term, pred>: Rule((StepSite(r, s, o, m, isl, term), StepHome(r, s, o, m, Reg::GuardArm(r, s, o, m, 1)), StepPredVal(r, s, o, m, pred))
+        -> OutSwitch(Sw::Step(r, s, o, m), Reg::GuardArm(r, s, o, m, 1), 5000000, term, pred));
+    let sw_step_arm<r, s, o, src, arm, slot, dst>: Rule(StepSiteArm(r, s, o, src, arm, slot, dst) -> OutSwitchArm(Sw::Step(r, s, o, src), arm, Reg::StepArm(r, s, o, src, arm)));
+    let sw_step_res<r, s, o, src, isl, t, k, v, idx, ty>: Rule((StepSite(r, s, o, src, isl, t), OrdIdx("sv", s, o, src, k, v, idx), VarTy(r, s, v, ty)) -> OutSwitchRes(Sw::Step(r, s, o, src), idx, ty, Val::StepRes(r, s, o, src, v)));
+    let sw_step_yield<r, s, o, src, arm, slot, dst, k, v, idx, val>: Rule((StepSiteArm(r, s, o, src, arm, slot, dst), OrdIdx("sv", s, o, src, k, v, idx), StepArmOutVal(r, s, o, src, arm, v, val)) -> OutYield(Reg::StepArm(r, s, o, src, arm), idx, val));
 
-    let move_op<r, b, reg, base, oid, k, pos, d, loc>:
-        (BlockHome(r, b, reg), BlockBaseOrder(r, b, base), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }(), !TermOp(oid), !IsForOp(oid)) -> (OutMovedOp{ operation: oid, region: reg, order: (base + pos) }(), MovedOp(oid));
-    let rw_op_in<r, o, e, b, oid, k, pos, d, loc, slot, arg, val>:
-        (TargetRegion(r, o, e), analysis::cfg::CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }(), !TermOp(oid), !IsForOp(oid), ir::Operand(std::ir::operation_key(oid), slot, std::ir::value_key(arg)), TrackedVar(r, arg), !analysis::cfg::ValueDefBlock(r, b, arg), BlockInVal(r, b, arg, val)) -> OutRewriteOperand{ operation: oid, slot: slot, value: val }();
-    let rw_op_blkarg<r, o, e, b, oid, k, pos, d, loc, slot, arg, ty, sl, decl, val>:
-        (TargetRegion(r, o, e), analysis::cfg::CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }(), !TermOp(oid), !IsForOp(oid), ir::Operand(std::ir::operation_key(oid), slot, std::ir::value_key(arg)), ir::Value(std::ir::value_key(arg), ty, "block", b, sl, decl), BlockInVal(r, b, arg, val)) -> OutRewriteOperand{ operation: oid, slot: slot, value: val }();
-    let rw_op_forres<r, b, oid, k, pos, d, loc, slot, arg, fop, fsl>:
-        (ForOrigRes(r, fop, fsl, arg), analysis::cfg::CfgReachable(r, b), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }(), !TermOp(oid), !IsForOp(oid), ir::Operand(std::ir::operation_key(oid), slot, std::ir::value_key(arg)), analysis::cfg::ValueDefBlock(r, b, arg)) -> OutRewriteOperand{ operation: oid, slot: slot, value: Val::ForRes(fop, fsl) }();
-    let append_st<r, b, oid, c, st>: (MemOpInState(r, b, oid, c, st), !IsForOp(oid)) -> OutAppendState{ operation: oid, input: st, output: Val::MemState(oid) }();
+    let move_op<r, b, reg, base, oid, k, pos, d, loc>: Rule((BlockHome(r, b, reg), BlockBaseOrder(r, b, base), Operation(oid, k, "block", b, pos, d, loc), !TermOp(oid), !IsForOp(oid)) -> (OutMovedOp(oid, reg, (base + pos)), MovedOp(oid)));
+    let rw_op_in<r, o, e, b, oid, k, pos, d, loc, slot, arg, val>: Rule((TargetRegion(r, o, e), CfgReachable(r, b), Operation(oid, k, "block", b, pos, d, loc), !TermOp(oid), !IsForOp(oid), Operand(oid, slot, arg), TrackedVar(r, arg), !ValueDefBlock(r, b, arg), BlockInVal(r, b, arg, val)) -> OutRewriteOperand(oid, slot, val));
+    let rw_op_blkarg<r, o, e, b, oid, k, pos, d, loc, slot, arg, ty, sl, decl, val>: Rule((TargetRegion(r, o, e), CfgReachable(r, b), Operation(oid, k, "block", b, pos, d, loc), !TermOp(oid), !IsForOp(oid), Operand(oid, slot, arg), Value(arg, ty, "block", b, sl, decl), BlockInVal(r, b, arg, val)) -> OutRewriteOperand(oid, slot, val));
+    let rw_op_forres<r, b, oid, k, pos, d, loc, slot, arg, fop, fsl>: Rule((ForOrigRes(r, fop, fsl, arg), CfgReachable(r, b), Operation(oid, k, "block", b, pos, d, loc), !TermOp(oid), !IsForOp(oid), Operand(oid, slot, arg), ValueDefBlock(r, b, arg)) -> OutRewriteOperand(oid, slot, Val::ForRes(fop, fsl)));
+    let append_st<r, b, oid, c, st>: Rule((MemOpInState(r, b, oid, c, st), !IsForOp(oid)) -> OutAppendState(oid, st, Val::MemState(oid)));
 
-    let for_op<outer, blk, for_op, pos, body, entry, reg, base, n, lb, ub, step, iv, iv_ty, iv_d>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), BlockHome(outer, blk, reg), BlockBaseOrder(outer, blk, base), OrdCount("for_opnd", for_op, 0, 0, n),
-         ir::Operand(std::ir::operation_key(for_op), 0, std::ir::value_key(lb)), ir::Operand(std::ir::operation_key(for_op), (n - 2), std::ir::value_key(ub)), ir::Operand(std::ir::operation_key(for_op), (n - 1), std::ir::value_key(step)), ir::Value(std::ir::value_key(iv), iv_ty, "block", entry, 0, iv_d))
-        -> (OutFor{ loop_op: for_op, region: reg, order: (base + pos), body: body, lower: Val::Orig(lb), upper: Val::Orig(ub), step: Val::Orig(step) }(), OutForBody{ region: Reg::Orig(body), induction: Val::Orig(iv), upper: Val::Orig(ub), step: Val::Orig(step) }());
-    let for_init_val<outer, blk, for_op, pos, body, entry, n, sl, arg>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), OrdCount("for_opnd", for_op, 0, 0, n), ir::Operand(std::ir::operation_key(for_op), sl, std::ir::value_key(arg)), std::int::less(0, sl) == true, std::int::less(sl, (n - 2)) == true) -> OutForInit{ loop_op: for_op, slot: (sl - 1), value: Val::Orig(arg) }();
-    let for_res_val<outer, blk, for_op, pos, body, entry, sl, v, ty, decl>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), ir::Value(std::ir::value_key(v), ty, "result", for_op, sl, decl)) -> OutForRes{ loop_op: for_op, slot: sl, ty: Ty::Exact(ty), value: Val::ForRes(for_op, sl) }();
-    let for_yield_val<body, sl, val>: ForBodyYieldVal(body, sl, val) -> OutYield{ region: Reg::Orig(body), slot: sl, value: val }();
-    let for_yield_ch<outer, blk, for_op, pos, body, entry, k, c, idx, val>:
-        (ForOpInfo(outer, blk, for_op, pos, body, entry), OrdIdx("for_ch", for_op, 0, 0, k, c, idx), RootChainVal(body, c, val)) -> OutYield{ region: Reg::Orig(body), slot: (1000000 + idx), value: val }();
-    let for_ch_in<for_op, idx, st>:
-        ForOpChainIn(for_op, idx, st) -> (OutForInit{ loop_op: for_op, slot: (2000000 + idx), value: st }(), OutForRes{ loop_op: for_op, slot: (2000000 + idx), ty: Ty::State, value: Val::ForState(for_op, idx) }());
+    let for_op<outer, blk, for_op, pos, body, entry, reg, base, n, lb, ub, step, iv, iv_ty, iv_d>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), BlockHome(outer, blk, reg), BlockBaseOrder(outer, blk, base), OrdCount("for_opnd", for_op, 0, 0, n),
+         Operand(for_op, 0, lb), Operand(for_op, (n - 2), ub), Operand(for_op, (n - 1), step), Value(iv, iv_ty, "block", entry, 0, iv_d))
+        -> (OutFor(for_op, reg, (base + pos), body, Val::Orig(lb), Val::Orig(ub), Val::Orig(step)), OutForBody(Reg::Orig(body), Val::Orig(iv), Val::Orig(ub), Val::Orig(step))));
+    let for_init_val<outer, blk, for_op, pos, body, entry, n, sl, arg>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), OrdCount("for_opnd", for_op, 0, 0, n), Operand(for_op, sl, arg), less(int_lit(0), sl) == true, less(sl, (n - 2)) == true) -> OutForInit(for_op, (sl - 1), Val::Orig(arg)));
+    let for_res_val<outer, blk, for_op, pos, body, entry, sl, v, ty, decl>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), Value(v, ty, "result", for_op, sl, decl)) -> OutForRes(for_op, sl, Ty::Exact(ty), Val::ForRes(for_op, sl)));
+    let for_yield_val<body, sl, val>: Rule(ForBodyYieldVal(body, sl, val) -> OutYield(Reg::Orig(body), sl, val));
+    let for_yield_ch<outer, blk, for_op, pos, body, entry, k, c, idx, val>: Rule((ForOpInfo(outer, blk, for_op, pos, body, entry), OrdIdx("for_ch", for_op, 0, 0, k, c, idx), RootChainVal(body, c, val)) -> OutYield(Reg::Orig(body), (1000000 + idx), val));
+    let for_ch_in<for_op, idx, st>: Rule(ForOpChainIn(for_op, idx, st) -> (OutForInit(for_op, (2000000 + idx), st), OutForRes(for_op, (2000000 + idx), Ty::State, Val::ForState(for_op, idx))));
 
-    let root_y_ret<r, val>: RootRetVal(r, val) -> OutYield{ region: Reg::Orig(r), slot: 0, value: val }();
-    let root_y_st1<r, c, val>: (!IsForBody(r), OrdCount("chain", r, 0, 0, 1), RootChainVal(r, c, val)) -> OutYield{ region: Reg::Orig(r), slot: 1, value: val }();
-    let root_y_stn<r, n>: (!IsForBody(r), OrdCount("chain", r, 0, 0, n), std::int::less(1, n) == true) -> OutYield{ region: Reg::Orig(r), slot: 1, value: Val::JoinState(r) }();
-    let root_join<r, n, k, c, idx, val>:
-        (!IsForBody(r), OrdCount("chain", r, 0, 0, n), std::int::less(1, n) == true, OrdIdx("chain", r, 0, 0, k, c, idx), RootChainVal(r, c, val)) -> OutJoinState{ region: r, slot: idx, value: val }();
-    std::schedule::Schedule::Rules((
-        orig_fn, orig_for, ch_cnt, child_reg, port_loop, port_sese, port_guard, port_for,
+    let root_y_ret<r, val>: Rule(RootRetVal(r, val) -> OutYield(Reg::Orig(r), 0, val));
+    let root_y_st1<r, c, val>: Rule((!IsForBody(r), OrdCount("chain", r, 0, 0, 1), RootChainVal(r, c, val)) -> OutYield(Reg::Orig(r), 1, val));
+    let root_y_stn<r, n>: Rule((!IsForBody(r), OrdCount("chain", r, 0, 0, n), less(int_lit(1), n) == true) -> OutYield(Reg::Orig(r), 1, Val::JoinState(r)));
+    let root_join<r, n, k, c, idx, val>: Rule((!IsForBody(r), OrdCount("chain", r, 0, 0, n), less(int_lit(1), n) == true, OrdIdx("chain", r, 0, 0, k, c, idx), RootChainVal(r, c, val)) -> OutJoinState(r, idx, val));
+    Schedule::Once(List(orig_fn, orig_for, ch_cnt, child_reg, port_loop, port_sese, port_guard, port_for,
         loop_dag, loop_in_irr, loop_slots, sw_sese_blk, sw_sese_loop, sw_sese_in, sw_sese_arm,
         sw_sese_res, sw_sese_yield, sw_guard_irr, sw_guard_ham, sw_guard_in, sw_guard_res,
         sw_step_ham, sw_step_mem, sw_step_arm, sw_step_res, sw_step_yield, move_op, rw_op_in,
         rw_op_blkarg, rw_op_forres, append_st, for_op, for_init_val, for_res_val, for_yield_val,
-        for_yield_ch, for_ch_in, root_y_ret, root_y_st1, root_y_stn, root_join,
-    ))
+        for_yield_ch, for_ch_in, root_y_ret, root_y_st1, root_y_stn, root_join))
 };
 
-let phase_need_val = || {
-    let n_yield<r, s, v>: OutYield{ region: r, slot: s, value: v }() -> NeedVal(v);
-    let n_linit<r, s, v>: OutLoopInit{ body: r, slot: s, value: v }() -> NeedVal(v);
-    let n_swp<sw, h, o, t, v>: OutSwitch{ switch: sw, region: h, order: o, terminator: t, selector: v }() -> NeedVal(v);
-    let n_swin<sw, s, v>: OutSwitchInput{ switch: sw, slot: s, value: v }() -> NeedVal(v);
-    let n_for<f, h, o, b, lb, ub, st>: OutFor{ loop_op: f, region: h, order: o, body: b, lower: lb, upper: ub, step: st }() -> (NeedVal(lb), NeedVal(ub), NeedVal(st));
-    let n_finit<f, s, v>: OutForInit{ loop_op: f, slot: s, value: v }() -> NeedVal(v);
-    let n_rw<o, s, v>: OutRewriteOperand{ operation: o, slot: s, value: v }() -> NeedVal(v);
-    let n_app<o, s, r>: OutAppendState{ operation: o, input: s, output: r }() -> NeedVal(s);
-    let n_join<r, i, v>: OutJoinState{ region: r, slot: i, value: v }() -> NeedVal(v);
-    let n_not<v, reg, c>: (NeedVal(v), v == Val::Not(reg, c)) -> NeedVal(c);
-    let n_cmp<v, reg, p, a, b>: (NeedVal(v), v == Val::Cmp(reg, p, a, b)) -> (NeedVal(a), NeedVal(b));
-    let n_sub<v, reg, a, b>: (NeedVal(v), v == Val::Sub(reg, a, b)) -> (NeedVal(a), NeedVal(b));
-    std::schedule::saturate((
-        n_yield, n_linit, n_swp, n_swin, n_for, n_finit, n_rw, n_app, n_join, n_not, n_cmp,
-        n_sub,
-    ))
+let phase_need_val = || -> Schedule {
+    let n_yield<r, s, v>: Rule(OutYield(r, s, v) -> NeedVal(v));
+    let n_linit<r, s, v>: Rule(OutLoopInit(r, s, v) -> NeedVal(v));
+    let n_swp<sw, h, o, t, v>: Rule(OutSwitch(sw, h, o, t, v) -> NeedVal(v));
+    let n_swin<sw, s, v>: Rule(OutSwitchInput(sw, s, v) -> NeedVal(v));
+    let n_for<f, h, o, b, lb, ub, st>: Rule(OutFor(f, h, o, b, lb, ub, st) -> (NeedVal(lb), NeedVal(ub), NeedVal(st)));
+    let n_finit<f, s, v>: Rule(OutForInit(f, s, v) -> NeedVal(v));
+    let n_rw<o, s, v>: Rule(OutRewriteOperand(o, s, v) -> NeedVal(v));
+    let n_app<o, s, r>: Rule(OutAppendState(o, s, r) -> NeedVal(s));
+    let n_join<r, i, v>: Rule(OutJoinState(r, i, v) -> NeedVal(v));
+    let n_not<v, reg, c>: Rule((NeedVal(v), v == Val::Not(reg, c)) -> NeedVal(c));
+    let n_cmp<v, reg, p, a, b>: Rule((NeedVal(v), v == Val::Cmp(reg, p, a, b)) -> (NeedVal(a), NeedVal(b)));
+    let n_sub<v, reg, a, b>: Rule((NeedVal(v), v == Val::Sub(reg, a, b)) -> (NeedVal(a), NeedVal(b)));
+    Schedule::Saturate(List(n_yield, n_linit, n_swp, n_swin, n_for, n_finit, n_rw, n_app, n_join, n_not, n_cmp,
+        n_sub))
 };
 
-let phase_emit_final = || {
-    let s_const<v, reg, w, val>: (NeedVal(v), v == Val::IntConst(reg, w, val)) -> OutSynth{ value: v, region: reg, order: (0 - 100) }();
-    let s_zero<v, reg, ty>: (NeedVal(v), v == Val::Zero(reg, ty)) -> OutSynth{ value: v, region: reg, order: (0 - 100) }();
-    let s_not<v, reg, c, ord>: (NeedVal(v), v == Val::Not(reg, c), SynthOrd(v, ord)) -> OutSynth{ value: v, region: reg, order: ord }();
-    let s_cmp<v, reg, p, a, b, ord>: (NeedVal(v), v == Val::Cmp(reg, p, a, b), SynthOrd(v, ord)) -> OutSynth{ value: v, region: reg, order: ord }();
-    let s_sub<v, reg, a, b, ord>: (NeedVal(v), v == Val::Sub(reg, a, b), SynthOrd(v, ord)) -> OutSynth{ value: v, region: reg, order: ord }();
-    let erase_op<r, o, e, b, lay, oid, k, pos, d, loc>:
-        (TargetRegion(r, o, e), ir::Block(b, r, lay), ir::Operation{ id: std::ir::operation_key(oid), kind: k, placement: "block", container: b, position: pos, display: d, location: loc }(), !MovedOp(oid)) -> OutEraseOp(oid);
-    let erase_blk<r, o, e, b, lay>: (TargetRegion(r, o, e), ir::Block(b, r, lay)) -> OutEraseBlock(b);
-    std::schedule::Schedule::Rules((
-        s_const, s_zero, s_not, s_cmp, s_sub, erase_op, erase_blk,
-    ))
+let phase_emit_final = || -> Schedule {
+    let s_const<v, reg, w, val>: Rule((NeedVal(v), v == Val::IntConst(reg, w, val)) -> OutSynth(v, reg, (0 - 100)));
+    let s_zero<v, reg, ty>: Rule((NeedVal(v), v == Val::Zero(reg, ty)) -> OutSynth(v, reg, (0 - 100)));
+    let s_not<v, reg, c, ord>: Rule((NeedVal(v), v == Val::Not(reg, c), SynthOrd(v, ord)) -> OutSynth(v, reg, ord));
+    let s_cmp<v, reg, p, a, b, ord>: Rule((NeedVal(v), v == Val::Cmp(reg, p, a, b), SynthOrd(v, ord)) -> OutSynth(v, reg, ord));
+    let s_sub<v, reg, a, b, ord>: Rule((NeedVal(v), v == Val::Sub(reg, a, b), SynthOrd(v, ord)) -> OutSynth(v, reg, ord));
+    let erase_op<r, o, e, b, lay, oid, k, pos, d, loc>: Rule((TargetRegion(r, o, e), Block(b, r, lay), Operation(oid, k, "block", b, pos, d, loc), !MovedOp(oid)) -> OutEraseOp(oid));
+    let erase_blk<r, o, e, b, lay>: Rule((TargetRegion(r, o, e), Block(b, r, lay)) -> OutEraseBlock(b));
+    Schedule::Once(List(s_const, s_zero, s_not, s_cmp, s_sub, erase_op, erase_blk))
 };
 
 
-let order = || {
-    std::schedule::sequence((
-        std::schedule::Schedule::Rules(ord_next::step),
-        std::schedule::Schedule::Rules(ord_links::link),
+let order = || -> Schedule {
+    Schedule::Seq(List(ord_next(),
+        ord_links(),
         ord_index(),
-        std::schedule::Schedule::Rules(ord_count::count),
-    ))
+        ord_count()))
 };
 
-pub let transform = || {
-    std::schedule::sequence((
-        phase_targets(),
+pub let transform = || -> Schedule {
+    Schedule::Seq(List(phase_targets(),
         phase_active(),
         phase_ord_seed1(),
         order(),
         phase_arms(),
-        std::schedule::Schedule::Rules(phase_homes_inner::inner_sese),
+        phase_homes_inner(),
         phase_homes(),
         phase_home_derived(),
         phase_reg_tree(),
-        std::schedule::Schedule::Rules(phase_reg_tree2::rp_step),
+        phase_reg_tree2(),
         phase_depths(),
-        std::schedule::Schedule::Rules(phase_depth_max::max_d),
+        phase_depth_max(),
         phase_vars(),
         phase_static_writes(),
         order(),
@@ -978,13 +831,42 @@ pub let transform = || {
         phase_fill(),
         phase_fold_prep(),
         phase_fold_match(),
-        std::schedule::Schedule::Rules(phase_fold_diff::diff),
-        std::schedule::Schedule::Rules(phase_fold_dup::dup_min),
+        phase_fold_diff(),
+        phase_fold_dup(),
         phase_fold_keep(),
         order(),
         phase_fold_skip(),
         phase_emit_raw(),
         phase_need_val(),
-        phase_emit_final(),
-    ))
+        phase_emit_final()))
 };
+
+extract rust phase_targets => "@ct";
+extract rust phase_active => "@ct";
+extract rust phase_ord_seed1 => "@ct";
+extract rust ord_next => "@ct";
+extract rust ord_links => "@ct";
+extract rust ord_index => "@ct";
+extract rust ord_count => "@ct";
+extract rust phase_arms => "@ct";
+extract rust phase_homes_inner => "@ct";
+extract rust phase_homes => "@ct";
+extract rust phase_home_derived => "@ct";
+extract rust phase_reg_tree => "@ct";
+extract rust phase_reg_tree2 => "@ct";
+extract rust phase_depths => "@ct";
+extract rust phase_depth_max => "@ct";
+extract rust phase_vars => "@ct";
+extract rust phase_static_writes => "@ct";
+extract rust phase_flow => "@ct";
+extract rust phase_fill => "@ct";
+extract rust phase_fold_prep => "@ct";
+extract rust phase_fold_match => "@ct";
+extract rust phase_fold_diff => "@ct";
+extract rust phase_fold_dup => "@ct";
+extract rust phase_fold_keep => "@ct";
+extract rust phase_fold_skip => "@ct";
+extract rust phase_emit_raw => "@ct";
+extract rust phase_need_val => "@ct";
+extract rust phase_emit_final => "@ct";
+extract rust order => "@ct";
