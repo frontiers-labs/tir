@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::attributes::{AttributeRole, AttributeValue, RegisterAttr};
 use crate::backend::regalloc::RegClassId;
+use crate::backend::{InstrInfo, MachineInstruction, register_attr};
 use crate::{Context, OpHandle, OpId, ValueId};
 
 /// A physical register: its class handle and encoding index.
@@ -45,25 +46,27 @@ pub struct OpRegs {
 /// physical registers its register slots name directly, and the registers a
 /// call destroys. Dependencies live in no register and are not among them.
 pub fn op_regs(op: &OpHandle) -> OpRegs {
+    let instruction = op.clone().as_interface::<dyn MachineInstruction>();
+    op_regs_with_info(
+        op,
+        instruction.as_ref().map(|instruction| instruction.info()),
+    )
+}
+
+fn op_regs_with_info(op: &OpHandle, info: Option<&InstrInfo>) -> OpRegs {
     let mut regs = OpRegs {
         defs: op.value_results().to_vec(),
         uses: op.value_operands().to_vec(),
         phys_defs: Vec::new(),
         phys_uses: Vec::new(),
     };
-    if let Some(schema) = crate::schema::OP_SCHEMAS
-        .iter()
-        .find(|s| s.dialect == op.dialect().as_str() && s.name == op.name().as_str())
-    {
-        for (fields, is_write) in [(schema.results, true), (schema.operands, false)] {
-            for field in fields {
-                if let Some(register) = crate::backend::register_attr(op, field.name) {
-                    if is_write {
-                        regs.phys_defs.push(register);
-                    } else {
-                        regs.phys_uses.push(register);
-                    }
-                }
+    for &(name, role) in info.into_iter().flat_map(|info| info.register_attrs) {
+        if let Some(register) = register_attr(op, name) {
+            if matches!(role, AttributeRole::Def | AttributeRole::ReadWrite) {
+                regs.phys_defs.push(register);
+            }
+            if matches!(role, AttributeRole::Use | AttributeRole::ReadWrite) {
+                regs.phys_uses.push(register);
             }
         }
     }
@@ -92,13 +95,10 @@ pub fn op_regs(op: &OpHandle) -> OpRegs {
 /// sub-register view implies. This is the view a timing model reconstructs
 /// dependencies from.
 pub fn execution_regs(op: &OpHandle) -> OpRegs {
-    let mut regs = op_regs(op);
-
-    let implicit_regs = op
-        .clone()
-        .as_interface::<dyn crate::backend::MachineInstruction>()
-        .map(|mi| mi.info().implicit_regs)
-        .unwrap_or_default();
+    let instruction = op.clone().as_interface::<dyn MachineInstruction>();
+    let info = instruction.as_ref().map(|instruction| instruction.info());
+    let mut regs = op_regs_with_info(op, info);
+    let implicit_regs = info.map_or(&[][..], |info| info.implicit_regs);
     for implicit in implicit_regs {
         let register = (implicit.class, implicit.index);
         if matches!(

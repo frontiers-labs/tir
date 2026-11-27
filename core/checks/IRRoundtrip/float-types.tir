@@ -1,7 +1,6 @@
 // RUN: tir opt --verify %s | filecheck %s
 
-// Storage types remain distinct. Scalar fp operations intentionally support
-// only the binary32 and binary64 formats owned by this stage.
+// Storage types remain distinct. The arithmetic cases use binary32 and binary64.
 
 module {
   %fn_f8e4m3 = func.func @f8e4m3(%0: !f8e4m3) -> !f8e4m3 {
@@ -17,14 +16,20 @@ module {
     func.return %0
   }
   %fn_f32 = func.func @f32() -> !f32 {
-    %0 = fp.constant {bits = 1069547520} : !f32
-    %1 = fp.add %0, %0 {semantics = {kind = "arithmetic", rounding = "nearest_even", exceptions = "ignore", nan = "any_quiet", subnormals = "gradual", tininess = "after_rounding"}} : !f32
-    func.return %1
+    %bits = constant {value = 1069547520} : !i32
+    %literal = bitcast %bits : !f32
+    %x = fp.capture %literal : !fp.computation<!f32, nearest_even, separate>
+    %sum = fp.add %x, %x : !fp.computation<!f32, nearest_even, separate>
+    %result = fp.materialize %sum : !f32
+    func.return %result
   }
   %fn_f64 = func.func @f64() -> !f64 {
-    %0 = fp.constant {bits = 4609434218613702656} : !f64
-    %1 = fp.add %0, %0 {semantics = {kind = "arithmetic", rounding = "nearest_even", exceptions = "ignore", nan = "any_quiet", subnormals = "gradual", tininess = "after_rounding"}} : !f64
-    func.return %1
+    %bits = constant {value = 4609434218613702656} : !i64
+    %literal = bitcast %bits : !f64
+    %x = fp.capture %literal : !fp.computation<!f64, nearest_even, separate>
+    %sum = fp.add %x, %x : !fp.computation<!f64, nearest_even, separate>
+    %result = fp.materialize %sum : !f64
+    func.return %result
   }
   module_end
 }
@@ -34,6 +39,12 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f16(%{{[0-9]+}}: !f16) -> !f16
 // CHECK-LABEL: %{{[0-9]+}} = func.func @bf16(%{{[0-9]+}}: !bf16) -> !bf16
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f32() -> !f32
-// CHECK: %{{[0-9]+}} = fp.add
+// CHECK: %[[X32:[0-9]+]] = fp.capture %{{[0-9]+}} : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[S32:[0-9]+]] = fp.add %[[X32]], %[[X32]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[R32:[0-9]+]] = fp.materialize %[[S32]] : !f32
+// CHECK-NEXT: func.return %[[R32]]
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f64() -> !f64
-// CHECK: %{{[0-9]+}} = fp.add
+// CHECK: %[[X64:[0-9]+]] = fp.capture %{{[0-9]+}} : !fp.computation<!f64, nearest_even, separate>
+// CHECK-NEXT: %[[S64:[0-9]+]] = fp.add %[[X64]], %[[X64]] : !fp.computation<!f64, nearest_even, separate>
+// CHECK-NEXT: %[[R64:[0-9]+]] = fp.materialize %[[S64]] : !f64
+// CHECK-NEXT: func.return %[[R64]]
