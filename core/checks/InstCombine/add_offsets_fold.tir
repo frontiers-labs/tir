@@ -1,4 +1,4 @@
-// RUN: tir opt --pass eqsat --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat,dce --verify %s | filecheck %s
 
 // A constant added to an operand of an add moves to the result: the value of
 // `(x + 3) + (y + 5)` is `x + y` at offset 8, with no rule reassociating it.

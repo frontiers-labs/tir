@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat,memopt,dce)) --verify %s | filecheck %s
 
 module {
   func.func @store(%p: !ptr.p<!i32>, %x: !i32) -> !i32 {

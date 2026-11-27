@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,control-simplify,dce) --verify %s | filecheck %s
 
 // The latch is a term over the port, not the port itself, so no fixpoint a
 // bottom-up saturation reaches says what the loop carries. Hypothesise that the

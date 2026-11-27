@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // A tested loop's body runs under the condition its test yields. The condition
 // is spelled over the ports' per-iteration heads, so it holds on every

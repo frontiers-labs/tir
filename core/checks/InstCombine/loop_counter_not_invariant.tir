@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(control-simplify,dce) --verify %s | filecheck %s
 
 // A counter's next value is the counter at offset one, which is not the
 // counter: the hypothesis that the port holds the zero it was entered on is

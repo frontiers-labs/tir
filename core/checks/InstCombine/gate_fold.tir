@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // Both arms of the gate yield the same value, so its result (a gamma gate) folds to
 // that value regardless of the condition, and the gate carrying nothing is swept.

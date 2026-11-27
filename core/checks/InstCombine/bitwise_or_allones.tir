@@ -1,4 +1,4 @@
-// RUN: tir opt --pass eqsat --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat,dce --verify %s | filecheck %s
 
 // Freeze the discarded operand to state the defined-input contract.
 
