@@ -1,22 +1,20 @@
 //! Cost-guided `TreeExtractor` materialization and IR edit publishing for EqSat.
 
-use std::collections::{HashMap, HashSet};
-
 use tir_egglog::{
-    ArcSort, Color, Database, Enode, NativeIdentity, TableSchema, Value,
+    ArcSort, Color, Database, Enode, IndexId, NativeIdentity, SortKind, TableId, TableSchema,
+    Value,
     extract::{DagCostModel, MonoidCost, TreeCostModelFromDag, TreeExtractor},
     sort::BigInt,
 };
 
-use super::generated::Expr;
+use super::generated::{Expr, table_eq_sat_load_op, table_val_expr};
 use crate::passes::common::{
     Alias, CheckedEdit, Local, Replacement, UseSite, apply_uses, check_removals, check_uses,
-    erase_operations, literal, placed_op,
+    erase_operations, literal, placed_op, rule_error,
 };
 
 use crate::{
-    BlockId, Context, NewOp, OpHandle, OpId, Operation, OperationRef, PassError, RegionId,
-    Speculatable, ValueId,
+    Context, NewOp, OpHandle, OpId, Operation, OperationRef, PassError, Speculatable, ValueId,
     attributes::{AttributeValue, NamedAttribute},
     builtin::ops,
     schema::Argument,
@@ -99,7 +97,7 @@ impl DagCostModel<EqSatCost> for OpCostModel<'_> {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn publish(
     context: &Context,
-    db: &Database,
+    db: &mut Database,
     custom_defs: Vec<DefinitionRow>,
     edits: Vec<Alias>,
     local: Vec<Local>,
@@ -107,9 +105,8 @@ pub(super) fn publish(
     erase: &[OpId],
     pinned_vals: &[ValueId],
     pinned_ops: &[OpId],
-    live_ops: &[OpId],
+    live_ops: Vec<OpId>,
     lifted: &[ValueId],
-    load_ops: &HashMap<OpId, (ValueId, ValueId)>,
 ) -> Result<(), PassError> {
     let checked_edits = check_uses(context, edits, local, erase)?;
     let removals = check_removals(context, redirected, erase, &checked_edits)?;
@@ -132,7 +129,6 @@ pub(super) fn publish(
         pinned_ops,
         live_ops,
         lifted,
-        load_ops,
     )
 }
 
@@ -140,154 +136,214 @@ pub(super) fn publish(
 
 struct ExtractionState<'a> {
     context: &'a Context,
-    db: &'a Database,
     extractor: TreeExtractor<'a, EqSatCost>,
-    val_to_class: HashMap<ValueId, Value>,
-    block_pos: HashMap<OpId, (BlockId, usize)>,
-    graph_deps: HashSet<(RegionId, OpId, OpId)>,
-    existing: HashMap<Value, Vec<ValueId>>,
-    erased: HashSet<OpId>,
-    redirected: HashSet<ValueId>,
-    to_erase: Vec<OpHandle>,
+    rows: ExtractionRows<'a>,
+    decisions: PublicationDecisions<'a>,
 }
 
-fn load_val_expr_map(db: &Database) -> HashMap<ValueId, Value> {
-    let mut map = HashMap::new();
-    let Ok(table) = db.table("ValExpr") else {
-        return map;
-    };
-    for row in db.rows_in(Color::BASE, table) {
-        if row.is_subsumed() {
-            continue;
-        }
-        if let Ok(raw_v) = u32::try_from(db.base_value::<i64>(row[0])) {
-            map.insert(ValueId::from_number(raw_v), db.find_in(Color::BASE, row[1]));
-        }
-    }
-    map
+struct PublicationDecisions<'a> {
+    db: Database,
+    candidates: TableId,
+    by_class: IndexId,
+    pending_erasures: TableId,
+    new_redirects: TableId,
+    prior_erasures: &'a [OpId],
+    prior_redirects: &'a [ValueId],
 }
 
-fn load_graph_deps(db: &Database) -> HashSet<(RegionId, OpId, OpId)> {
-    let mut deps = HashSet::new();
-    let Ok(table) = db.table("DependsOn") else {
-        return deps;
-    };
-    for row in db.rows_in(Color::BASE, table) {
-        if let (Ok(r), Ok(a), Ok(b)) = (
-            u32::try_from(db.base_value::<i64>(row[0])),
-            u32::try_from(db.base_value::<i64>(row[1])),
-            u32::try_from(db.base_value::<i64>(row[2])),
-        ) {
-            deps.insert((
-                RegionId::from_number(r),
-                OpId::from_number(a),
-                OpId::from_number(b),
-            ));
+impl<'a> PublicationDecisions<'a> {
+    fn new(prior_erasures: &'a [OpId], prior_redirects: &'a [ValueId]) -> Self {
+        let mut db = Database::new();
+        let number = db.add_sort("u32", SortKind::base::<u32>());
+        let candidates = db.add_relation("Candidate", &[number, number]);
+        // The kept index uses row order to break ties within a class.
+        let by_class = db.add_kept_index(candidates, &[0], &[]);
+        let pending_erasures = db.add_relation("Erase", &[number]);
+        let new_redirects = db.add_relation("Redirect", &[number]);
+        Self {
+            db,
+            candidates,
+            by_class,
+            pending_erasures,
+            new_redirects,
+            prior_erasures,
+            prior_redirects,
         }
     }
-    deps
+
+    fn add_candidate(&mut self, class: Value, value: ValueId) -> Result<(), PassError> {
+        // Class IDs belong to the extraction snapshot. Only their numbers cross into this DB.
+        let row = [self.db.base(class.raw()), self.db.base(value.number())];
+        self.db.insert(self.candidates, &row).map_err(rule_error)
+    }
+
+    fn candidates(&self, class: Value) -> impl Iterator<Item = ValueId> + '_ {
+        self.db
+            .listed(self.by_class, &[self.db.base(class.raw())])
+            .map(|row| ValueId::from_number(self.db.base_value(row[1])))
+    }
+
+    fn erase(&mut self, op: OpId) -> Result<(), PassError> {
+        let key = [self.db.base(op.number())];
+        self.db
+            .insert(self.pending_erasures, &key)
+            .map_err(rule_error)
+    }
+
+    fn is_erased(&self, op: OpId) -> bool {
+        self.prior_erasures.binary_search(&op).is_ok()
+            || self
+                .db
+                .lookup(self.pending_erasures, &[self.db.base(op.number())])
+                .is_some()
+    }
+
+    fn erasures(&self) -> impl Iterator<Item = OpId> + '_ {
+        self.db
+            .rows(self.pending_erasures)
+            .map(|row| OpId::from_number(self.db.base_value(row[0])))
+    }
+
+    fn redirect(&mut self, value: ValueId) -> Result<(), PassError> {
+        let key = [self.db.base(value.number())];
+        self.db.insert(self.new_redirects, &key).map_err(rule_error)
+    }
+
+    fn is_redirected(&self, value: ValueId) -> bool {
+        self.prior_redirects.binary_search(&value).is_ok()
+            || self
+                .db
+                .lookup(self.new_redirects, &[self.db.base(value.number())])
+                .is_some()
+    }
 }
 
-fn collect_extraction_order(
-    context: &Context,
-    live_ops: &[OpId],
-) -> (Vec<OpId>, HashMap<OpId, (BlockId, usize)>) {
-    let mut block_pos: HashMap<OpId, (BlockId, usize)> = HashMap::new();
-    let mut ops_by_block: HashMap<BlockId, Vec<(usize, OpId)>> = HashMap::new();
-    let mut ops_by_graph: HashMap<RegionId, Vec<OpId>> = HashMap::new();
-    let mut seen_blocks: HashSet<BlockId> = HashSet::new();
+struct ExtractionRows<'a> {
+    db: &'a Database,
+    val_expr: TableId,
+    by_value: IndexId,
+    by_class: IndexId,
+    by_load: IndexId,
+}
 
-    for &id in live_ops {
-        if !context.has_operation(id) {
-            continue;
-        }
-        if let Some(block) = context.parent_block(id) {
-            if seen_blocks.insert(block) {
-                for (pos, bid) in context.get_block(block).op_ids().into_iter().enumerate() {
-                    block_pos.insert(bid, (block, pos));
-                }
-            }
-            if let Some(&(_, pos)) = block_pos.get(&id) {
-                ops_by_block.entry(block).or_default().push((pos, id));
-            }
-        } else if let Some(region) = context.parent_nodes_region(id) {
-            ops_by_graph.entry(region).or_default().push(id);
-        }
+impl<'a> ExtractionRows<'a> {
+    fn new(db: &'a mut Database) -> Result<Self, PassError> {
+        let val_expr = table_val_expr(db).map_err(rule_error)?;
+        let load_op = table_eq_sat_load_op(db).map_err(rule_error)?;
+        let by_value = db.add_kept_index(val_expr, &[0], &[]);
+        let by_class = db.add_kept_index(val_expr, &[1], &[]);
+        let by_load = db.add_kept_index(load_op, &[0], &[]);
+        Ok(Self {
+            db,
+            val_expr,
+            by_value,
+            by_class,
+            by_load,
+        })
     }
 
-    let mut ordered_ops = Vec::new();
-    let mut blocks: Vec<BlockId> = ops_by_block.keys().copied().collect();
-    blocks.sort_unstable();
-    for block in blocks {
-        let list = ops_by_block.get_mut(&block).unwrap();
-        list.sort_unstable();
-        ordered_ops.extend(list.iter().map(|&(_, id)| id));
+    fn class_of(&self, value: ValueId) -> Option<Value> {
+        let key = self.db.base(i64::from(value.number()));
+        let row = self
+            .db
+            .listed(self.by_value, &[key])
+            .find(|row| !row.is_subsumed())?;
+        Some(self.db.find_in(Color::BASE, row[1]))
     }
-    let mut regions: Vec<RegionId> = ops_by_graph.keys().copied().collect();
-    regions.sort_unstable();
-    for region in regions {
-        let list = ops_by_graph.get_mut(&region).unwrap();
-        list.sort_unstable();
-        ordered_ops.extend(list.iter().copied());
+
+    fn values(&self) -> impl Iterator<Item = (ValueId, Value)> + '_ {
+        self.db
+            .rows_in(Color::BASE, self.val_expr)
+            .filter(|row| !row.is_subsumed())
+            .filter_map(|row| {
+                let value = self.value_id(row[0]).ok()?;
+                Some((value, self.db.find_in(Color::BASE, row[1])))
+            })
     }
-    (ordered_ops, block_pos)
+
+    fn values_in_class(&self, class: Value) -> impl Iterator<Item = ValueId> + '_ {
+        self.db
+            .listed(self.by_class, &[class])
+            .filter(|row| !row.is_subsumed())
+            .filter_map(|row| self.value_id(row[0]).ok())
+    }
+
+    fn load_op(&self, op: OpId) -> Result<Option<(ValueId, ValueId)>, PassError> {
+        let key = self.db.base(i64::from(op.number()));
+        self.db
+            .listed(self.by_load, &[key])
+            .filter(|row| !row.is_subsumed())
+            .last()
+            .map(|row| {
+                let state = self.value_id(row[1]).map_err(rule_error)?;
+                let result = self.value_id(row[2]).map_err(rule_error)?;
+                Ok((state, result))
+            })
+            .transpose()
+    }
+
+    fn value_id(&self, value: Value) -> Result<ValueId, std::num::TryFromIntError> {
+        u32::try_from(self.db.base_value::<i64>(value)).map(ValueId::from_number)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn extract_and_apply(
     context: &Context,
-    db: &Database,
+    db: &mut Database,
     prior_edits: &[CheckedEdit],
     redirected: &[ValueId],
     erased: &[OpId],
     pinned_vals: &[ValueId],
     pinned_ops: &[OpId],
-    live_ops: &[OpId],
+    mut live_ops: Vec<OpId>,
     lifted: &[ValueId],
-    load_ops: &HashMap<OpId, (ValueId, ValueId)>,
 ) -> Result<(), PassError> {
-    let val_to_class = load_val_expr_map(db);
-    if val_to_class.is_empty() {
+    let rows = ExtractionRows::new(db)?;
+    let mut values = rows.values().peekable();
+    if values.peek().is_none() {
         return Ok(());
     }
 
     let extractor = TreeExtractor::with_cost_model_in(
-        db,
+        rows.db,
         Color::BASE,
         TreeCostModelFromDag(OpCostModel { context }),
     );
-    let (ordered_ops, block_pos) = collect_extraction_order(context, live_ops);
-    let mut existing: HashMap<Value, Vec<ValueId>> = HashMap::new();
-    for (&vid, &class) in &val_to_class {
+    live_ops.sort_by_cached_key(|&id| {
+        if let Some((block, position)) = context.block_placement(id) {
+            (0, block.number(), position, id)
+        } else if let Some(region) = context.parent_nodes_region(id) {
+            (1, region.number(), 0, id)
+        } else {
+            (2, 0, 0, id)
+        }
+    });
+    let mut decisions = PublicationDecisions::new(erased, redirected);
+    for (vid, class) in values {
         if context.has_value(vid)
             && context.get_value(vid).defining_op().is_none()
             && redirected.binary_search(&vid).is_err()
         {
-            existing.entry(class).or_default().push(vid);
+            decisions.add_candidate(class, vid)?;
         }
     }
 
     let mut state = ExtractionState {
         context,
-        db,
         extractor,
-        val_to_class,
-        block_pos,
-        graph_deps: load_graph_deps(db),
-        existing,
-        erased: erased.iter().copied().collect(),
-        redirected: redirected.iter().copied().collect(),
-        to_erase: Vec::new(),
+        rows,
+        decisions,
     };
 
-    for op_id in ordered_ops {
-        if state.erased.contains(&op_id)
+    for op_id in live_ops {
+        if state.decisions.is_erased(op_id)
             || pinned_ops.binary_search(&op_id).is_ok()
             || !context.has_operation(op_id)
         {
             continue;
         }
-        if let Some(&(state_in, val_res)) = load_ops.get(&op_id) {
+        if let Some((state_in, val_res)) = state.rows.load_op(op_id)? {
             extract_load_op(&mut state, op_id, state_in, val_res, pinned_vals)?;
             continue;
         }
@@ -300,7 +356,13 @@ fn extract_and_apply(
         extract_single_op(&mut state, op_id, prior_edits, pinned_vals, lifted)?;
     }
 
-    erase_operations(context, state.to_erase)
+    let removals = state
+        .decisions
+        .erasures()
+        .filter(|&id| context.has_operation(id))
+        .map(|id| context.get_op(id))
+        .collect();
+    erase_operations(context, removals)
 }
 
 fn extract_load_op(
@@ -314,23 +376,19 @@ fn extract_load_op(
     let Some(op) = placed_op(context, op_id) else {
         return Ok(());
     };
-    if pinned_vals.binary_search(&val_res).is_ok() || state.redirected.contains(&val_res) {
+    if pinned_vals.binary_search(&val_res).is_ok() || state.decisions.is_redirected(val_res) {
         return Ok(());
     }
-    let Some(&eclass) = state.val_to_class.get(&val_res) else {
+    let Some(eclass) = state.rows.class_of(val_res) else {
         return Ok(());
     };
     let vis = VisibilityCtx {
         context,
-        block_pos: &state.block_pos,
-        graph_deps: &state.graph_deps,
-        erased: &state.erased,
-        redirected: &state.redirected,
+        db: state.rows.db,
+        decisions: &state.decisions,
     };
     let expected_ty = context.get_value(val_res).ty();
-    let target = if let Some(prev) =
-        find_visible_existing(&state.existing, eclass, val_res, op_id, expected_ty, &vis)
-    {
+    let target = if let Some(prev) = vis.find_existing(eclass, val_res, op_id, expected_ty) {
         Some(Expression::Read(prev))
     } else if state
         .extractor
@@ -338,44 +396,32 @@ fn extract_load_op(
         .is_some_and(|c| c.compute < 100_000)
     {
         if let Some(existing_val) = state
-            .val_to_class
-            .iter()
-            .filter_map(|(&v, &c)| {
-                (c == eclass
-                    && v != val_res
+            .rows
+            .values_in_class(eclass)
+            .filter(|&v| {
+                v != val_res
                     && context.has_value(v)
                     && context.get_value(v).ty() == expected_ty
-                    && vis.visible(v, op_id))
-                .then_some(v)
+                    && vis.visible(v, op_id)
             })
             .min()
         {
             Some(Expression::Read(existing_val))
         } else {
-            decode_extracted(
-                context,
-                state.db,
-                &state.extractor,
-                eclass,
-                val_res,
-                op_id,
-                &state.existing,
-                &vis,
-                true,
-            )?
+            decode_extracted(&state.extractor, eclass, val_res, op_id, &vis, true)?
         }
     } else {
         None
     };
 
     let Some(expr) = target else {
-        state.existing.entry(eclass).or_default().push(val_res);
+        state.decisions.add_candidate(eclass, val_res)?;
         return Ok(());
     };
     let replacement = match expr {
         Expression::Read(v) if v != val_res => v,
         Expression::Read(_) => {
-            state.existing.entry(eclass).or_default().push(val_res);
+            state.decisions.add_candidate(eclass, val_res)?;
             return Ok(());
         }
         other => {
@@ -384,13 +430,12 @@ fn extract_load_op(
         }
     };
     replace_all_uses(context, val_res, replacement);
-    state.redirected.insert(val_res);
+    state.decisions.redirect(val_res)?;
     if let Some(&state_out) = op.results().get(1) {
         replace_all_uses(context, state_out, state_in);
-        state.redirected.insert(state_out);
+        state.decisions.redirect(state_out)?;
     }
-    state.erased.insert(op_id);
-    state.to_erase.push(op);
+    state.decisions.erase(op_id)?;
     Ok(())
 }
 
@@ -405,11 +450,11 @@ fn extract_region_op(
     for res in op.results() {
         if lifted.binary_search(&res).is_err()
             || pinned_vals.binary_search(&res).is_ok()
-            || state.redirected.contains(&res)
+            || state.decisions.is_redirected(res)
         {
             continue;
         }
-        let Some(&eclass) = state.val_to_class.get(&res) else {
+        let Some(eclass) = state.rows.class_of(res) else {
             continue;
         };
         let Some(&best_cost) = state.extractor.cost_of(eclass) else {
@@ -420,23 +465,10 @@ fn extract_region_op(
         }
         let vis = VisibilityCtx {
             context,
-            block_pos: &state.block_pos,
-            graph_deps: &state.graph_deps,
-            erased: &state.erased,
-            redirected: &state.redirected,
+            db: state.rows.db,
+            decisions: &state.decisions,
         };
-        let Some(expr) = decode_extracted(
-            context,
-            state.db,
-            &state.extractor,
-            eclass,
-            res,
-            op_id,
-            &state.existing,
-            &vis,
-            true,
-        )?
-        else {
+        let Some(expr) = decode_extracted(&state.extractor, eclass, res, op_id, &vis, true)? else {
             continue;
         };
         let replacement = match expr {
@@ -455,7 +487,7 @@ fn extract_region_op(
             _ => continue,
         };
         replace_all_uses(context, res, replacement);
-        state.redirected.insert(res);
+        state.decisions.redirect(res)?;
     }
     Ok(())
 }
@@ -468,7 +500,7 @@ fn extract_single_op(
     lifted: &[ValueId],
 ) -> Result<(), PassError> {
     let context = state.context;
-    let db = state.db;
+    let db = state.rows.db;
     let Some(op) = placed_op(context, op_id) else {
         return Ok(());
     };
@@ -477,10 +509,10 @@ fn extract_single_op(
         return Ok(());
     }
     let res = results[0];
-    if pinned_vals.binary_search(&res).is_ok() || state.redirected.contains(&res) {
+    if pinned_vals.binary_search(&res).is_ok() || state.decisions.is_redirected(res) {
         return Ok(());
     }
-    let Some(&eclass) = state.val_to_class.get(&res) else {
+    let Some(eclass) = state.rows.class_of(res) else {
         return Ok(());
     };
     let Some(kind) = context.operation_kind(op_id) else {
@@ -505,20 +537,11 @@ fn extract_single_op(
         .any(|edit| matches!(edit.1, Replacement::Integer(..)));
 
     let is_lifted = lifted.binary_search(&res).is_ok();
-    let own_cost = compute_own_cost(
-        context,
-        &op,
-        kind,
-        is_lifted,
-        &state.val_to_class,
-        &state.extractor,
-    );
+    let own_cost = compute_own_cost(context, &op, kind, is_lifted, &state.rows, &state.extractor);
     let vis = VisibilityCtx {
         context,
-        block_pos: &state.block_pos,
-        graph_deps: &state.graph_deps,
-        erased: &state.erased,
-        redirected: &state.redirected,
+        db: state.rows.db,
+        decisions: &state.decisions,
     };
 
     // Case 1: Extracted root is an existing opaque `Expr::Var(v)` — direct identity!
@@ -532,10 +555,9 @@ fn extract_single_op(
             && vis.visible(target, op_id)
         {
             replace_all_uses(context, res, target);
-            state.redirected.insert(res);
+            state.decisions.redirect(res)?;
             if is_lifted {
-                state.erased.insert(op_id);
-                state.to_erase.push(op);
+                state.decisions.erase(op_id)?;
             }
             return Ok(());
         }
@@ -545,20 +567,12 @@ fn extract_single_op(
     if !has_scoped_operand
         && best_cost <= own_cost
         && (is_lifted || best_cost < own_cost)
-        && let Some(prev) = find_visible_existing(
-            &state.existing,
-            eclass,
-            res,
-            op_id,
-            context.get_value(res).ty(),
-            &vis,
-        )
+        && let Some(prev) = vis.find_existing(eclass, res, op_id, context.get_value(res).ty())
     {
         replace_all_uses(context, res, prev);
-        state.redirected.insert(res);
+        state.decisions.redirect(res)?;
         if is_lifted {
-            state.erased.insert(op_id);
-            state.to_erase.push(op);
+            state.decisions.erase(op_id)?;
         }
         return Ok(());
     }
@@ -567,47 +581,30 @@ fn extract_single_op(
     let best_name = db.schema().table(best_table).name();
     if best_cost < own_cost
         && !(has_scoped_operand && matches!(best_name, "Expr::Unary" | "Expr::Bin"))
-        && let Some(expr) = decode_extracted(
-            context,
-            db,
-            &state.extractor,
-            eclass,
-            res,
-            op_id,
-            &state.existing,
-            &vis,
-            true,
-        )?
+        && let Some(expr) = decode_extracted(&state.extractor, eclass, res, op_id, &vis, true)?
     {
         match expr {
             Expression::Read(target) if target != res => {
                 replace_all_uses(context, res, target);
-                state.redirected.insert(res);
+                state.decisions.redirect(res)?;
                 if is_lifted {
-                    state.erased.insert(op_id);
-                    state.to_erase.push(op);
+                    state.decisions.erase(op_id)?;
                 }
             }
             Expression::Read(_) => {
-                state.existing.entry(eclass).or_default().push(res);
+                state.decisions.add_candidate(eclass, res)?;
             }
             other => {
-                let old_pos = state.block_pos.get(&op_id).copied();
                 let old = OperationRef::new(op);
-                let new_op = materialize(context, &old, res, other, Some(res))?;
-                if let (Some(pos), Some(def_op)) =
-                    (old_pos, context.get_value(new_op).defining_op())
-                {
-                    state.block_pos.insert(def_op, pos);
-                }
-                state.existing.entry(eclass).or_default().push(res);
+                materialize(context, &old, res, other, Some(res))?;
+                state.decisions.add_candidate(eclass, res)?;
             }
         }
         return Ok(());
     }
 
     // Case 4: `op` is already optimal — record for downstream CSE.
-    state.existing.entry(eclass).or_default().push(res);
+    state.decisions.add_candidate(eclass, res)?;
     Ok(())
 }
 
@@ -616,7 +613,7 @@ fn compute_own_cost(
     op: &OpHandle,
     kind: NativeIdentity,
     is_lifted: bool,
-    val_to_class: &HashMap<ValueId, Value>,
+    rows: &ExtractionRows<'_>,
     extractor: &TreeExtractor<'_, EqSatCost>,
 ) -> EqSatCost {
     if !is_lifted {
@@ -630,7 +627,7 @@ fn compute_own_cost(
         ops: 1,
     };
     for operand in op.operands() {
-        let Some(&oc) = val_to_class.get(&operand) else {
+        let Some(oc) = rows.class_of(operand) else {
             return EqSatCost {
                 compute: u32::MAX,
                 ops: u16::MAX,
@@ -649,37 +646,31 @@ fn compute_own_cost(
 
 struct VisibilityCtx<'a> {
     context: &'a Context,
-    block_pos: &'a HashMap<OpId, (BlockId, usize)>,
-    graph_deps: &'a HashSet<(RegionId, OpId, OpId)>,
-    erased: &'a HashSet<OpId>,
-    redirected: &'a HashSet<ValueId>,
+    db: &'a Database,
+    decisions: &'a PublicationDecisions<'a>,
 }
 
 impl VisibilityCtx<'_> {
     fn visible(&self, value: ValueId, anchor: OpId) -> bool {
-        if !self.context.has_value(value) || self.redirected.contains(&value) {
+        if !self.context.has_value(value) || self.decisions.is_redirected(value) {
             return false;
         }
         let Some(anchor_region) = self.context.region_of_op(anchor) else {
             return false;
         };
-        let anchor_block = self.context.parent_block(anchor);
+        let anchor_block = self.context.block_placement(anchor);
         if let Some(def_op) = self.context.get_value(value).defining_op() {
             if def_op == anchor
-                || self.erased.contains(&def_op)
+                || self.decisions.is_erased(def_op)
                 || !self.context.has_operation(def_op)
             {
                 return false;
             }
-            if let Some(def_block) = self.context.parent_block(def_op) {
-                if anchor_block == Some(def_block) {
-                    let Some(&(_, def_p)) = self.block_pos.get(&def_op) else {
-                        return false;
-                    };
-                    let Some(&(_, anc_p)) = self.block_pos.get(&anchor) else {
-                        return false;
-                    };
-                    return def_p < anc_p;
+            if let Some((def_block, def_position)) = self.context.block_placement(def_op) {
+                if let Some((block, anchor_position)) = anchor_block
+                    && block == def_block
+                {
+                    return def_position < anchor_position;
                 }
                 let Some(def_region) = self.context.parent_region(def_block) else {
                     return false;
@@ -689,7 +680,15 @@ impl VisibilityCtx<'_> {
             }
             if let Some(def_region) = self.context.parent_nodes_region(def_op) {
                 if self.context.parent_nodes_region(anchor) == Some(def_region) {
-                    return !self.graph_deps.contains(&(def_region, def_op, anchor));
+                    let Ok(table) = self.db.table("DependsOn") else {
+                        return true;
+                    };
+                    let key = [
+                        self.db.base(i64::from(def_region.number())),
+                        self.db.base(i64::from(def_op.number())),
+                        self.db.base(i64::from(anchor.number())),
+                    ];
+                    return self.db.lookup(table, &key).is_none();
                 }
                 return self.context.region_under(anchor_region, def_region);
             }
@@ -700,7 +699,7 @@ impl VisibilityCtx<'_> {
             return self.context.region_under(anchor_region, def_region);
         }
         if let Some(def_block) = self.context.block_of_argument(value) {
-            if anchor_block == Some(def_block) {
+            if anchor_block.is_some_and(|(block, _)| block == def_block) {
                 return true;
             }
             let Some(def_region) = self.context.parent_region(def_block) else {
@@ -711,37 +710,33 @@ impl VisibilityCtx<'_> {
         }
         false
     }
+
+    fn find_existing(
+        &self,
+        eclass: Value,
+        exclude: ValueId,
+        anchor: OpId,
+        expected_ty: crate::TypeId,
+    ) -> Option<ValueId> {
+        self.decisions.candidates(eclass).find(|&value| {
+            value != exclude
+                && self.context.has_value(value)
+                && self.context.get_value(value).ty() == expected_ty
+                && self.visible(value, anchor)
+        })
+    }
 }
 
-fn find_visible_existing(
-    existing: &HashMap<Value, Vec<ValueId>>,
-    eclass: Value,
-    exclude: ValueId,
-    anchor: OpId,
-    expected_ty: crate::TypeId,
-    vis: &VisibilityCtx<'_>,
-) -> Option<ValueId> {
-    let list = existing.get(&eclass)?;
-    list.iter().copied().find(|&v| {
-        v != exclude
-            && vis.context.has_value(v)
-            && vis.context.get_value(v).ty() == expected_ty
-            && vis.visible(v, anchor)
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
 fn decode_extracted(
-    context: &Context,
-    db: &Database,
     extractor: &TreeExtractor<'_, EqSatCost>,
     eclass: Value,
     expected: ValueId,
     anchor: OpId,
-    existing: &HashMap<Value, Vec<ValueId>>,
     vis: &VisibilityCtx<'_>,
     is_root: bool,
 ) -> Result<Option<Expression>, PassError> {
+    let context = vis.context;
+    let db = vis.db;
     let class = db.find_in(Color::BASE, eclass);
     let expected_ty = context.get_value(expected).ty();
     let Some((table, row)) = extractor.best_row(class) else {
@@ -754,16 +749,13 @@ fn decode_extracted(
     if !is_root
         && name != "Expr::Const"
         && name != "Expr::CustomConst"
-        && let Some(prev) =
-            find_visible_existing(existing, class, expected, anchor, expected_ty, vis)
+        && let Some(prev) = vis.find_existing(class, expected, anchor, expected_ty)
     {
         return Ok(Some(Expression::Read(prev)));
     }
 
     match name {
-        "Expr::Pi" => decode_extracted(
-            context, db, extractor, row[1], expected, anchor, existing, vis, is_root,
-        ),
+        "Expr::Pi" => decode_extracted(extractor, row[1], expected, anchor, vis, is_root),
         "Expr::Var" => {
             let Ok(raw_v) = u32::try_from(db.base_value::<i64>(row[0])) else {
                 return Ok(None);
@@ -795,9 +787,7 @@ fn decode_extracted(
             let Some(schema) = context.schema_for_kind(kind) else {
                 return Ok(None);
             };
-            let Some(child) = decode_extracted(
-                context, db, extractor, row[2], expected, anchor, existing, vis, false,
-            )?
+            let Some(child) = decode_extracted(extractor, row[2], expected, anchor, vis, false)?
             else {
                 return Ok(None);
             };
@@ -811,15 +801,11 @@ fn decode_extracted(
             let Some(schema) = context.schema_for_kind(kind) else {
                 return Ok(None);
             };
-            let Some(left) = decode_extracted(
-                context, db, extractor, row[2], expected, anchor, existing, vis, false,
-            )?
+            let Some(left) = decode_extracted(extractor, row[2], expected, anchor, vis, false)?
             else {
                 return Ok(None);
             };
-            let Some(right) = decode_extracted(
-                context, db, extractor, row[3], expected, anchor, existing, vis, false,
-            )?
+            let Some(right) = decode_extracted(extractor, row[3], expected, anchor, vis, false)?
             else {
                 return Ok(None);
             };
