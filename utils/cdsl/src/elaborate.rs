@@ -1087,6 +1087,7 @@ fn elab_type<'src>(
                 Ok(Term::Ind(q, args))
             }
         }
+        SExpr::App { .. } | SExpr::Lam { .. } => elab_expr(ctx, sc, ast, id),
         _ => Err(Error("invalid type expression".into())),
     }
 }
