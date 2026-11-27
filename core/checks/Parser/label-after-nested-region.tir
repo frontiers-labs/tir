@@ -6,9 +6,9 @@
 module {
   %fn_f = func.func @f(%1: !i32) -> !i32 {
   ^start:
-    %lb = constant {value = 0} : !index
-    %ub = constant {value = 4} : !index
-    %st = constant {value = 1} : !index
+    %lb = constant {value = 0} : !i32
+    %ub = constant {value = 4} : !i32
+    %st = constant {value = 1} : !i32
     %c, %2 = scf.ordered_for %i = %lb to %ub step %st (%a = %1) {
       scf.yield %a
     }
