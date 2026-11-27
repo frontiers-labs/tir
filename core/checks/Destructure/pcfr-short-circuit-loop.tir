@@ -1,4 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
+// Structured recovery retains the materialized loop selector.
 // XFAIL: *
 // RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=CFG %s
 
@@ -35,6 +35,7 @@ module {
 
 // CFG-NOT: scf.loop
 // CFG-NOT: scf.switch
+// CFG-NOT: constant {value = 0} : !i1
 // CFG: cfg.cond_br
 // CFG-NOT: constant {value = 0} : !i1
 // CFG: func.return

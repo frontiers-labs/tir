@@ -1,0 +1,346 @@
+// Demand and dependency order for the graph regions recovered inside a function.
+
+use std::core::*;
+use std::ir::{OperationId, ValueId};
+
+pub let RecoveryRegion: Relation<Int>;
+pub let GraphPathLength: Relation<(Int, OperationId, Int)>;
+pub let GraphDepth: Table<(Int, OperationId), Int, Merge::Max>;
+pub let GraphNeededValue: Relation<ValueId>;
+pub let GraphControlOp: Relation<OperationId>;
+pub let GraphNeededPort: Relation<(Int, Int)>;
+pub let GraphStrictInput: Relation<(OperationId, Int)>;
+pub let GraphNeededResult: Relation<(OperationId, Int)>;
+pub let GraphActiveControl: Relation<OperationId>;
+pub let GraphLiveYield: Relation<(Int, Int, String)>;
+pub let GraphDemand: Relation<(Int, OperationId, String)>;
+pub let GraphExecution: Relation<(Int, String, Int, OperationId)>;
+pub let GraphLocalState: Relation<(Int, String, ValueId)>;
+pub let GraphLiveInState: Relation<(Int, String, ValueId)>;
+pub let GraphReplayOp: Relation<(Int, OperationId)>;
+pub let DeferredGraphOp: Relation<(Int, OperationId)>;
+pub let DeferredRead: Relation<(Int, OperationId, Int, String)>;
+pub let ThetaGraph: Relation<(Int, Int, OperationId)>;
+pub let ThetaBody: Relation<Int>;
+pub let CapturedGraphOp: Relation<(Int, OperationId)>;
+pub let DeferredArmInput: Relation<(Int, OperationId)>;
+pub let EagerGraphRead: Relation<(Int, OperationId)>;
+pub let FeedbackCapture: Relation<(Int, OperationId)>;
+pub let FeedbackOwner: Table<(Int, OperationId), Int, Merge::Min>;
+pub let UnsupportedGraphCapture: Relation<OperationId>;
+pub let GraphFeedbackCapture: Relation<(OperationId, Int, OperationId, Bool)>;
+pub let UndemandedGraphEffect: Relation<OperationId>;
+pub let DelayedGraphOp: Relation<OperationId>;
+
+pub let recovery_scope: List<Rule> = {
+    let function_body<r, mode, entry>: Rule((Region(r, mode, arg(0), 0, entry)) -> RecoveryRegion(r));
+    let nested<r, node, gamma, sel, theta, body, pred, polarity, child, mode, slot, entry>: Rule((
+            RecoveryRegion(r), ReaderAt(node, r, node),
+            Control(node, gamma, sel, theta, body, pred, polarity),
+            Region(child, mode, node, slot, entry)
+        ) -> RecoveryRegion(child));
+    let control<r, node, gamma, sel, theta, body, pred, polarity>: Rule((RecoveryRegion(r), ReaderAt(node, r, node), Control(node, gamma, sel, theta, body, pred, polarity)) -> GraphControlOp(node));
+    List(function_body, nested, control)
+};
+
+pub let dependency_paths: List<Rule> = {
+    let member<r, node, kind, pos, display, loc>: Rule((
+            RecoveryRegion(r),
+            Operation(node, kind, "graph", r, pos, display, loc)
+        ) -> GraphPathLength(r, node, 0));
+    let dependency<r, consumer, producer, d>: Rule((DependsOn(r, consumer, producer), GraphPathLength(r, producer, d), !CyclePath(r, consumer, consumer)) -> GraphPathLength(r, consumer, (d + 1)));
+    List(member, dependency)
+};
+
+pub let dependency_depth: List<Rule> = {
+    let longest<r, node, d>: Rule(GraphPathLength(r, node, d) -> GraphDepth(r, node, d));
+    List(longest)
+};
+
+pub let live_result_bindings: List<Rule> = {
+    let function_yield<r, mode, entry, slot, val>: Rule((
+            Region(r, mode, arg(0), 0, entry),
+            Yield(r, slot, val)
+        ) -> GraphLiveYield(r, slot, "yield"));
+    let cfg_read<r, block, layout, reader, kind, pos, display, loc, slot, val>: Rule((
+            RecoveryRegion(r), Block(block, r, layout),
+            Operation(reader, kind, "block", block, pos, display, loc),
+            Operand(reader, slot, val), !GraphControlOp(reader)
+        ) -> GraphStrictInput(reader, slot));
+    let cfg_control<r, block, layout, node, kind, pos, display, loc, gamma, sel, theta, body, pred, polarity>: Rule((
+            RecoveryRegion(r), Block(block, r, layout),
+            Operation(node, kind, "block", block, pos, display, loc),
+            Control(node, gamma, sel, theta, body, pred, polarity)
+        ) -> GraphActiveControl(node));
+    let result<node, val, ty, slot, declared>: Rule((GraphNeededValue(val), Value(val, ty, "result", node, slot, declared)) -> GraphNeededResult(node, slot));
+    let operands<r, node, d, result, operand, val>: Rule((GraphDepth(r, node, d), GraphNeededResult(node, result), Operand(node, operand, val), !GraphControlOp(node)) -> GraphStrictInput(node, operand));
+    let graph_control<r, node, d, slot, gamma, sel, theta, body, pred, polarity>: Rule((GraphDepth(r, node, d), GraphNeededResult(node, slot), Control(node, gamma, sel, theta, body, pred, polarity)) -> GraphActiveControl(node));
+    let selector<node, sel, theta, body, pred, polarity>: Rule((GraphActiveControl(node), Control(node, true, sel, theta, body, pred, polarity)) -> GraphStrictInput(node, sel));
+    let port<r, port, val, ty, declared>: Rule((RecoveryRegion(r), GraphNeededValue(val), Value(val, ty, "region", r, port, declared)) -> GraphNeededPort(r, port));
+    let theta_init<node, gamma, sel, body, pred, polarity, port, slot>: Rule((
+            GraphActiveControl(node), Control(node, gamma, sel, true, body, pred, polarity),
+            GraphNeededPort(body, port), Binding(body, "entry", port, slot)
+        ) -> GraphStrictInput(node, slot));
+    let strict_operand<node, slot, val>: Rule((GraphStrictInput(node, slot), Operand(node, slot, val)) -> GraphNeededValue(val));
+    let gamma_init<node, default, key, arm, port, slot, val>: Rule((
+            GraphActiveControl(node), Arm(node, default, key, arm),
+            GraphNeededPort(arm, port), Binding(arm, "entry", port, slot), Operand(node, slot, val)
+        ) -> GraphNeededValue(val));
+    let arm<node, slot, body, default, key, index>: Rule((
+            GraphActiveControl(node), GraphNeededResult(node, slot),
+            Arm(node, default, key, body), Binding(body, "exit", slot, index)
+        ) -> GraphLiveYield(body, index, "yield"));
+    let predicate<node, gamma, sel, body, pred, polarity>: Rule((GraphActiveControl(node), Control(node, gamma, sel, true, body, pred, polarity)) -> GraphLiveYield(body, pred, "head"));
+    let feedback<node, gamma, sel, body, pred, polarity, port, index>: Rule((
+            GraphActiveControl(node), Control(node, gamma, sel, true, body, pred, polarity),
+            GraphNeededPort(body, port), Binding(body, "feedback", port, index)
+        ) -> GraphLiveYield(body, index, "feedback"));
+    let exit<node, slot, gamma, sel, body, pred, polarity, index>: Rule((
+            GraphActiveControl(node), GraphNeededResult(node, slot), Control(node, gamma, sel, true, body, pred, polarity),
+            Binding(body, "exit", slot, index)
+        ) -> GraphLiveYield(body, index, "exit"));
+    let yield_value<r, slot, part, val>: Rule((GraphLiveYield(r, slot, part), Yield(r, slot, val)) -> GraphNeededValue(val));
+    List(function_yield, cfg_read, cfg_control, result, operands, graph_control, selector, port, theta_init, strict_operand, gamma_init, arm, predicate, feedback, exit, yield_value)
+};
+
+pub let graph_demand_producer: List<Rule> = {
+    let yielded<r, slot, part, val, ty, producer, output, declared, d>: Rule((
+            GraphLiveYield(r, slot, part), Yield(r, slot, val),
+            Value(val, ty, "result", producer, output, declared), GraphDepth(r, producer, d)
+        ) -> (GraphDemand(r, producer, part), GraphDemand(r, producer, "yield")));
+    let operand<r, member, part, reader, operand, val, ty, producer, slot, declared, d>: Rule((
+            GraphDemand(r, member, part), ReaderAt(reader, r, member),
+            GraphStrictInput(reader, operand), Operand(reader, operand, val),
+            Value(val, ty, "result", producer, slot, declared), GraphDepth(r, producer, d)
+        ) -> GraphDemand(r, producer, part));
+    let forwarded<r, member, part, reader, arm, default, key, port, operand, val, ty, producer, slot, declared, d>: Rule((
+            GraphDemand(r, member, part), ReaderAt(reader, r, member),
+            Arm(reader, default, key, arm), GraphNeededPort(arm, port),
+            Binding(arm, "entry", port, operand), Operand(reader, operand, val),
+            Value(val, ty, "result", producer, slot, declared), GraphDepth(r, producer, d)
+        ) -> GraphDemand(r, producer, part));
+    let nested_yield<r, member, part, reader, child, mode, regslot, entry, index, yield_part, val, ty, producer, slot, declared, d>: Rule((
+            GraphDemand(r, member, part), ReaderAt(reader, r, member),
+            Region(child, mode, reader, regslot, entry), GraphLiveYield(child, index, yield_part),
+            Yield(child, index, val), Value(val, ty, "result", producer, slot, declared),
+            GraphDepth(r, producer, d)
+        ) -> GraphDemand(r, producer, part));
+    List(yielded, operand, forwarded, nested_yield)
+};
+
+pub let deferred_ops: List<Rule> = {
+    let read<r, node, d, pos, display, loc>: Rule((
+            GraphDepth(r, node, d),
+            Operation(node, dialects::ptr::load.kind, "graph", r, pos, display, loc)
+        ) -> DeferredGraphOp(r, node));
+    let call<r, node, d, pos, display, loc>: Rule((
+            GraphDepth(r, node, d),
+            Operation(node, dialects::func::call.kind, "graph", r, pos, display, loc)
+        ) -> DeferredGraphOp(r, node));
+    let loop_node<r, node, d, flag, sel, body, pred, polarity>: Rule((GraphDepth(r, node, d), Control(node, flag, sel, true, body, pred, polarity)) -> (DeferredGraphOp(r, node), ThetaGraph(r, body, node)));
+    let gamma_yield<r, node, d, default, key, arm, slot, val, ty, home, producer, output, declared>: Rule((
+            GraphDepth(r, node, d), Arm(node, default, key, arm),
+            GraphLiveYield(arm, slot, "yield"), Yield(arm, slot, val),
+            Value(val, ty, "result", producer, output, declared), DeferredGraphOp(home, producer)
+        ) -> (DeferredGraphOp(r, node), GraphReplayOp(r, node)));
+    let gamma_selector<r, node, d, sel, theta, body, pred, polarity, val, ty, home, producer, output, declared>: Rule((
+            GraphDepth(r, node, d), Control(node, true, sel, theta, body, pred, polarity),
+            Operand(node, sel, val), Value(val, ty, "result", producer, output, declared),
+            DeferredGraphOp(home, producer)
+        ) -> (DeferredGraphOp(r, node), GraphReplayOp(r, node)));
+    let dependent<r, node, d, operand, value, ty, home, producer, slot, declared>: Rule((
+            GraphDepth(r, node, d), GraphStrictInput(node, operand), Operand(node, operand, value),
+            Value(value, ty, "result", producer, slot, declared), DeferredGraphOp(home, producer)
+        ) -> DeferredGraphOp(r, node));
+    List(read, call, loop_node, gamma_yield, gamma_selector, dependent)
+};
+
+pub let theta_bodies: List<Rule> = {
+    let body<node, flag, sel, body, pred, polarity>: Rule(Control(node, flag, sel, true, body, pred, polarity) -> ThetaBody(body));
+    List(body)
+};
+
+pub let deferred_reads: List<Rule> = {
+    let read<home, producer, site, reader, operand, value, ty, slot, declared, part>: Rule((
+            GraphDemand(site, reader, part), part != "yield",
+            GraphStrictInput(reader, operand), Operand(reader, operand, value),
+            Value(value, ty, "result", producer, slot, declared),
+            DeferredGraphOp(home, producer), !DeferredGraphOp(site, reader)
+        ) -> DeferredRead(home, producer, site, part));
+    let region_read<home, producer, site, reader, operand, value, ty, slot, declared>: Rule((
+            GraphDemand(site, reader, "yield"), !ThetaBody(site),
+            GraphStrictInput(reader, operand), Operand(reader, operand, value),
+            Value(value, ty, "result", producer, slot, declared),
+            DeferredGraphOp(home, producer), !DeferredGraphOp(site, reader)
+        ) -> DeferredRead(home, producer, site, "yield"));
+    let yielded<home, producer, site, index, part, value, ty, slot, declared>: Rule((
+            GraphLiveYield(site, index, part), Yield(site, index, value),
+            Value(value, ty, "result", producer, slot, declared), DeferredGraphOp(home, producer)
+        ) -> DeferredRead(home, producer, site, part));
+    let dependent<home, reader_home, producer, site, reader, operand, value, ty, slot, declared, part>: Rule((
+            DeferredRead(reader_home, reader, site, part), GraphStrictInput(reader, operand),
+            Operand(reader, operand, value),
+            Value(value, ty, "result", producer, slot, declared), DeferredGraphOp(home, producer)
+        ) -> DeferredRead(home, producer, site, part));
+    List(read, region_read, yielded, dependent)
+};
+
+pub let capture_sites: List<Rule> = {
+    let captured<home, node, site, part>: Rule((DeferredRead(home, node, site, part), home != site) -> CapturedGraphOp(home, node));
+    let feedback<home, node, site, loop>: Rule((DeferredRead(home, node, site, "feedback"), ThetaGraph(home, site, loop)) -> (FeedbackOwner(home, node, site), FeedbackCapture(home, node)));
+    let local_yield<home, node>: Rule(DeferredRead(home, node, home, "yield") -> EagerGraphRead(home, node));
+    let local_header<home, node>: Rule(DeferredRead(home, node, home, "head") -> EagerGraphRead(home, node));
+    let arm_input<home, node, gamma, default, key, arm, port, slot, val, ty, result, declared>: Rule((
+            GraphActiveControl(gamma), Arm(gamma, default, key, arm),
+            GraphNeededPort(arm, port), Binding(arm, "entry", port, slot), Operand(gamma, slot, val),
+            Value(val, ty, "result", node, result, declared), DeferredGraphOp(home, node)
+        ) -> DeferredArmInput(home, node));
+    List(captured, feedback, local_yield, local_header, arm_input)
+};
+
+pub let capture_legality: List<Rule> = {
+    let no_cut<home, node>: Rule((CapturedGraphOp(home, node), !EagerGraphRead(home, node), !FeedbackCapture(home, node)) -> UnsupportedGraphCapture(node));
+    let other_phase<home, node, site, other, part>: Rule((FeedbackOwner(home, node, site), DeferredRead(home, node, other, part), part != "feedback") -> UnsupportedGraphCapture(node));
+    let different<home, node, site, other>: Rule((FeedbackOwner(home, node, site), DeferredRead(home, node, other, "feedback"), site != other) -> UnsupportedGraphCapture(node));
+    let value_type<home, node, site, value, ty, slot, declared, ctor, args, dialect, name, decl, default>: Rule((
+            FeedbackOwner(home, node, site), GraphNeededResult(node, slot), Value(value, ty, "result", node, slot, declared),
+            TypeTerm(ty, ctor, args), TypeCtor(ctor, dialect, name, decl, default),
+            !TypeCtor(ctor, "builtin", "i", decl, default)
+        ) -> UnsupportedGraphCapture(node));
+    let conditional_input<home, node>: Rule((DeferredArmInput(home, node), !EagerGraphRead(home, node)) -> UnsupportedGraphCapture(node));
+    let replay_input<home, node, site, replay>: Rule((
+            FeedbackOwner(home, node, site), FeedbackOwner(home, replay, site),
+            DependsOn(home, node, replay), GraphReplayOp(home, replay), !GraphReplayOp(home, node)
+        ) -> UnsupportedGraphCapture(node));
+    let state_input<home, node, site, reader, slot, value, ty, def, owner, vslot, declared>: Rule((
+            FeedbackOwner(home, node, site), ReaderAt(reader, home, node),
+            Operand(reader, slot, value), Value(value, ty, def, owner, vslot, declared),
+            StateTypeId(ty)
+        ) -> UnsupportedGraphCapture(node));
+    List(no_cut, other_phase, different, value_type, conditional_input, replay_input, state_input)
+};
+
+pub let feedback_captures: List<Rule> = {
+    let delay<home, node, site, loop, rank>: Rule((
+            FeedbackOwner(home, node, site), ThetaGraph(home, site, loop),
+            GraphDepth(home, node, rank), !UnsupportedGraphCapture(node), !GraphReplayOp(home, node)
+        ) -> GraphFeedbackCapture(loop, rank, node, false));
+    let replay<home, node, site, loop, rank>: Rule((
+            FeedbackOwner(home, node, site), ThetaGraph(home, site, loop),
+            GraphDepth(home, node, rank), !UnsupportedGraphCapture(node), GraphReplayOp(home, node)
+        ) -> GraphFeedbackCapture(loop, rank, node, true));
+    List(delay, replay)
+};
+
+pub let delayed_ops: List<Rule> = {
+    let delayed<loop, rank, node, replay>: Rule(GraphFeedbackCapture(loop, rank, node, replay) -> DelayedGraphOp(node));
+    List(delayed)
+};
+
+pub let execution_parts: List<Rule> = {
+    let yielded<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "yield"), !DelayedGraphOp(node)) -> GraphExecution(r, "yield", d, node));
+    let header<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "head"), !DelayedGraphOp(node)) -> GraphExecution(r, "head", d, node));
+    let shared<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "feedback"), GraphDemand(r, node, "exit"), !DelayedGraphOp(node)) -> GraphExecution(r, "head", d, node));
+    let feedback<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "feedback"), !GraphDemand(r, node, "head"), !GraphDemand(r, node, "exit"), !DelayedGraphOp(node)) -> GraphExecution(r, "feedback", d, node));
+    let exit<r, node, d>: Rule((GraphDepth(r, node, d), GraphDemand(r, node, "exit"), !GraphDemand(r, node, "head"), !GraphDemand(r, node, "feedback"), !DelayedGraphOp(node)) -> GraphExecution(r, "exit", d, node));
+    let undemanded<r, node, d, v, ty, slot, declared>: Rule((
+            GraphDepth(r, node, d), !GraphDemand(r, node, "yield"),
+            Value(v, ty, "result", node, slot, declared), StateTypeId(ty)
+        ) -> UndemandedGraphEffect(node));
+    List(yielded, header, shared, feedback, exit, undemanded)
+};
+
+pub let local_state: List<Rule> = {
+    let result<r, part, d, member, node, v, ty, slot, declared>: Rule((
+            GraphExecution(r, part, d, member), ReaderAt(node, r, member),
+            Value(v, ty, "result", node, slot, declared), StateTypeId(ty)
+        ) -> GraphLocalState(r, part, v));
+    let nested_port<r, part, d, member, owner, body, mode, regslot, entry, v, ty, slot, declared>: Rule((
+            GraphExecution(r, part, d, member), ReaderAt(owner, r, member),
+            Region(body, mode, owner, regslot, entry),
+            Value(v, ty, "region", body, slot, declared), StateTypeId(ty)
+        ) -> GraphLocalState(r, part, v));
+    let nested_block_arg<r, part, d, member, owner, body, mode, regslot, entry, block, layout, v, ty, slot, declared>: Rule((
+            GraphExecution(r, part, d, member), ReaderAt(owner, r, member),
+            Region(body, mode, owner, regslot, entry), Block(block, body, layout),
+            Value(v, ty, "block", block, slot, declared), StateTypeId(ty)
+        ) -> GraphLocalState(r, part, v));
+    List(result, nested_port, nested_block_arg)
+};
+
+pub let live_in_state: List<Rule> = {
+    let read<r, part, d, member, reader, slot, v, ty, definition, owner, port, declared>: Rule((
+            GraphExecution(r, part, d, member), part != "head", part != "yield",
+            ReaderAt(reader, r, member), GraphStrictInput(reader, slot), Operand(reader, slot, v),
+            Value(v, ty, definition, owner, port, declared), StateTypeId(ty),
+            !GraphLocalState(r, part, v)
+        ) -> GraphLiveInState(r, part, v));
+    let forwarded<r, part, d, member, reader, arm, default, key, port, slot, v, ty, definition, owner, value_slot, declared>: Rule((
+            GraphExecution(r, part, d, member), part != "head", part != "yield",
+            ReaderAt(reader, r, member), Arm(reader, default, key, arm),
+            GraphNeededPort(arm, port), Binding(arm, "entry", port, slot), Operand(reader, slot, v),
+            Value(v, ty, definition, owner, value_slot, declared), StateTypeId(ty),
+            !GraphLocalState(r, part, v)
+        ) -> GraphLiveInState(r, part, v));
+    let nested_yield<r, part, d, member, reader, body, mode, regslot, entry, slot, yield_part, v, ty, definition, owner, port, declared>: Rule((
+            GraphExecution(r, part, d, member), part != "head", part != "yield",
+            ReaderAt(reader, r, member), Region(body, mode, reader, regslot, entry),
+            GraphLiveYield(body, slot, yield_part), Yield(body, slot, v), Value(v, ty, definition, owner, port, declared),
+            StateTypeId(ty), !GraphLocalState(r, part, v)
+        ) -> GraphLiveInState(r, part, v));
+    let outgoing<r, part, d, member, slot, v, ty, definition, owner, value_slot, declared>: Rule((
+            GraphExecution(r, part, d, member), part != "head", part != "yield",
+            GraphLiveYield(r, slot, part), Yield(r, slot, v),
+            Value(v, ty, definition, owner, value_slot, declared), StateTypeId(ty),
+            !GraphLocalState(r, part, v)
+        ) -> GraphLiveInState(r, part, v));
+    List(read, forwarded, nested_yield, outgoing)
+};
+
+extract rust recovery_scope => "@ct";
+extract rust dependency_paths => "@ct";
+extract rust dependency_depth => "@ct";
+extract rust live_result_bindings => "@ct";
+extract rust graph_demand_producer => "@ct";
+extract rust deferred_ops => "@ct";
+extract rust theta_bodies => "@ct";
+extract rust deferred_reads => "@ct";
+extract rust capture_sites => "@ct";
+extract rust capture_legality => "@ct";
+extract rust feedback_captures => "@ct";
+extract rust delayed_ops => "@ct";
+extract rust execution_parts => "@ct";
+extract rust local_state => "@ct";
+extract rust live_in_state => "@ct";
+
+pub let recover = memo |root: OperationId| {
+    (
+        Schedule::Seq(List(
+            Schedule::Saturate(analysis::cfg::state_types),
+            Schedule::Saturate(recovery_scope),
+            Schedule::Saturate(dependency_paths),
+            Schedule::Saturate(dependency_depth),
+            Schedule::Saturate(live_result_bindings),
+            Schedule::Saturate(graph_demand_producer),
+            Schedule::Saturate(deferred_ops),
+            Schedule::Saturate(theta_bodies),
+            Schedule::Saturate(deferred_reads),
+            Schedule::Saturate(capture_sites),
+            Schedule::Saturate(capture_legality),
+            Schedule::Saturate(feedback_captures),
+            Schedule::Saturate(delayed_ops),
+            Schedule::Saturate(execution_parts),
+            Schedule::Saturate(local_state),
+            Schedule::Saturate(live_in_state),
+        )),
+        {
+            GraphExecution: "GraphExecution",
+            GraphFeedbackCapture: "GraphFeedbackCapture",
+            GraphLiveInState: "GraphLiveInState",
+            GraphNeededPort: "GraphNeededPort",
+            GraphNeededResult: "GraphNeededResult",
+            UndemandedGraphEffect: "UndemandedGraphEffect",
+            UnsupportedGraphCapture: "UnsupportedGraphCapture",
+        },
+    )
+};

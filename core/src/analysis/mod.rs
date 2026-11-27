@@ -1,5 +1,6 @@
 pub mod cfg;
 pub mod defuse;
+pub(crate) mod destructure;
 pub mod effects;
 pub mod exits;
 pub(crate) mod memory;
