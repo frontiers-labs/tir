@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat,dce)) --verify %s | filecheck %s
 
 // State the defined-input condition for the operand the rewrite removes.
 

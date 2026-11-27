@@ -1,136 +1,107 @@
-// Non-term relational integer rules for EqSat (congruence CSE, power-of-2
-// strength reduction, modular constant reassociation, cast CSE, argument freeze,
-// and definition selection).
-//
-// All algebraic identities, cancellations, complements, and reconstructions
-// live as concise `Rewrite(...)` rules over typed `OpDef`s in `rewrites.cdsl`.
+// `Expr`-level power-of-2 strength reduction, modular constant reassociation,
+// definedness propagation, and `EqSatReplace` -> `Expr` e-class bridging.
 
 use std::core::*;
 use std::bigint::*;
 use std::int::*;
 use dialects::builtin;
 use dialects::func;
-
-pub let integer_facts: List<Rule> = {
-    let congruent_cfg<a, b, ak, bk, block, ap, bp, ad, bd, al, bl, x, y, ty, term, xd, yd>: Rule(
-        (
-            Operation(a, ak, "block", block, ap, ad, al),
-            Operation(b, bk, "block", block, bp, bd, bl),
-            less(ap, bp) == true,
-            EqSatBinaryKey(a), EqSatBinaryKey(b),
-            Value(x, ty, "result", a, 0, xd), Value(y, ty, "result", b, 0, yd),
-            EqSatScalar(x, ty, term), EqSatScalar(y, ty, term),
-        ) -> EqSatIdentity(b, y, x)
-    );
-    let congruent_graph<a, b, k, region, ap, bp, ad, bd, al, bl, x, y, ty, left, right>: Rule(
-        (
-            Operation(a, k, "graph", region, ap, ad, al),
-            Operation(b, k, "graph", region, bp, bd, bl),
-            less(a, b) == true,
-            EqSatBinaryKey(a), EqSatBinaryKey(b),
-            EqSatBinary(a, k, x, ty, left, right, region),
-            EqSatBinary(b, k, y, ty, left, right, region),
-        ) -> EqSatIdentity(b, y, x)
-    );
-    let equal<owner, out, input, ty, a, b>: Rule(
-        (EqSatIdentity(owner, out, input), EqSatScalar(out, ty, a), EqSatScalar(input, ty, b))
-        -> a == b
-    );
-    let candidate<owner, out, input>: Rule(
-        EqSatIdentity(owner, out, input)
-        -> (EqSatReplace(owner, out, input), EqSatErase(owner))
-    );
-    List(congruent_cfg, congruent_graph, equal, candidate)
-};
+use dialects::ptr;
 
 pub let strength: List<Rule> = {
-    let multiply: Rule(() -> EqSatPowerForm(builtin::muli.kind, builtin::shli.kind));
-    let divide:   Rule(() -> EqSatPowerForm(builtin::divui.kind, builtin::shrui.kind));
-    let power<value, bits, log, width>: Rule(
+    let mul_pow2<e, ty, x, bits, log, amt>: Rule(
         (
-            EqSatFolded(value, bits),
+            e == Expr::Bin(builtin::muli.kind, ty, x, Expr::Const(ty, bits)),
             log == (big_bits(bits) - bigint(1)),
-            width == eqsat_shift_amount(log),
-            less(width, int_lit(0)) == false,
-            shl(bigint(1), width) == bits,
-        ) -> EqSatPower(bits, log)
+            amt == eqsat_shift_amount(log),
+            less(amt, int_lit(0)) == false,
+            shl(bigint(1), amt) == bits,
+        ) -> e == Expr::Bin(builtin::shli.kind, ty, x, Expr::Const(ty, log))
     );
-    let shift<node, kind, target, result, ty, x, y, home, value, power>: Rule(
+    let divui_pow2<e, ty, x, bits, log, amt>: Rule(
         (
-            EqSatBinary(node, kind, result, ty, x, y, home),
-            EqSatPowerForm(kind, target),
-            EqSatFolded(y, value), EqSatPower(value, power),
-            !EqSatPinnedOp(node),
-        ) -> EqSatRebuild(node, result, Form::Bin(target, Form::Read(x), Form::Bits(power)))
+            e == Expr::Bin(builtin::divui.kind, ty, x, Expr::Const(ty, bits)),
+            log == (big_bits(bits) - bigint(1)),
+            amt == eqsat_shift_amount(log),
+            less(amt, int_lit(0)) == false,
+            shl(bigint(1), amt) == bits,
+        ) -> e == Expr::Bin(builtin::shrui.kind, ty, x, Expr::Const(ty, log))
     );
-    let remainder<node, result, ty, x, y, home, value, power>: Rule(
+    let remui_pow2<e, ty, x, bits, log, amt>: Rule(
         (
-            EqSatBinary(node, builtin::remui.kind, result, ty, x, y, home),
-            EqSatFolded(y, value), EqSatPower(value, power),
-            !EqSatPinnedOp(node),
-        ) -> EqSatRebuild(node, result, Form::Bin(builtin::andi.kind, Form::Read(x), Form::Bits((value - bigint(1)))))
+            e == Expr::Bin(builtin::remui.kind, ty, x, Expr::Const(ty, bits)),
+            log == (big_bits(bits) - bigint(1)),
+            amt == eqsat_shift_amount(log),
+            less(amt, int_lit(0)) == false,
+            shl(bigint(1), amt) == bits,
+        ) -> e == Expr::Bin(builtin::andi.kind, ty, x, Expr::Const(ty, (bits - bigint(1))))
     );
-    let wrapping_add<node, result, ty, x, y, home>: Rule(
-        (EqSatBinary(node, builtin::addi.kind, result, ty, x, y, home), !EqSatHasAttr(node, "nsw"), !EqSatHasAttr(node, "nuw"))
-        -> EqSatWrappingAdd(node)
-    );
-    let wrapping_sub<node, result, ty, x, y, home>: Rule(
-        (EqSatBinary(node, builtin::subi.kind, result, ty, x, y, home), !EqSatHasAttr(node, "nsw"), !EqSatHasAttr(node, "nuw"))
-        -> EqSatWrappingSub(node)
-    );
-    let reassociate<inner, outer, result, middle, ty, x, y, z, home, prior, a, b, mask>: Rule(
+    let reassociate_add<e, ty, x, a, b, mask>: Rule(
         (
-            EqSatBinary(inner, builtin::addi.kind, middle, ty, x, y, prior), EqSatWrappingAdd(inner),
-            EqSatBinary(outer, builtin::addi.kind, result, ty, middle, z, home), EqSatWrappingAdd(outer),
-            EqSatFolded(y, a), EqSatFolded(z, b), EqSatAllBits(ty, mask), !EqSatPinnedOp(outer),
-        ) -> EqSatRebuild(outer, result, Form::Bin(builtin::addi.kind, Form::Read(x), Form::Bits(bit_and(big_add(a, b), mask))))
+            e == Expr::Bin(
+                builtin::addi.kind, ty,
+                Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, a)),
+                Expr::Const(ty, b),
+            ),
+            TypeMask(ty, mask),
+        ) -> e == Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, bit_and(big_add(a, b), mask)))
     );
-    let offsets<node, out, ty, u, v, home, left, right, lh, rh, x, y, c, d, a, b, mask>: Rule(
+    let reassociate_offsets<e, ty, x, y, vx, vy, a, b, mask>: Rule(
         (
-            EqSatBinary(node, builtin::addi.kind, out, ty, u, v, home), EqSatWrappingAdd(node), !EqSatPinnedOp(node),
-            EqSatBinary(left, builtin::addi.kind, u, ty, x, c, lh), EqSatWrappingAdd(left),
-            EqSatBinary(right, builtin::addi.kind, v, ty, y, d, rh), EqSatWrappingAdd(right),
-            EqSatFolded(c, a), EqSatFolded(d, b), EqSatAllBits(ty, mask), less(y, x) == false,
-        ) -> EqSatRebuild(node, out, Form::Bin(builtin::addi.kind, Form::Bin(builtin::addi.kind, Form::Read(x), Form::Read(y)), Form::Bits(bit_and(big_add(a, b), mask))))
+            e == Expr::Bin(
+                builtin::addi.kind, ty,
+                Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, a)),
+                Expr::Bin(builtin::addi.kind, ty, y, Expr::Const(ty, b)),
+            ),
+            ValExpr(vx, x),
+            ValExpr(vy, y),
+            less(vy, vx) == false,
+            TypeMask(ty, mask),
+        ) -> e == Expr::Bin(
+            builtin::addi.kind, ty,
+            Expr::Bin(builtin::addi.kind, ty, x, y),
+            Expr::Const(ty, bit_and(big_add(a, b), mask)),
+        )
     );
-    let subtract<inner, outer, result, middle, ty, x, y, z, home, prior, a, b, mask>: Rule(
+    let reassociate_sub<e, ty, x, a, b, mask>: Rule(
         (
-            EqSatBinary(inner, builtin::addi.kind, middle, ty, x, y, prior), EqSatWrappingAdd(inner),
-            EqSatBinary(outer, builtin::subi.kind, result, ty, middle, z, home), EqSatWrappingSub(outer),
-            EqSatFolded(y, a), EqSatFolded(z, b), EqSatAllBits(ty, mask), !EqSatPinnedOp(outer),
-        ) -> EqSatRebuild(outer, result, Form::Bin(builtin::addi.kind, Form::Read(x), Form::Bits(bit_and(big_sub(a, b), mask))))
+            e == Expr::Bin(
+                builtin::subi.kind, ty,
+                Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, a)),
+                Expr::Const(ty, b),
+            ),
+            TypeMask(ty, mask),
+        ) -> e == Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, bit_and(big_sub(a, b), mask)))
     );
-    let multiply_const<inner, outer, result, middle, ty, x, y, z, home, prior, a, b, mask>: Rule(
+    let reassociate_mul<e, ty, x, a, b, mask>: Rule(
         (
-            EqSatBinary(inner, builtin::muli.kind, middle, ty, x, y, prior),
-            EqSatBinary(outer, builtin::muli.kind, result, ty, middle, z, home),
-            EqSatFolded(y, a), EqSatFolded(z, b), EqSatAllBits(ty, mask), !EqSatPinnedOp(outer),
-        ) -> EqSatRebuild(outer, result, Form::Bin(builtin::muli.kind, Form::Read(x), Form::Bits(bit_and(big_mul(a, b), mask))))
+            e == Expr::Bin(
+                builtin::muli.kind, ty,
+                Expr::Bin(builtin::muli.kind, ty, x, Expr::Const(ty, a)),
+                Expr::Const(ty, b),
+            ),
+            TypeMask(ty, mask),
+        ) -> e == Expr::Bin(builtin::muli.kind, ty, x, Expr::Const(ty, bit_and(big_mul(a, b), mask)))
     );
-    List(multiply, divide, power, shift, remainder, wrapping_add, wrapping_sub, reassociate, offsets, subtract, multiply_const)
-};
-
-pub let cast_cse: List<Rule> = {
-    let ext_u: Rule(() -> EqSatUnaryKind(builtin::extui.kind));
-    let ext_s: Rule(() -> EqSatUnaryKind(builtin::extsi.kind));
-    let trunc: Rule(() -> EqSatUnaryKind(builtin::trunci.kind));
-    let introduce<node, k, input, result, ty, decl, pl, hm, pos, dp, lc>: Rule(
+    let reassociate_ptradd<e, ty, idx, p, a, b, mask, total>: Rule(
         (
-            EqSatLive(node), EqSatUnaryKind(k),
-            Operation(node, k, pl, hm, pos, dp, lc),
-            Operand(node, 0, input),
-            Value(result, ty, "result", node, 0, decl),
-        ) -> EqSatCast(node, k, input, result, ty)
+            e == Expr::Bin(
+                ptr::ptradd.kind, ty,
+                Expr::Bin(ptr::ptradd.kind, ty, p, Expr::Const(idx, a)),
+                Expr::Const(idx, b),
+            ),
+            TypeMask(idx, mask),
+            big_le(big_add(a, a), mask) == true,
+            big_le(big_add(b, b), mask) == true,
+            total == big_add(a, b),
+            big_le(big_add(total, total), mask) == true,
+        ) -> e == Expr::Bin(ptr::ptradd.kind, ty, p, Expr::Const(idx, total))
     );
-    let existing<first, last, k, input, a, b, ty, place, home, p, q, ad, bd, al, bl>: Rule(
-        (
-            EqSatCast(first, k, input, a, ty), EqSatCast(last, k, input, b, ty),
-            Operation(first, k, place, home, p, ad, al),
-            Operation(last, k, place, home, q, bd, bl),
-            less(p, q) == true,
-        ) -> EqSatIdentity(last, b, a)
-    );
-    List(ext_u, ext_s, trunc, introduce, existing)
+    List(
+        mul_pow2, divui_pow2, remui_pow2,
+        reassociate_add, reassociate_offsets, reassociate_sub, reassociate_mul,
+        reassociate_ptradd,
+    )
 };
 
 pub let arguments: List<Rule> = {
@@ -159,37 +130,19 @@ pub let defined_frozen: List<Rule> = {
     List(frozen)
 };
 
-pub let defined_integer: List<Rule> = {
-    let known<value, bits>: Rule(EqSatFolded(value, bits) -> EqSatDefined(value));
-    let frozen<node, value>: Rule(EqSatArgumentFreeze(node, value) -> EqSatDefined(value));
-    let fold<node, out, bits>: Rule(
-        (EqSatDefinedFold(node, out, bits), !EqSatPinnedOp(node))
-        -> (EqSatFolded(out, bits), EqSatConstant(node, out, bits))
+pub let defined_bridge: List<Rule> = {
+    let const_defined<e, ty, bits>: Rule(e == Expr::Const(ty, bits) -> ExprDefined(e));
+    let val_to_expr<v, e>: Rule((EqSatDefined(v), ValExpr(v, e)) -> ExprDefined(e));
+    let expr_to_val<v, e>: Rule((ExprDefined(e), ValExpr(v, e)) -> EqSatDefined(v));
+    // Bridge `EqSatReplace` (from extra RuleCollections / memory / loop rules) into `Expr` e-classes!
+    let replace_to_expr<op, old, new, eo, en>: Rule(
+        (EqSatReplace(op, old, new), ValExpr(old, eo), ValExpr(new, en))
+        -> eo == en
     );
-    List(known, frozen, fold)
+    List(const_defined, val_to_expr, expr_to_val, replace_to_expr)
 };
 
-pub let definition_constants: List<Rule> = {
-    let selected<node, result, bits>: Rule(
-        EqSatConstant(node, result, bits)
-        -> (EqSatDefinition(node, result, Form::Bits(bits)), EqSatConstantNode(node))
-    );
-    List(selected)
-};
-
-pub let definition_expressions: List<Rule> = {
-    let selected<node, result, form>: Rule(
-        (EqSatRebuild(node, result, form), !EqSatConstantNode(node))
-        -> EqSatDefinition(node, result, form)
-    );
-    List(selected)
-};
-
-extract rust integer_facts          => "@ct";
-extract rust strength               => "@ct";
-extract rust cast_cse               => "@ct";
-extract rust arguments              => "@ct";
-extract rust defined_frozen         => "@ct";
-extract rust defined_integer        => "@ct";
-extract rust definition_constants   => "@ct";
-extract rust definition_expressions => "@ct";
+extract rust strength       => "@ct";
+extract rust arguments      => "@ct";
+extract rust defined_frozen => "@ct";
+extract rust defined_bridge => "@ct";

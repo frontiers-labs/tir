@@ -508,7 +508,23 @@ where
                 } else {
                     Slice::EMPTY
                 };
-                self.ast().push_expr(Expr::Path { path, ty_args })
+                let node = self.ast().push_expr(Expr::Path { path, ty_args });
+                if self.eat(Token::LParen) {
+                    let mark = self.s_exprs.len();
+                    while !matches!(self.inp.peek(), Some(Token::RParen) | None) {
+                        let a = self.parse_expr()?;
+                        self.s_exprs.push(a);
+                        if !self.eat(Token::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(Token::RParen)?;
+                    let args = self.inp.state().0.push_exprs(&self.s_exprs[mark..]);
+                    self.s_exprs.truncate(mark);
+                    self.ast().push_expr(Expr::App { func: node, args })
+                } else {
+                    node
+                }
             }
         };
 
@@ -1691,13 +1707,20 @@ mod lossless {
                         .delimited_by(just(Token::Less), just(Token::Greater))
                         .or_not(),
                 )
-                .map_with(move |args, e| {
-                    wrap(
-                        ctx,
-                        SyntaxKind::Expression,
-                        e.span().into_range(),
-                        args.unwrap_or_default(),
-                    )
+                .then(
+                    ty.clone()
+                        .separated_by(just(Token::Comma))
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .or_not(),
+                )
+                .map_with(move |(args, call_args), e| {
+                    let mut ch = args.unwrap_or_default();
+                    if let Some(ca) = call_args {
+                        ch.extend(ca);
+                    }
+                    wrap(ctx, SyntaxKind::Expression, e.span().into_range(), ch)
                 });
             let nat_lit = select! { Token::Natural(_) => () }.map_with(
                 move |_,

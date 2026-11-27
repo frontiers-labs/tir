@@ -1,1 +1,4 @@
+pub mod control_simplify;
+pub mod dce;
+pub mod memopt;
 pub mod restructure;

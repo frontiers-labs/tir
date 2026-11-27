@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // The retained store still observes its original computation.
 
@@ -96,7 +96,7 @@ module {
 // CHECK-NEXT: func.return %[[X]]
 // CHECK-LABEL: func.func @xor_xor_and_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
 // CHECK-NEXT: %[[OBSERVED:[0-9]+]] = xori %[[Y]], %[[X]] : !i32
-// CHECK-NEXT: %[[RESULT:[0-9]+]] = ori %[[Y]], %[[X]] : !i32
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = ori %[[X]], %[[Y]] : !i32
 // CHECK-NEXT: ptr.store %[[OBSERVED]], %[[P]]
 // CHECK-NEXT: func.return %[[RESULT]]
 // CHECK-LABEL: func.func @xor_cancel_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)

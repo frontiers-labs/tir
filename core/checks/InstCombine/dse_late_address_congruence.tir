@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat,memopt,dce)) --verify %s | filecheck %s
 
 // The read after the first write names an address the graph cannot yet read
 // back to the slot: its offset is a term that only folds to zero once

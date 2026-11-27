@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat,control-simplify,dce)) --verify %s | filecheck %s
 
 // Only the taken edge of the retested condition can supply the merge value.
 

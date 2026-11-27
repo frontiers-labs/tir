@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(memopt,dce) --verify %s | filecheck %s
 
 #layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !ptr.p = {size = 64, abi = 64}>
 

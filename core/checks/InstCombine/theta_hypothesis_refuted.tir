@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,control-simplify,dce) --verify %s | filecheck %s
 
 // The same shape with a latch that advances the port. Under the hypothesis the
 // latch folds to 8, which is not the 7 the loop was entered on, so the edge

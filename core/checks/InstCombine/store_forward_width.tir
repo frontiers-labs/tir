@@ -1,4 +1,4 @@
-// RUN: tir opt --pass eqsat --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat,dce --verify %s | filecheck %s
 
 // The store wrote four bytes and the load reads two of them, so the load is not
 // the stored value.

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat,control-simplify,dce)) --verify %s | filecheck %s
 
 // A counted loop forwards 7 each iteration. Its body uses the square of that
 // invariant while the other carry still changes on every iteration.

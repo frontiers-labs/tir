@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,control-simplify,dce) --verify %s | filecheck %s
 
 module {
   func.func @graph_congruent(%x: !i8, %m: !i8) -> !i8 {
