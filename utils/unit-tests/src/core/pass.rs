@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use tir::{
     builtin::{ops, AddIOp, IntegerType},
     func::FuncOp,
-    AnalysisManager, Context, Operation, OperationRef, Pass, PassError, PassManager, PassTarget,
-    Symbol,
+    AnalysisManager, Context, OpId, Operation, OperationRef, Pass, PassError, PassManager,
+    PassTarget, Symbol,
 };
 
 use super::fixtures;
@@ -25,15 +25,16 @@ impl Pass for AddToSubPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
+        op: OpId,
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
         let operands = add.operands();
         let result_ty = context.get_value(add.result()).ty();
         let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
-        context.replace_op(op, &new_op)
+        context.replace_op(&op, &new_op)
     }
 }
 
@@ -53,11 +54,12 @@ impl Pass for BreakIRPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
+        op: OpId,
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        context.erase_op(op)
+        let op = OperationRef::new(context.get_op(op));
+        context.erase_op(&op)
     }
 }
 
@@ -77,15 +79,16 @@ impl Pass for ReplaceThenErasePass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
+        op: OpId,
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
         let operands = add.operands();
         let result_ty = context.get_value(add.result()).ty();
         let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
-        context.replace_op(op, &new_op)?;
+        context.replace_op(&op, &new_op)?;
         context.erase_op(&OperationRef::new(context.get_op(new_op.id())))
     }
 }
@@ -101,7 +104,7 @@ impl Pass for ReadOnlyPass {
 
     fn run(
         &mut self,
-        _op: &OperationRef,
+        _op: OpId,
         _context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
@@ -126,10 +129,11 @@ impl Pass for TouchPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
-        _context: &Context,
+        op: OpId,
+        context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
         func.body()
             .set_attr("touched", tir::attributes::AttributeValue::Bool(true));
@@ -154,7 +158,7 @@ fn run_on_broken_candidate(pass: Box<dyn Pass>) -> Result<(), PassError> {
     let (context, func) = parse_func(ADD_ITS_ARGUMENT);
     let mut pm = PassManager::new();
     pm.add_boxed_pass(pass);
-    pm.run(&context, context.get_op(func.id()))
+    pm.run(&context, func.id())
 }
 
 #[test]
@@ -218,8 +222,8 @@ fn analysis_survives<P: Pass + Clone + 'static>(pass: P) -> bool {
 
     let mut pm = PassManager::new();
     pm.add_pass(pass);
-    let root = OperationRef::new(context.get_op(func.id()));
-    pm.run_on_op_ref(&context, root, &analyses)
+    let root = func.id();
+    pm.run_on_op_id(&context, root, &analyses)
         .expect("the pass keeps the IR valid");
 
     std::rc::Rc::ptr_eq(&before, &analyses.get::<Simple>(&context, func.id()))
@@ -244,8 +248,8 @@ fn repeated_pass_runs_do_not_grow_the_analysis_cache() {
 
     let mut counts = Vec::new();
     for _ in 0..8 {
-        let root = OperationRef::new(context.get_op(func.id()));
-        pm.run_on_op_ref(&context, root, &analyses)
+        let root = func.id();
+        pm.run_on_op_id(&context, root, &analyses)
             .expect("touching a block attribute keeps the IR valid");
         analyses.get::<Simple>(&context, func.id());
         counts.push(analyses.cached_count());
@@ -274,7 +278,7 @@ fn a_root_whose_replacement_was_erased_ends_the_pipeline_without_a_root() {
     let add_id = func.body().op_ids()[0];
     let mut pm = PassManager::new();
     pm.add_pass(ReplaceThenErasePass);
-    pm.run(&context, context.get_op(add_id))
+    pm.run(&context, add_id)
         .expect("erasing the replaced root is a valid rewrite");
     assert_eq!(func.body().op_ids().len(), 1);
 }
@@ -297,7 +301,7 @@ module_end
     let mut pm = PassManager::new();
     pm.nest::<FuncOp>().add_pass(AddToSubPass);
 
-    pm.run(&context, context.get_op(module.id()))
+    pm.run(&context, module.id())
         .expect("pass pipeline should succeed");
 
     let op_names: Vec<_> = func_body
@@ -384,9 +388,7 @@ fn restructure_source(source: &str) -> (Context, FuncOp, usize) {
     let before = count_ops(&context, func.id());
     let mut manager = PassManager::new();
     manager.add_pass(tir::passes::RestructureNodesPass::new());
-    manager
-        .run(&context, context.get_op(func.id()))
-        .expect("restructure");
+    manager.run(&context, func.id()).expect("restructure");
     (context, func, before)
 }
 
@@ -465,10 +467,11 @@ impl Pass for CountingPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
-        _context: &Context,
+        op: OpId,
+        context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if run <= self.edits {
             let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
@@ -487,7 +490,7 @@ fn count_fixpoint_runs(cap: u8, edits: u32) -> u32 {
         runs: runs.clone(),
         edits,
     });
-    pm.run(&context, context.get_op(func.id()))
+    pm.run(&context, func.id())
         .expect("the counting pass keeps the IR valid");
     runs.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -526,10 +529,11 @@ impl Pass for PeerCountPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
+        op: OpId,
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         let id = op.op().id;
         let module = context.parent_op(id).expect("a function sits in a module");
         let peers: i64 = context
@@ -585,7 +589,7 @@ fn run_peer_count(workers: usize) -> (String, Vec<i64>) {
     let mut pm = PassManager::new();
     pm.set_workers(workers);
     pm.nest::<FuncOp>().add_pass(PeerCountPass);
-    pm.run(&context, context.get_op(module.id()))
+    pm.run(&context, module.id())
         .expect("the pass keeps the IR valid");
     let counts = fixtures::module_ops(&context, module.id())
         .into_iter()
@@ -622,10 +626,11 @@ impl Pass for SlowFirstPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
+        op: OpId,
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
         let delay = if func.symbol_name() == "a" { 30 } else { 0 };
         std::thread::sleep(std::time::Duration::from_millis(delay));
@@ -644,7 +649,7 @@ fn tasks_commit_in_callable_order_whatever_order_they_finish_in() {
         let mut pm = PassManager::new();
         pm.set_workers(workers);
         pm.nest::<FuncOp>().add_pass(SlowFirstPass);
-        pm.run(&context, context.get_op(module.id()))
+        pm.run(&context, module.id())
             .expect("the pass keeps the IR valid");
         module_text(&context, module.id())
     };
@@ -673,10 +678,11 @@ impl Pass for TouchSiblingPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
+        op: OpId,
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         let id = op.op().id;
         let module = context.parent_op(id).expect("a function sits in a module");
         let functions: Vec<_> = context
@@ -706,7 +712,7 @@ fn overlapping_write_sets_are_refused_before_anything_commits() {
     let mut pm = PassManager::new();
     pm.nest::<FuncOp>().add_pass(TouchSiblingPass);
     let error = pm
-        .run(&context, context.get_op(module.id()))
+        .run(&context, module.id())
         .expect_err("two tasks edited one block");
     assert!(matches!(error, PassError::OverlappingEdits(_)), "{error}");
     assert_eq!(module_text(&context, module.id()), before);
@@ -723,7 +729,7 @@ fn a_function_task_rebuilds_an_analysis_its_earlier_pass_invalidated() {
     functions.add_pass(RecordOpCountPass { seen: seen.clone() });
     functions.add_pass(SlowFirstPass);
     functions.add_pass(RecordOpCountPass { seen: seen.clone() });
-    pm.run(&context, context.get_op(module.id()))
+    pm.run(&context, module.id())
         .expect("the passes keep the IR valid");
     let mut seen = seen.lock().unwrap().clone();
     seen.sort_unstable();
@@ -760,10 +766,11 @@ impl Pass for RecordOpCountPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
+        op: OpId,
         context: &Context,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
         let name: &'static str = if func.symbol_name() == "a" { "a" } else { "b" };
         let count = analyses.get::<OpCount>(context, op.op().id).0;
@@ -790,10 +797,11 @@ impl Pass for ThreeRoundsPass {
 
     fn run(
         &mut self,
-        op: &OperationRef,
-        _context: &Context,
+        op: OpId,
+        context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        let op = OperationRef::new(context.get_op(op));
         self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let body = op
             .as_op::<FuncOp>()
@@ -820,7 +828,7 @@ fn a_fixpoint_inside_a_function_task_runs_until_the_version_settles() {
     pm.nest::<FuncOp>()
         .fixpoint(10)
         .add_pass(ThreeRoundsPass { runs: runs.clone() });
-    pm.run(&context, context.get_op(module.id()))
+    pm.run(&context, module.id())
         .expect("the pass keeps the IR valid");
     assert_eq!(runs.load(std::sync::atomic::Ordering::Relaxed), 8);
     let text = module_text(&context, module.id());
@@ -840,7 +848,7 @@ fn sibling_roots_replaced_in_one_block_commit_without_conflict() {
     let mut pm = PassManager::new();
     pm.set_workers(2);
     pm.nest::<AddIOp>().add_pass(AddToSubPass);
-    pm.run(&context, context.get_op(func.id()))
+    pm.run(&context, func.id())
         .expect("each task replaces only its own root");
     let names: Vec<_> = func
         .body()

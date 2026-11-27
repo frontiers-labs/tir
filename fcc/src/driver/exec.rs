@@ -217,7 +217,7 @@ fn run_compile_action(
             if opts.opt_level.rounds().is_some() {
                 use tir::Operation;
                 super::compile::mid_end(opts)
-                    .run(&context, context.get_op(module.id()))
+                    .run(&context, module.id())
                     .unwrap_or_else(|e| {
                         eprintln!("fcc: error: mid-end failed: {e}");
                         std::process::exit(1);
