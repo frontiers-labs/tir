@@ -657,7 +657,7 @@ fn adoption_preserves_selected_container_payload() {
     let held = db.container(Pair(a, a));
     db.insert_in(color, selected, &[held]).unwrap();
     db.rebuild().unwrap();
-    db.adopt_rows(color, &[selected], mark);
+    db.adopt_rows(color, &[selected], mark).unwrap();
     db.rebuild().unwrap();
     let adopted = db.rows(selected).next().unwrap()[0];
     assert_eq!(db.container_value::<Pair>(adopted), Some(&Pair(a, a)));
@@ -690,7 +690,7 @@ fn adoption_retains_nested_typed_containers_and_discards_unselected_payloads() {
     db.union_in(color, b, alias);
     db.union_in(color, a, z);
     db.rebuild().unwrap();
-    db.adopt_rows(color, &[selected], mark);
+    db.adopt_rows(color, &[selected], mark).unwrap();
     db.rebuild().unwrap();
 
     let adopted: Vec<_> = db.rows(selected).next().unwrap().values().collect();
@@ -723,7 +723,7 @@ fn rollback_forgets_speculative_container_interning() {
     let speculative = db.container(Pair(b, a));
     db.drop_color(color);
     let rollback = db.color(&[]);
-    db.adopt_rows(rollback, &[], mark);
+    db.adopt_rows(rollback, &[], mark).unwrap();
     assert_eq!(db.container_value::<Pair>(stable), Some(&Pair(a, a)));
     assert_eq!(db.container_value::<Pair>(speculative), None);
     let fresh = db.fresh(node);
@@ -762,7 +762,7 @@ fn selective_adoption_removes_base_rows_hidden_by_color_equality() {
     let color = db.color(&[]);
     db.union_in(color, b, a);
     db.rebuild().unwrap();
-    db.adopt_rows(color, &[r], mark);
+    db.adopt_rows(color, &[r], mark).unwrap();
     db.rebuild().unwrap();
     assert_eq!(rows(&db, r), [vec![a]]);
     assert_eq!(rows(&db, other), [vec![b]]);

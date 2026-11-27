@@ -1181,7 +1181,7 @@ fn command_macros_and_relaxed_rulesets() -> Result<(), Error> {
     add_relation(&mut eg, "R", vec!["i64".into()])?;
     assert!(eg.get_function("R_copy").is_some());
     datatype!(&mut eg, (datatype Math (Num i64) (Add Math Math)));
-    eg.set_ruleset_mode("", tir_egglog::Mode::Relaxed);
+    eg.set_ruleset_mode("", tir_egglog::Mode::Relaxed)?;
     let rewrite = tir_egglog::ast::Rewrite {
         span: span!(),
         lhs: expr!((Add a b)),
