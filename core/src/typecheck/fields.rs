@@ -1,8 +1,9 @@
 use super::{Attr, Check, Failures};
 use crate::{
     OpHandle, TypeArg, TypeId,
-    builtin::{FnType, IndexType, TupleType, UnitType},
+    builtin::{FnType, IndexType, ModuleOp, TupleType, UnitType},
     ptr::PtrType,
+    schema::{ConstraintPort, TypeConstraint},
 };
 
 fn unsigned(attr: &Attr) -> Option<u64> {
@@ -29,7 +30,25 @@ impl Check<'_> {
             .map(|(_, v)| v)
     }
 
-    fn layout(&self, errors: &mut Failures) {
+    fn port_type(&self, port: ConstraintPort) -> Option<TypeId> {
+        match port {
+            ConstraintPort::Input(index) => self.inputs.one(index),
+            ConstraintPort::Output(index) => self.outputs.one(index),
+        }
+    }
+
+    pub(super) fn layout(&self, constraints: &[TypeConstraint], errors: &mut Failures) {
+        if !constraints.iter().any(|constraint| {
+            matches!(
+                constraint,
+                TypeConstraint::EqualWidth(..)
+                    | TypeConstraint::PointerWidth(..)
+                    | TypeConstraint::EqualType(..)
+            )
+        }) {
+            return;
+        }
+
         let pointer = self.scoped(|op| {
             let Attr::LayoutSpec(spec) = op.attr("layout.spec")? else {
                 return None;
@@ -64,29 +83,23 @@ impl Check<'_> {
                 terms.int_width(ty)
             }
         };
-        let input = self.inputs.one(1);
-        let output = self.outputs.one(0);
-        match self.kind.as_str() {
-            "builtin.bitcast" => {
-                let w = width(self.inputs.one(0));
-                errors.require(w.is_some() && w == width(output), "bitcast width");
-            }
-            "ptr.ptradd" if pointer.is_some() => {
-                errors.require(width(input) == pointer, "pointer offset width")
-            }
-            "ptr.ptrdiff" if pointer.is_some() => {
-                errors.require(width(output) == pointer, "pointer difference width")
-            }
-            "ptr.disjoint" => {
-                errors.require(
-                    input.is_some() && input == self.inputs.one(3),
-                    "disjoint size types",
-                );
-                if pointer.is_some() {
-                    errors.require(width(input) == pointer, "disjoint size width");
+        for constraint in constraints {
+            let (valid, label) = match *constraint {
+                TypeConstraint::EqualWidth(lhs, rhs, label) => {
+                    let lhs = width(self.port_type(lhs));
+                    (lhs.is_some() && lhs == width(self.port_type(rhs)), label)
                 }
-            }
-            _ => {}
+                TypeConstraint::PointerWidth(port, label) => (
+                    pointer.is_none() || width(self.port_type(port)) == pointer,
+                    label,
+                ),
+                TypeConstraint::EqualType(lhs, rhs, label) => {
+                    let lhs = self.port_type(lhs);
+                    (lhs.is_some() && lhs == self.port_type(rhs), label)
+                }
+                _ => continue,
+            };
+            errors.require(valid, label);
         }
     }
 
@@ -133,39 +146,48 @@ impl Check<'_> {
                 "floating-point policies belong in the computation type",
             );
         }
-        if self.kind.as_str() == "type.def"
-            && let Some(owner) = self.ctx.parent_op(self.op.id)
-        {
-            errors.require(
-                self.ctx
-                    .operation_kind(owner)
-                    .map(tir_egglog::NativeIdentity::as_str)
-                    == Some("builtin.module"),
-                "type definition outside module scope",
-            );
-        }
     }
 
-    fn abi(&self, args: &[TypeId], errors: &mut Failures) {
+    fn abi(&self, args: &[TypeId], definition: bool, errors: &mut Failures) {
         let pointer = |i| {
             args.get(i)
                 .is_some_and(|t| PtrType::view(self.ctx, *t).is_some())
         };
         if let Some(v) = self.op.attr("argument_alignments") {
-            errors.require(matches!(v,Attr::Array(entries) if entries.len() == args.len() && entries.iter().all(|x| match x {Attr::UInt(n)=>n.is_power_of_two(),_=>unsigned(x).is_some_and(u64::is_power_of_two)})), "argument alignment");
+            let valid = match v {
+                Attr::Array(entries) => {
+                    entries.len() == args.len()
+                        && entries.iter().all(|entry| match entry {
+                            Attr::UInt(n) => n.is_power_of_two(),
+                            _ => unsigned(entry).is_some_and(u64::is_power_of_two),
+                        })
+                }
+                _ => false,
+            };
+            errors.require(valid, "argument alignment");
         }
-        if self.kind.as_str() == "func.func"
-            && let Some(v) = self.op.attr("noalias")
-        {
-            errors.require(matches!(v,Attr::Array(entries) if entries.iter().all(|x| unsigned(x).is_some_and(|i|pointer(i as usize)))),"noalias arguments");
+        if definition && let Some(v) = self.op.attr("noalias") {
+            let valid = match v {
+                Attr::Array(entries) => entries.iter().all(|entry| {
+                    unsigned(entry)
+                        .and_then(|i| usize::try_from(i).ok())
+                        .is_some_and(pointer)
+                }),
+                _ => false,
+            };
+            errors.require(valid, "noalias arguments");
         }
         if self.op.attr("result_address") == Some(Attr::Bool(true)) {
             errors.require(pointer(0), "result address");
         }
     }
 
-    fn function(&self, errors: &mut Failures) {
-        let ret = match self.op.attr("ret_type") {
+    fn matches_return(&self, expected: TypeId, actual: &[TypeId]) -> bool {
+        actual == [expected] || (actual.is_empty() && UnitType::view(self.ctx, expected).is_some())
+    }
+
+    fn function(&self, result: Option<TypeId>, ret_attr: &str, errors: &mut Failures) {
+        let ret = match self.op.attr(ret_attr) {
             Some(Attr::Type(t)) => Some(t),
             _ => None,
         };
@@ -189,112 +211,151 @@ impl Check<'_> {
         }
         args.retain(|t| !self.ctx.is_state_type(*t));
         yields.retain(|t| !self.ctx.is_state_type(*t));
-        self.abi(&args, errors);
-        let sig = self.outputs.one(0).and_then(|t| FnType::view(self.ctx, t));
+        self.abi(&args, true, errors);
+        let sig = result.and_then(|t| FnType::view(self.ctx, t));
         errors.require(
             sig.is_some_and(|s| s.params() == args && Some(s.ret()) == ret),
             "function signature",
         );
         if nodes {
             errors.require(
-                ret.is_some_and(|t| {
-                    yields == [t] || (yields.is_empty() && UnitType::view(self.ctx, t).is_some())
-                }),
+                ret.is_some_and(|t| self.matches_return(t, &yields)),
                 "function yields",
+            );
+        }
+    }
+
+    fn function_return(&self, value: Option<Vec<TypeId>>, errors: &mut Failures) {
+        let ret = self
+            .scoped(|op| {
+                let kind = self.ctx.operation_kind(op.id)?;
+                let schema = self.ctx.schema_for_kind(kind)?;
+                let ret_attr =
+                    schema
+                        .type_constraints
+                        .iter()
+                        .find_map(|constraint| match constraint {
+                            TypeConstraint::FunctionDefinition(_, attr) => Some(*attr),
+                            _ => None,
+                        })?;
+                Some(op.attr(ret_attr))
+            })
+            .flatten();
+        let valid = match (ret, value) {
+            (Some(Attr::Type(t)), Some(values)) => self.matches_return(t, &values),
+            _ => false,
+        };
+        errors.require(valid, "return type");
+    }
+
+    fn function_call(
+        &self,
+        callee: Option<TypeId>,
+        args: Option<Vec<TypeId>>,
+        result: Option<TypeId>,
+        errors: &mut Failures,
+    ) {
+        if let Some(args) = &args {
+            self.abi(args, false, errors);
+        }
+        let valid = callee
+            .and_then(|t| FnType::view(self.ctx, t))
+            .zip(args)
+            .is_some_and(|(sig, args)| {
+                let params = sig.params();
+                let matches = match params.split_last() {
+                    Some((&last, fixed)) if self.ctx.is_variadic_tail(last) => {
+                        args.starts_with(fixed)
+                    }
+                    _ => args == params,
+                };
+                matches && Some(sig.ret()) == result
+            });
+        errors.require(valid, "call signature");
+        if let Some(v) = self.op.attr("resources") {
+            errors.require(
+                matches!(v, Attr::Array(xs) if xs.len() == 1 && xs[0].as_str() == Some("memory")),
+                "call resource summary",
             );
         }
     }
 
     pub(super) fn fields(&self, errors: &mut Failures) {
         self.metadata(errors);
-        let a = self.inputs.one(0);
-        let b = self.outputs.one(0);
-        match self.kind.as_str() {
-            "builtin.bitcast" | "ptr.ptrdiff" | "ptr.ptradd" | "ptr.disjoint" => {
-                self.layout(errors)
-            }
-            "builtin.make_tuple" => {
-                let tuple = b.and_then(|t| TupleType::view(self.ctx, t));
-                errors.require(
-                    tuple.is_some_and(|t| Some(t.elements()) == self.inputs.list(0)),
-                    "tuple elements",
-                );
-            }
-            "builtin.tuple_get" => {
-                let element = a.and_then(|t| TupleType::view(self.ctx, t)).and_then(|t| {
-                    let Attr::UInt(i) = self.op.attr("index")? else {
-                        return None;
-                    };
-                    t.elements().get(i as usize).copied()
-                });
-                errors.require(element.is_some() && element == b, "tuple projection");
-            }
-            "state.join" | "state.split" => {
-                let join = self.kind.as_str() == "state.join";
-                let (single, many) = if join {
-                    (&self.outputs, &self.inputs)
-                } else {
-                    (&self.inputs, &self.outputs)
-                };
-                let valid = single.complete
-                    && single.list(0).as_deref() == Some(&[TypeId::STATE])
-                    && many
-                        .list(0)
-                        .is_some_and(|v| !v.is_empty() && v.iter().all(|t| *t == TypeId::STATE));
-                errors.require(valid, if join { "memory join" } else { "memory split" });
-            }
-            "ptr.load" => errors.require(
-                b.and_then(|t| FnType::view(self.ctx, t)).is_none(),
-                "load moves a function value through memory",
-            ),
-            "ptr.store" => errors.require(
-                a.and_then(|t| FnType::view(self.ctx, t)).is_none(),
-                "store moves a function value through memory",
-            ),
-            "func.func" => self.function(errors),
-            "func.return" => {
-                let ret = self
-                    .scoped(|op| {
-                        (self
-                            .ctx
-                            .operation_kind(op.id)
-                            .map(tir_egglog::NativeIdentity::as_str)
-                            == Some("func.func"))
-                        .then(|| op.attr("ret_type"))
-                    })
-                    .flatten();
-                let valid = match (ret, self.inputs.list(0)) {
-                    (Some(Attr::Type(t)), Some(args)) => {
-                        args == [t] || (args.is_empty() && UnitType::view(self.ctx, t).is_some())
-                    }
-                    _ => false,
-                };
-                errors.require(valid, "return type");
-            }
-            "func.call" => {
-                let args = self.inputs.list(1);
-                if let Some(args) = &args {
-                    self.abi(args, errors);
+        let Some(schema) = self.schema else { return };
+        self.layout(schema.type_constraints, errors);
+        let port_group = |port| match port {
+            ConstraintPort::Input(i) => (&self.inputs, i),
+            ConstraintPort::Output(i) => (&self.outputs, i),
+        };
+        let list = |port| {
+            let (group, index) = port_group(port);
+            group.list(index)
+        };
+        for constraint in schema.type_constraints {
+            match *constraint {
+                TypeConstraint::TupleElements(input, result) => {
+                    let tuple = self
+                        .port_type(result)
+                        .and_then(|t| TupleType::view(self.ctx, t));
+                    errors.require(
+                        tuple.is_some_and(|t| Some(t.elements()) == list(input)),
+                        "tuple elements",
+                    );
                 }
-                let valid = a
-                    .and_then(|t| FnType::view(self.ctx, t))
-                    .zip(args)
-                    .is_some_and(|(sig, args)| {
-                        let params = sig.params();
-                        let matches = match params.split_last() {
-                            Some((&last, fixed)) if self.ctx.is_variadic_tail(last) => {
-                                args.starts_with(fixed)
-                            }
-                            _ => args == params,
+                TypeConstraint::TupleProjection(tuple, index, result) => {
+                    let tuple = self
+                        .port_type(tuple)
+                        .and_then(|t| TupleType::view(self.ctx, t));
+                    let element = tuple.and_then(|t| {
+                        let Attr::UInt(i) = self.op.attr(index)? else {
+                            return None;
                         };
-                        matches && Some(sig.ret()) == b
+                        t.elements().get(usize::try_from(i).ok()?).copied()
                     });
-                errors.require(valid, "call signature");
-                if let Some(v) = self.op.attr("resources") {
-                    errors.require(matches!(v,Attr::Array(xs) if xs.len()==1 && xs[0].as_str()==Some("memory")),"call resource summary");
+                    errors.require(
+                        element.is_some() && element == self.port_type(result),
+                        "tuple projection",
+                    );
                 }
+                TypeConstraint::StateFan(single, many, label) => {
+                    let (single_group, single_index) = port_group(single);
+                    let valid = single_group.complete
+                        && single_group.one(single_index) == Some(TypeId::STATE)
+                        && list(many).is_some_and(|types| {
+                            !types.is_empty() && types.iter().all(|t| *t == TypeId::STATE)
+                        });
+                    errors.require(valid, label);
+                }
+                TypeConstraint::NonFunction(port, label) => errors.require(
+                    self.port_type(port)
+                        .and_then(|t| FnType::view(self.ctx, t))
+                        .is_none(),
+                    label,
+                ),
+                TypeConstraint::FunctionDefinition(result, ret_attr) => {
+                    self.function(self.port_type(result), ret_attr, errors);
+                }
+                TypeConstraint::FunctionReturn(value) => self.function_return(list(value), errors),
+                TypeConstraint::FunctionCall(callee, args, result) => {
+                    self.function_call(
+                        self.port_type(callee),
+                        list(args),
+                        self.port_type(result),
+                        errors,
+                    );
+                }
+                TypeConstraint::ModuleScope(label) => {
+                    errors.require(
+                        self.ctx.parent_op(self.op.id).is_none_or(|owner| {
+                            self.ctx.operation_kind(owner)
+                                == Some(tir_egglog::NativeIdentity::of::<ModuleOp>())
+                        }),
+                        label,
+                    );
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 }
