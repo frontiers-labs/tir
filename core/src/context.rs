@@ -620,8 +620,12 @@ impl Context {
         (row.definition == "block").then(|| BlockId::new(row.owner as u32))
     }
     pub fn parent_block(&self, op: OpId) -> Option<BlockId> {
+        self.block_placement(op).map(|(block, _)| block)
+    }
+    pub(crate) fn block_placement(&self, op: OpId) -> Option<(BlockId, i64)> {
         let row = self.record::<OperationRow>(op.raw())?;
-        (row.placement == "block").then(|| BlockId::new(row.container as u32))
+        let block = BlockId::new(u32::try_from(row.container).ok()?);
+        (row.placement == "block").then_some((block, row.position))
     }
     pub fn parent_nodes_region(&self, op: OpId) -> Option<RegionId> {
         let row = self.record::<OperationRow>(op.raw())?;
