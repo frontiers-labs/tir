@@ -1,7 +1,7 @@
 //! The compiled contract and registered interfaces for each operation kind.
 use super::Context;
 use crate::operation::OpInterfaceConverter;
-use crate::schema::{OP_SCHEMAS, OpSchema};
+use crate::schema::OP_SCHEMAS;
 use std::any::{TypeId, type_name};
 use std::hash::{Hash, Hasher};
 use tir_egglog::{BaseValue, EGraph, Value};
@@ -86,10 +86,6 @@ impl Context {
         Some(self.engine().value_to_base(Value::new(raw)))
     }
 
-    pub(crate) fn schema_for_kind(&self, qualified: &str) -> Option<&'static OpSchema> {
-        Some(&OP_SCHEMAS[self.declaration(qualified)?.schema?])
-    }
-
     pub(crate) fn op_identity(&self, op: crate::OpId) -> (&'static str, &'static str) {
         let kind = self.operation_kind(op).expect("live operation");
         let declaration = self.declaration(&kind).expect("registered operation kind");
@@ -130,9 +126,5 @@ impl Context {
         let value = self.lookup("OpSpec", (kind, type_name::<I>(), i64::from(iface)))?;
         let raw = self.integer(value) as u32;
         Some(self.engine().value_to_base::<Converter>(Value::new(raw)).0)
-    }
-
-    pub(crate) fn kind_has_interface<I: ?Sized + 'static>(&self, kind: &str) -> bool {
-        self.find_op_interface::<I>(kind).is_some()
     }
 }

@@ -107,26 +107,6 @@ impl Context {
 }
 
 impl Context {
-    // Read only the projected columns, in index order.
-    pub(crate) fn index_rows<R: FromValues, const N: usize>(
-        &self,
-        name: &str,
-        (columns, keys): (&[usize], impl IntoValues),
-        order: &[usize],
-        project: [usize; N],
-    ) -> Vec<R> {
-        let mut engine = self.engine();
-        let db = engine.database_mut();
-        let keys: Vec<_> = keys.into_values(db.base_values()).collect();
-        let table = db.table(name).expect("declared IR table");
-        let index = db.add_kept_index(table, columns, order);
-        db.listed(index, &keys)
-            .map(|row| R::from_values(&project.map(|i| row[i]), db.base_values()))
-            .collect()
-    }
-}
-
-impl Context {
     pub(crate) fn operation_kind(&self, id: crate::OpId) -> Option<String> {
         self.record::<OperationRow>(id.number()).map(|row| row.kind)
     }

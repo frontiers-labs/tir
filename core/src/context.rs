@@ -168,14 +168,6 @@ impl Context {
         self.0.engine.borrow_mut()
     }
 
-    pub(crate) fn typing_engine(&self) -> Result<RefMut<'_, EGraph>, Error> {
-        drop(self.0.engine.try_borrow_mut().map_err(|_| {
-            Error::VerificationError("IR engine already borrowed during typechecking".into())
-        })?);
-        self.0.queries.verification(&mut self.engine());
-        Ok(self.engine())
-    }
-
     /// Request a fresh evaluation of the structural queries after an external edit.
     pub fn invalidate_indexes(&self) {
         self.0.queries.invalidate();
@@ -683,11 +675,6 @@ impl Context {
         u32::try_from(self.record::<RegionRow>(r.raw())?.owner)
             .ok()
             .map(OpId::new)
-    }
-    pub(crate) fn region_entry(&self, region: RegionId) -> Option<BlockId> {
-        u32::try_from(self.record::<RegionRow>(region.raw())?.entry)
-            .ok()
-            .map(BlockId::new)
     }
     pub(crate) fn region_is_nodes(&self, r: RegionId) -> bool {
         self.record::<RegionRow>(r.raw())
@@ -1313,20 +1300,6 @@ impl Context {
     pub(crate) fn set_block_ops(&self, block: BlockId, ops: Vec<OpId>) {
         for (slot, op) in ops.into_iter().enumerate() {
             self.place(op, Placement::Block(block, slot));
-        }
-    }
-    pub(crate) fn insert_op(&self, block: BlockId, index: usize, op: OpId) {
-        let mut ops = self.block_ops(block);
-        ops.insert(index, op);
-        self.set_block_ops(block, ops);
-    }
-    pub(crate) fn append_op(&self, block: BlockId, op: OpId) {
-        let (next, last) = self.member_tail("block", block.raw());
-        if last.is_none_or(|position| position == next as i64 - 1) {
-            self.place(op, Placement::Block(block, next));
-        } else {
-            // An earlier removal can leave a gap in the block order.
-            self.insert_op(block, next, op);
         }
     }
     pub(crate) fn remove_op_from_block(&self, block: BlockId, op: OpId) -> bool {
