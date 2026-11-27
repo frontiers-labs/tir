@@ -1,15 +1,66 @@
-// Migrated faithfully from `core/defs/eqsat/context.cdsl` to pure CDSL v3 `Rule(...)` syntax.
+// EqSat scoping, `scf.for` pins, flat `Color::BASE` SSI `Pi` branch-condition
+// refinement (zero `Color` overlays!), and custom-rule alias bridge.
 
 use std::core::*;
 use std::bigint::*;
 use std::int::*;
-use std::ir::dialect_drop_rules;
-use dialects::builtin;
+use dialects::{builtin, cfg, scf};
 
 pub let select: List<Rule> = {
     let root<node>: Rule(EqSatRoot(node) -> EqSatLive(node));
-    let within<root, region, mode, slot, entry, node, representative>: Rule((EqSatRoot(root), Region(region, mode, root, slot, entry), ReaderAt(node, region, representative)) -> EqSatLive(node));
+    let within<root, region, mode, slot, entry, node, representative>: Rule(
+        (EqSatRoot(root), Region(region, mode, root, slot, entry), ReaderAt(node, region, representative))
+        -> EqSatLive(node)
+    );
     List(root, within)
+};
+
+pub let attributes: List<Rule> = {
+    let present<node, name, attr>: Rule(
+        (EqSatLive(node), Attribute("operation", node, name, attr))
+        -> EqSatHasAttr(node, name)
+    );
+    let port<node, region, mode, slot, entry, port_slot, operand_slot, init, port, ty, declared>: Rule(
+        (
+            EqSatLive(node), Region(region, mode, node, slot, entry),
+            Binding(region, "entry", port_slot, operand_slot), Operand(node, operand_slot, init),
+            Value(port, ty, "region", region, port_slot, declared),
+        ) -> EqSatPort(node, region, port_slot, port, init)
+    );
+    let opnd_slot<node, slot, val>: Rule(Operand(node, slot, val) -> EqSatOperandSlot(node, slot));
+    let extra_res<node, val, ty, slot, decl>: Rule(
+        (EqSatLive(node), Value(val, ty, "result", node, slot, decl), less(int_lit(0), slot) == true)
+        -> EqSatExtraResult(node)
+    );
+    List(present, port, opnd_slot, extra_res)
+};
+
+pub let counted_pins: List<Rule> = {
+    let body<node, place, home, pos, display, loc, select, body, pred, polarity>: Rule(
+        (Operation(node, scf::r#for.kind, place, home, pos, display, loc), Control(node, false, select, true, body, pred, polarity))
+        -> (EqSatCounted(node, body), EqSatPinnedYield(body, pred))
+    );
+    let advance<node, region, slot>: Rule(
+        (EqSatCounted(node, region), Binding(region, "feedback", 0, slot))
+        -> EqSatPinnedYield(region, slot)
+    );
+    let exit<node, region, index, slot>: Rule(
+        (EqSatCounted(node, region), Binding(region, "exit", index, slot))
+        -> EqSatPinnedYield(region, slot)
+    );
+    let value<region, slot, value>: Rule(
+        (EqSatPinnedYield(region, slot), Yield(region, slot, value))
+        -> EqSatPinned(value)
+    );
+    let computation<region, slot, value, ty, node, index, decl>: Rule(
+        (EqSatPinnedYield(region, slot), Yield(region, slot, value), Value(value, ty, "result", node, index, decl))
+        -> EqSatPinnedOp(node)
+    );
+    let operand<node, slot, value>: Rule(
+        (EqSatPinnedOp(node), Operand(node, slot, value))
+        -> EqSatPinned(value)
+    );
+    List(body, advance, exit, value, computation, operand)
 };
 
 pub let paths: List<Rule> = {
@@ -30,138 +81,293 @@ pub let edits: List<Rule> = {
     List(terminal, operand, yield_value)
 };
 
-pub let attributes: List<Rule> = {
-    let present<node, name, attr>: Rule((EqSatLive(node), Attribute("operation", node, name, attr)) -> EqSatHasAttr(node, name));
-    List(present)
-};
+// ── Flat `Color::BASE` Branch-Condition Refinement (Zero `Color` Overlays) ───
 
-pub let incoming: List<Rule> = {
-    let untaken<node, home, pos, display, loc, pred, edge, target, bit, known>: Rule((EqSatLive(node), Operation(node, dialects::cfg::cond_br.kind, "block", home, pos, display, loc),
-         Operand(node,0,pred), Successor(node,edge,target), EqSatEdgeTruth(edge,bit),
-         EqSatFolded(pred,known), known != bigint_of(bit)) -> EqSatUntaken(node,edge));
+pub let scope_prep: List<Rule> = {
     let sources<a, x, b, y, target>: Rule((Successor(a, x, target), Successor(b, y, target), a != b) -> EqSatMultipleEdges(target));
     let slots<a, x, y, target>: Rule((Successor(a, x, target), Successor(a, y, target), x != y) -> EqSatMultipleEdges(target));
     let entry<region, mode, node, slot, block>: Rule(Region(region, mode, node, slot, block) -> EqSatEntryBlock(block));
-    let literal<value, bits>: Rule(EqSatFolded(value, bits) -> EqSatDefinedLiteral(value));
     let true_edge: Rule(() -> EqSatEdgeTruth(0, 1));
     let false_edge: Rule(() -> EqSatEdgeTruth(1, 0));
-    List(untaken, sources, slots, entry, literal, true_edge, false_edge)
+    let case_false: Rule(() -> EqSatCaseBit("0", 0));
+    let case_true: Rule(() -> EqSatCaseBit("1", 1));
+    let bit_zero: Rule(() -> EqSatBitVal(bigint(0), 0));
+    let bit_one: Rule(() -> EqSatBitVal(bigint(1), 1));
+    let eq_true: Rule(() -> EqSatEqualityCondition("eq", 1));
+    let ne_false: Rule(() -> EqSatEqualityCondition("ne", 0));
+    let eq_ne: Rule(() -> EqSatPredicateComplement("eq", "ne"));
+    let slt_sge: Rule(() -> EqSatPredicateComplement("slt", "sge"));
+    let sgt_sle: Rule(() -> EqSatPredicateComplement("sgt", "sle"));
+    let ult_uge: Rule(() -> EqSatPredicateComplement("ult", "uge"));
+    let ugt_ule: Rule(() -> EqSatPredicateComplement("ugt", "ule"));
+    let base_const<node, kind, pl, hm, pos, d, l, res, ty, decl>: Rule(
+        (EqSatLive(node), EqSatConstantImplementation(kind), Operation(node, kind, pl, hm, pos, d, l), Value(res, ty, "result", node, 0, decl))
+        -> EqSatBaseConst(res)
+    );
+    let base_const_val<node, kind, pl, hm, pos, d, l, res, ty, decl, mask, attr, raw, bits>: Rule(
+        (
+            EqSatLive(node), EqSatConstantImplementation(kind),
+            Operation(node, kind, pl, hm, pos, d, l),
+            Value(res, ty, "result", node, 0, decl), TypeMask(ty, mask),
+            Attribute("operation", node, "value", attr),
+            raw == eqsat_attr_int(attr), bits == bit_and(raw, mask),
+        ) -> EqSatBaseConstVal(res, bits)
+    );
+    let inv_cmp<a, b>: Rule(EqSatPredicateComplement(a, b) -> EqSatPredicateComplement(b, a));
+    List(
+        sources, slots, entry, true_edge, false_edge, case_false, case_true, bit_zero, bit_one,
+        eq_true, ne_false, eq_ne, slt_sge, sgt_sle, ult_uge, ugt_ule, inv_cmp, base_const, base_const_val,
+    )
 };
 
-pub let assumptions: List<Rule> = {
-    let cfg<node, block, pos, display, loc, selector, edge, target, bit>: Rule((EqSatLive(node), Operation(node, dialects::cfg::cond_br.kind, "block", block, pos, display, loc),
-         Operand(node, 0, selector), Successor(node, edge, target), EqSatEdgeTruth(edge, bit),
-         !EqSatMultipleEdges(target), !EqSatEntryBlock(target), block != target) -> EqSatAssumption(target, selector, bit));
-    let explicit_arm<node, selector_slot, body, pred, polarity, selector, bits, region, bit>: Rule((EqSatLive(node), Control(node, true, selector_slot, false, body, pred, polarity),
-         Operand(node, selector_slot, selector), Arm(node, false, bits, region),
-         EqSatCaseBit(bits, bit)) -> EqSatAssumption(region, selector, bit));
-    let literal_false: Rule(() -> EqSatCaseBit("0", 0));
-    let literal_true: Rule(() -> EqSatCaseBit("1", 1));
-    let boolean_default<node, selector_slot, body, pred, polarity, selector, case_region, region, ty, term>: Rule((EqSatLive(node), Control(node, true, selector_slot, false, body, pred, polarity),
-         Operand(node, selector_slot, selector), EqSatScalar(selector, ty, term),
-         EqSatAllBits(ty, bigint(1)), Arm(node, false, "0", case_region),
-         Arm(node, true, "", region)) -> EqSatAssumption(region, selector, 1));
-    let forwarded<node, region, index, port, selector, bit>: Rule((EqSatAssumption(region, selector, bit), EqSatPort(node, region, index, port, selector)) -> EqSatAssumption(region, port, bit));
-    let low_bit<scope, selector, bit, ty, trunc, declared, masked, mt, result, x, y, home, mask, pl, hm, pos, dp, lc>: Rule((EqSatAssumption(scope, selector, bit),
-         Operation(trunc, builtin::trunci.kind, pl, hm, pos, dp, lc), Operand(trunc, 0, masked),
-         Value(selector, ty, "result", trunc, 0, declared),
-         EqSatAllBits(ty, bigint(1)),
-         EqSatBinary(result, builtin::andi.kind, masked, mt, x, y, home),
-         EqSatScalar(y, mt, mask), mask == Scalar::Literal(mt, bigint(1))) -> EqSatAssumption(scope, masked, bit));
-    let unconditional<scope, value, bit, node, p, d, l, target>: Rule((EqSatAssumption(scope,value,bit), EqSatLive(node), Operation(node, dialects::cfg::br.kind, "block", scope, p, d, l),
-         Successor(node,0,target), !EqSatMultipleEdges(target), !EqSatEntryBlock(target)) -> EqSatAssumption(target,value,bit));
-    let graph_child<scope, value, bit, node, k, p, d, l, region, mode, slot, entry>: Rule((EqSatAssumption(scope,value,bit), EqSatLive(node), Operation(node, k, "graph", scope, p, d, l),
-         Region(region,mode,node,slot,entry)) -> EqSatAssumption(region,value,bit));
-    let predicate_complement<scope, value, bit, other, flipped, ty, term, comparison, k, opposite, a, b>: Rule((EqSatAssumption(scope,value,bit), EqSatScalar(value,ty,term), EqSatScalar(other,ty,comparison),
-         term == Scalar::Compare(k,ty,a,b), comparison == Scalar::Compare(opposite,ty,a,b),
-         EqSatPredicateComplement(k,opposite), EqSatEdgeTruth(bit,flipped)) -> EqSatAssumption(scope,other,flipped));
-    let equal_difference<scope, selector, result, owner, k, ty, bit_ty, term, x, y, lhs, rhs, home, predicate, bit>: Rule((EqSatAssumption(scope,selector,bit), EqSatScalar(selector,bit_ty,term),
-         term == Scalar::Compare(predicate,bit_ty,lhs,rhs), EqSatEqualityCondition(predicate,bit),
-         EqSatBinary(owner,k,result,ty,x,y,home), EqSatEqualDifference(k),
-         EqSatScalar(x,ty,lhs), EqSatScalar(y,ty,rhs)) -> EqSatAssumption(scope,result,0));
-    let equality_literal<scope, selector, known, ty, bit_ty, term, input, predicate, bit, left, right>: Rule((EqSatAssumption(scope,selector,bit), EqSatScalar(selector,bit_ty,term),
-         EqSatEqualityCondition(predicate,bit), term == Scalar::Compare(predicate,bit_ty,left,right),
-         EqSatScalar(input,ty,left), right == Scalar::Literal(ty,known), !EqSatDefinedLiteral(input)) -> EqSatColorSeed(scope,left,Scalar::Literal(ty,known)));
-    let eq_true: Rule(() -> EqSatEqualityCondition("eq",1));
-    let ne_false: Rule(() -> EqSatEqualityCondition("ne",0));
-    let subtract: Rule(() -> EqSatEqualDifference(dialects::builtin::subi.kind));
-    let exclusive_or: Rule(() -> EqSatEqualDifference(dialects::builtin::xori.kind));
-    let eq_ne: Rule(() -> EqSatPredicateComplement("eq","ne"));
-    let slt_sge: Rule(() -> EqSatPredicateComplement("slt","sge"));
-    let sgt_sle: Rule(() -> EqSatPredicateComplement("sgt","sle"));
-    let ult_uge: Rule(() -> EqSatPredicateComplement("ult","uge"));
-    let ugt_ule: Rule(() -> EqSatPredicateComplement("ugt","ule"));
-    let inverse<a, b>: Rule(EqSatPredicateComplement(a,b) -> EqSatPredicateComplement(b,a));
-    let seed<scope, value, bit, ty, term>: Rule((EqSatAssumption(scope, value, bit), EqSatScalar(value, ty, term),
-         !EqSatDefinedLiteral(value)) -> EqSatColorSeed(scope, term, Scalar::Literal(ty, bigint_of(bit))));
-    List(cfg, explicit_arm, literal_false, literal_true, boolean_default, forwarded, low_bit, unconditional, graph_child, predicate_complement, equal_difference, equality_literal, eq_true, ne_false, subtract, exclusive_or, eq_ne, slt_sge, sgt_sle, ult_uge, ugt_ule, inverse, seed)
+pub let scope_constraints: List<Rule> = {
+    // 1. Seed per-scope selector constants from CFG cond_br and RVSDG scf.switch
+    //    (skip already-constant selectors so unreachable arms never assert contradictions).
+    let cfg_br<node, block, pos, display, loc, selector, edge, target, bit>: Rule(
+        (
+            EqSatLive(node), Operation(node, cfg::cond_br.kind, "block", block, pos, display, loc),
+            Operand(node, 0, selector), !EqSatBaseConst(selector),
+            Successor(node, edge, target), EqSatEdgeTruth(edge, bit),
+            !EqSatMultipleEdges(target), !EqSatEntryBlock(target), block != target,
+        ) -> (ScopeValConst(target, selector, bigint_of(bit)), ScopeConstrained(target, selector))
+    );
+    let sw_explicit<node, sel_slot, body, pred, pol, sel, bits, region, bit>: Rule(
+        (
+            EqSatLive(node), Control(node, true, sel_slot, false, body, pred, pol),
+            Operand(node, sel_slot, sel), !EqSatBaseConst(sel),
+            Arm(node, false, bits, region), EqSatCaseBit(bits, bit),
+        ) -> (ScopeValConst(region, sel, bigint_of(bit)), ScopeConstrained(region, sel))
+    );
+    let sw_bool_default<node, sel_slot, body, pred, pol, sel, case_reg, region, ty, decl, def, ow, sl>: Rule(
+        (
+            EqSatLive(node), Control(node, true, sel_slot, false, body, pred, pol),
+            Operand(node, sel_slot, sel), !EqSatBaseConst(sel),
+            Value(sel, ty, def, ow, sl, decl),
+            TypeMask(ty, bigint(1)), Arm(node, false, "0", case_reg),
+            Arm(node, true, "", region),
+        ) -> (ScopeValConst(region, sel, bigint(1)), ScopeConstrained(region, sel))
+    );
+    // 2. Propagate constraints into arm ports, single-pred CFG continuations, nested RVSDG regions, and `ScopeValEq`.
+    let port_fwd<node, region, idx, port, sel, bits>: Rule(
+        (ScopeValConst(region, sel, bits), EqSatPort(node, region, idx, port, sel))
+        -> (ScopeValConst(region, port, bits), ScopeConstrained(region, port))
+    );
+    let eq_const_l<scope, a, b, bits>: Rule(
+        (ScopeValEq(scope, a, b), ScopeValConst(scope, a, bits))
+        -> (ScopeValConst(scope, b, bits), ScopeConstrained(scope, b))
+    );
+    let eq_const_r<scope, a, b, bits>: Rule(
+        (ScopeValEq(scope, a, b), ScopeValConst(scope, b, bits))
+        -> (ScopeValConst(scope, a, bits), ScopeConstrained(scope, a))
+    );
+    let cfg_uncond_const<scope, val, bits, node, p, d, l, target>: Rule(
+        (
+            ScopeValConst(scope, val, bits), EqSatLive(node),
+            Operation(node, cfg::br.kind, "block", scope, p, d, l),
+            Successor(node, 0, target), !EqSatMultipleEdges(target), !EqSatEntryBlock(target),
+        ) -> (ScopeValConst(target, val, bits), ScopeConstrained(target, val))
+    );
+    let cfg_uncond_eq<scope, a, b, node, p, d, l, target>: Rule(
+        (
+            ScopeValEq(scope, a, b), EqSatLive(node),
+            Operation(node, cfg::br.kind, "block", scope, p, d, l),
+            Successor(node, 0, target), !EqSatMultipleEdges(target), !EqSatEntryBlock(target),
+        ) -> (ScopeValEq(target, a, b), ScopeConstrained(target, a), ScopeConstrained(target, b))
+    );
+    let graph_child_const<scope, val, bits, node, k, p, d, l, region, mode, slot, entry>: Rule(
+        (
+            ScopeValConst(scope, val, bits), EqSatLive(node),
+            Operation(node, k, "graph", scope, p, d, l),
+            Region(region, mode, node, slot, entry),
+        ) -> (ScopeValConst(region, val, bits), ScopeConstrained(region, val))
+    );
+    let graph_child_eq<scope, a, b, node, k, p, d, l, region, mode, slot, entry>: Rule(
+        (
+            ScopeValEq(scope, a, b), EqSatLive(node),
+            Operation(node, k, "graph", scope, p, d, l),
+            Region(region, mode, node, slot, entry),
+        ) -> (ScopeValEq(region, a, b), ScopeConstrained(region, a), ScopeConstrained(region, b))
+    );
+    // 3. Derive low-bit, equality (`a == b` or `a == const`), and comparison-complement constraints directly from IR.
+    let low_bit<scope, sel, bits, ty, trunc, decl, masked, mt, mdecl, and_op, x, one, oattr, mask, raw, pl, hm, pos, dp, lc, ap, ah, apos, adp, alc, co, cd, cp, ch, cpos, cdp, clc>: Rule(
+        (
+            ScopeValConst(scope, sel, bits),
+            Value(sel, ty, "result", trunc, 0, decl), TypeMask(ty, bigint(1)),
+            Operation(trunc, builtin::trunci.kind, pl, hm, pos, dp, lc), Operand(trunc, 0, masked),
+            Value(masked, mt, "result", and_op, 0, mdecl), TypeMask(mt, mask),
+            Operation(and_op, builtin::andi.kind, ap, ah, apos, adp, alc),
+            Operand(and_op, 0, x), Operand(and_op, 1, one),
+            Value(one, mt, "result", co, 0, cd),
+            Operation(co, builtin::constant.kind, cp, ch, cpos, cdp, clc),
+            Attribute("operation", co, "value", oattr),
+            raw == eqsat_attr_int(oattr), bit_and(raw, mask) == bigint(1),
+        ) -> (ScopeValConst(scope, masked, bits), ScopeConstrained(scope, masked))
+    );
+    let cmp_eq_sym<scope, sel, sbits, bit, cmp_op, pl, hm, pos, dp, lc, ty, decl, attr, pred, a, b>: Rule(
+        (
+            ScopeValConst(scope, sel, sbits), EqSatBitVal(sbits, bit),
+            Value(sel, ty, "result", cmp_op, 0, decl),
+            Operation(cmp_op, builtin::cmpi.kind, pl, hm, pos, dp, lc),
+            Attribute("operation", cmp_op, "predicate", attr), pred == eqsat_attr_case(attr),
+            EqSatEqualityCondition(pred, bit),
+            Operand(cmp_op, 0, a), Operand(cmp_op, 1, b),
+            !EqSatBaseConst(a), !EqSatBaseConst(b),
+        ) -> (ScopeValEq(scope, a, b), ScopeConstrained(scope, a), ScopeConstrained(scope, b))
+    );
+    let cmp_eq_const_r<scope, sel, sbits, bit, cmp_op, pl, hm, pos, dp, lc, ty, decl, attr, pred, a, b, cbits>: Rule(
+        (
+            ScopeValConst(scope, sel, sbits), EqSatBitVal(sbits, bit),
+            Value(sel, ty, "result", cmp_op, 0, decl),
+            Operation(cmp_op, builtin::cmpi.kind, pl, hm, pos, dp, lc),
+            Attribute("operation", cmp_op, "predicate", attr), pred == eqsat_attr_case(attr),
+            EqSatEqualityCondition(pred, bit),
+            Operand(cmp_op, 0, a), Operand(cmp_op, 1, b),
+            !EqSatBaseConst(a), EqSatBaseConstVal(b, cbits),
+        ) -> (ScopeValConst(scope, a, cbits), ScopeConstrained(scope, a))
+    );
+    let cmp_eq_const_l<scope, sel, sbits, bit, cmp_op, pl, hm, pos, dp, lc, ty, decl, attr, pred, a, b, cbits>: Rule(
+        (
+            ScopeValConst(scope, sel, sbits), EqSatBitVal(sbits, bit),
+            Value(sel, ty, "result", cmp_op, 0, decl),
+            Operation(cmp_op, builtin::cmpi.kind, pl, hm, pos, dp, lc),
+            Attribute("operation", cmp_op, "predicate", attr), pred == eqsat_attr_case(attr),
+            EqSatEqualityCondition(pred, bit),
+            Operand(cmp_op, 0, a), Operand(cmp_op, 1, b),
+            EqSatBaseConstVal(a, cbits), !EqSatBaseConst(b),
+        ) -> (ScopeValConst(scope, b, cbits), ScopeConstrained(scope, b))
+    );
+    let cmp_same<scope, sel, sbits, bit, cmp_op, pl, hm, pos, dp, lc, ty, decl, attr, pred, a, b>: Rule(
+        (
+            ScopeValConst(scope, sel, sbits), EqSatBitVal(sbits, bit),
+            Value(sel, ty, "result", cmp_op, 0, decl),
+            Operation(cmp_op, builtin::cmpi.kind, pl, hm, pos, dp, lc),
+            Attribute("operation", cmp_op, "predicate", attr), pred == eqsat_attr_case(attr),
+            Operand(cmp_op, 0, a), Operand(cmp_op, 1, b),
+        ) -> ScopeCmpConst(scope, pred, a, b, bit)
+    );
+    let cmp_complement<scope, pred, a, b, bit, opp, flipped>: Rule(
+        (ScopeCmpConst(scope, pred, a, b, bit), EqSatPredicateComplement(pred, opp), EqSatEdgeTruth(bit, flipped))
+        -> ScopeCmpConst(scope, opp, a, b, flipped)
+    );
+    let cmp_child<scope, pred, a, b, bit, node, k, p, d, l, region, mode, slot, entry>: Rule(
+        (
+            ScopeCmpConst(scope, pred, a, b, bit), EqSatLive(node),
+            Operation(node, k, "graph", scope, p, d, l),
+            Region(region, mode, node, slot, entry),
+        ) -> ScopeCmpConst(region, pred, a, b, bit)
+    );
+    let cmp_uncond<scope, pred, a, b, bit, node, p, d, l, target>: Rule(
+        (
+            ScopeCmpConst(scope, pred, a, b, bit), EqSatLive(node),
+            Operation(node, cfg::br.kind, "block", scope, p, d, l),
+            Successor(node, 0, target), !EqSatMultipleEdges(target), !EqSatEntryBlock(target),
+        ) -> ScopeCmpConst(target, pred, a, b, bit)
+    );
+    List(
+        cfg_br, sw_explicit, sw_bool_default, port_fwd, eq_const_l, eq_const_r,
+        cfg_uncond_const, cfg_uncond_eq, graph_child_const, graph_child_eq,
+        low_bit, cmp_eq_sym, cmp_eq_const_r, cmp_eq_const_l, cmp_same, cmp_complement, cmp_child, cmp_uncond,
+    )
 };
 
-pub let branch_local: List<Rule> = {
-    let rewrite<scope, user, kind, place, pos, display, location, slot, value, ty, term, bits>: Rule((EqSatColorSite(scope), EqSatColorSubject(term), EqSatLive(user),
-         Operation(user, kind, place, scope, pos, display, location), Operand(user, slot, value),
-         EqSatScalar(value, ty, term), !EqSatDefinedLiteral(value), !EqSatPinned(value), term == Scalar::Literal(ty, bits)) -> EqSatScopedEdit(UseOwner::Operand(user), slot, value, bits));
-    let yield_value<scope, slot, value, ty, term, bits>: Rule((EqSatColorSite(scope), EqSatColorSubject(term), Yield(scope, slot, value),
-         EqSatScalar(value, ty, term), !EqSatDefinedLiteral(value), !EqSatPinned(value), term == Scalar::Literal(ty, bits)) -> EqSatScopedEdit(UseOwner::Yield(scope), slot, value, bits));
-    List(rewrite, yield_value)
+// Detect contradictory/unreachable scopes after base algebraic saturation so `Color::BASE`
+// constants can NEVER collide when `pi_equalities` fires.
+pub let detect_dead_scope: List<Rule> = {
+    let dead_pair<scope, v1, v2, b1, b2, e>: Rule(
+        (
+            ScopeValConst(scope, v1, b1), ScopeValConst(scope, v2, b2),
+            ValExpr(v1, e), ValExpr(v2, e), b1 != b2,
+        ) -> EqSatDeadScope(scope)
+    );
+    let dead_const<scope, v, b1, ty, b2>: Rule(
+        (ScopeValConst(scope, v, b1), ValExpr(v, Expr::Const(ty, b2)), b1 != b2)
+        -> EqSatDeadScope(scope)
+    );
+    let dead_eq_const<scope, a, b, t1, b1, t2, b2>: Rule(
+        (
+            ScopeValEq(scope, a, b),
+            ValExpr(a, Expr::Const(t1, b1)), ValExpr(b, Expr::Const(t2, b2)), b1 != b2,
+        ) -> EqSatDeadScope(scope)
+    );
+    List(dead_pair, dead_const, dead_eq_const)
 };
 
-pub let removable: List<Rule> = {
-    let frozen_argument<node, result>: Rule((EqSatArgumentFreeze(node,result), !EqSatPinnedOp(node), !EqSatPinned(result)) -> (EqSatRemovable(node,result), EqSatRemovableNode(node)));
-    let candidate<node, k, place, home, pos, display, loc, result, ty, decl>: Rule((EqSatLive(node), Operation(node, k, place, home, pos, display, loc), EqSatDropKind(k),
-         Value(result, ty, "result", node, 0, decl), !EqSatPinnedOp(node), !EqSatPinned(result)) -> (EqSatRemovable(node,result), EqSatRemovableNode(node)));
-    append(dialect_drop_rules(builtin::all_ops), List(frozen_argument, candidate))
+pub let pi_equalities: List<Rule> = {
+    // Monotonic lattices flow straight into `Pi(scope, e)`.
+    let pi_zeros<p, scope, e, z>: Rule(
+        (p == Expr::Pi(scope, e), KnownZeros(e, z))
+        -> KnownZeros(p, z)
+    );
+    let pi_defined<p, scope, e>: Rule(
+        (p == Expr::Pi(scope, e), ExprDefined(e))
+        -> ExprDefined(p)
+    );
+    // Branch constant assumption: `Pi(scope, val) == Const(ty, bits)`.
+    // NOTE: No `Pi(scope, Const(c)) == Const(c)` rule, so contradictory unreachable
+    // arms can NEVER collapse distinct `Color::BASE` constants.
+    let scope_const<scope, val, bits, ty, def, ow, sl, decl, ev>: Rule(
+        (
+            ScopeValConst(scope, val, bits), !EqSatDeadScope(scope),
+            Value(val, ty, def, ow, sl, decl), EqSatInteger(ty),
+            ValExpr(val, ev),
+        ) -> Expr::Pi(scope, ev) == Expr::Const(ty, bits)
+    );
+    // General symbolic equality under branch: `Pi(scope, a) == Pi(scope, b)` (both defined on taken path!).
+    let scope_eq<scope, a, b, ea, eb>: Rule(
+        (ScopeValEq(scope, a, b), !EqSatDeadScope(scope), ValExpr(a, ea), ValExpr(b, eb))
+        -> (
+            Expr::Pi(scope, ea) == Expr::Pi(scope, eb),
+            ExprDefined(Expr::Pi(scope, ea)),
+            ExprDefined(Expr::Pi(scope, eb)),
+        )
+    );
+    // Reflexive comparisons on defined expressions.
+    let cmp_eq_self<e, ty, x>: Rule(
+        (e == Expr::Compare("eq", ty, x, x), ExprDefined(x))
+        -> e == Expr::Const(ty, bigint(1))
+    );
+    let cmp_ne_self<e, ty, x>: Rule(
+        (e == Expr::Compare("ne", ty, x, x), ExprDefined(x))
+        -> e == Expr::Const(ty, bigint(0))
+    );
+    List(pi_zeros, pi_defined, scope_const, scope_eq, cmp_eq_self, cmp_ne_self)
 };
 
-pub let demand: List<Rule> = {
-    let root<user, slot, value>: Rule((Operand(user,slot,value), !EqSatRemovableNode(user), !EqSatDead(user)) -> EqSatDemand(value));
-    let yielded<region, slot, value>: Rule(Yield(region,slot,value) -> EqSatDemand(value));
-    let input<node, result, slot, value>: Rule((EqSatRemovable(node,result), EqSatDemand(result), Operand(node,slot,value)) -> EqSatDemand(value));
-    List(root, yielded, input)
+pub let mark_base_const: List<Rule> = {
+    let base_c<val, ty, bits>: Rule(ValExpr(val, Expr::Const(ty, bits)) -> EqSatBaseConst(val));
+    List(base_c)
 };
 
-pub let dead: List<Rule> = {
-    let unused<node, result>: Rule((EqSatRemovable(node,result), !EqSatDemand(result)) -> EqSatDead(node));
-    List(unused)
+// Direct constant edits for non-lifted ops (func.return, cfg.cond_br, etc.) & Yields inside `scope`.
+pub let scoped_edits: List<Rule> = {
+    let opnd<scope, user, k, pl, pos, d, l, slot, val, ev, ty, bits>: Rule(
+        (
+            EqSatLive(user), !EqSatLiftedOp(user),
+            Operation(user, k, pl, scope, pos, d, l),
+            Operand(user, slot, val),
+            ScopeConstrained(scope, val), !EqSatDeadScope(scope), !EqSatBaseConst(val), !EqSatPinned(val),
+            ValExpr(val, ev), Expr::Pi(scope, ev) == Expr::Const(ty, bits),
+        ) -> EqSatScopedEdit(UseOwner::Operand(user), slot, val, bits)
+    );
+    let yld<scope, slot, val, ev, ty, bits>: Rule(
+        (
+            Yield(scope, slot, val),
+            ScopeConstrained(scope, val), !EqSatDeadScope(scope), !EqSatBaseConst(val), !EqSatPinned(val),
+            ValExpr(val, ev), Expr::Pi(scope, ev) == Expr::Const(ty, bits),
+        ) -> EqSatScopedEdit(UseOwner::Yield(scope), slot, val, bits)
+    );
+    List(opnd, yld)
 };
 
-pub let phi_candidates: List<Rule> = {
-    let edge<node, edge, block, param, slot, value, bits>: Rule((EqSatLive(node), Successor(node,edge,block), SuccessorArgument(node,edge,param,slot),
-         Operand(node,slot,value), EqSatFolded(value,bits), !EqSatEntryBlock(block), !EqSatUntaken(node,edge)) -> EqSatEdgeBits(node,edge,block,param,bits));
-    List(edge)
-};
-
-pub let phi_disagreement: List<Rule> = {
-    let missing<block, param, bits, witness, incoming, node, edge>: Rule((EqSatEdgeBits(witness,incoming,block,param,bits), Successor(node,edge,block),
-         !EqSatEdgeBits(node,edge,block,param,bits), !EqSatUntaken(node,edge)) -> EqSatPhiDisagrees(block,param,bits));
-    List(missing)
-};
-
-pub let phi_literals: List<Rule> = {
-    let agreed<block, param, bits, witness, incoming, value, ty, decl>: Rule((EqSatEdgeBits(witness,incoming,block,param,bits), !EqSatPhiDisagrees(block,param,bits),
-         Value(value,ty,"block",block,param,decl), EqSatInteger(ty), !EqSatPinned(value)) -> (EqSatPhiLiteral(value,bits), EqSatFolded(value,bits)));
-    List(agreed)
-};
-
-pub let phi_uses: List<Rule> = {
-    let yielded<region, slot, value, bits, node, mode, region_slot, entry>: Rule((EqSatPhiLiteral(value,bits), Yield(region,slot,value), Region(region,mode,node,region_slot,entry),
-         EqSatLive(node)) -> EqSatScopedEdit(UseOwner::Yield(region),slot,value,bits));
-    let operand<user, slot, value, bits>: Rule((EqSatPhiLiteral(value,bits), EqSatLive(user), Operand(user,slot,value)) -> EqSatScopedEdit(UseOwner::Operand(user),slot,value,bits));
-    List(yielded, operand)
-};
-
-extract rust select => "@ct";
-extract rust paths => "@ct";
-extract rust used => "@ct";
-extract rust edits => "@ct";
-extract rust attributes => "@ct";
-extract rust incoming => "@ct";
-extract rust assumptions => "@ct";
-extract rust branch_local => "@ct";
-extract rust removable => "@ct";
-extract rust demand => "@ct";
-extract rust dead => "@ct";
-extract rust phi_candidates => "@ct";
-extract rust phi_disagreement => "@ct";
-extract rust phi_literals => "@ct";
-extract rust phi_uses => "@ct";
+extract rust select            => "@ct";
+extract rust attributes        => "@ct";
+extract rust counted_pins      => "@ct";
+extract rust paths             => "@ct";
+extract rust used              => "@ct";
+extract rust edits             => "@ct";
+extract rust scope_prep        => "@ct";
+extract rust scope_constraints => "@ct";
+extract rust detect_dead_scope => "@ct";
+extract rust pi_equalities     => "@ct";
+extract rust mark_base_const   => "@ct";
+extract rust scoped_edits      => "@ct";

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // The slot's own pointer is stored into another slot, so its contents may be
 // reached by a name the term graph never sees. The chain the arms leave says

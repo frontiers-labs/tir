@@ -1,5 +1,5 @@
-// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
-// RUN: tir opt --pass fixpoint<3>(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(memopt)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(memopt) --verify %s | filecheck %s
 // RUN: not tir opt --pass func.func(nope) %s
 
 // Each private slot is bounded and its stored values are defined.

@@ -1,0 +1,209 @@
+// Declarative Flat-CFG Control-Flow Simplification pass.
+//
+// Consumes cached `analysis::value_info` tables and handles CFG-only constructs:
+// 1. CFG untaken branches & constant block-argument (phi) folding
+// 2. `scf.ordered_for` (CFG-body) invariant carried ports & constant read folding
+//
+// RVSDG `scf.switch` (Gamma) and `scf.loop` (Theta) live inside `EqSatPass`.
+
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use std::ir::{OperationId, ValueId};
+use dialects::{cfg, scf};
+
+pub enum CtrlUseOwner {
+    Operand(OperationId),
+    Yield(Int),
+}
+
+// ── CFG Constant Phi Folding ─────────────────────────────────────────────────
+
+pub let CtrlEdgeTruth: Relation<(Int, Int)>;
+pub let CtrlEntryBlock: Relation<Int>;
+pub let CtrlUntaken: Relation<(OperationId, Int)>;
+pub let CtrlEdgeBits: Relation<(OperationId, Int, Int, Int, BigInt)>;
+pub let CtrlPhiDisagrees: Relation<(Int, Int, BigInt)>;
+pub let CtrlPhiLiteral: Relation<(ValueId, BigInt)>;
+
+// ── `scf.ordered_for` (CFG-Body) Invariant Ports ─────────────────────────────
+
+pub let CtrlCountedPort: Relation<(OperationId, Int, Int, ValueId, ValueId, ValueId)>;
+pub let CtrlCountedYield: Relation<(Int, OperationId)>;
+pub let CtrlCountedSame: Relation<(ValueId, OperationId)>;
+pub let CtrlCountedDiffer: Relation<ValueId>;
+pub let CtrlKnownCountedPort: Relation<(Int, ValueId, BigInt)>;
+
+// ── Output Edits ─────────────────────────────────────────────────────────────
+
+pub let CtrlReplace: Relation<(OperationId, ValueId, ValueId)>;
+pub let CtrlPath: Relation<(ValueId, ValueId)>;
+pub let CtrlOutgoing: Relation<ValueId>;
+pub let CtrlRedirect: Relation<(ValueId, ValueId)>;
+pub let CtrlAliasEdit: Relation<(CtrlUseOwner, Int, ValueId, ValueId)>;
+pub let CtrlConstEdit: Relation<(CtrlUseOwner, Int, ValueId, BigInt)>;
+
+let seed_facts: List<Rule> = {
+    let true_edge: Rule(() -> CtrlEdgeTruth(0, 1));
+    let false_edge: Rule(() -> CtrlEdgeTruth(1, 0));
+    let entry<region, mode, node, slot, blk>: Rule(Region(region, mode, node, slot, blk) -> CtrlEntryBlock(blk));
+    List(true_edge, false_edge, entry)
+};
+
+let cfg_phi_seed: List<Rule> = {
+    let untaken<node, hm, pos, d, l, pred, edge, target, bit, ty, known>: Rule(
+        (
+            ValLive(node), Operation(node, cfg::cond_br.kind, "block", hm, pos, d, l),
+            Operand(node, 0, pred), Successor(node, edge, target), CtrlEdgeTruth(edge, bit),
+            ValConstInt(pred, ty, known), known != bigint_of(bit),
+        ) -> CtrlUntaken(node, edge)
+    );
+    List(untaken)
+};
+
+let cfg_phi_edges: List<Rule> = {
+    let edge<node, edge, blk, param, slot, val, ty, bits>: Rule(
+        (
+            ValLive(node), Successor(node, edge, blk), SuccessorArgument(node, edge, param, slot),
+            Operand(node, slot, val), ValConstInt(val, ty, bits),
+            !CtrlEntryBlock(blk), !CtrlUntaken(node, edge),
+        ) -> CtrlEdgeBits(node, edge, blk, param, bits)
+    );
+    List(edge)
+};
+
+let cfg_phi_disagree: List<Rule> = {
+    let missing<blk, param, bits, w, inc, node, edge>: Rule(
+        (
+            CtrlEdgeBits(w, inc, blk, param, bits), Successor(node, edge, blk),
+            !CtrlEdgeBits(node, edge, blk, param, bits), !CtrlUntaken(node, edge),
+        ) -> CtrlPhiDisagrees(blk, param, bits)
+    );
+    List(missing)
+};
+
+let cfg_phi_apply: List<Rule> = {
+    let agreed<blk, param, bits, w, inc, val, ty, decl>: Rule(
+        (
+            CtrlEdgeBits(w, inc, blk, param, bits), !CtrlPhiDisagrees(blk, param, bits),
+            Value(val, ty, "block", blk, param, decl), ValIntType(ty), !ValPinned(val),
+        ) -> CtrlPhiLiteral(val, bits)
+    );
+    List(agreed)
+};
+
+let ordered_for_seed: List<Rule> = {
+    let binding<node, hm, pos, d, l, region, entry, j, i, port, init, res, ty, pdecl, rdecl, dk, ow, isl, idecl>: Rule(
+        (
+            ValLive(node), Operation(node, scf::ordered_for.kind, "block", hm, pos, d, l),
+            Region(region, "cfg", node, 0, entry), Value(port, ty, "block", entry, i, pdecl),
+            less(int_lit(0), i) == true, j == (i - 1),
+            Operand(node, i, init), Value(init, ty, dk, ow, isl, idecl),
+            Value(res, ty, "result", node, i, rdecl),
+        ) -> CtrlCountedPort(node, region, j, port, res, init)
+    );
+    let sites<region, blk, ord, ex, pos, d, l>: Rule(
+        (Block(blk, region, ord), Operation(ex, scf::r#yield.kind, "block", blk, pos, d, l))
+        -> CtrlCountedYield(region, ex)
+    );
+    let same_port<node, region, j, port, res, init, ex>: Rule(
+        (CtrlCountedPort(node, region, j, port, res, init), CtrlCountedYield(region, ex), Operand(ex, j, port))
+        -> CtrlCountedSame(res, ex)
+    );
+    let same_const<node, region, j, port, res, init, ex, out, ty, bits>: Rule(
+        (
+            CtrlCountedPort(node, region, j, port, res, init), CtrlCountedYield(region, ex),
+            Operand(ex, j, out), ValConstInt(init, ty, bits), ValConstInt(out, ty, bits),
+        ) -> CtrlCountedSame(res, ex)
+    );
+    List(binding, sites, same_port, same_const)
+};
+
+let ordered_for_disagree: List<Rule> = {
+    let diff<node, region, slot, port, res, init, ex>: Rule(
+        (CtrlCountedPort(node, region, slot, port, res, init), CtrlCountedYield(region, ex), !CtrlCountedSame(res, ex))
+        -> CtrlCountedDiffer(res)
+    );
+    List(diff)
+};
+
+let ordered_for_apply: List<Rule> = {
+    let inv_exit<node, region, slot, port, res, init, ex>: Rule(
+        (CtrlCountedPort(node, region, slot, port, res, init), CtrlCountedSame(res, ex), !CtrlCountedDiffer(res))
+        -> CtrlReplace(node, res, init)
+    );
+    let inv_const<node, region, slot, port, res, init, ex, ty, bits>: Rule(
+        (
+            CtrlCountedPort(node, region, slot, port, res, init), CtrlCountedSame(res, ex),
+            !CtrlCountedDiffer(res), ValConstInt(init, ty, bits),
+        ) -> CtrlKnownCountedPort(region, port, bits)
+    );
+    let const_read<user, region, member, port, bits, slot, k, pl, hm, p, d, l>: Rule(
+        (
+            CtrlKnownCountedPort(region, port, bits), ReaderAt(user, region, member),
+            Operand(user, slot, port), Operation(user, k, pl, hm, p, d, l),
+            ValDropKind(k), !ValPinnedOp(user),
+        ) -> CtrlConstEdit(CtrlUseOwner::Operand(user), slot, port, bits)
+    );
+    List(inv_exit, inv_const, const_read)
+};
+
+let emit_phi_uses: List<Rule> = {
+    let yielded<region, slot, val, bits, node, mode, rslot, entry>: Rule(
+        (CtrlPhiLiteral(val, bits), Yield(region, slot, val), Region(region, mode, node, rslot, entry), ValLive(node))
+        -> CtrlConstEdit(CtrlUseOwner::Yield(region), slot, val, bits)
+    );
+    let operand<user, slot, val, bits>: Rule(
+        (CtrlPhiLiteral(val, bits), ValLive(user), Operand(user, slot, val))
+        -> CtrlConstEdit(CtrlUseOwner::Operand(user), slot, val, bits)
+    );
+    List(yielded, operand)
+};
+
+let alias_paths: List<Rule> = {
+    let direct<owner, old, new>: Rule((CtrlReplace(owner, old, new), !ValPinned(old)) -> CtrlPath(old, new));
+    let trans<old, mid, new>: Rule((CtrlPath(old, mid), CtrlPath(mid, new)) -> CtrlPath(old, new));
+    List(direct, trans)
+};
+
+let alias_outgoing: List<Rule> = {
+    let out<old, new>: Rule(CtrlPath(old, new) -> CtrlOutgoing(old));
+    List(out)
+};
+
+let alias_edits: List<Rule> = {
+    let term<old, new>: Rule((CtrlPath(old, new), !CtrlOutgoing(new)) -> CtrlRedirect(old, new));
+    let opnd<user, slot, old, new>: Rule((CtrlRedirect(old, new), Operand(user, slot, old)) -> CtrlAliasEdit(CtrlUseOwner::Operand(user), slot, old, new));
+    let yld<region, slot, old, new>: Rule((CtrlRedirect(old, new), Yield(region, slot, old)) -> CtrlAliasEdit(CtrlUseOwner::Yield(region), slot, old, new));
+    List(term, opnd, yld)
+};
+
+extract rust seed_facts           => "@ct";
+extract rust cfg_phi_seed         => "@ct";
+extract rust cfg_phi_edges        => "@ct";
+extract rust cfg_phi_disagree     => "@ct";
+extract rust cfg_phi_apply        => "@ct";
+extract rust ordered_for_seed     => "@ct";
+extract rust ordered_for_disagree => "@ct";
+extract rust ordered_for_apply    => "@ct";
+extract rust emit_phi_uses        => "@ct";
+extract rust alias_paths          => "@ct";
+extract rust alias_outgoing       => "@ct";
+extract rust alias_edits          => "@ct";
+
+pub let run_control_simplify = || -> Schedule {
+    Schedule::Seq(List(
+        Schedule::Once(seed_facts),
+        Schedule::Once(cfg_phi_seed),
+        Schedule::Once(cfg_phi_edges),
+        Schedule::Once(cfg_phi_disagree),
+        Schedule::Once(cfg_phi_apply),
+        Schedule::Repeat(2, ordered_for_seed),
+        Schedule::Once(ordered_for_disagree),
+        Schedule::Repeat(2, ordered_for_apply),
+        Schedule::Once(emit_phi_uses),
+        Schedule::Repeat(64, alias_paths),
+        Schedule::Once(alias_outgoing),
+        Schedule::Repeat(4, alias_edits),
+    ))
+};

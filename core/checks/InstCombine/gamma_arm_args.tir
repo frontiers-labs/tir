@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // An arm's entry arguments are the inputs the gamma forwards into it, so
 // `addi %3, 0` is the forwarded `%1`. Both arms then yield `%1` and the gamma

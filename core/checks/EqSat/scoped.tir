@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 module {
   func.func @scoped(%x: !i8) -> !i8 {
@@ -25,10 +25,10 @@ module {
 // CHECK: %[[MASKED:[0-9]+]] = andi
 // CHECK: trunci %[[MASKED]]
 // CHECK: ^bb1:
-// CHECK: %[[ONE:[0-9]+]] = constant {value = 1} : !i8
-// CHECK-NEXT: muli %[[ONE]],
+// CHECK-NEXT: %[[TWO:[0-9]+]] = constant {value = 2} : !i8
+// CHECK-NEXT: cfg.br ^bb3(%[[TWO]] : !i8)
 // CHECK: ^bb2:
-// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i8
-// CHECK-NEXT: muli %[[ZERO]],
+// CHECK-NEXT: %[[ZERO:[0-9]+]] = constant {value = 0} : !i8
+// CHECK-NEXT: cfg.br ^bb3(%[[ZERO]] : !i8)
 // CHECK: ^bb3
 // CHECK: addi %{{[0-9]+}}, %[[MASKED]]

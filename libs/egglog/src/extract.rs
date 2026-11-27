@@ -230,6 +230,21 @@ impl<'g> TreeExtractor<'g, DefaultCost> {
     pub fn new_in(db: &'g Database, color: Color) -> Self {
         Self::build(db, color, DEFAULT_COST_MODEL)
     }
+}
+
+impl<'g, C: Cost> TreeExtractor<'g, C> {
+    pub fn with_cost_model(db: &'g Database, model: impl TreeCostModel<C> + 'g) -> Self {
+        Self::with_cost_model_in(db, Color::BASE, model)
+    }
+
+    /// The cheapest terms of the e-classes of `color` under `model`.
+    pub fn with_cost_model_in(
+        db: &'g Database,
+        color: Color,
+        model: impl TreeCostModel<C> + 'g,
+    ) -> Self {
+        Self::build(db, color, model)
+    }
 
     /// The best term of the e-class `value`.
     pub fn best(&self, value: Value) -> Result<(TermDag, TermId), Error> {
@@ -238,6 +253,20 @@ impl<'g> TreeExtractor<'g, DefaultCost> {
             .best_term(&mut termdag, value, &mut Map::default())
             .ok_or_else(|| Error::ExtractError(format!("no term for {value:?}")))?;
         Ok((termdag, term))
+    }
+
+    /// The extracted cost of the e-class `value`, if it has a finite term.
+    pub fn cost_of(&self, value: Value) -> Option<&C> {
+        let class = self.db.find_in(self.color, value);
+        self.costs.get(&class)
+    }
+
+    /// The chosen constructor table and operand values for `value`, if any.
+    pub fn best_row(&self, value: Value) -> Option<(TableId, &[Value])> {
+        let class = self.db.find_in(self.color, value);
+        self.parent
+            .get(&class)
+            .map(|(table, row)| (*table, row.as_slice()))
     }
 
     pub(crate) fn best_terms(
@@ -265,12 +294,6 @@ impl<'g> TreeExtractor<'g, DefaultCost> {
         let (table, _) = self.parent.get(&class)?;
         let sort = self.db.schema().table(*table).columns().last().copied()?;
         Some(self.term(termdag, class, sort, cache))
-    }
-}
-
-impl<'g, C: Cost> TreeExtractor<'g, C> {
-    pub fn with_cost_model(db: &'g Database, model: impl TreeCostModel<C> + 'g) -> Self {
-        Self::build(db, Color::BASE, model)
     }
 
     fn build(db: &'g Database, color: Color, model: impl TreeCostModel<C> + 'g) -> Self {

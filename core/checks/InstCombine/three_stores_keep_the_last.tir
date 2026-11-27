@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(memopt,dce) --verify %s | filecheck %s
 
 // The last of three writes to one address determines the externally visible value.
 

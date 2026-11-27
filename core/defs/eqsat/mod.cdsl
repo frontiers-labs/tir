@@ -1,30 +1,34 @@
-// EqSat Equality Saturation Pass — pure CDSL v3.
+// EqSat Equality Saturation Pass — flat `Color::BASE` CDSL v3 e-graph.
 //
-// Defines the pass schema, memoized known-zeros analysis, algebraic rewrite
-// collections, and the top-level CDSL pass drivers (`run_builtin_eqsat`,
-// `run_custom_eqsat`) compiled directly into static TEGG bytecode + Rust.
+// Single unified `Expr` e-graph covering:
+// - Pure arithmetic, bitwise, cast, FP, and pointer expressions + `KnownZeros` lattice
+// - Zero-color branch-scoped refinement via SSI `Expr::Pi(scope, expr)`
+// - RVSDG state-threaded memory via McCarthy `Store`/`LoadVal`/`LoadState`
+// - RVSDG structured control flow via Peggy `Gamma2`/`StateGamma2`/`Theta`
+// Extracted in one `Color::BASE` pass via `tir_egglog::TreeExtractor` + `OpCostModel`.
 
 use std::core::*;
 use std::ir::{
     EditSummary, OperationId, OperationKind, RuleCollection, RuleSlice, Session, ValueId,
-    propagate_scoped, publish_rewrites, resolve_layouts, run_collection, run_stage,
-    saturate_with_masks, seed_root, sweep_dead,
+    publish_rewrites, resolve_layouts, run_collection, run_stage, saturate, seed_root,
 };
 
-// ── E-Graph Value Sorts ──────────────────────────────────────────────────────
+// ── Unified `Expr` E-Graph Sort (Flat `Color::BASE`, Zero `Color` Overlays) ──
 
-pub enum Scalar {
-    Read(Int, ValueId),
-    Literal(Int, BigInt),
-    Binary(OperationKind, Int, Scalar, Scalar),
-    Compare(String, Int, Scalar, Scalar),
-}
-
-pub enum Form {
-    Read(ValueId),
-    Bits(BigInt),
-    Bin(OperationKind, Form, Form),
-    Constant(OperationKind, String, BigInt),
+pub enum Expr {
+    Var(ValueId),
+    Const(Int, BigInt),
+    CustomConst(OperationKind, String, BigInt),
+    Unary(OperationKind, Int, Expr),
+    Bin(OperationKind, Int, Expr, Expr),
+    Compare(String, Int, Expr, Expr),
+    Pi(Int, Expr),
+    Store(Expr, Expr, Int, Expr),
+    LoadVal(Expr, Expr, Int),
+    LoadState(Expr, Expr, Int),
+    Gamma2(Expr, Expr, Expr),
+    StateGamma2(Expr, Expr, Expr),
+    LoadGamma(Expr, Expr),
 }
 
 pub enum UseOwner {
@@ -41,177 +45,116 @@ pub let eqsat_attr_int: Int -> BigInt;
 pub let eqsat_bool_bit: Bool -> BigInt;
 pub let eqsat_pick_case: (String, String, Bool, Bool) -> Bool;
 
-// ── EqSat Relational Schema ──────────────────────────────────────────────────
+let bigint_or: (BigInt, BigInt) -> BigInt;
+extract egglog bigint_or => "bit_or";
 
-pub let EqSatRebuild: Table<(OperationId, ValueId), Form, Merge::Union>;
-pub let EqSatFlag: Relation<(OperationId, String, Bool, Bool)>;
-pub let EqSatFolded: Relation<(ValueId, BigInt)>;
-pub let EqSatConstant: Relation<(OperationId, ValueId, BigInt)>;
-pub let EqSatScalar: Relation<(ValueId, Int, Scalar)>;
-pub let EqSatZeros: Relation<(Scalar, Int, BigInt)>;
-pub let EqSatBinaryKind: Relation<(OperationKind,)>;
-pub let EqSatBinary: Relation<(OperationId, OperationKind, ValueId, Int, ValueId, ValueId, Int)>;
+// ── Core `Expr` E-Graph Schema ───────────────────────────────────────────────
+
+pub let ValExpr: Table<ValueId, Expr, Merge::Union>;
+pub let OpExpr: Table<(OperationId, Int), Expr, Merge::Union>;
+pub let ExprLifted: Relation<(ValueId,)>;
+pub let EqSatLiftedOp: Relation<(OperationId,)>;
+pub let ExprDefined: Relation<(Expr,)>;
+pub let KnownZeros: Table<Expr, BigInt, Merge::With(bigint_or)>;
+pub let TypeMask: Table<Int, BigInt, Merge::Unique>;
+pub let TypeWidth: Table<Int, Int, Merge::Unique>;
 pub let EqSatInteger: Relation<(Int,)>;
-pub let EqSatNeeded: Relation<(ValueId,)>;
-pub let EqSatAllBits: Relation<(Int, BigInt)>;
-pub let EqSatPureBinary: Relation<(OperationKind,)>;
-pub let EqSatBinaryKey: Relation<(OperationId,)>;
-pub let EqSatCommutative: Relation<(OperationKind,)>;
-pub let EqSatIntegerWidth: Relation<(Int, Int)>;
-pub let EqSatIntegerResult: Relation<(OperationId, OperationKind, ValueId, Int)>;
-pub let EqSatIntegerOperand: Relation<(OperationId, Int, ValueId, Int)>;
+pub let EqSatPointerType: Relation<(Int,)>;
+pub let EqSatNoSignedWrap: Relation<(OperationId,)>;
+pub let EqSatNoUnsignedWrap: Relation<(OperationId,)>;
+pub let EqSatBaseConst: Relation<(ValueId,)>;
+pub let EqSatBaseConstVal: Relation<(ValueId, BigInt)>;
+
+// ── Pass Scoping, DataLayout, & Custom Rule Bridge ───────────────────────────
+
 pub let EqSatConstantImplementation: Relation<(OperationKind,)>;
-pub let EqSatFlagField: Relation<(String, Bool)>;
 pub let EqSatRoot: Relation<(OperationId,)>;
 pub let EqSatLive: Relation<(OperationId,)>;
+pub let EqSatHasAttr: Relation<(OperationId, String)>;
+pub let EqSatOperandSlot: Relation<(OperationId, Int)>;
+pub let EqSatExtraResult: Relation<(OperationId,)>;
+pub let EqSatDefined: Relation<(ValueId,)>;
+pub let EqSatIncomingParameter: Relation<(ValueId,)>;
+pub let EqSatArgumentFreeze: Relation<(OperationId, ValueId)>;
+pub let EqSatCounted: Relation<(OperationId, Int)>;
+pub let EqSatPinnedYield: Relation<(Int, Int)>;
+pub let EqSatPinned: Relation<(ValueId,)>;
+pub let EqSatPinnedOp: Relation<(OperationId,)>;
+pub let EqSatLayoutKind: Relation<(OperationKind,)>;
+pub let EqSatLayoutQuery: Relation<(OperationId, OperationKind)>;
+pub let EqSatLayoutValue: Relation<(OperationId, BigInt)>;
+pub let EqSatLayoutScoped: Relation<(OperationId,)>;
+pub let EqSatPointerSize: Relation<(OperationId, Int)>;
+pub let EqSatStoreLayout: Relation<(OperationId, BigInt, BigInt)>;
+
+// ── Custom RuleCollection & Explicit Edit Bridge ─────────────────────────────
+
+pub let EqSatDefinition: Relation<(OperationId, ValueId, Expr)>;
 pub let EqSatReplace: Relation<(OperationId, ValueId, ValueId)>;
 pub let EqSatErase: Relation<(OperationId,)>;
 pub let EqSatPath: Relation<(ValueId, ValueId)>;
 pub let EqSatRedirect: Relation<(ValueId, ValueId)>;
 pub let EqSatAliasEdit: Relation<(UseOwner, Int, ValueId, ValueId)>;
 pub let outgoing: Relation<(ValueId,)>;
-pub let EqSatHasAttr: Relation<(OperationId, String)>;
+pub let EqSatScopedEdit: Relation<(UseOwner, Int, ValueId, BigInt)>;
+
+// ── Flat `Pi` Branch-Condition Refinement (Zero `Color` Overlays) ────────────
+
+pub let EqSatPort: Relation<(OperationId, Int, Int, ValueId, ValueId)>;
 pub let EqSatMultipleEdges: Relation<(Int,)>;
 pub let EqSatEntryBlock: Relation<(Int,)>;
 pub let EqSatEdgeTruth: Relation<(Int, Int)>;
-pub let EqSatAssumption: Relation<(Int, ValueId, Int)>;
-pub let EqSatColorSeed: Relation<(Int, Scalar, Scalar)>;
-pub let EqSatColorSite: Relation<(Int,)>;
-pub let EqSatColorSubject: Relation<(Scalar,)>;
-pub let EqSatDefinedLiteral: Relation<(ValueId,)>;
-pub let EqSatScopedEdit: Relation<(UseOwner, Int, ValueId, BigInt)>;
-pub let EqSatUntaken: Relation<(OperationId, Int)>;
-pub let EqSatEqualityCondition: Relation<(String, Int)>;
-pub let EqSatEqualDifference: Relation<(OperationKind,)>;
-pub let EqSatPredicateComplement: Relation<(String, String)>;
 pub let EqSatCaseBit: Relation<(String, Int)>;
-pub let EqSatDropKind: Relation<(OperationKind,)>;
-pub let EqSatRemovable: Relation<(OperationId, ValueId)>;
-pub let EqSatRemovableNode: Relation<(OperationId,)>;
-pub let EqSatDemand: Relation<(ValueId,)>;
-pub let EqSatDead: Relation<(OperationId,)>;
-pub let EqSatEdgeBits: Relation<(Int, Int, OperationId, Int, BigInt)>;
-pub let EqSatPhiDisagrees: Relation<(Int, Int, BigInt)>;
-pub let EqSatPhiLiteral: Relation<(ValueId, BigInt)>;
-pub let EqSatIdentity: Relation<(OperationId, ValueId, ValueId)>;
-pub let EqSatPowerForm: Relation<(OperationKind, OperationKind)>;
-pub let EqSatPower: Relation<(BigInt, BigInt)>;
-pub let EqSatWrappingAdd: Relation<(OperationId,)>;
-pub let EqSatWrappingSub: Relation<(OperationId,)>;
-pub let EqSatCast: Relation<(OperationId, OperationKind, ValueId, Int, ValueId)>;
-pub let EqSatUnaryKind: Relation<(OperationKind,)>;
-pub let EqSatDefined: Relation<(ValueId,)>;
-pub let EqSatIncomingParameter: Relation<(ValueId,)>;
-pub let EqSatDefinedFold: Relation<(OperationId, ValueId, BigInt)>;
-pub let EqSatArgumentFreeze: Relation<(OperationId, ValueId)>;
-pub let EqSatDefinition: Relation<(OperationId, ValueId, Form)>;
-pub let EqSatConstantNode: Relation<(OperationId,)>;
-pub let EqSatWrite: Relation<(ValueId, ValueId, Int, ValueId, OperationId, String, Int, Int, Int)>;
-pub let EqSatStoreSite: Relation<(OperationId, ValueId, Int, ValueId, ValueId, String, Int, Int, Int)>;
-pub let EqSatLoadSite: Relation<(OperationId, ValueId, Int, ValueId, ValueId, String, Int)>;
-pub let EqSatAdjacentWrite: Relation<(OperationId, OperationId, ValueId, ValueId, ValueId, ValueId, ValueId, Int, Int)>;
-pub let EqSatStored: Relation<(ValueId, ValueId, Int, ValueId)>;
-pub let EqSatFunctionGraph: Relation<(Int,)>;
-pub let EqSatRequiredGraphValue: Relation<(Int, ValueId)>;
-pub let EqSatMemoryOrdered: Relation<(OperationId, ValueId)>;
-pub let EqSatLoad: Relation<(OperationId, ValueId, ValueId, ValueId)>;
+pub let EqSatBitVal: Relation<(BigInt, Int)>;
+pub let EqSatEqualityCondition: Relation<(String, Int)>;
+pub let EqSatPredicateComplement: Relation<(String, String)>;
+pub let ScopeValConst: Relation<(Int, ValueId, BigInt)>;
+pub let ScopeValEq: Relation<(Int, ValueId, ValueId)>;
+pub let ScopeConstrained: Relation<(Int, ValueId)>;
+pub let ScopeCmpConst: Relation<(Int, String, ValueId, ValueId, Int)>;
+pub let ScopeCmpOp: Relation<(OperationId,)>;
+pub let EqSatDeadScope: Relation<(Int,)>;
+
+// ── RVSDG Memory & Structured Control Side-Condition Facts ───────────────────
+
 pub let EqSatAllocation: Relation<(ValueId,)>;
 pub let EqSatAddressSlot: Relation<(OperationKind, Int)>;
-pub let EqSatEscapes: Relation<(ValueId,)>;
-pub let EqSatOverwrite: Relation<(OperationId, ValueId, OperationId, ValueId)>;
-pub let EqSatStateOtherUse: Relation<(ValueId,)>;
-pub let EqSatVisibleAt: Relation<(OperationId, ValueId)>;
-pub let EqSatBranchCell: Relation<(OperationId, Int, Int, ValueId, Int, ValueId)>;
-pub let EqSatBranchDisagrees: Relation<(OperationId, Int, ValueId, Int, ValueId)>;
-pub let EqSatCfgCell: Relation<(Int, Int, OperationId, Int, ValueId, Int, ValueId)>;
-pub let EqSatCfgDisagrees: Relation<(Int, Int, ValueId, Int, ValueId)>;
 pub let EqSatOrdinaryAccess: Relation<(OperationId,)>;
-pub let EqSatOperandSlot: Relation<(OperationId, Int)>;
-pub let EqSatPlainStore: Relation<(OperationId, Int, Int, ValueId, Int, ValueId)>;
-pub let EqSatPlainLoad: Relation<(OperationId, Int, Int, ValueId, Int, ValueId)>;
-pub let EqSatWindow: Relation<(OperationId, Int, Int, Int, ValueId, Int, ValueId)>;
-pub let EqSatTransparent: Relation<(OperationKind,)>;
-pub let EqSatClobber: Relation<(OperationId, OperationId)>;
-pub let EqSatBlockedSlot: Relation<(OperationId,)>;
-pub let EqSatPrivateWrite: Relation<(OperationId, ValueId)>;
-pub let EqSatLocalPointerUse: Relation<(OperationId, ValueId)>;
-pub let EqSatPreservesCell: Relation<(OperationId, OperationId)>;
-pub let EqSatStoreLayout: Relation<(OperationId, BigInt, BigInt)>;
-pub let EqSatHasStoreLayout: Relation<(OperationId,)>;
-pub let EqSatPrivateExtent: Relation<(ValueId, BigInt, BigInt)>;
-pub let EqSatExtraResult: Relation<(OperationId,)>;
-pub let EqSatPointerSize: Relation<(OperationId, Int)>;
-pub let EqSatPointerType: Relation<(Int,)>;
-pub let EqSatPointerCell: Relation<(ValueId, ValueId, Int, ValueId, Int)>;
-pub let EqSatPlainOverwrite: Relation<(OperationId, OperationId, Int, Int, Int)>;
-pub let EqSatOverwriteBarrier: Relation<(OperationId, OperationId)>;
-pub let EqSatMixedRegion: Relation<(Int,)>;
 pub let EqSatOpaqueMemory: Relation<(OperationKind,)>;
-pub let EqSatPort: Relation<(OperationId, Int, Int, ValueId, ValueId)>;
-pub let EqSatArmResult: Relation<(OperationId, Int, Int, ValueId, Bool)>;
-pub let EqSatArmDisagrees: Relation<(OperationId, Int, ValueId)>;
-pub let EqSatInvariantPort: Relation<(OperationId, Int, Int, ValueId, ValueId)>;
-pub let EqSatCountedPort: Relation<(OperationId, Int, Int, ValueId, ValueId, Int)>;
-pub let EqSatCountedYield: Relation<(OperationId, ValueId)>;
-pub let EqSatCountedSame: Relation<(OperationId, ValueId)>;
-pub let EqSatCountedDiffer: Relation<(OperationId,)>;
-pub let EqSatKnownCountedPort: Relation<(OperationId, Int, BigInt)>;
-pub let EqSatCounted: Relation<(OperationId, Int)>;
-pub let EqSatPinnedYield: Relation<(Int, Int)>;
-pub let EqSatPinned: Relation<(ValueId,)>;
-pub let EqSatPinnedOp: Relation<(OperationId,)>;
+pub let EqSatMixedRegion: Relation<(Int,)>;
+pub let EqSatFunctionGraph: Relation<(Int,)>;
+pub let EqSatOrderedGraph: Relation<(Int,)>;
+pub let EqSatRequiredGraphValue: Relation<(Int, ValueId)>;
+pub let EqSatMemOrdered: Relation<(OperationId, ValueId)>;
+pub let EqSatLoadOp: Relation<(OperationId, ValueId, ValueId)>;
+pub let EqSatStateOtherUse: Relation<(ValueId,)>;
+pub let EqSatDropKind: Relation<(OperationKind,)>;
+pub let EqSatCheckControl: Relation<(OperationKind,)>;
+pub let EqSatControlInputSafe: Relation<(ValueId,)>;
 pub let EqSatUnprovedControl: Relation<(OperationId,)>;
+pub let EqSatPureSwitch: Relation<(OperationId, ValueId, Int)>;
 pub let EqSatKnownSelector: Relation<(OperationId, BigInt)>;
 pub let EqSatHasExplicitArm: Relation<(OperationId,)>;
 pub let EqSatSelectedArm: Relation<(OperationId, Int)>;
-pub let EqSatPureSwitch: Relation<(OperationId, ValueId, Int)>;
-pub let EqSatSwitchYield: Relation<(OperationId, ValueId, Int, ValueId)>;
-pub let EqSatSwitchDisagrees: Relation<(OperationId, ValueId)>;
-pub let EqSatControlInputSafe: Relation<(OperationId,)>;
-pub let EqSatCheckControl: Relation<(OperationKind,)>;
 pub let EqSatFiniteLoop: Relation<(OperationId, Int)>;
-pub let EqSatFpBinary: Relation<(OperationKind,)>;
-pub let EqSatFpUnary: Relation<(OperationKind,)>;
-pub let EqSatFpKey: Relation<(OperationId, OperationKind, ValueId, Int, ValueId, ValueId)>;
-pub let EqSatLayoutKind: Relation<(OperationKind,)>;
-pub let EqSatLayoutQuery: Relation<(OperationId, OperationKind)>;
-pub let EqSatLayoutValue: Relation<(OperationId, BigInt)>;
-pub let EqSatLayoutScoped: Relation<(OperationId,)>;
-pub let EqSatOffsetStep: Relation<(ValueId, ValueId, Int, Int, Int, BigInt, BigInt)>;
-pub let EqSatAddress: Relation<(ValueId, ValueId, Int, Int, Int, BigInt)>;
-pub let EqSatAddressEquals: Relation<(ValueId, ValueId)>;
-pub let EqSatLocalAddress: Relation<(ValueId, ValueId, BigInt)>;
 
 // ── Modular Rule Submodules ──────────────────────────────────────────────────
 
 pub mod bits;
 pub mod context;
-pub mod fp;
 pub mod integer;
 pub mod layout;
-pub mod loops;
-pub mod memory;
 pub mod rewrites;
+pub mod rvsdg;
 pub mod schedule;
-
-// ── Memoized Known-Zeros Analysis ────────────────────────────────────────────
-
-pub let known_zeros = memo || {
-    (
-        Schedule::Saturate(append(bits::known_bits, bits::shift_bits)),
-        { eq_sat_zeros: "EqSatZeros" },
-    )
-};
 
 // ── Exported Standalone Rewrite Collections ──────────────────────────────────
 
 pub let add_zero_rewrites = || -> List<Rewrite> { rewrites::add_zero_list };
 pub let builtin_rewrites = || -> List<Rewrite> { rewrites::builtin_list };
 
-// ── Equality Saturation Pass Drivers (Pure CDSL!) ────────────────────────────
+// ── Equality Saturation Pass Drivers ─────────────────────────────────────────
 
-// Higher-order compile-time EqSat driver parameterized by any `List<Rewrite>`.
-// NbE specializes each instantiation directly into a static TEGG schedule.
 let eqsat_driver = |
     session: Session,
     root: OperationId,
@@ -222,14 +165,10 @@ let eqsat_driver = |
     seed_root(session, root);
     run_stage(session, schedule::prepare_stage);
     resolve_layouts(session);
-    saturate_with_masks(session, analyze, "eqsat::global", extras, schedule::apply_masks_stage);
-    run_stage(session, schedule::seed_assumptions_stage);
-    propagate_scoped(session, schedule::propagate_scoped_stage);
-    publish_rewrites(session);
-    sweep_dead(session, root, schedule::prepare_stage, schedule::sweep_stage)
+    saturate(session, analyze, "eqsat::global", extras);
+    publish_rewrites(session)
 };
 
-// Built-in EqSat pass (all algebraic/cast/fp/pointer rewrites + optional extras).
 pub let run_builtin_eqsat = |
     session: Session,
     root: OperationId,
@@ -238,7 +177,6 @@ pub let run_builtin_eqsat = |
     eqsat_driver(session, root, rewrites::algebraic_rewrites, extras)
 };
 
-// Custom ruleset EqSat pass (exclusive user-supplied `RuleCollection`).
 pub let run_custom_eqsat = |
     session: Session,
     root: OperationId,
