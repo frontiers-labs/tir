@@ -1,5 +1,3 @@
-// IR migration: instruction selection and backend lowering are unavailable.
-// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/break_unreachable.c | filecheck --implicit-check-not=scf. %s
 
 // The immediate break leaves no live conditional or loop. The load must
