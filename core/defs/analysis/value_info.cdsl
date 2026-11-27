@@ -1,0 +1,234 @@
+// Shared IR value, type, purity, and control-safety facts cached per subtree.
+//
+// Consumed by `dce`, `memopt`, and `control-simplify` via `load_with_tables`.
+
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use std::ir::{OperationId, OperationKind, ValueId, dialect_drop_rules, integer_width};
+use dialects::{builtin, func, scf};
+
+pub let ValLive: Relation<OperationId>;
+pub let ValIntType: Relation<Int>;
+pub let ValIntWidth: Table<Int, Int, Merge::Unique>;
+pub let ValIntMask: Table<Int, BigInt, Merge::Unique>;
+pub let ValPtrType: Relation<Int>;
+pub let ValHasAttr: Relation<(OperationId, String)>;
+pub let ValExtraResult: Relation<OperationId>;
+pub let ValDropKind: Relation<OperationKind>;
+pub let ValConstInt: Relation<(ValueId, Int, BigInt)>;
+pub let ValIncomingParam: Relation<ValueId>;
+pub let ValArgFreeze: Relation<(OperationId, ValueId)>;
+pub let ValDefined: Relation<ValueId>;
+pub let ValCounted: Relation<(OperationId, Int)>;
+pub let ValPinnedYield: Relation<(Int, Int)>;
+pub let ValPinned: Relation<ValueId>;
+pub let ValPinnedOp: Relation<OperationId>;
+pub let ValCheckControl: Relation<OperationKind>;
+pub let ValControlInputSafe: Relation<ValueId>;
+pub let ValUnprovedControl: Relation<OperationId>;
+pub let ValPureSwitch: Relation<(OperationId, ValueId, Int)>;
+
+let scope_rules: List<Rule> = {
+    let root: Rule(() -> ValLive(arg(0)));
+    let within<region, mode, slot, entry, node, rep>: Rule(
+        (Region(region, mode, arg(0), slot, entry), ReaderAt(node, region, rep))
+        -> ValLive(node)
+    );
+    List(root, within)
+};
+
+let type_and_attr_rules: List<Rule> = {
+    let int_ty<ty, ctor, args, decl, def>: Rule(
+        (TypeTerm(ty, ctor, args), TypeCtor(ctor, "builtin", "i", decl, def))
+        -> ValIntType(ty)
+    );
+    let width_mask<ty, ctor, args, w>: Rule(
+        (ValIntType(ty), TypeTerm(ty, ctor, args), w == integer_width(args))
+        -> (ValIntWidth(ty, w), ValIntMask(ty, (shl(bigint(1), w) - bigint(1))))
+    );
+    let ptr_ty<ty, ctor, args, decl, def>: Rule(
+        (TypeTerm(ty, ctor, args), TypeCtor(ctor, "ptr", "p", decl, def))
+        -> ValPtrType(ty)
+    );
+    let attr_present<node, name, attr>: Rule(
+        (ValLive(node), Attribute("operation", node, name, attr))
+        -> ValHasAttr(node, name)
+    );
+    let extra_res<node, val, ty, slot, decl>: Rule(
+        (ValLive(node), Value(val, ty, "result", node, slot, decl), less(int_lit(0), slot) == true)
+        -> ValExtraResult(node)
+    );
+    List(int_ty, width_mask, ptr_ty, attr_present, extra_res)
+};
+
+let drop_kind_rules: List<Rule> = dialect_drop_rules("ValDropKind", builtin::all_ops);
+
+let const_and_defined_rules: List<Rule> = {
+    let const_int<node, pl, hm, pos, dp, lc, res, ty, decl, attr, mask, raw, bits>: Rule(
+        (
+            ValLive(node),
+            Operation(node, builtin::constant.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl),
+            ValIntMask(ty, mask),
+            Attribute("operation", node, "value", attr),
+            raw == eqsat::eqsat_attr_int(attr),
+            bits == bit_and(raw, mask),
+        ) -> (ValConstInt(res, ty, bits), ValDefined(res))
+    );
+    let cfg_param<f, pl, hm, p, d, l, region, slot, entry, value, ty, i, decl>: Rule(
+        (
+            Operation(f, func::func.kind, pl, hm, p, d, l),
+            Region(region, "cfg", f, slot, entry),
+            Value(value, ty, "block", entry, i, decl),
+        ) -> ValIncomingParam(value)
+    );
+    let graph_param<f, pl, hm, p, d, l, region, slot, entry, value, ty, i, decl>: Rule(
+        (
+            Operation(f, func::func.kind, pl, hm, p, d, l),
+            Region(region, "graph", f, slot, entry),
+            Value(value, ty, "region", region, i, decl),
+        ) -> ValIncomingParam(value)
+    );
+    let freeze_arg<node, input, out, pl, hm, pos, dp, lc, ty, decl>: Rule(
+        (
+            ValLive(node),
+            Operation(node, builtin::freeze.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, input),
+            Value(out, ty, "result", node, 0, decl),
+            ValIncomingParam(input),
+        ) -> (ValArgFreeze(node, out), ValDefined(out))
+    );
+    let defined_mul<node, pl, hm, pos, dp, lc, x, y, out, ty, decl>: Rule(
+        (
+            ValLive(node),
+            Operation(node, builtin::muli.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, x), Operand(node, 1, y),
+            Value(out, ty, "result", node, 0, decl),
+            ValDefined(x), ValDefined(y),
+        ) -> ValDefined(out)
+    );
+    List(const_int, cfg_param, graph_param, freeze_arg, defined_mul)
+};
+
+let counted_pin_rules: List<Rule> = {
+    let body<node, pl, hm, pos, dp, lc, sel, body, pred, pol>: Rule(
+        (
+            ValLive(node),
+            Operation(node, scf::r#for.kind, pl, hm, pos, dp, lc),
+            Control(node, false, sel, true, body, pred, pol),
+        ) -> (ValCounted(node, body), ValPinnedYield(body, pred))
+    );
+    let advance<node, region, slot>: Rule(
+        (ValCounted(node, region), Binding(region, "feedback", 0, slot))
+        -> ValPinnedYield(region, slot)
+    );
+    let exit<node, region, idx, slot>: Rule(
+        (ValCounted(node, region), Binding(region, "exit", idx, slot))
+        -> ValPinnedYield(region, slot)
+    );
+    let pin_val<region, slot, val>: Rule(
+        (ValPinnedYield(region, slot), Yield(region, slot, val))
+        -> ValPinned(val)
+    );
+    let pin_op<region, slot, val, ty, node, idx, decl>: Rule(
+        (ValPinnedYield(region, slot), Yield(region, slot, val), Value(val, ty, "result", node, idx, decl))
+        -> ValPinnedOp(node)
+    );
+    let pin_opnd<node, slot, val>: Rule(
+        (ValPinnedOp(node), Operand(node, slot, val))
+        -> ValPinned(val)
+    );
+    List(body, advance, exit, pin_val, pin_op, pin_opnd)
+};
+
+let control_safe_seed: List<Rule> = {
+    let sw: Rule(() -> ValCheckControl(scf::r#switch.kind));
+    let lp: Rule(() -> ValCheckControl(scf::r#loop.kind));
+    let def_safe<val>: Rule(ValDefined(val) -> ValControlInputSafe(val));
+    let param_safe<val, ty, kind, owner, slot, decl>: Rule(
+        (ValIncomingParam(val), Value(val, ty, kind, owner, slot, decl), ValIntType(ty))
+        -> ValControlInputSafe(val)
+    );
+    List(sw, lp, def_safe, param_safe)
+};
+
+let control_unproved_rules: List<Rule> = {
+    let bad_input<node, k, pl, hm, p, d, l, slot, val>: Rule(
+        (
+            ValLive(node), ValCheckControl(k),
+            Operation(node, k, pl, hm, p, d, l),
+            Operand(node, slot, val), !ValControlInputSafe(val),
+        ) -> ValUnprovedControl(node)
+    );
+    let bad_effect<node, region, mode, slot, entry, child, member, kind, pl, hm, p, d, l>: Rule(
+        (
+            ValLive(node),
+            Region(region, mode, node, slot, entry),
+            ReaderAt(child, region, member),
+            Operation(child, kind, pl, hm, p, d, l),
+            !ValDropKind(kind),
+        ) -> ValUnprovedControl(node)
+    );
+    List(bad_input, bad_effect)
+};
+
+let pure_switch_rules: List<Rule> = {
+    let safe<node, hm, p, d, l, sel, body, pred, pol, val, res, ty, decl>: Rule(
+        (
+            ValLive(node),
+            Operation(node, scf::r#switch.kind, "graph", hm, p, d, l),
+            Control(node, true, sel, false, body, pred, pol),
+            Operand(node, sel, val),
+            ValDefined(val),
+            !ValUnprovedControl(node),
+            !ValExtraResult(node),
+            Value(res, ty, "result", node, 0, decl),
+            ValIntType(ty),
+            !ValPinned(res),
+        ) -> ValPureSwitch(node, res, ty)
+    );
+    List(safe)
+};
+
+extract rust scope_rules            => "@ct";
+extract rust type_and_attr_rules    => "@ct";
+extract rust drop_kind_rules        => "@ct";
+extract rust const_and_defined_rules => "@ct";
+extract rust counted_pin_rules      => "@ct";
+extract rust control_safe_seed      => "@ct";
+extract rust control_unproved_rules => "@ct";
+extract rust pure_switch_rules      => "@ct";
+
+pub let analyze = memo |root: OperationId| {
+    (
+        Schedule::Seq(List(
+            Schedule::Saturate(scope_rules),
+            Schedule::Saturate(type_and_attr_rules),
+            Schedule::Once(drop_kind_rules),
+            Schedule::Saturate(const_and_defined_rules),
+            Schedule::Saturate(counted_pin_rules),
+            Schedule::Once(control_safe_seed),
+            Schedule::Once(control_unproved_rules),
+            Schedule::Once(pure_switch_rules),
+        )),
+        {
+            ValLive: "ValLive",
+            ValIntType: "ValIntType",
+            ValIntWidth: "ValIntWidth",
+            ValIntMask: "ValIntMask",
+            ValPtrType: "ValPtrType",
+            ValHasAttr: "ValHasAttr",
+            ValExtraResult: "ValExtraResult",
+            ValDropKind: "ValDropKind",
+            ValConstInt: "ValConstInt",
+            ValIncomingParam: "ValIncomingParam",
+            ValArgFreeze: "ValArgFreeze",
+            ValDefined: "ValDefined",
+            ValPinned: "ValPinned",
+            ValPinnedOp: "ValPinnedOp",
+            ValUnprovedControl: "ValUnprovedControl",
+            ValPureSwitch: "ValPureSwitch",
+        },
+    )
+};

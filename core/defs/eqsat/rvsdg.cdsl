@@ -1,0 +1,500 @@
+// RVSDG state-threaded memory (McCarthy axioms) and structured control flow
+// (Peggy Gamma/Theta axioms) lifted directly into the flat `Color::BASE` `Expr` e-graph.
+
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use std::ir::dialect_drop_rules;
+use dialects::{builtin, func, ptr, scf, state};
+
+// ── Side-Condition Seed Facts (Allocations, Ordinary Access, Purity) ─────────
+
+pub let prep_seed: List<Rule> = {
+    let alloc<node, pl, hm, pos, d, l, addr, ty, decl>: Rule(
+        (EqSatLive(node), Operation(node, ptr::alloca.kind, pl, hm, pos, d, l), Value(addr, ty, "result", node, 0, decl))
+        -> EqSatAllocation(addr)
+    );
+    let slot_load: Rule(() -> EqSatAddressSlot(ptr::load.kind, 0));
+    let slot_store: Rule(() -> EqSatAddressSlot(ptr::store.kind, 1));
+    let op_call: Rule(() -> EqSatOpaqueMemory(func::call.kind));
+    let op_memcpy: Rule(() -> EqSatOpaqueMemory(ptr::memcpy.kind));
+    let op_memset: Rule(() -> EqSatOpaqueMemory(ptr::memset.kind));
+    let op_copy: Rule(() -> EqSatOpaqueMemory(ptr::copy.kind));
+    let chk_sw: Rule(() -> EqSatCheckControl(scf::r#switch.kind));
+    let chk_lp: Rule(() -> EqSatCheckControl(scf::r#loop.kind));
+    let def_safe<v>: Rule(EqSatDefined(v) -> EqSatControlInputSafe(v));
+    let param_safe<v, ty, dk, ow, sl, decl>: Rule(
+        (EqSatIncomingParameter(v), Value(v, ty, dk, ow, sl, decl), EqSatInteger(ty))
+        -> EqSatControlInputSafe(v)
+    );
+    append(
+        dialect_drop_rules("EqSatDropKind", builtin::all_ops),
+        List(alloc, slot_load, slot_store, op_call, op_memcpy, op_memset, op_copy, chk_sw, chk_lp, def_safe, param_safe),
+    )
+};
+
+pub let prep_guards: List<Rule> = {
+    let ordinary<node, kind, pl, hm, pos, d, l, slot>: Rule(
+        (
+            EqSatLive(node), Operation(node, kind, pl, hm, pos, d, l), EqSatAddressSlot(kind, slot),
+            !EqSatHasAttr(node, "volatile"), !EqSatHasAttr(node, "atomic"),
+            !EqSatHasAttr(node, "align"), !EqSatHasAttr(node, "alignment"),
+        ) -> EqSatOrdinaryAccess(node)
+    );
+    let unproved_input<node, k, pl, hm, p, d, l, slot, val>: Rule(
+        (EqSatLive(node), EqSatCheckControl(k), Operation(node, k, pl, hm, p, d, l), Operand(node, slot, val), !EqSatControlInputSafe(val))
+        -> EqSatUnprovedControl(node)
+    );
+    let unproved_effect<node, region, mode, slot, entry, child, member, kind, pl, hm, p, d, l>: Rule(
+        (
+            EqSatLive(node), Region(region, mode, node, slot, entry),
+            ReaderAt(child, region, member), Operation(child, kind, pl, hm, p, d, l),
+            !EqSatDropKind(kind),
+        ) -> EqSatUnprovedControl(node)
+    );
+    List(ordinary, unproved_input, unproved_effect)
+};
+
+pub let prep_barriers: List<Rule> = {
+    let unthreaded<node, k, blk, p, d, l, region, ord, addr_slot, tok>: Rule(
+        (
+            Operation(node, k, "block", blk, p, d, l), Block(blk, region, ord),
+            EqSatAddressSlot(k, addr_slot), tok == (addr_slot + 1), !EqSatOperandSlot(node, tok),
+        ) -> EqSatMixedRegion(region)
+    );
+    let flagged<node, k, blk, p, d, l, region, ord, addr_slot>: Rule(
+        (
+            EqSatLive(node), Operation(node, k, "block", blk, p, d, l), Block(blk, region, ord),
+            EqSatAddressSlot(k, addr_slot), !EqSatOrdinaryAccess(node),
+        ) -> EqSatMixedRegion(region)
+    );
+    let opaque<node, k, blk, p, d, l, region, ord>: Rule(
+        (Operation(node, k, "block", blk, p, d, l), Block(blk, region, ord), EqSatOpaqueMemory(k))
+        -> EqSatMixedRegion(region)
+    );
+    let pure_sw<node, hm, p, d, l, sel, body, pred, pol, val, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), Operation(node, scf::r#switch.kind, "graph", hm, p, d, l),
+            Control(node, true, sel, false, body, pred, pol), Operand(node, sel, val),
+            EqSatDefined(val), !EqSatUnprovedControl(node), !EqSatExtraResult(node),
+            Value(res, ty, "result", node, 0, decl), EqSatInteger(ty), !EqSatPinned(res),
+        ) -> EqSatPureSwitch(node, res, ty)
+    );
+    List(unthreaded, flagged, opaque, pure_sw)
+};
+
+pub let mem_ordering: List<Rule> = {
+    let block_write<read, blk, rp, rd, rl, addr, st_val, write, kind, origin, region, ord, prior, q, e, loc, ty, slot, decl>: Rule(
+        (
+            EqSatLive(read), Operation(read, ptr::load.kind, "block", blk, rp, rd, rl),
+            Operand(read, 0, addr), Operand(read, 1, st_val),
+            EqSatLive(write), Operation(write, kind, "block", origin, q, e, loc),
+            Block(blk, region, ord), Block(origin, region, prior), !EqSatMixedRegion(region),
+            Value(st_val, ty, "result", write, slot, decl),
+        ) -> EqSatMemOrdered(read, st_val)
+    );
+    let block_arg<read, blk, rp, rd, rl, addr, st_val, ty, slot, decl, region, ord>: Rule(
+        (
+            EqSatLive(read), Operation(read, ptr::load.kind, "block", blk, rp, rd, rl),
+            Operand(read, 0, addr), Operand(read, 1, st_val),
+            Value(st_val, ty, "block", blk, slot, decl),
+            Block(blk, region, ord), !EqSatMixedRegion(region),
+        ) -> EqSatMemOrdered(read, st_val)
+    );
+    let fn_graph<node, pl, hm, pos, d, l, region, slot, entry>: Rule(
+        (EqSatLive(node), Operation(node, func::func.kind, pl, hm, pos, d, l), Region(region, "graph", node, slot, entry))
+        -> (EqSatFunctionGraph(region), EqSatOrderedGraph(region))
+    );
+    let req_yield<region, slot, val>: Rule(
+        (EqSatFunctionGraph(region), Yield(region, slot, val))
+        -> EqSatRequiredGraphValue(region, val)
+    );
+    let sw_arm_req<parent, res, ty, sw, rslot, decl, p, d, l, def_arm, key, arm, aslot, aentry, yslot, val>: Rule(
+        (
+            EqSatRequiredGraphValue(parent, res), Value(res, ty, "result", sw, rslot, decl),
+            Operation(sw, scf::r#switch.kind, "graph", parent, p, d, l),
+            Arm(sw, def_arm, key, arm), Region(arm, "graph", sw, aslot, aentry),
+            Binding(arm, "exit", rslot, yslot), Yield(arm, yslot, val),
+        ) -> (EqSatOrderedGraph(arm), EqSatRequiredGraphValue(arm, val))
+    );
+    let req_join<region, out, ty, node, slot, decl, p, d, l, input, i>: Rule(
+        (
+            EqSatRequiredGraphValue(region, out), Value(out, ty, "result", node, slot, decl),
+            Operation(node, state::join.kind, "graph", region, p, d, l), Operand(node, i, input),
+        ) -> EqSatRequiredGraphValue(region, input)
+    );
+    let req_split<region, out, ty, node, slot, decl, p, d, l, input>: Rule(
+        (
+            EqSatRequiredGraphValue(region, out), Value(out, ty, "result", node, slot, decl),
+            Operation(node, state::split.kind, "graph", region, p, d, l), Operand(node, 0, input),
+        ) -> EqSatRequiredGraphValue(region, input)
+    );
+    let req_store<region, out, ty, node, decl, p, d, l, input>: Rule(
+        (
+            EqSatRequiredGraphValue(region, out), Value(out, ty, "result", node, 0, decl),
+            Operation(node, ptr::store.kind, "graph", region, p, d, l), Operand(node, 2, input),
+        ) -> EqSatRequiredGraphValue(region, input)
+    );
+    let graph_ret_state<read, rp, rd, rl, addr, st_val, next, write, kind, region, q, e, loc, ty, decl, nd, sslot>: Rule(
+        (
+            EqSatLive(read), Operation(read, ptr::load.kind, "graph", region, rp, rd, rl),
+            Operand(read, 0, addr), Operand(read, 1, st_val),
+            EqSatLive(write), EqSatOrderedGraph(region),
+            Operation(write, kind, "graph", region, q, e, loc),
+            Value(st_val, ty, "result", write, sslot, decl),
+            Value(next, ty, "result", read, 1, nd),
+            EqSatRequiredGraphValue(region, next),
+        ) -> EqSatMemOrdered(read, st_val)
+    );
+    let graph_ret_in<read, rp, rd, rl, addr, st_val, write, kind, region, q, e, loc, ty, decl, sslot>: Rule(
+        (
+            EqSatLive(read), Operation(read, ptr::load.kind, "graph", region, rp, rd, rl),
+            Operand(read, 0, addr), Operand(read, 1, st_val),
+            EqSatLive(write), EqSatOrderedGraph(region),
+            Operation(write, kind, "graph", region, q, e, loc),
+            Value(st_val, ty, "result", write, sslot, decl),
+            EqSatRequiredGraphValue(region, st_val),
+        ) -> EqSatMemOrdered(read, st_val)
+    );
+    List(
+        block_write, block_arg, fn_graph, req_yield, sw_arm_req,
+        req_join, req_split, req_store, graph_ret_state, graph_ret_in,
+    )
+};
+
+// ── Mark Lifted Memory & Pure-Switch Results ─────────────────────────────────
+
+pub let mark_rvsdg: List<Rule> = {
+    let store_int<node, pl, hm, pos, d, l, data, addr, st_in, ty, dk, ow, sl, decl, st_out, sty, sdecl>: Rule(
+        (
+            EqSatLive(node), EqSatOrdinaryAccess(node), !EqSatPinnedOp(node),
+            Operation(node, ptr::store.kind, pl, hm, pos, d, l),
+            Operand(node, 0, data), Operand(node, 1, addr), Operand(node, 2, st_in),
+            Value(data, ty, dk, ow, sl, decl), EqSatInteger(ty),
+            Value(st_out, sty, "result", node, 0, sdecl),
+        ) -> ExprLifted(st_out)
+    );
+    let store_ptr<node, pl, hm, pos, d, l, data, addr, st_in, ty, dk, ow, sl, decl, st_out, sty, sdecl, width>: Rule(
+        (
+            EqSatLive(node), EqSatOrdinaryAccess(node), !EqSatPinnedOp(node),
+            Operation(node, ptr::store.kind, pl, hm, pos, d, l),
+            Operand(node, 0, data), Operand(node, 1, addr), Operand(node, 2, st_in),
+            Value(data, ty, dk, ow, sl, decl), EqSatPointerType(ty), EqSatPointerSize(node, width),
+            Value(st_out, sty, "result", node, 0, sdecl),
+        ) -> ExprLifted(st_out)
+    );
+    let load_int<node, pl, hm, pos, d, l, addr, st_in, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), EqSatOrdinaryAccess(node), !EqSatPinnedOp(node),
+            Operation(node, ptr::load.kind, pl, hm, pos, d, l),
+            Operand(node, 0, addr), Operand(node, 1, st_in),
+            EqSatMemOrdered(node, st_in),
+            Value(res, ty, "result", node, 0, decl), EqSatInteger(ty),
+        ) -> (ExprLifted(res), EqSatLoadOp(node, st_in, res))
+    );
+    let load_ptr<node, pl, hm, pos, d, l, addr, st_in, res, ty, decl, width>: Rule(
+        (
+            EqSatLive(node), EqSatOrdinaryAccess(node), !EqSatPinnedOp(node),
+            Operation(node, ptr::load.kind, pl, hm, pos, d, l),
+            Operand(node, 0, addr), Operand(node, 1, st_in),
+            EqSatMemOrdered(node, st_in),
+            Value(res, ty, "result", node, 0, decl), EqSatPointerType(ty), EqSatPointerSize(node, width),
+        ) -> (ExprLifted(res), EqSatLoadOp(node, st_in, res))
+    );
+    let load_state<node, st_in, res, st_out, sty, sdecl>: Rule(
+        (EqSatLoadOp(node, st_in, res), Value(st_out, sty, "result", node, 1, sdecl))
+        -> ExprLifted(st_out)
+    );
+    let pure_sw_mark<node, res, ty>: Rule(
+        EqSatPureSwitch(node, res, ty) -> ExprLifted(res)
+    );
+    let sw_port_mark<node, sel, body, pred, pol, region, pslot, port, init>: Rule(
+        (Control(node, true, sel, false, body, pred, pol), EqSatPort(node, region, pslot, port, init))
+        -> ExprLifted(port)
+    );
+    List(store_int, store_ptr, load_int, load_ptr, load_state, pure_sw_mark, sw_port_mark)
+};
+
+// ── Lift Memory & Control Into `Expr` (Flat `Color::BASE`) ───────────────────
+
+pub let lift_rvsdg: List<Rule> = {
+    let store_int<node, pl, hm, pos, d, l, data, ty, dk, ow, sl, decl, st_out, sty, sdecl, ev, ea, es>: Rule(
+        (
+            EqSatLive(node), EqSatOrdinaryAccess(node), !EqSatPinnedOp(node),
+            Operation(node, ptr::store.kind, pl, hm, pos, d, l),
+            Operand(node, 0, data), Value(data, ty, dk, ow, sl, decl), EqSatInteger(ty),
+            Value(st_out, sty, "result", node, 0, sdecl), ExprLifted(st_out),
+            OpExpr(node, 0, ev), OpExpr(node, 1, ea), OpExpr(node, 2, es),
+        ) -> ValExpr(st_out, Expr::Store(es, ea, ty, ev))
+    );
+    let store_ptr<node, pl, hm, pos, d, l, data, ty, dk, ow, sl, decl, st_out, sty, sdecl, width, ev, ea, es>: Rule(
+        (
+            EqSatLive(node), EqSatOrdinaryAccess(node), !EqSatPinnedOp(node),
+            Operation(node, ptr::store.kind, pl, hm, pos, d, l),
+            Operand(node, 0, data), Value(data, ty, dk, ow, sl, decl), EqSatPointerType(ty),
+            EqSatPointerSize(node, width),
+            Value(st_out, sty, "result", node, 0, sdecl), ExprLifted(st_out),
+            OpExpr(node, 0, ev), OpExpr(node, 1, ea), OpExpr(node, 2, es),
+        ) -> ValExpr(st_out, Expr::Store(es, ea, ty, ev))
+    );
+    let load_val<node, st_in, res, ty, decl, ea, es>: Rule(
+        (
+            EqSatLoadOp(node, st_in, res), Value(res, ty, "result", node, 0, decl),
+            OpExpr(node, 0, ea), OpExpr(node, 1, es),
+        ) -> ValExpr(res, Expr::LoadVal(es, ea, ty))
+    );
+    let load_state<node, st_in, res, ty, decl, st_out, sty, sdecl, ea, es>: Rule(
+        (
+            EqSatLoadOp(node, st_in, res), Value(res, ty, "result", node, 0, decl),
+            Value(st_out, sty, "result", node, 1, sdecl),
+            OpExpr(node, 0, ea), OpExpr(node, 1, es),
+        ) -> ValExpr(st_out, Expr::LoadState(es, ea, ty))
+    );
+    // Switch arm entry ports inherit outer `ValExpr(init)` (or `Pi(arm, init)` if constrained).
+    let sw_port_plain<node, sel, body, pred, pol, region, pslot, port, init, ei>: Rule(
+        (
+            Control(node, true, sel, false, body, pred, pol),
+            EqSatPort(node, region, pslot, port, init),
+            !ScopeConstrained(region, init), ValExpr(init, ei),
+        ) -> ValExpr(port, ei)
+    );
+    let sw_port_pi<node, sel, body, pred, pol, region, pslot, port, init, ei>: Rule(
+        (
+            Control(node, true, sel, false, body, pred, pol),
+            EqSatPort(node, region, pslot, port, init),
+            ScopeConstrained(region, init), ValExpr(init, ei),
+        ) -> ValExpr(port, Expr::Pi(region, ei))
+    );
+    // 2-arm PureSwitch result -> `Gamma2(esel, ey0, ey1)`.
+    let pure_sw_gamma2<node, res, ty, sel, body, pred, pol, a0, a1, d1, k1, sl0, sl1, y0, y1, esel, ey0, ey1>: Rule(
+        (
+            EqSatPureSwitch(node, res, ty),
+            Control(node, true, sel, false, body, pred, pol), OpExpr(node, sel, esel),
+            Arm(node, false, "0", a0), Arm(node, d1, k1, a1), a1 != a0,
+            Binding(a0, "exit", 0, sl0), Yield(a0, sl0, y0), ValExpr(y0, ey0),
+            Binding(a1, "exit", 0, sl1), Yield(a1, sl1, y1), ValExpr(y1, ey1),
+        ) -> ValExpr(res, Expr::Gamma2(esel, ey0, ey1))
+    );
+    // 2-arm switch state result -> `StateGamma2(esel, es0, es1)` (for McCarthy load distribution!).
+    let sw_state_gamma2<node, sel, body, pred, pol, a0, a1, d1, k1, rslot, sl0, sl1, y0, y1, st_res, sty, ctor, args, sdecl, td, def, esel, ey0, ey1>: Rule(
+        (
+            EqSatLive(node), Control(node, true, sel, false, body, pred, pol), OpExpr(node, sel, esel),
+            Arm(node, false, "0", a0), Arm(node, d1, k1, a1), a1 != a0,
+            Binding(a0, "exit", rslot, sl0), Yield(a0, sl0, y0), ValExpr(y0, ey0),
+            Binding(a1, "exit", rslot, sl1), Yield(a1, sl1, y1), ValExpr(y1, ey1),
+            Value(st_res, sty, "result", node, rslot, sdecl),
+            TypeTerm(sty, ctor, args), TypeCtor(ctor, "builtin", "state", td, def),
+        ) -> ValExpr(st_res, Expr::StateGamma2(esel, ey0, ey1))
+    );
+    List(store_int, store_ptr, load_val, load_state, sw_port_plain, sw_port_pi, pure_sw_gamma2, sw_state_gamma2)
+};
+
+// ── McCarthy Memory + Peggy Gamma/Theta E-Graph Axioms (Pure `Color::BASE`!) ─
+
+pub let axioms: List<Rule> = {
+    // 1. McCarthy select-of-store (forwarding — address congruence is automatic via `Expr`!).
+    let load_store_same<e, s, a, ty, v>: Rule(
+        e == Expr::LoadVal(Expr::Store(s, a, ty, v), a, ty)
+        -> e == v
+    );
+    // 2. Loads preserve stored values.
+    let load_after_load<e, s, a1, t1, a2, t2>: Rule(
+        e == Expr::LoadVal(Expr::LoadState(s, a2, t2), a1, t1)
+        -> e == Expr::LoadVal(s, a1, t1)
+    );
+    // 3. Disjoint local allocations commute.
+    let load_store_disjoint<e, s, a, b, ty, bt, w, va, vb>: Rule(
+        (
+            e == Expr::LoadVal(Expr::Store(s, b, bt, w), a, ty),
+            EqSatAllocation(va), EqSatAllocation(vb), va != vb,
+            ValExpr(va, a), ValExpr(vb, b),
+        ) -> e == Expr::LoadVal(s, a, ty)
+    );
+    // 4. Load distributes over 2-arm `scf.switch` state joins (no `BranchDisagrees` needed!).
+    let load_gamma_dist<e, sel, s0, s1, a, ty>: Rule(
+        e == Expr::LoadVal(Expr::StateGamma2(sel, s0, s1), a, ty)
+        -> e == Expr::LoadGamma(Expr::LoadVal(s0, a, ty), Expr::LoadVal(s1, a, ty))
+    );
+    let load_gamma_same<e, x>: Rule(
+        e == Expr::LoadGamma(x, x)
+        -> e == x
+    );
+    // 5. Peggy `Gamma2`: identical arms & decided selector (2-arm fast path + arbitrary-arity below).
+    let gamma2_same<e, sel, x>: Rule(
+        e == Expr::Gamma2(sel, x, x)
+        -> e == x
+    );
+    let gamma2_zero<e, ty, a, b>: Rule(
+        e == Expr::Gamma2(Expr::Const(ty, bigint(0)), a, b)
+        -> e == a
+    );
+    // Arbitrary-arity decided PureSwitch selector.
+    let known_sel<node, res, ty, sel, body, pred, pol, val, st, bits>: Rule(
+        (
+            EqSatPureSwitch(node, res, ty),
+            Control(node, true, sel, false, body, pred, pol),
+            Operand(node, sel, val), ValExpr(val, Expr::Const(st, bits)),
+        ) -> EqSatKnownSelector(node, bits)
+    );
+    let sel_exact<node, bits, key, region>: Rule(
+        (EqSatKnownSelector(node, bits), key == to_string(bits), Arm(node, false, key, region))
+        -> (EqSatHasExplicitArm(node), EqSatSelectedArm(node, region))
+    );
+    let sel_apply<node, res, ty, arm, sl, y, ey>: Rule(
+        (
+            EqSatPureSwitch(node, res, ty), EqSatSelectedArm(node, arm),
+            Binding(arm, "exit", 0, sl), Yield(arm, sl, y), ValExpr(y, ey),
+        ) -> ValExpr(res, ey)
+    );
+    // 6. Peggy `Theta` (`scf.loop`): invariant carried port (unifies value & memory state ports!).
+    let theta_inv_port<node, sel, body, pred, pol, slot, port, init, fb, next, ep, ei, en>: Rule(
+        (
+            EqSatLive(node), Control(node, false, sel, true, body, pred, pol),
+            EqSatPort(node, body, slot, port, init),
+            Binding(body, "feedback", slot, fb), Yield(body, fb, next),
+            ValExpr(port, ep), ValExpr(init, ei), ValExpr(next, en),
+            en == ep,
+        ) -> ep == ei
+    );
+    let theta_inv_const<node, sel, body, pred, pol, slot, port, init, fb, next, ty, bits, ep>: Rule(
+        (
+            EqSatLive(node), Control(node, false, sel, true, body, pred, pol),
+            EqSatPort(node, body, slot, port, init),
+            Binding(body, "feedback", slot, fb), Yield(body, fb, next),
+            ValExpr(port, ep),
+            ValExpr(init, Expr::Const(ty, bits)), ValExpr(next, Expr::Const(ty, bits)),
+        ) -> ep == Expr::Const(ty, bits)
+    );
+    let theta_inv_state_exit<node, sel, body, pred, pol, slot, port, init, fb, next, ex, rslot, res, sty, ctor, args, decl, td, def, ep, ei, en, er>: Rule(
+        (
+            EqSatLive(node), Control(node, false, sel, true, body, pred, pol),
+            EqSatPort(node, body, slot, port, init),
+            Binding(body, "feedback", slot, fb), Yield(body, fb, next),
+            ValExpr(port, ep), ValExpr(init, ei), ValExpr(next, en), en == ep,
+            Binding(body, "exit", rslot, ex), Yield(body, ex, port),
+            Value(res, sty, "result", node, rslot, decl),
+            TypeTerm(sty, ctor, args), TypeCtor(ctor, "builtin", "state", td, def),
+            ValExpr(res, er),
+        ) -> er == ei
+    );
+    // 7. Finite pure `scf.loop` constant exit (counter 0..bound, step +1).
+    let finite_loop<node, hm, pos, d, l, sel, body, pred, cond, ct, cmp, slot, counter, init, fb, next, next_e, ty, term, bound_e, bound, start, mask>: Rule(
+        (
+            EqSatLive(node), Operation(node, scf::r#loop.kind, "graph", hm, pos, d, l),
+            !EqSatUnprovedControl(node),
+            Control(node, false, sel, true, body, pred, "true"), Yield(body, pred, cond),
+            EqSatPort(node, body, slot, counter, init),
+            Binding(body, "feedback", slot, fb), Yield(body, fb, next),
+            ValExpr(counter, term), ValExpr(next, next_e),
+            next_e == Expr::Bin(builtin::addi.kind, ty, term, Expr::Const(ty, bigint(1))),
+            ValExpr(cond, cmp), cmp == Expr::Compare("slt", ct, term, bound_e),
+            bound_e == Expr::Const(ty, bound),
+            ValExpr(init, Expr::Const(ty, start)), TypeMask(ty, mask),
+            big_le(big_add(start, start), mask) == true,
+            big_le(big_add(bound, bound), mask) == true,
+        ) -> EqSatFiniteLoop(node, body)
+    );
+    let finite_exit<node, body, exits, slot, val, res, ty, decl, bits>: Rule(
+        (
+            EqSatFiniteLoop(node, body), Binding(body, "exit", slot, exits), Yield(body, exits, val),
+            ValExpr(val, Expr::Const(ty, bits)), Value(res, ty, "result", node, slot, decl),
+            EqSatInteger(ty), !EqSatPinned(res),
+        ) -> (ValExpr(res, Expr::Const(ty, bits)), ExprLifted(res))
+    );
+    List(
+        load_store_same, load_after_load, load_store_disjoint,
+        load_gamma_dist, load_gamma_same,
+        gamma2_same, gamma2_zero, known_sel, sel_exact, sel_apply,
+        theta_inv_port, theta_inv_const, theta_inv_state_exit,
+        finite_loop, finite_exit,
+    )
+};
+
+pub let post_default_arm: List<Rule> = {
+    let sel_default<node, bits, region, key>: Rule(
+        (EqSatKnownSelector(node, bits), !EqSatHasExplicitArm(node), Arm(node, true, key, region))
+        -> EqSatSelectedArm(node, region)
+    );
+    List(sel_default)
+};
+
+// State-threaded overwrite DSE (linear single-use check on overwritten state!).
+pub let state_dse_uses: List<Rule> = {
+    let other_op<first, second, blk, region, ord, p, q, d1, l1, d2, l2, s1, st_ty, sd, other, slot>: Rule(
+        (
+            EqSatLive(first), Operation(first, ptr::store.kind, "block", blk, p, d1, l1),
+            EqSatLive(second), Operation(second, ptr::store.kind, "block", blk, q, d2, l2),
+            Block(blk, region, ord), !EqSatMixedRegion(region),
+            Value(s1, st_ty, "result", first, 0, sd), Operand(second, 2, s1),
+            Operand(other, slot, s1), other != second,
+        ) -> EqSatStateOtherUse(s1)
+    );
+    let yielded<first, second, blk, region, ord, p, q, d1, l1, d2, l2, s1, st_ty, sd, reg, slot>: Rule(
+        (
+            EqSatLive(first), Operation(first, ptr::store.kind, "block", blk, p, d1, l1),
+            EqSatLive(second), Operation(second, ptr::store.kind, "block", blk, q, d2, l2),
+            Block(blk, region, ord), !EqSatMixedRegion(region),
+            Value(s1, st_ty, "result", first, 0, sd), Operand(second, 2, s1),
+            Yield(reg, slot, s1),
+        ) -> EqSatStateOtherUse(s1)
+    );
+    List(other_op, yielded)
+};
+
+pub let state_dse_apply: List<Rule> = {
+    let int_defined<first, second, blk, region, ord, p, q, d1, l1, d2, l2, s0, s1, st_ty, sd, dk, ow, sl, dl, v1, v2, ty, d1k, d1o, d1s, d1d, d2k, d2o, d2s, d2d, ea, ev1>: Rule(
+        (
+            EqSatLive(first), EqSatOrdinaryAccess(first), Operation(first, ptr::store.kind, "block", blk, p, d1, l1),
+            EqSatLive(second), EqSatOrdinaryAccess(second), Operation(second, ptr::store.kind, "block", blk, q, d2, l2),
+            Block(blk, region, ord), !EqSatMixedRegion(region),
+            Operand(first, 0, v1), Operand(second, 0, v2),
+            Value(v1, ty, d1k, d1o, d1s, d1d), Value(v2, ty, d2k, d2o, d2s, d2d), EqSatInteger(ty),
+            OpExpr(first, 1, ea), OpExpr(second, 1, ea),
+            Operand(first, 2, s0), Value(s0, st_ty, dk, ow, sl, dl),
+            Value(s1, st_ty, "result", first, 0, sd), Operand(second, 2, s1),
+            !EqSatStateOtherUse(s1),
+            OpExpr(first, 0, ev1), ExprDefined(ev1),
+        ) -> (EqSatReplace(first, s1, s0), EqSatErase(first))
+    );
+    let int_same<first, second, blk, region, ord, p, q, d1, l1, d2, l2, s0, s1, st_ty, sd, dk, ow, sl, dl, v1, v2, ty, d1k, d1o, d1s, d1d, d2k, d2o, d2s, d2d, ea, ev>: Rule(
+        (
+            EqSatLive(first), EqSatOrdinaryAccess(first), Operation(first, ptr::store.kind, "block", blk, p, d1, l1),
+            EqSatLive(second), EqSatOrdinaryAccess(second), Operation(second, ptr::store.kind, "block", blk, q, d2, l2),
+            Block(blk, region, ord), !EqSatMixedRegion(region),
+            Operand(first, 0, v1), Operand(second, 0, v2),
+            Value(v1, ty, d1k, d1o, d1s, d1d), Value(v2, ty, d2k, d2o, d2s, d2d), EqSatInteger(ty),
+            OpExpr(first, 1, ea), OpExpr(second, 1, ea),
+            Operand(first, 2, s0), Value(s0, st_ty, dk, ow, sl, dl),
+            Value(s1, st_ty, "result", first, 0, sd), Operand(second, 2, s1),
+            !EqSatStateOtherUse(s1),
+            OpExpr(first, 0, ev), OpExpr(second, 0, ev),
+        ) -> (EqSatReplace(first, s1, s0), EqSatErase(first))
+    );
+    let ptr_defined<first, second, blk, region, ord, p, q, d1, l1, d2, l2, s0, s1, st_ty, sd, dk, ow, sl, dl, v1, v2, ty, d1k, d1o, d1s, d1d, d2k, d2o, d2s, d2d, ea, ev1, w1, a1, w2, a2>: Rule(
+        (
+            EqSatLive(first), EqSatOrdinaryAccess(first), Operation(first, ptr::store.kind, "block", blk, p, d1, l1),
+            EqSatLive(second), EqSatOrdinaryAccess(second), Operation(second, ptr::store.kind, "block", blk, q, d2, l2),
+            Block(blk, region, ord), !EqSatMixedRegion(region),
+            Operand(first, 0, v1), Operand(second, 0, v2),
+            Value(v1, ty, d1k, d1o, d1s, d1d), Value(v2, ty, d2k, d2o, d2s, d2d), EqSatPointerType(ty),
+            EqSatStoreLayout(first, w1, a1), EqSatStoreLayout(second, w2, a2),
+            OpExpr(first, 1, ea), OpExpr(second, 1, ea),
+            Operand(first, 2, s0), Value(s0, st_ty, dk, ow, sl, dl),
+            Value(s1, st_ty, "result", first, 0, sd), Operand(second, 2, s1),
+            !EqSatStateOtherUse(s1),
+            OpExpr(first, 0, ev1), ExprDefined(ev1),
+        ) -> (EqSatReplace(first, s1, s0), EqSatErase(first))
+    );
+    List(int_defined, int_same, ptr_defined)
+};
+
+extract rust prep_seed        => "@ct";
+extract rust prep_guards      => "@ct";
+extract rust prep_barriers    => "@ct";
+extract rust mem_ordering     => "@ct";
+extract rust mark_rvsdg       => "@ct";
+extract rust lift_rvsdg       => "@ct";
+extract rust axioms           => "@ct";
+extract rust post_default_arm => "@ct";
+extract rust state_dse_uses   => "@ct";
+extract rust state_dse_apply  => "@ct";

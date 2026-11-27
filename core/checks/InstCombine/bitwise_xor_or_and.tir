@@ -1,4 +1,4 @@
-// RUN: tir opt --pass eqsat --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat,dce --verify %s | filecheck %s
 
 module {
   %f8 = func.func @xor_or_and_8(%x: !i8, %y: !i8, %z: !i8) -> !i8 {

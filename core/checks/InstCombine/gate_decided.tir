@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // A gate whose decision is a known constant publishes what the arm that constant
 // selects yields. The arm is the one the decision indexes, and a decision past

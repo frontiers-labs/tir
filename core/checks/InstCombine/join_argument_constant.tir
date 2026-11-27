@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(control-simplify)) --verify %s | filecheck %s
 
 // Every edge into the merge carries the same literal, so the value it merges is
 // that literal however the branch goes.

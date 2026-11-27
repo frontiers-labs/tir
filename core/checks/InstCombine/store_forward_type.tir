@@ -1,4 +1,4 @@
-// RUN: tir opt --pass eqsat --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat,dce --verify %s | filecheck %s
 
 // The extents agree but the types do not: forwarding would read the bits of a
 // float as an integer.

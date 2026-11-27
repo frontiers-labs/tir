@@ -1,9 +1,7 @@
-// Data-layout queries and pointer-address equivalence rules.
-// (`ptr::ptradd(p, constant(0)) -> p` lives in `rewrites.cdsl` as a 1-line `Rewrite`.)
+// Data-layout constant queries (`sizeof`, `alignof`, `offsetof`) and pointer layout facts.
 
 use std::core::*;
 use std::bigint::*;
-use std::int::*;
 use dialects::layout;
 use dialects::ptr;
 
@@ -29,64 +27,12 @@ pub let layout_values: List<Rule> = {
         (
             EqSatLayoutValue(node, value),
             Value(result, ty, "result", node, 0, declared),
-            EqSatAllBits(ty, mask),
+            TypeMask(ty, mask),
             bits == bit_and(value, mask),
-        ) -> (EqSatFolded(result, bits), EqSatConstant(node, result, bits))
+        ) -> ValExpr(result, Expr::Const(ty, bits))
     );
     List(fold)
 };
 
-pub let address_keys: List<Rule> = {
-    let step<node, place, home, p, d, l, base, disp, address, ty, decl, index, kind, owner, slot, id, width, offset, mask>: Rule(
-        (
-            EqSatLive(node),
-            Operation(node, ptr::ptradd.kind, place, home, p, d, l),
-            EqSatLayoutScoped(node),
-            EqSatPointerSize(node, width),
-            Operand(node, 0, base),
-            Operand(node, 1, disp),
-            Value(address, ty, "result", node, 0, decl),
-            Value(disp, index, kind, owner, slot, id),
-            EqSatFolded(disp, offset),
-            EqSatAllBits(index, mask),
-            big_le(big_add(offset, offset), mask) == true,
-            !EqSatHasAttr(node, "inbounds"),
-            !EqSatHasAttr(node, "nuw"),
-            !EqSatHasAttr(node, "nsw"),
-        ) -> EqSatOffsetStep(address, base, ty, index, width, offset, mask)
-    );
-    let direct<address, base, ty, index, width, offset, mask>: Rule(
-        EqSatOffsetStep(address, base, ty, index, width, offset, mask)
-        -> EqSatAddress(address, base, ty, index, width, offset)
-    );
-    let add<address, parent, base, ty, index, width, offset, prior, total, mask>: Rule(
-        (
-            EqSatOffsetStep(address, parent, ty, index, width, offset, mask),
-            EqSatAddress(parent, base, ty, index, width, prior),
-            total == big_add(offset, prior),
-            big_le(big_add(total, total), mask) == true,
-        ) -> EqSatAddress(address, base, ty, index, width, total)
-    );
-    let twins<a, b, base, ty, index, width, offset>: Rule(
-        (
-            EqSatAddress(a, base, ty, index, width, offset),
-            EqSatAddress(b, base, ty, index, width, offset),
-        ) -> EqSatAddressEquals(a, b)
-    );
-    let same_cell<a, b, state, ty, data>: Rule(
-        (EqSatAddressEquals(a, b), EqSatStored(state, a, ty, data))
-        -> EqSatStored(state, b, ty, data)
-    );
-    let root<base>: Rule(
-        EqSatAllocation(base) -> EqSatLocalAddress(base, base, bigint(0))
-    );
-    let local<address, base, ty, index, width, offset>: Rule(
-        (EqSatAddress(address, base, ty, index, width, offset), EqSatAllocation(base))
-        -> EqSatLocalAddress(address, base, offset)
-    );
-    List(step, direct, add, twins, same_cell, root, local)
-};
-
 extract rust layout_queries => "@ct";
 extract rust layout_values  => "@ct";
-extract rust address_keys   => "@ct";

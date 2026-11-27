@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 module {
   %f8 = func.func @sdiv_one_8(%x: !i8, %y: !i8, %z: !i8) -> !i8 {

@@ -1,0 +1,299 @@
+// Declarative Flat-CFG Memory Optimization pass (unthreaded intra-block
+// store-to-load forwarding, plain overwrite DSE, private stack slot elimination,
+// and CFG block-argument state joins).
+//
+// RVSDG / state-threaded memory lives directly inside `EqSatPass`'s `Expr` e-graph.
+
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use std::ir::{OperationId, OperationKind, ValueId, integer_width};
+use dialects::{func, ptr};
+use memory::{
+    MemAddressEquals, MemAllocation, MemEscapes, MemLoadSite,
+    MemLocalAddress, MemOffsetStep, MemOrdered, MemOrdinaryAccess, MemPlainLoad,
+    MemPlainStore, MemStoreLayout, MemStoreSite,
+};
+
+pub enum MemUseOwner {
+    Operand(OperationId),
+    Yield(Int),
+}
+
+// ── CFG Block-Argument State Join Forwarding ─────────────────────────────────
+
+pub let MemStored: Relation<(ValueId, ValueId, Int, ValueId)>;
+pub let MemCfgCell: Relation<(Int, Int, OperationId, Int, ValueId, Int, ValueId)>;
+pub let MemCfgDisagrees: Relation<(Int, Int, ValueId, Int, ValueId)>;
+
+// ── Plain CFG Forwarding, Overwrite DSE, & Private Slot Elimination ──────────
+
+pub let MemTransparent: Relation<OperationKind>;
+pub let MemWindow: Relation<(OperationId, OperationId, Int, Int, Int)>;
+pub let MemPreservesCell: Relation<(OperationId, OperationId)>;
+pub let MemClobber: Relation<(OperationId, OperationId)>;
+pub let MemHasStoreLayout: Relation<OperationId>;
+pub let MemPrivateExtent: Relation<(OperationId, BigInt, BigInt)>;
+pub let MemPrivateWrite: Relation<(ValueId, OperationId)>;
+pub let MemLocalPtrUse: Relation<(ValueId, OperationId)>;
+pub let MemBlockedSlot: Relation<ValueId>;
+pub let MemPlainOverwrite: Relation<(OperationId, OperationId, Int, Int, Int)>;
+pub let MemOverwriteBarrier: Relation<(OperationId, OperationId)>;
+
+// ── Output Edits & Removals ──────────────────────────────────────────────────
+
+pub let MemReplace: Relation<(OperationId, ValueId, ValueId)>;
+pub let MemErase: Relation<OperationId>;
+pub let MemDead: Relation<OperationId>;
+pub let MemPath: Relation<(ValueId, ValueId)>;
+pub let MemOutgoing: Relation<ValueId>;
+pub let MemRedirect: Relation<(ValueId, ValueId)>;
+pub let MemAliasEdit: Relation<(MemUseOwner, Int, ValueId, ValueId)>;
+
+let cfg_state_seed: List<Rule> = {
+    let store<node, addr, ty, val, st, pl, hm, pos, sty>: Rule(
+        (MemStoreSite(node, addr, ty, val, st, pl, hm, pos, sty), MemOrdinaryAccess(node), ValIntType(ty))
+        -> MemStored(st, addr, ty, val)
+    );
+    let same_addr<a, b, st, ty, data>: Rule(
+        (MemAddressEquals(a, b), MemStored(st, a, ty, data))
+        -> MemStored(st, b, ty, data)
+    );
+    let edge<node, edge, target, param, opnd, st, addr, ty, data, region, ord, mode, f, rslot, entry, dslot, decl>: Rule(
+        (
+            ValLive(node), Successor(node, edge, target), SuccessorArgument(node, edge, param, opnd),
+            Operand(node, opnd, st), MemStored(st, addr, ty, data),
+            Block(target, region, ord), Region(region, mode, f, rslot, entry),
+            target != entry, Value(data, ty, "block", entry, dslot, decl),
+        ) -> MemCfgCell(target, param, node, edge, addr, ty, data)
+    );
+    List(store, same_addr, edge)
+};
+
+let cfg_join_disagree: List<Rule> = {
+    let missing<target, param, addr, ty, data, w, inc, node, edge>: Rule(
+        (MemCfgCell(target, param, w, inc, addr, ty, data), Successor(node, edge, target), !MemCfgCell(target, param, node, edge, addr, ty, data))
+        -> MemCfgDisagrees(target, param, addr, ty, data)
+    );
+    List(missing)
+};
+
+let cfg_join_forward: List<Rule> = {
+    let agreed<target, param, addr, ty, data, w, inc, st, sty, decl>: Rule(
+        (MemCfgCell(target, param, w, inc, addr, ty, data), !MemCfgDisagrees(target, param, addr, ty, data), Value(st, sty, "block", target, param, decl))
+        -> MemStored(st, addr, ty, data)
+    );
+    let load_val<node, blk, addr, st, res, ty, val>: Rule(
+        (
+            MemLoadSite(node, addr, ty, res, st, "block", blk), MemStored(st, addr, ty, val),
+            ValIntType(ty), MemOrdered(node, st), MemOrdinaryAccess(node),
+        ) -> (MemReplace(node, res, val), MemErase(node))
+    );
+    let load_state<node, blk, addr, st, res, ty, val, next, sty, d1, dk, ow, sl, d2>: Rule(
+        (
+            MemLoadSite(node, addr, ty, res, st, "block", blk), MemStored(st, addr, ty, val),
+            ValIntType(ty), MemOrdered(node, st), MemOrdinaryAccess(node),
+            Value(next, sty, "result", node, 1, d1), Value(st, sty, dk, ow, sl, d2),
+        ) -> MemReplace(node, next, st)
+    );
+    List(agreed, load_val, load_state)
+};
+
+let plain_window_rules: List<Rule> = {
+    let harmless<k>: Rule(ValDropKind(k) -> MemTransparent(k));
+    let alloca_ok: Rule(() -> MemTransparent(ptr::alloca.kind));
+    let pair<read, write, blk, p, q, a, b, ty, val, data>: Rule(
+        (MemPlainLoad(read, blk, q, a, ty, val), MemPlainStore(write, blk, p, b, ty, data), MemAddressEquals(b, a), less(p, q) == true)
+        -> MemWindow(read, write, blk, p, q)
+    );
+    let read_ok<first, read, blk, p, addr, ty, val, q, d, l>: Rule(
+        (MemPlainStore(first, blk, p, addr, ty, val), Operation(read, ptr::load.kind, "block", blk, q, d, l), MemOrdinaryAccess(read))
+        -> MemPreservesCell(first, read)
+    );
+    let diff_alloc<first, second, blk, p, q, a, b, at, bt, x, y>: Rule(
+        (MemPlainStore(first, blk, p, a, at, x), MemPlainStore(second, blk, q, b, bt, y), MemAllocation(a), MemAllocation(b), a != b)
+        -> MemPreservesCell(first, second)
+    );
+    let priv_call<write, blk, p, addr, ty, val, call, q, d, l>: Rule(
+        (MemPlainStore(write, blk, p, addr, ty, val), MemAllocation(addr), !MemEscapes(addr), Operation(call, func::call.kind, "block", blk, q, d, l))
+        -> MemPreservesCell(write, call)
+    );
+    List(harmless, alloca_ok, pair, read_ok, diff_alloc, priv_call)
+};
+
+let plain_clobber_rules: List<Rule> = {
+    let clobber<read, write, blk, p, q, node, k, pos, d, l>: Rule(
+        (
+            MemWindow(read, write, blk, p, q),
+            Operation(node, k, "block", blk, pos, d, l),
+            less(p, pos) == true, less(pos, q) == true,
+            !MemTransparent(k), !MemPreservesCell(write, node),
+        ) -> MemClobber(read, write)
+    );
+    List(clobber)
+};
+
+let plain_forward_rules: List<Rule> = {
+    let forward<read, write, blk, p, q, a, b, ty, val, data>: Rule(
+        (
+            MemWindow(read, write, blk, p, q), !MemClobber(read, write),
+            MemPlainLoad(read, blk, q, a, ty, val),
+            MemPlainStore(write, blk, p, b, ty, data),
+        ) -> (MemReplace(read, val, data), MemErase(read))
+    );
+    List(forward)
+};
+
+let plain_dse_seed: List<Rule> = {
+    let layout_ext<write, width, align>: Rule(
+        MemStoreLayout(write, width, align)
+        -> (MemHasStoreLayout(write), MemPrivateExtent(write, width, align))
+    );
+    let repeated<first, second, blk, p, q, addr, ty, val>: Rule(
+        (MemPlainStore(first, blk, p, addr, ty, val), MemPlainStore(second, blk, q, addr, ty, val), q == (p + 1))
+        -> MemDead(first)
+    );
+    let overwrite_cand<first, second, blk, p, q, addr, ty, x, y>: Rule(
+        (MemPlainStore(first, blk, p, addr, ty, x), MemPlainStore(second, blk, q, addr, ty, y), less(p, q) == true, ValDefined(x))
+        -> MemPlainOverwrite(first, second, blk, p, q)
+    );
+    List(layout_ext, repeated, overwrite_cand)
+};
+
+let plain_dse_extents: List<Rule> = {
+    let native_int<write, blk, p, addr, ty, data, ctor, args, width>: Rule(
+        (
+            MemPlainStore(write, blk, p, addr, ty, data), !MemHasStoreLayout(write),
+            MemAllocation(addr), TypeTerm(ty, ctor, args), width == integer_width(args),
+        ) -> MemPrivateExtent(write, bigint_of(width), bigint(1))
+    );
+    let barrier<first, second, blk, p, q, node, k, pos, d, l>: Rule(
+        (
+            MemPlainOverwrite(first, second, blk, p, q),
+            Operation(node, k, "block", blk, pos, d, l),
+            less(p, pos) == true, less(pos, q) == true,
+            !ValDropKind(k), !MemErase(node),
+        ) -> MemOverwriteBarrier(first, second)
+    );
+    List(native_int, barrier)
+};
+
+let private_store_rules: List<Rule> = {
+    let bounded<write, blk, pos, addr, base, offset, ty, data, alloc, st, decl, p, d, l, h_sz, bytes, h_al, align, width, end, start, req>: Rule(
+        (
+            MemPlainStore(write, blk, pos, addr, ty, data), MemLocalAddress(addr, base, offset),
+            Value(base, st, "result", alloc, 0, decl),
+            Operation(alloc, ptr::alloca.kind, "block", blk, p, d, l),
+            Attribute("operation", alloc, "size", h_sz), bytes == eqsat::eqsat_attr_int(h_sz),
+            Attribute("operation", alloc, "align", h_al), align == eqsat::eqsat_attr_int(h_al),
+            MemPrivateExtent(write, width, req),
+            start == (offset * bigint(8)),
+            big_le(bigint(1), align) == true, big_le(bigint(1), width) == true,
+            (start % req) == bigint(0),
+            ((align * bigint(8)) % req) == bigint(0),
+            end == (start + width),
+            big_le(end, big_mul(bytes, bigint(8))) == true,
+            ValDefined(data),
+        ) -> MemPrivateWrite(base, write)
+    );
+    let ptradd_use<addr, base, off1, res, off2, node, ty, decl, p, d, l, b, i, w, m, dist>: Rule(
+        (
+            MemLocalAddress(addr, base, off1), MemLocalAddress(res, base, off2),
+            MemOffsetStep(res, addr, ty, i, w, dist, m),
+            Value(res, ty, "result", node, 0, decl),
+            Operation(node, ptr::ptradd.kind, "block", b, p, d, l),
+            !ValPinned(res),
+        ) -> MemLocalPtrUse(addr, node)
+    );
+    List(bounded, ptradd_use)
+};
+
+let private_block_rules: List<Rule> = {
+    let other<addr, base, offset, node, slot>: Rule(
+        (
+            MemLocalAddress(addr, base, offset), Operand(node, slot, addr),
+            !MemPrivateWrite(base, node), !MemLocalPtrUse(addr, node), !MemErase(node),
+        ) -> MemBlockedSlot(base)
+    );
+    let yielded<addr, base, offset, region, slot>: Rule(
+        (MemLocalAddress(addr, base, offset), Yield(region, slot, addr))
+        -> MemBlockedSlot(base)
+    );
+    List(other, yielded)
+};
+
+let plain_dse_apply: List<Rule> = {
+    let overwrite<first, second, blk, p, q>: Rule(
+        (MemPlainOverwrite(first, second, blk, p, q), !MemOverwriteBarrier(first, second))
+        -> MemDead(first)
+    );
+    let priv_write<base, node>: Rule(
+        (MemPrivateWrite(base, node), !MemBlockedSlot(base))
+        -> MemDead(node)
+    );
+    let priv_ptradd<addr, base, offset, node>: Rule(
+        (MemLocalAddress(addr, base, offset), !MemBlockedSlot(base), MemLocalPtrUse(addr, node))
+        -> MemDead(node)
+    );
+    let priv_alloca<addr, node, ty, decl, h, p, d, l>: Rule(
+        (
+            MemAllocation(addr), !MemBlockedSlot(addr), !ValPinned(addr),
+            Value(addr, ty, "result", node, 0, decl),
+            Operation(node, ptr::alloca.kind, "block", h, p, d, l),
+            !ValExtraResult(node),
+        ) -> MemDead(node)
+    );
+    List(overwrite, priv_write, priv_ptradd, priv_alloca)
+};
+
+let alias_paths: List<Rule> = {
+    let direct<owner, old, new>: Rule((MemReplace(owner, old, new), !ValPinned(old)) -> MemPath(old, new));
+    let trans<old, mid, new>: Rule((MemPath(old, mid), MemPath(mid, new)) -> MemPath(old, new));
+    List(direct, trans)
+};
+
+let alias_outgoing: List<Rule> = {
+    let out<old, new>: Rule(MemPath(old, new) -> MemOutgoing(old));
+    List(out)
+};
+
+let alias_edits: List<Rule> = {
+    let term<old, new>: Rule((MemPath(old, new), !MemOutgoing(new)) -> MemRedirect(old, new));
+    let opnd<user, slot, old, new>: Rule((MemRedirect(old, new), Operand(user, slot, old)) -> MemAliasEdit(MemUseOwner::Operand(user), slot, old, new));
+    let yld<region, slot, old, new>: Rule((MemRedirect(old, new), Yield(region, slot, old)) -> MemAliasEdit(MemUseOwner::Yield(region), slot, old, new));
+    List(term, opnd, yld)
+};
+
+extract rust cfg_state_seed      => "@ct";
+extract rust cfg_join_disagree   => "@ct";
+extract rust cfg_join_forward    => "@ct";
+extract rust plain_window_rules  => "@ct";
+extract rust plain_clobber_rules => "@ct";
+extract rust plain_forward_rules => "@ct";
+extract rust plain_dse_seed      => "@ct";
+extract rust plain_dse_extents   => "@ct";
+extract rust private_store_rules => "@ct";
+extract rust private_block_rules => "@ct";
+extract rust plain_dse_apply     => "@ct";
+extract rust alias_paths         => "@ct";
+extract rust alias_outgoing      => "@ct";
+extract rust alias_edits         => "@ct";
+
+pub let run_memopt = || -> Schedule {
+    Schedule::Seq(List(
+        Schedule::Saturate(cfg_state_seed),
+        Schedule::Once(cfg_join_disagree),
+        Schedule::Repeat(2, cfg_join_forward),
+        Schedule::Once(plain_window_rules),
+        Schedule::Once(plain_clobber_rules),
+        Schedule::Once(plain_forward_rules),
+        Schedule::Once(plain_dse_seed),
+        Schedule::Once(plain_dse_extents),
+        Schedule::Once(private_store_rules),
+        Schedule::Once(private_block_rules),
+        Schedule::Once(plain_dse_apply),
+        Schedule::Repeat(64, alias_paths),
+        Schedule::Once(alias_outgoing),
+        Schedule::Repeat(4, alias_edits),
+    ))
+};

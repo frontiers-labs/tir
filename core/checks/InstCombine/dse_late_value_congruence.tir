@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // Both writes store 0, which is what they fold to and not what they are spelled
 // as. Dead-store elimination used to be an e-graph law asserting that the

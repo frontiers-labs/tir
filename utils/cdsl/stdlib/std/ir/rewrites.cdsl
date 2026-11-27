@@ -1,30 +1,21 @@
 // Pure-CDSL v3 High-Level Rewrite Lowering (`Rewrite` -> TIR EqSat `Rule`s).
 //
-// Evaluates at compile time via NbE directly over typed `OpDef`s — zero
-// hardcoded AST splicing in the compiler!
-//
-// Provides:
-//   - Guard combinators (`defined`, `wrapping`, `same_type`, `layout_scoped`,
-//     `not_i1`, `no_attr`) and width-polymorphic `all_ones` term
-//   - `lower_eqsat_rewrites`: lowers full algebraic/bitwise/cast/fp/pointer
-//     rewrites (including nested LHS & nested RHS `Term::TOp` -> `Form::Bin`)
-//     against TIR's EqSat tables (`EqSatBinary`, `EqSatScalar`, `EqSatIdentity`,
-//     `EqSatDefinedFold`, `EqSatRebuild`, and `Operation`/`Operand`/`Value`)
+// Evaluates at compile time via NbE directly over typed `OpDef`s:
+//   - `lower_eqsat_rewrites`: lowers algebraic/bitwise/cast/fp/pointer rewrites
+//     directly onto `Expr` e-class unions (genuine equality saturation!)
 //   - `lower_tir_rewrites`: lowers standalone custom `RuleCollection`s directly
 //     against `Operation`/`Operand`/`Value`/`EqSatReplace`/`EqSatDefinition`.
 
 use std::core::*;
 use std::bigint::bigint;
-use std::ir::{
-    attribute, op_decl, op_is_additive, op_is_binary_int, op_is_subtractive, op_name, operand,
-};
+use std::ir::{attribute, op_decl, op_is_binary_int, op_name, operand};
 
 // ── Guard & Term Combinators ─────────────────────────────────────────────────
 
 pub let all_ones: Term = Term::TAllOnes;
 
 pub let defined = |x: Term| -> Guard {
-    Guard::Fact(Fact::Row("EqSatDefined", List(term_to_atom(x))))
+    Guard::Meta("defined", List(term_to_atom(x)))
 };
 
 pub let wrapping: Guard = Guard::Meta("wrapping", List());
@@ -42,7 +33,6 @@ pub let no_attr = |name: String| -> Guard {
 // ── Internal Helpers ─────────────────────────────────────────────────────────
 
 let eqsat_attr_int = |h: Atom| -> Atom { Atom::Call("eqsat_attr_int", List(h)) };
-
 let prefix_var = |pfx: String, s: String| -> Atom { Atom::Var(pfx ++ s) };
 
 let d_str = |d: Int| -> String {
@@ -54,13 +44,6 @@ let d_str = |d: Int| -> String {
 
 let n_str = rec |n: Int| -> String {
     if n < 10 { d_str(n) } else { n_str(n / 10) ++ d_str(n % 10) }
-};
-
-let str_in_list = rec |needle: String, xs: List<String>| -> Bool {
-    match xs {
-        List::Nil => false,
-        List::Cons(h, t) => if h == needle { true } else { str_in_list(needle, t) },
-    }
 };
 
 let guard_facts = rec |g: Guard| -> List<Fact> {
@@ -89,29 +72,7 @@ let guard_meta_atoms = rec |key: String, g: Guard| -> List<Atom> {
     }
 };
 
-// ── 1. Full EqSat Rewrite Lowering (`lower_eqsat_rewrites`) ──────────────────
-
-enum MatchState {
-    State(Atom, List<String>, List<Fact>),
-}
-
-let term_to_form = rec |all: Atom, t: Term| -> Atom {
-    match t {
-        Term::TVar(v) => Atom::Call("Form::Read", List(v)),
-        Term::TConst(_, n) => Atom::Call("Form::Bits", List(bigint(n))),
-        Term::TAllOnes => Atom::Call("Form::Bits", List(all)),
-        Term::TOp(op, args) => match args {
-            List::Cons(a, rest) => match rest {
-                List::Cons(b, _) => Atom::Call(
-                    "Form::Bin",
-                    List(op_decl(op), term_to_form(all, a), term_to_form(all, b)),
-                ),
-                List::Nil => Atom::Call("Form::Read", List(Atom::Var("@rw:bad_arity"))),
-            },
-            List::Nil => Atom::Call("Form::Read", List(Atom::Var("@rw:bad_arity"))),
-        },
-    }
-};
+// ── 1. Direct `Expr` E-Graph Rewrite Lowering (`lower_eqsat_rewrites`) ───────
 
 let term_uses_all_ones = rec |t: Term| -> Bool {
     match t {
@@ -121,289 +82,87 @@ let term_uses_all_ones = rec |t: Term| -> Bool {
     }
 };
 
-let wrap_fact = |want_wrap: Bool, op: OpDef, node: Atom| -> List<Fact> {
-    if !want_wrap {
-        List()
-    } else if op_is_additive(op) {
-        List(Fact::Row("EqSatWrappingAdd", List(node)))
-    } else if op_is_subtractive(op) {
-        List(Fact::Row("EqSatWrappingSub", List(node)))
-    } else {
-        List()
-    }
-};
-
-let match_eqsat_bin_child = rec |
-    pfx: String,
-    ty: Atom,
-    all: Atom,
-    want_wrap: Bool,
-    congruent_dups: Bool,
-    seen: List<String>,
-    t: Term,
-| -> MatchState {
+// Convert a `Term` into an `Expr` atom. For `op_is_binary_int` ops all operands
+// share `ty`; for polymorphic unary/pointer ops each nested op gets its own type var.
+let term_to_expr = rec |pfx: String, ty: Atom, all: Atom, same_ty: Bool, t: Term| -> Atom {
     match t {
-        Term::TVar(a) => match a {
-            Atom::Var(vname) =>
-                if congruent_dups && str_in_list(vname, seen) {
-                    let dup = prefix_var(pfx, "dup");
-                    let sc = prefix_var(pfx, "sc");
-                    MatchState::State(
-                        dup,
-                        seen,
+        Term::TVar(v) => v,
+        Term::TConst(_, n) => Atom::Call("Expr::Const", List(ty, bigint(n))),
+        Term::TAllOnes => Atom::Call("Expr::Const", List(ty, all)),
+        Term::TOp(op, args) => match args {
+            List::Cons(a, rest) => match rest {
+                List::Nil => {
+                    let child_ty = if same_ty { ty } else { prefix_var(pfx, "cty") };
+                    Atom::Call(
+                        "Expr::Unary",
+                        List(op_decl(op), ty, term_to_expr(pfx ++ "u_", child_ty, all, same_ty, a)),
+                    )
+                },
+                List::Cons(b, _) => {
+                    let is_bin_int = op_is_binary_int(op);
+                    let lty = if is_bin_int { ty } else { prefix_var(pfx, "lty") };
+                    let rty = if is_bin_int { ty } else { prefix_var(pfx, "rty") };
+                    Atom::Call(
+                        "Expr::Bin",
                         List(
-                            Fact::Row("EqSatScalar", List(a, ty, sc)),
-                            Fact::Row("EqSatScalar", List(dup, ty, sc)),
+                            op_decl(op),
+                            ty,
+                            term_to_expr(pfx ++ "l_", lty, all, is_bin_int, a),
+                            term_to_expr(pfx ++ "r_", rty, all, is_bin_int, b),
                         ),
                     )
-                } else {
-                    MatchState::State(a, List::Cons(vname, seen), List())
                 },
-            _ => MatchState::State(a, seen, List()),
-        },
-        Term::TConst(_, n) => {
-            let cv = prefix_var(pfx, "c");
-            let sc = prefix_var(pfx, "sc");
-            MatchState::State(
-                cv,
-                seen,
-                List(
-                    Fact::Row("EqSatScalar", List(cv, ty, sc)),
-                    Fact::Eq(sc, Atom::Call("Scalar::Literal", List(ty, bigint(n)))),
-                ),
-            )
-        },
-        Term::TAllOnes => {
-            let av = prefix_var(pfx, "allv");
-            let sc = prefix_var(pfx, "sc");
-            MatchState::State(
-                av,
-                seen,
-                List(
-                    Fact::Row("EqSatAllBits", List(ty, all)),
-                    Fact::Row("EqSatScalar", List(av, ty, sc)),
-                    Fact::Eq(sc, Atom::Call("Scalar::Literal", List(ty, all))),
-                ),
-            )
-        },
-        Term::TOp(op, args) => match args {
-            List::Cons(lhs_t, rest) => match rest {
-                List::Cons(rhs_t, _) => {
-                    let sub_node = prefix_var(pfx, "n");
-                    let sub_out = prefix_var(pfx, "v");
-                    let sub_home = prefix_var(pfx, "h");
-                    match match_eqsat_bin_child(pfx ++ "l_", ty, all, want_wrap, congruent_dups, seen, lhs_t) {
-                        MatchState::State(lv, seen1, lf) =>
-                            match match_eqsat_bin_child(pfx ++ "r_", ty, all, want_wrap, congruent_dups, seen1, rhs_t) {
-                                MatchState::State(rv, seen2, rf) => {
-                                    let head_f = List(
-                                        Fact::Row("EqSatBinary", List(sub_node, op_decl(op), sub_out, ty, lv, rv, sub_home)),
-                                    );
-                                    let wf = wrap_fact(want_wrap, op, sub_node);
-                                    MatchState::State(
-                                        sub_out,
-                                        seen2,
-                                        append(head_f, append(wf, append(lf, rf))),
-                                    )
-                                },
-                            },
-                    }
-                },
-                List::Nil => MatchState::State(prefix_var(pfx, "bad"), seen, List()),
             },
-            List::Nil => MatchState::State(prefix_var(pfx, "bad"), seen, List()),
+            List::Nil => Atom::Var("@rw:bad_arity"),
         },
     }
 };
 
-let lower_eqsat_bin_root = |
-    rname: String,
-    op: OpDef,
-    lhs_t: Term,
-    rhs_t: Term,
-    g: Guard,
-    rhs: Term,
-| -> List<Rule> {
-    let root_node = Atom::Var("@rw:node");
-    let root_out = Atom::Var("@rw:out");
+let lower_eqsat_body = |rname: String, lhs: Term, g: Guard, rhs: Term| -> List<Rule> {
+    let root_e = Atom::Var("@rw:e");
     let ty = Atom::Var("@rw:ty");
     let all = Atom::Var("@rw:all");
-    let home = Atom::Var("@rw:home");
-    let want_wrap = guard_has_meta("wrapping", g);
-    let congruent_dups = match rhs {
-        Term::TOp(_, _) => false,
+    let same_ty = match lhs {
+        Term::TOp(op, _) => op_is_binary_int(op),
         _ => true,
     };
-    match match_eqsat_bin_child("@rw:l_", ty, all, want_wrap, congruent_dups, List(), lhs_t) {
-        MatchState::State(lv, seen1, lf) =>
-            match match_eqsat_bin_child("@rw:r_", ty, all, want_wrap, congruent_dups, seen1, rhs_t) {
-                MatchState::State(rv, _, rf) => {
-                    let root_f = List(
-                        Fact::Row("EqSatBinary", List(root_node, op_decl(op), root_out, ty, lv, rv, home)),
-                    );
-                    let wf = wrap_fact(want_wrap, op, root_node);
-                    let not_i1_f = if guard_has_meta("not_i1", g) {
-                        List(
-                            Fact::Row("EqSatAllBits", List(ty, all)),
-                            Fact::Neq(all, bigint(1)),
-                        )
-                    } else {
-                        List()
-                    };
-                    let rhs_all_f = if term_uses_all_ones(rhs) {
-                        List(Fact::Row("EqSatAllBits", List(ty, all)))
-                    } else {
-                        List()
-                    };
-                    let base_facts = append(
-                        root_f,
-                        append(wf, append(lf, append(rf, append(not_i1_f, append(rhs_all_f, guard_facts(g)))))),
-                    );
-                    match rhs {
-                        Term::TVar(v) => List(Rule::Clause(
-                            rname,
-                            base_facts,
-                            List(Action::Insert("EqSatIdentity", List(root_node, root_out, v))),
-                        )),
-                        Term::TConst(_, n) => List(Rule::Clause(
-                            rname,
-                            base_facts,
-                            List(Action::Insert("EqSatDefinedFold", List(root_node, root_out, bigint(n)))),
-                        )),
-                        Term::TAllOnes => List(Rule::Clause(
-                            rname,
-                            base_facts,
-                            List(Action::Insert("EqSatDefinedFold", List(root_node, root_out, all))),
-                        )),
-                        Term::TOp(_, _) => List(Rule::Clause(
-                            rname,
-                            append(base_facts, List(Fact::NotRow("EqSatPinnedOp", List(root_node)))),
-                            List(Action::Insert("EqSatRebuild", List(root_node, root_out, term_to_form(all, rhs)))),
-                        )),
-                    }
-                },
-            },
-    }
-};
+    let lhs_expr = term_to_expr("@rw:", ty, all, same_ty, lhs);
+    let rhs_expr = term_to_expr("@rw:rhs_", ty, all, true, rhs);
 
-// Non-binary op matching (trunci, extui, extsi, fp::materialize, fp::capture, ptr::ptradd, ...)
-let match_generic_op_term = rec |pfx: String, out_val: Atom, out_ty: Atom, t: Term| -> List<Fact> {
-    match t {
-        Term::TVar(v) => List(Fact::Eq(out_val, v)),
-        Term::TConst(_, n) => List(Fact::Row("EqSatFolded", List(out_val, bigint(n)))),
-        Term::TAllOnes => List(),
-        Term::TOp(op, args) => {
-            let node = prefix_var(pfx, "n");
-            let head: List<Fact> = List(
-                Fact::Row("Operation", List(
-                    node, op_decl(op),
-                    prefix_var(pfx, "pl"), prefix_var(pfx, "hm"), prefix_var(pfx, "ps"),
-                    prefix_var(pfx, "dp"), prefix_var(pfx, "lc"),
-                )),
-                Fact::Row("Value", List(
-                    out_val, out_ty, Atom::StrLit("result"),
-                    node, Atom::IntLit(0), prefix_var(pfx, "decl"),
-                )),
-            );
-            let arg_facts = flat_map(|x: List<Fact>| -> List<Fact> { x }, map_indexed(0, |i: Int, arg_t: Term| -> List<Fact> {
-                let spfx = pfx ++ "a" ++ n_str(i) ++ "_";
-                match arg_t {
-                    Term::TVar(v) => List(Fact::Row("Operand", List(node, Atom::IntLit(i), v))),
-                    Term::TConst(_, n) => {
-                        let aval = prefix_var(spfx, "v");
-                        List(
-                            Fact::Row("Operand", List(node, Atom::IntLit(i), aval)),
-                            Fact::Row("EqSatFolded", List(aval, bigint(n))),
-                        )
-                    },
-                    _ => {
-                        let aval = prefix_var(spfx, "v");
-                        let aty = prefix_var(spfx, "ty");
-                        append(
-                            List(Fact::Row("Operand", List(node, Atom::IntLit(i), aval))),
-                            match_generic_op_term(spfx, aval, aty, arg_t),
-                        )
-                    },
-                }
-            }, args));
-            append(head, arg_facts)
-        },
-    }
-};
-
-let lower_eqsat_generic_root = |
-    rname: String,
-    op: OpDef,
-    args: List<Term>,
-    g: Guard,
-    rhs: Term,
-| -> List<Rule> {
-    let root_node = Atom::Var("@rw:n");
-    let root_out = Atom::Var("@rw:out");
-    let root_ty = Atom::Var("@rw:ty");
-    let op_facts = match_generic_op_term("@rw:", root_out, root_ty, Term::TOp(op, args));
-    let live_f = List(Fact::Row("EqSatLive", List(root_node)));
-    let scoped_f = if guard_has_meta("layout_scoped", g) {
-        List(Fact::Row("EqSatLayoutScoped", List(root_node)))
+    let need_mask = term_uses_all_ones(lhs) || term_uses_all_ones(rhs) || guard_has_meta("not_i1", g);
+    let mask_f = if need_mask {
+        List(Fact::Row("TypeMask", List(ty, all)))
     } else {
         List()
     };
-    let no_attr_f = map(|a: Atom| -> Fact {
-        Fact::NotRow("EqSatHasAttr", List(root_node, a))
-    }, guard_meta_atoms("no_attr", g));
+    let not_i1_f = if guard_has_meta("not_i1", g) {
+        List(Fact::Neq(all, bigint(1)))
+    } else {
+        List()
+    };
+    let def_f = map(|x: Atom| -> Fact {
+        Fact::Row("ExprDefined", List(x))
+    }, guard_meta_atoms("defined", g));
     let same_ty_f = if guard_has_meta("same_type", g) {
         match rhs {
-            Term::TVar(v) => List(Fact::Row("Value", List(
-                v, root_ty, Atom::Var("@rw:vk"), Atom::Var("@rw:vo"),
-                Atom::Var("@rw:vs"), Atom::Var("@rw:vd"),
-            ))),
+            Term::TVar(v) => List(
+                Fact::Row("ValExpr", List(Atom::Var("@rw:sv"), v)),
+                Fact::Row("Value", List(
+                    Atom::Var("@rw:sv"), ty, Atom::Var("@rw:vk"),
+                    Atom::Var("@rw:vo"), Atom::Var("@rw:vs"), Atom::Var("@rw:vd"),
+                )),
+            ),
             _ => List(),
         }
     } else {
         List()
     };
-    let all_facts = append(
-        live_f,
-        append(op_facts, append(scoped_f, append(no_attr_f, append(same_ty_f, guard_facts(g))))),
-    );
-    match rhs {
-        Term::TVar(v) =>
-            if op_name(op) == "trunci" {
-                List(Rule::Clause(
-                    rname,
-                    all_facts,
-                    List(Action::Insert("EqSatIdentity", List(root_node, root_out, v))),
-                ))
-            } else {
-                List(Rule::Clause(
-                    rname,
-                    all_facts,
-                    List(
-                        Action::Insert("EqSatReplace", List(root_node, root_out, v)),
-                        Action::Insert("EqSatErase", List(root_node)),
-                    ),
-                ))
-            },
-        _ => List(),
-    }
-};
 
-let lower_eqsat_body = |rname: String, lhs: Term, g: Guard, rhs: Term| -> List<Rule> {
-    match lhs {
-        Term::TOp(op, args) =>
-            if op_is_binary_int(op) {
-                match args {
-                    List::Cons(a, rest) => match rest {
-                        List::Cons(b, _) => lower_eqsat_bin_root(rname, op, a, b, g, rhs),
-                        List::Nil => List(),
-                    },
-                    List::Nil => List(),
-                }
-            } else {
-                lower_eqsat_generic_root(rname, op, args, g, rhs)
-            },
-        _ => List(),
-    }
+    let facts = append(
+        List(Fact::Eq(root_e, lhs_expr)),
+        append(mask_f, append(not_i1_f, append(def_f, append(same_ty_f, guard_facts(g))))),
+    );
+    List(Rule::Clause(rname, facts, List(Action::Union(root_e, rhs_expr))))
 };
 
 let lower_eqsat_rw = rec |rname: String, idx: Int, rw: Rewrite| -> List<Rule> {
@@ -432,6 +191,27 @@ let combine_branches = |as_: List<List<Fact>>, bs: List<List<Fact>>| -> List<Lis
     }, as_)
 };
 
+let rhs_term_to_expr = rec |ty: Atom, all: Atom, t: Term| -> Atom {
+    match t {
+        Term::TVar(v) => Atom::Call("Expr::Var", List(v)),
+        Term::TConst(op, n) => Atom::Call("Expr::CustomConst", List(op_decl(op), Atom::StrLit("value"), bigint(n))),
+        Term::TAllOnes => Atom::Call("Expr::Const", List(ty, all)),
+        Term::TOp(op, args) => match args {
+            List::Cons(a, rest) => match rest {
+                List::Cons(b, _) => Atom::Call(
+                    "Expr::Bin",
+                    List(op_decl(op), ty, rhs_term_to_expr(ty, all, a), rhs_term_to_expr(ty, all, b)),
+                ),
+                List::Nil => Atom::Call(
+                    "Expr::Unary",
+                    List(op_decl(op), ty, rhs_term_to_expr(ty, all, a)),
+                ),
+            },
+            List::Nil => Atom::Var("@rw:bad_arity"),
+        },
+    }
+};
+
 let match_subterm = rec |pfx: String, val: Atom, t: Term| -> List<List<Fact>> {
     match t {
         Term::TVar(v) => List(List(Fact::Eq(val, v))),
@@ -455,7 +235,7 @@ let match_subterm = rec |pfx: String, val: Atom, t: Term| -> List<List<Fact>> {
             let def_branch: List<Fact> = List(
                 Fact::Row("EqSatDefinition", List(
                     cnode, val,
-                    Atom::Call("Form::Constant", List(op_decl(op), Atom::StrLit("value"), bigint(n))),
+                    Atom::Call("Expr::CustomConst", List(op_decl(op), Atom::StrLit("value"), bigint(n))),
                 )),
             );
             List(op_branch, def_branch)
@@ -494,7 +274,7 @@ let match_subterm = rec |pfx: String, val: Atom, t: Term| -> List<List<Fact>> {
     }
 };
 
-let rhs_actions = |root_node: Atom, root_res: Atom, rhs: Term| -> List<Action> {
+let rhs_actions = |root_node: Atom, root_res: Atom, root_ty: Atom, rhs: Term| -> List<Action> {
     match rhs {
         Term::TVar(v) => List(
             Action::Insert("EqSatReplace", List(root_node, root_res, v)),
@@ -503,14 +283,14 @@ let rhs_actions = |root_node: Atom, root_res: Atom, rhs: Term| -> List<Action> {
         Term::TConst(op, n) => List(
             Action::Insert("EqSatDefinition", List(
                 root_node, root_res,
-                Atom::Call("Form::Constant", List(op_decl(op), Atom::StrLit("value"), bigint(n))),
+                Atom::Call("Expr::CustomConst", List(op_decl(op), Atom::StrLit("value"), bigint(n))),
             )),
         ),
         Term::TAllOnes => List(),
         Term::TOp(_, _) => List(
             Action::Insert("EqSatDefinition", List(
                 root_node, root_res,
-                term_to_form(Atom::Var("@rw:all"), rhs),
+                rhs_term_to_expr(root_ty, Atom::Var("@rw:all"), rhs),
             )),
         ),
     }
@@ -519,18 +299,22 @@ let rhs_actions = |root_node: Atom, root_res: Atom, rhs: Term| -> List<Action> {
 let lower_tir_body = |rname: String, lhs: Term, g: Guard, rhs: Term| -> List<Rule> {
     let root_node = Atom::Var("@rw:node");
     let root_res = Atom::Var("@rw:res");
+    let root_ty = Atom::Var("@rw:ty");
     let branches = match_subterm("@rw:", root_res, lhs);
+    let def_f = map(|x: Atom| -> Fact {
+        Fact::Row("EqSatDefined", List(x))
+    }, guard_meta_atoms("defined", g));
     let tail_facts = append(
         List(
             Fact::Row("EqSatLive", List(root_node)),
             Fact::NotRow("EqSatPinnedOp", List(root_node)),
         ),
         append(
-            guard_facts(g),
-            List(Fact::NotRow("EqSatPinned", List(root_res))),
+            def_f,
+            append(guard_facts(g), List(Fact::NotRow("EqSatPinned", List(root_res)))),
         ),
     );
-    let acts = rhs_actions(root_node, root_res, rhs);
+    let acts = rhs_actions(root_node, root_res, root_ty, rhs);
     map_indexed(0, |i: Int, br: List<Fact>| -> Rule {
         Rule::Clause(rname ++ "::b" ++ n_str(i), append(br, tail_facts), acts)
     }, branches)
@@ -565,21 +349,16 @@ extract rust eqsat_attr_int        => "@ct";
 extract rust prefix_var            => "@ct";
 extract rust d_str                 => "@ct";
 extract rust n_str                 => "@ct";
-extract rust str_in_list           => "@ct";
 extract rust guard_facts           => "@ct";
 extract rust guard_has_meta        => "@ct";
 extract rust guard_meta_atoms      => "@ct";
-extract rust term_to_form          => "@ct";
 extract rust term_uses_all_ones    => "@ct";
-extract rust wrap_fact             => "@ct";
-extract rust match_eqsat_bin_child => "@ct";
-extract rust lower_eqsat_bin_root  => "@ct";
-extract rust match_generic_op_term => "@ct";
-extract rust lower_eqsat_generic_root => "@ct";
+extract rust term_to_expr          => "@ct";
 extract rust lower_eqsat_body      => "@ct";
 extract rust lower_eqsat_rw        => "@ct";
 extract rust lower_eqsat_rewrites  => "@ct";
 extract rust combine_branches      => "@ct";
+extract rust rhs_term_to_expr      => "@ct";
 extract rust match_subterm         => "@ct";
 extract rust rhs_actions           => "@ct";
 extract rust lower_tir_body        => "@ct";

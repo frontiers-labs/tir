@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(memopt,dce)) --verify %s | filecheck %s
 
 // Two spellings of one address: `+4` and `+2+2` land on the same byte of the
 // same object. The extent a law reads is the object an address is derived from
