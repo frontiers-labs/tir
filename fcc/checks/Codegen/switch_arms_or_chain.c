@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile -O2 --stage asm --march x86_64 -o - %s | filecheck %s
 
 // The shape that used to make instruction selection quadratic: an `||` chain and

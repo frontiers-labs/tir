@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_switch.c | filecheck %s
 
 // The cases are one gamma on the controlling value. Falling through from

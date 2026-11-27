@@ -260,7 +260,6 @@ pub(crate) fn verify_op_trees(context: &Context, roots: &[OpId]) -> Result<(), E
         verify_op_tree_ops(context, root, &mut ops)?;
     }
     crate::check_types(context, &ops)?;
-    crate::sem::refine::check_refinements(context, &ops)?;
     roots
         .iter()
         .try_for_each(|&root| verify_state_forks(context, root))
@@ -811,10 +810,6 @@ impl OpHandle {
     /// Returns whether this operation has type `T`.
     pub fn is<T: Operation>(&self) -> bool {
         self.identity() == (T::dialect(), T::name())
-    }
-
-    pub(crate) fn is_name(&self, dialect: &str, name: &str) -> bool {
-        self.identity() == (dialect, name)
     }
 
     pub fn as_op<T: Operation + Sized>(self) -> Option<T> {

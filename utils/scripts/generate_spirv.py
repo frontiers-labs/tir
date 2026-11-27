@@ -87,13 +87,6 @@ def generate(grammar_path, output_dir):
     rust.extend([
         "];",
         "",
-        "pub(crate) fn opcode_for_name(name: &str) -> Option<u16> {",
-        "    GENERATED",
-        "        .iter()",
-        "        .find(|(_, candidate, _)| *candidate == name)",
-        "        .map(|&(opcode, _, _)| opcode)",
-        "}",
-        "",
         "pub(crate) fn build_generated(",
         "    context: &tir::Context,",
         "    opcode: u16,",

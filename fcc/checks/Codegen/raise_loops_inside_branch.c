@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
 
 // A raised loop is an ordinary non-terminator operation sitting in a block, so

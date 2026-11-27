@@ -128,7 +128,7 @@ impl EvaluationContract {
         self.attribute().print(fmt, context)
     }
 
-    fn attribute(&self) -> AttributeValue {
+    pub(crate) fn attribute(&self) -> AttributeValue {
         let string = |value: &str| AttributeValue::Str(value.into());
         let dict = |entries: Vec<(&str, AttributeValue)>| {
             AttributeValue::Dict(Box::new(

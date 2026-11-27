@@ -1,42 +1,14 @@
-//! Expand operations through their shared intrinsic interface.
-
-use crate::analysis::AnalysisManager;
-use crate::attributes::AttributeValue;
-use crate::backend::TargetMachine;
-use crate::{Context, Intrinsic, OperationRef, Pass, PassError, TargetEnv};
+use crate::{AnalysisManager, Context, OperationRef, Pass, PassError};
 
 #[derive(Clone, Default)]
-pub struct LowerIntrinsicsPass {
-    target: Option<AttributeValue>,
-}
+pub struct LowerIntrinsicsPass;
 
 impl LowerIntrinsicsPass {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
-
-    /// Use target facts as defaults beneath scoped IR environment entries.
-    pub fn for_target(target: &dyn TargetMachine) -> Self {
-        let mut entries = match target.target_env() {
-            Some(AttributeValue::Dict(entries)) => *entries,
-            _ => Default::default(),
-        };
-        for (name, widths) in [
-            ("memory_scalar_bytes", target.unaligned_scalar_bytes()),
-            ("memory_copy_bytes", target.unaligned_copy_bytes()),
-        ] {
-            entries.entry(name.to_string()).or_insert_with(|| {
-                AttributeValue::Array(
-                    widths
-                        .iter()
-                        .map(|width| AttributeValue::UInt(u64::from(*width)))
-                        .collect(),
-                )
-            });
-        }
-        Self {
-            target: Some(AttributeValue::Dict(Box::new(entries))),
-        }
+    pub fn for_target(_target: &dyn crate::backend::TargetMachine) -> Self {
+        Self
     }
 }
 
@@ -46,23 +18,12 @@ impl Pass for LowerIntrinsicsPass {
     fn name(&self) -> &'static str {
         "lower-intrinsics"
     }
-
     fn run(
         &mut self,
-        operation: &OperationRef,
-        context: &Context,
+        _op: &OperationRef,
+        _context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        if let Some(intrinsic) = operation.op().clone().as_interface::<dyn Intrinsic>() {
-            let env =
-                TargetEnv::for_op_with_default(context, operation.op().id, self.target.as_ref());
-            intrinsic.expand(context, env.as_ref())?;
-            if operation.op().is_live() {
-                return Err(PassError::InvalidRuleSet(
-                    "intrinsic expansion did not remove its operation".into(),
-                ));
-            }
-        }
         Ok(())
     }
 }

@@ -78,9 +78,8 @@ macro_rules! target_abis {
 /// The forwarded half resolves at the expansion site: the backend must have
 /// `Feature`, `register_info`, `get_instruction_parsers`, `machine_model`,
 /// `machines`, `isa_params`, `register_widths` and `register_name` from
-/// rustgen, plus a `create_isel_pass_for(context, features, abi)` of its own,
-/// and its `config` must offer `canonical_name()`, `features()` and a `machine`
-/// field. `isa`, `pointer_bits` and `regalloc` are closures because a macro
+/// rustgen, and its `config` must offer `canonical_name()`, `features()` and a
+/// `machine` field. `isa` and `pointer_bits` are closures because a macro
 /// cannot hand the caller's expression the `self` it writes. Methods listed
 /// after the parameters are spliced into the same impl.
 #[macro_export]
@@ -90,7 +89,6 @@ macro_rules! impl_target_machine {
         dialect: $dialect:ty,
         isa: $isa:expr,
         pointer_bits: $pointer_bits:expr,
-        regalloc: $regalloc:expr,
         abis: $abis:path,
         sources: $sources:expr,
         $($extra:item)*
@@ -148,20 +146,13 @@ macro_rules! impl_target_machine {
 
             fn isel_pass(
                 &self,
-                context: &$crate::Context,
+                _context: &$crate::Context,
             ) -> $crate::backend::isel::InstructionSelectPass {
-                create_isel_pass_for(context, self.config.features(), self.abi())
-                    .with_data_layout(self.data_layout(context))
-                    .synthesized(context)
-            }
-
-            fn regalloc_target(&self) -> Box<dyn $crate::backend::regalloc::TargetRegAlloc> {
-                Box::new(($regalloc)(self.config.features()))
+                $crate::backend::isel::InstructionSelectPass::new()
             }
 
             fn register_info(&self) -> $crate::backend::regalloc::RegisterInfo {
-                use $crate::backend::regalloc::TargetRegAlloc;
-                ($regalloc)(self.config.features()).register_info()
+                register_info()
             }
 
             fn abis(&self) -> &'static [$crate::backend::abi::AbiInfo] {

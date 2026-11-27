@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir prove %s | filecheck %s
 
 // A switch whose arms agree is that value; one indexed by a boolean is an

@@ -92,30 +92,6 @@ impl Context {
         }
     }
 
-    pub(crate) fn rename_region_results_batch(
-        &self,
-        region: RegionId,
-        renames: &crate::IdMap<ValueId, ValueId>,
-    ) {
-        let mut naming: Vec<RegionId> = renames
-            .keys()
-            .flat_map(|old| self.result_uses(*old))
-            .map(|(naming, _)| naming)
-            .filter(|naming| self.region_under(*naming, region))
-            .collect();
-        naming.sort_unstable();
-        naming.dedup();
-        for nested in naming {
-            let mut results = self.get_region(nested).results();
-            for result in &mut results {
-                while let Some(&next) = renames.get(result) {
-                    *result = next;
-                }
-            }
-            self.set_region_results(nested, results);
-        }
-    }
-
     fn exits_leaving(&self, roots: &[OpId], target: OpId) -> Vec<OpId> {
         self.subtree_ops(roots)
             .into_iter()
@@ -199,7 +175,7 @@ impl Context {
         } else {
             panic!("grow_declared_port needs a Theta or Gamma");
         }
-        let result = self.create_value(ty, Some(op)).id();
+        let result = self.create_value(ty, None).id();
         let results = handle.results();
         let binding = crate::binding::declared(&self.get_op(op)).expect("a loop or a gate");
         self.insert_result_at(op, at(&results, binding.results), result);

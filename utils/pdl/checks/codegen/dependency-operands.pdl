@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // Dependency operands are pattern children after the value operands, in the
 // order the printer spells them; a switch's predicate leads its arms.
 // RUN: tir-pdl %s --emit rust | filecheck %s

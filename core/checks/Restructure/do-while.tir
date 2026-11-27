@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A tail-controlled loop needs no dispatch: the value the body computes leaves

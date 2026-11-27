@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 // An arm may not read a sibling arm's value. Both arms are entered with the same

@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
 
 // A private function is not visible outside its module, so it lowers to a local

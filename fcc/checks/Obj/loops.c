@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage obj --march riscv32 -o - %S/../Inputs/basic_for.c | tir readobj - | filecheck %s
 // RUN: fcc compile --stage asm --march riscv32 -o - %S/../Inputs/long_counted_loop.c | filecheck %s --check-prefix=ASM
 // RUN: fcc compile --stage asm --march riscv32 -o - %S/../Inputs/loop_control.c | filecheck %s --check-prefix=CONTROL

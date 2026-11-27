@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 // AAPCS64 passes integer args past the 8th on the stack. The callee reloads

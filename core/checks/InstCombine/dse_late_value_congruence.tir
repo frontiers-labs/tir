@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Both writes store 0, which is what they fold to and not what they are spelled

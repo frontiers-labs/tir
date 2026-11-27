@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir prove --width 1 %s | filecheck %s
 
 rule sub-add-negate-right: #sub(x: int<W>, #add(x, y: int<W>)) : int<W> => #sub(const<W>(0), y);

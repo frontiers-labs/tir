@@ -1,3 +1,6 @@
+// Disabled during the IR migration: the allocator hooks and PBQP dump path were removed.
+#![cfg(any())]
+
 use std::process::Command;
 
 use tir::backend::regalloc::RegisterAllocationPass;

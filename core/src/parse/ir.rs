@@ -43,7 +43,7 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
         .downcast::<T>()
         .map(|t| *t)
         .map_err(|_| (Span(0), Error::ExpectedOperation(T::dialect(), T::name())))?;
-    context.commit();
+
     Ok(op)
 }
 

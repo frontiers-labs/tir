@@ -59,7 +59,22 @@ struct Clause {
     lits: Vec<Lit>,
 }
 
+struct VariableActivity {
+    scores: Vec<f64>,
+    increment: f64,
+}
+
+impl Default for VariableActivity {
+    fn default() -> Self {
+        Self {
+            scores: Vec::new(),
+            increment: 1.0,
+        }
+    }
+}
+
 /// CDCL SAT solver: build with [`Solver::new_var`]/[`Solver::add_clause`], then [`Solver::solve`].
+#[derive(Default)]
 pub struct Solver {
     clauses: Vec<Clause>,
     /// `watches[l]`: clauses watching literal `l`, processed when `l` becomes false.
@@ -72,8 +87,7 @@ pub struct Solver {
     reason: Vec<Option<usize>>,
     /// Saved last polarity per variable, for phase saving.
     phase: Vec<bool>,
-    activity: Vec<f64>,
-    var_inc: f64,
+    activity: VariableActivity,
     /// Assignment stack in chronological order.
     trail: Vec<Lit>,
     /// Index into `trail` of the first not-yet-propagated literal.
@@ -92,31 +106,9 @@ pub struct Solver {
     seen: Vec<bool>,
 }
 
-impl Default for Solver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Solver {
     pub fn new() -> Self {
-        Solver {
-            clauses: Vec::new(),
-            watches: Vec::new(),
-            assign: Vec::new(),
-            level: Vec::new(),
-            reason: Vec::new(),
-            phase: Vec::new(),
-            activity: Vec::new(),
-            var_inc: 1.0,
-            trail: Vec::new(),
-            qhead: 0,
-            trail_lim: Vec::new(),
-            unsat: false,
-            order: Vec::new(),
-            order_slot: Vec::new(),
-            seen: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn num_vars(&self) -> usize {
@@ -130,7 +122,7 @@ impl Solver {
         self.level.push(0);
         self.reason.push(None);
         self.phase.push(false);
-        self.activity.push(0.0);
+        self.activity.scores.push(0.0);
         self.watches.push(Vec::new());
         self.watches.push(Vec::new());
         self.order_slot.push(usize::MAX);
@@ -421,7 +413,7 @@ impl Solver {
     }
 
     fn ahead(&self, a: u32, b: u32) -> bool {
-        (self.activity[a as usize], a) > (self.activity[b as usize], b)
+        (self.activity.scores[a as usize], a) > (self.activity.scores[b as usize], b)
     }
 
     fn queue(&mut self, var: u32) {
@@ -475,13 +467,13 @@ impl Solver {
     }
 
     fn bump(&mut self, var: Var) {
-        let a = &mut self.activity[var.index()];
-        *a += self.var_inc;
+        let a = &mut self.activity.scores[var.index()];
+        *a += self.activity.increment;
         if *a > 1e100 {
-            for act in &mut self.activity {
+            for act in &mut self.activity.scores {
                 *act *= 1e-100;
             }
-            self.var_inc *= 1e-100;
+            self.activity.increment *= 1e-100;
             // Scaling can round distinct activities into a tie.
             for slot in (0..self.order.len() / 2).rev() {
                 self.sift_down(slot);
@@ -494,7 +486,7 @@ impl Solver {
     }
 
     fn decay(&mut self) {
-        self.var_inc /= 0.95;
+        self.activity.increment /= 0.95;
     }
 }
 

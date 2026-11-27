@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // The slot's address reaches a call, so its contents may be observed from

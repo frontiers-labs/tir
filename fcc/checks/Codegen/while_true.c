@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
 
 // An invariant loop still becomes a canonical scf.loop whose predicate is

@@ -39,6 +39,9 @@ impl Terminator for BranchOp {
 }
 
 impl BranchTerminator for BranchOp {
+    fn successor_operand_slots(&self) -> Vec<(BlockId, Vec<usize>)> {
+        vec![(self.dest(), (0..self.operands().len()).collect())]
+    }
     fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
         vec![(self.dest(), self.dest_args())]
     }
@@ -92,6 +95,12 @@ impl Terminator for CondBranchOp {
 }
 
 impl BranchTerminator for CondBranchOp {
+    fn successor_operand_slots(&self) -> Vec<(BlockId, Vec<usize>)> {
+        vec![
+            (self.true_dest(), self.args_range(1).collect()),
+            (self.false_dest(), self.args_range(2).collect()),
+        ]
+    }
     fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
         vec![
             (self.true_dest(), self.true_args()),
@@ -367,6 +376,18 @@ impl Terminator for SwitchOp {
 }
 
 impl BranchTerminator for SwitchOp {
+    fn successor_operand_slots(&self) -> Vec<(BlockId, Vec<usize>)> {
+        let mut start = 1;
+        self.edges()
+            .into_iter()
+            .map(|(dest, args)| {
+                let end = start + args.len();
+                let slots = (start..end).collect();
+                start = end;
+                (dest, slots)
+            })
+            .collect()
+    }
     fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
         self.edges()
     }

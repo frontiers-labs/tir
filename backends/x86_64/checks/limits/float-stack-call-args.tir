@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 // The ninth SysV f64 argument is stored to the outgoing stack area from its

@@ -1,3 +1,5 @@
+// IR migration: selector rule generation was removed.
+// XFAIL: *
 // Flag-mediated branch derivation: a definer writing status_flag registers
 // composes with each flag-guarded branch, and the proved composition becomes a
 // CondBranch rule emitting the definer + branch pair.

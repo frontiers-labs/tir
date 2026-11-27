@@ -68,9 +68,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     }
 
     if args.print_affine {
-        for view in tir::analysis::affine::nests_under(&context, module.id()) {
-            print!("{}", view.render(&context));
-        }
+        return Err("affine analysis is unavailable during the IR migration".into());
     }
 
     if args.verify {

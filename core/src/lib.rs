@@ -4,8 +4,7 @@ extern crate self as tir;
 // downstream crates without each of them depending on it directly.
 pub use linkme;
 
-/// Declares an entity's identity: the `u32` position of its row in the
-/// context's storage.
+/// Declares an entity's identity from the context-wide allocator.
 macro_rules! id_newtype {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -62,19 +61,16 @@ pub mod passes;
 mod print;
 mod region;
 pub mod region_format;
-pub(crate) mod rewrite;
 pub mod schema;
 mod scoped_attr;
 pub mod sem;
 mod state_verification;
-mod store;
 pub mod symbol_table;
 mod target_env;
 mod ty;
 mod typecheck;
 pub mod utils;
 mod value;
-pub mod variants;
 
 pub mod helpers {
     pub use tir_macros::{dialect, operation};
@@ -83,7 +79,7 @@ pub mod parse;
 
 pub use analysis::{Analysis, AnalysisManager};
 pub use block::{BlockHandle, BlockId};
-pub use context::{Census, Context, ContextIterator, FunctionScope, GetFromContext, Names, Parent};
+pub use context::{Context, ContextIterator, GetFromContext, Names};
 pub use diagnostics::{print_error_range, print_parse_error};
 pub use dialect::{Dialect, OperationParser};
 pub use error::Error;

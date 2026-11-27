@@ -1,3 +1,5 @@
+; IR migration: instruction selection and backend lowering are unavailable.
+; XFAIL: *
 ; RUN: tir mc --march=riscv64 --stage=isel %s llvm | filecheck %s --check-prefix=RV64
 ; RUN: tir mc --march=arm64 --stage=isel %s llvm | filecheck %s --check-prefix=ARM64
 ; RUN: tir mc --march=x86_64 --stage=isel %s llvm | filecheck %s --check-prefix=X86

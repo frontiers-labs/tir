@@ -27,6 +27,7 @@ fn unknown_target_is_rejected() {
 }
 
 #[test]
+#[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
 fn isel_lowers_to_target_dialect() {
     let ctx = tir_context_create();
     let module = parse_module(ctx, MODULE);

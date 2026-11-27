@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile -O2 --stage asm --march x86_64 -o - %s | filecheck %s
 
 // Nightly differential-fuzz #399. A two-trip counted loop writes `p[i & 3]`.

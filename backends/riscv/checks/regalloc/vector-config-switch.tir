@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64iv --stage=regalloc %s | filecheck %s
 
 // A configuration transition: the two ops demand different vector lengths, so

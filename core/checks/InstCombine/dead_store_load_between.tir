@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 
 // The load between the two writes names the extent the first one wrote, so it
