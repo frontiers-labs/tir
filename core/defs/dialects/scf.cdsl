@@ -1,9 +1,11 @@
 use std::core::*;
 use std::ir::{Bits, Cfg, Counter, IndexOrInt, Nodes};
 
+let loop_latch_role = "scf.loop_latch";
+
 pub let r#yield = op {
     signature: (values: ..Any) -> (),
-    interfaces: (Terminator,),
+    interfaces: (Terminator, Check(TypeConstraint::ExitRole(loop_latch_role))),
     macro_def: true,
 };
 
@@ -36,7 +38,10 @@ pub let r#for<C: IndexOrInt> = op {
 pub let ordered_for<C: IndexOrInt> = op {
     signature: (lb: Counter<C>, inits: ..Any, ub: Counter<C>, step: Counter<C>) -> (results: ..Any),
     regions: (body: Cfg),
-    interfaces: (ExitScope, CountedLoop),
+    interfaces: (
+        ExitScope, CountedLoop,
+        Check(TypeConstraint::OrderedLoop(ConstraintPort::Input("inits"), loop_latch_role)),
+    ),
     custom_format: true,
     macro_def: true,
 };
