@@ -27,5 +27,6 @@ fn main() -> Result<(), Error> {
             "core::passes::control_simplify::*",
             Program("control_simplify.rs"),
         ),
+        ("core::passes::restructure::*", Program("restructure.rs")),
     ])
 }

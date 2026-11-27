@@ -1,5 +1,3 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // `*p = 1; x = *p; *p = 2` on ordered blocks carries no dependencies. The

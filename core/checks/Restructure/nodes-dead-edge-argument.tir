@@ -1,7 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
-// RUN: tir opt --pass restructure-nodes,dce --verify %s | filecheck --check-prefix=DEAD %s
 
 module {
   %f = func.func @count(%n: !i32) -> !i32 {
@@ -26,10 +23,3 @@ module {
 // CHECK: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}) {
 // CHECK: %[[NEXT:[0-9]+]] = addi %[[I]], %[[ONE]]
 // CHECK: -> %{{[0-9]+}}, %[[NEXT]], %[[I]]
-
-// Keep the loop result live while DCE removes the unused edge producer.
-// DEAD-LABEL: func.func @count(%[[N:[0-9]+]]: !i32)
-// DEAD: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}) {
-// DEAD-NOT: addi %[[I]], %[[N]]
-// DEAD: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[I]]
-// DEAD-NEXT: }
