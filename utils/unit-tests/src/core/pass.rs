@@ -29,12 +29,14 @@ impl Pass for AddToSubPass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
-        let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
+        let add = context
+            .get_op(op)
+            .as_op::<AddIOp>()
+            .expect("target guarantees AddIOp");
         let operands = add.operands();
         let result_ty = context.get_value(add.result()).ty();
         let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
-        context.replace_op(&op, &new_op)
+        context.replace_op(&OperationRef::new(context.get_op(op)), &new_op)
     }
 }
 
@@ -58,8 +60,7 @@ impl Pass for BreakIRPass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
-        context.erase_op(&op)
+        context.erase_op(&OperationRef::new(context.get_op(op)))
     }
 }
 
@@ -83,12 +84,14 @@ impl Pass for ReplaceThenErasePass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
-        let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
+        let add = context
+            .get_op(op)
+            .as_op::<AddIOp>()
+            .expect("target guarantees AddIOp");
         let operands = add.operands();
         let result_ty = context.get_value(add.result()).ty();
         let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
-        context.replace_op(&op, &new_op)?;
+        context.replace_op(&OperationRef::new(context.get_op(op)), &new_op)?;
         context.erase_op(&OperationRef::new(context.get_op(new_op.id())))
     }
 }
@@ -108,35 +111,6 @@ impl Pass for ReadOnlyPass {
         _context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        Ok(())
-    }
-}
-
-/// Mutates on every run, without changing what the IR means.
-#[derive(Clone)]
-#[cfg(any())]
-struct TouchPass;
-
-#[cfg(any())]
-impl Pass for TouchPass {
-    fn name(&self) -> &'static str {
-        "touch"
-    }
-
-    fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
-    }
-
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
-        let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
-        func.body()
-            .set_attr("touched", tir::attributes::AttributeValue::Bool(true));
         Ok(())
     }
 }
@@ -237,32 +211,6 @@ fn analysis_survives<P: Pass + Clone + 'static>(pass: P) -> bool {
 #[ignore = "IR migration: the pass manager and analysis cache are unavailable"]
 fn an_analysis_survives_a_pass_that_changes_nothing() {
     assert!(analysis_survives(ReadOnlyPass));
-}
-
-// Migration skip: the analysis cache API was removed.
-#[cfg(any())]
-#[test]
-fn repeated_pass_runs_do_not_grow_the_analysis_cache() {
-    use super::analysis::Simple;
-
-    let (context, func) = parse_func(ADD_ITS_ARGUMENT);
-    let analyses = AnalysisManager::new();
-    let mut pm = PassManager::new();
-    pm.add_pass(TouchPass);
-
-    let mut counts = Vec::new();
-    for _ in 0..8 {
-        let root = func.id();
-        pm.run_on_op_id(&context, root, &analyses)
-            .expect("touching a block attribute keeps the IR valid");
-        analyses.get::<Simple>(&context, func.id());
-        counts.push(analyses.cached_count());
-    }
-
-    assert!(
-        counts.iter().all(|count| *count == counts[0]),
-        "each rebuild must replace the stale result, got {counts:?}"
-    );
 }
 
 #[test]
@@ -476,10 +424,12 @@ impl Pass for CountingPass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if run <= self.edits {
-            let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
+            let func = context
+                .get_op(op)
+                .as_op::<FuncOp>()
+                .expect("target guarantees FuncOp");
             func.body()
                 .set_attr("round", tir::attributes::AttributeValue::Int(run as i64));
         }
@@ -538,8 +488,7 @@ impl Pass for PeerCountPass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
-        let id = op.op().id;
+        let id = op;
         let module = context.parent_op(id).expect("a function sits in a module");
         let peers: i64 = context
             .get_region(context.get_op(module).regions()[0])
@@ -553,19 +502,21 @@ impl Pass for PeerCountPass {
                     .len() as i64
             })
             .sum();
-        let mut attributes = op.op().attributes().to_vec();
+        let mut attributes = context.get_op(op).attributes().to_vec();
         attributes
             .push(context.named_attribute("peer_ops", tir::attributes::AttributeValue::Int(peers)));
         context.set_op_attributes(id, attributes);
-        let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
+        let func = context
+            .get_op(op)
+            .as_op::<FuncOp>()
+            .expect("target guarantees FuncOp");
         let i32_ty = IntegerType::new(context, 32);
-        context.insert(
-            tir::InsertionPoint::Block {
+        ops::constant(context, 7, i32_ty)
+            .at(tir::InsertionPoint::Block {
                 block: func.body().id(),
                 position: 0,
-            },
-            ops::constant(context, 7, i32_ty).build().id(),
-        );
+            })
+            .build();
         Ok(())
     }
 }
@@ -640,18 +591,19 @@ impl Pass for SlowFirstPass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
-        let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
+        let func = context
+            .get_op(op)
+            .as_op::<FuncOp>()
+            .expect("target guarantees FuncOp");
         let delay = if func.symbol_name() == "a" { 30 } else { 0 };
         std::thread::sleep(std::time::Duration::from_millis(delay));
         let i32_ty = IntegerType::new(context, 32);
-        context.insert(
-            tir::InsertionPoint::Block {
+        ops::constant(context, 7, i32_ty)
+            .at(tir::InsertionPoint::Block {
                 block: func.body().id(),
                 position: 0,
-            },
-            ops::constant(context, 7, i32_ty).build().id(),
-        );
+            })
+            .build();
         Ok(())
     }
 }
@@ -674,63 +626,6 @@ fn tasks_commit_in_callable_order_whatever_order_they_finish_in() {
         "{sequential}"
     );
     assert_eq!(run(2), sequential);
-}
-
-/// Edits the function after its own: what a task may not do.
-#[derive(Clone)]
-#[cfg(any())]
-struct TouchSiblingPass;
-
-#[cfg(any())]
-impl Pass for TouchSiblingPass {
-    fn name(&self) -> &'static str {
-        "touch-sibling"
-    }
-
-    fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
-    }
-
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
-        let id = op.op().id;
-        let module = context.parent_op(id).expect("a function sits in a module");
-        let functions: Vec<_> = context
-            .get_region(context.get_op(module).regions()[0])
-            .op_ids()
-            .into_iter()
-            .filter(|peer| context.get_op(*peer).is::<FuncOp>())
-            .collect();
-        for target in [id, functions[0]] {
-            context
-                .get_op(target)
-                .as_op::<FuncOp>()
-                .expect("a function")
-                .body()
-                .set_attr("touched", tir::attributes::AttributeValue::Bool(true));
-        }
-        Ok(())
-    }
-}
-
-// Migration skip: overlapping epoch writes no longer exist.
-#[cfg(any())]
-#[test]
-fn overlapping_write_sets_are_refused_before_anything_commits() {
-    let (context, module) = fixtures::parse(TWO_FUNCTIONS);
-    let before = module_text(&context, module.id());
-    let mut pm = PassManager::new();
-    pm.nest::<FuncOp>().add_pass(TouchSiblingPass);
-    let error = pm
-        .run(&context, module.id())
-        .expect_err("two tasks edited one block");
-    assert!(matches!(error, PassError::OverlappingEdits(_)), "{error}");
-    assert_eq!(module_text(&context, module.id()), before);
 }
 
 #[test]
@@ -785,10 +680,12 @@ impl Pass for RecordOpCountPass {
         context: &Context,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
-        let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
+        let func = context
+            .get_op(op)
+            .as_op::<FuncOp>()
+            .expect("target guarantees FuncOp");
         let name: &'static str = if func.symbol_name() == "a" { "a" } else { "b" };
-        let count = analyses.get::<OpCount>(context, op.op().id).0;
+        let count = analyses.get::<OpCount>(context, op).0;
         self.seen.lock().unwrap().push((name, count));
         Ok(())
     }
@@ -816,9 +713,9 @@ impl Pass for ThreeRoundsPass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let op = OperationRef::new(context.get_op(op));
         self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let body = op
+        let body = context
+            .get_op(op)
             .as_op::<FuncOp>()
             .expect("target guarantees FuncOp")
             .body();

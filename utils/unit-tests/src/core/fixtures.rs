@@ -6,17 +6,7 @@ use tir::backend::{SymbolOp, SymbolOpBuilder};
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
 use tir::parse::ir::parse_ir;
-// Migration skip: selector-only test support.
-#[cfg(any())]
-use tir::sem::{SemGraph, SymKind, SymPayload};
-// Migration skip: selector-only test support.
-#[cfg(any())]
-use tir::NodeId;
 use tir::{BlockHandle, Context, OpId, Operation, RegionId};
-// Migration skip: selector-only test support.
-#[cfg(any())]
-use tir_adt::APInt;
-
 #[allow(dead_code)]
 pub mod ops {
     include!(concat!(env!("OUT_DIR"), "/core_fixtures.rs"));
@@ -25,7 +15,6 @@ pub mod ops {
     __cdsl_dep_UpdateParamOp!(tir::backend::MachineInstruction);
     __cdsl_dep_SetFlagsOp!(tir::backend::MachineInstruction);
     __cdsl_dep_ReadFlagsOp!(tir::backend::MachineInstruction);
-    __cdsl_test_TestInstOp!();
     __cdsl_test_AddTestOp!(tir::backend::MachineInstruction);
     __cdsl_test_ExitOp!();
     __cdsl_test_BeqDecodeOp!();
@@ -107,11 +96,13 @@ pub const fn r_high() -> RegClassId {
     RegClassId::new(&R_HIGH_CLASS)
 }
 
+/// An `asm.symbol` named `f` whose body is one block holding `ops`, in that
+/// order. Machine instructions have no textual form, so the machine-IR tests
 /// build the function around them rather than parsing one.
 pub fn asm_symbol(context: &Context, ops: &[OpId]) -> (SymbolOp, BlockHandle) {
     let block = context.create_block(vec![]);
     for &op in ops {
-        block.context.insert(block.end(), op);
+        context.insert(block.end(), op);
     }
     let region = context.create_region();
     region.add_block(block.id());
@@ -122,50 +113,8 @@ pub fn asm_symbol(context: &Context, ops: &[OpId]) -> (SymbolOp, BlockHandle) {
     (symbol, block)
 }
 
-/// Isel pattern-graph builders: symbols, constants and operator nodes.
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn symbol(g: &mut SemGraph, id: u32) -> NodeId {
-    let node = g.add_node(SymKind::Symbol);
-    g.set_leaf_data(node, SymPayload::SymbolId(id));
-    node
-}
-
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn constant(g: &mut SemGraph, value: u64, width: u32) -> NodeId {
-    let node = g.add_node(SymKind::Constant);
-    g.set_leaf_data(node, SymPayload::Int(APInt::new(u64::from(width), value)));
-    node
-}
-
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn nary(g: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
-    let node = g.add_node(kind);
-    for &child in children {
-        g.add_edge(node, child);
-    }
-    node
-}
-
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn binary(g: &mut SemGraph, kind: SymKind, lhs: NodeId, rhs: NodeId) -> NodeId {
-    nary(g, kind, &[lhs, rhs])
-}
-
-/// A one-operator pattern over two fresh symbols.
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub fn atomic_pattern(kind: SymKind) -> SemGraph {
-    let mut g = SemGraph::new();
-    let lhs = symbol(&mut g, 0);
-    let rhs = symbol(&mut g, 1);
-    binary(&mut g, kind, lhs, rhs);
-    g
-}
-
+/// The `MachineInstruction` facts a test opcode reports: its mnemonic, the
+/// registers `$implicit` its behavior touches.
 macro_rules! instr_info {
     ($op:ident, $name:tt, $implicit:expr) => {
         impl tir::backend::MachineInstruction for $op {

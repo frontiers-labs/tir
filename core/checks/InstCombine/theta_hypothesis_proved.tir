@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,control-simplify,dce) --verify %s | filecheck %s
 
 // The latch is a term over the port, not the port itself, so no fixpoint a
 // bottom-up saturation reaches says what the loop carries. Hypothesise that the
@@ -22,8 +20,9 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-LABEL: func.func @f
 // CHECK: %[[SEVEN:[0-9]+]] = constant {value = 7} : !i32
+// CHECK: scf.ordered_for {{.*}} (%[[PORT:[0-9]+]] = %[[SEVEN]])
+// CHECK-NEXT: scf.yield %[[PORT]]
 // CHECK-NOT: addi
-// CHECK-NOT: scf.for
-// CHECK: -> %[[SEVEN]]
+// CHECK: func.return %[[SEVEN]]

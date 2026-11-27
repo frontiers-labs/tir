@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat --verify %s | filecheck %s
 
 module {
   %f = func.func @sub_zero(%x: !i32) -> !i32 {
@@ -13,4 +11,4 @@ module {
 
 // CHECK: func.func @sub_zero(%[[X:[0-9]+]]: !i32)
 // CHECK-NOT: subi
-// CHECK: -> %[[X]]
+// CHECK: func.return %[[X]]

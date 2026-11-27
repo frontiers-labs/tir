@@ -79,84 +79,6 @@ module_end
     }
 }
 
-// An operation holding one ordered region and nothing else, so a commit to it
-// is a commit to a region an op owns without also being a port contract the
-// staged body would have to satisfy.
-// Migration skip: the storage revision API was removed.
-#[cfg(any())]
-tir::helpers::operation! {
-    NestOp {
-        name: "nest",
-        dialect: "nest_test",
-        scheme: "() -> ()",
-        regions: R {
-            body: Region {
-                kind: Blocks,
-            }
-        },
-    }
-}
-
-// Migration skip: the storage revision API was removed.
-#[cfg(any())]
-tir::helpers::dialect! {
-    NestDialect {
-        name: "nest_test",
-        operations: [NestOp],
-    }
-}
-
-/// `module { func demo() { %c = 1; test.nest { %old = 7; scf.yield }; return } }`
-/// — a region owned by an op nested inside a function.
-// Migration skip: the storage revision API was removed.
-#[cfg(any())]
-struct Fixture {
-    nest: OpId,
-    body_region: RegionId,
-    body_block: BlockId,
-    /// `%old`, defined inside the nested region.
-    old: ValueId,
-}
-
-// Migration skip: the storage revision API was removed.
-#[cfg(any())]
-fn fixture(context: &Context) -> Fixture {
-    context.register_dialect::<NestDialect>();
-    let module = fixtures::parse_in(
-        context,
-        r#"module {
-%fn_demo = func.func @demo() {
-  %c = constant {value = 1} : !i32
-  nest_test.nest {
-    %old = constant {value = 7} : !i32
-    scf.yield
-  }
-  func.return
-}
-module_end
-}"#,
-    );
-    let func = fixtures::module_ops(context, module.id())[0];
-    let body = context
-        .get_op(func)
-        .as_op::<FuncOp>()
-        .expect("a func")
-        .body();
-    let [_, nest, ..] = body.op_ids()[..] else {
-        panic!("the function body holds the constant and the nest");
-    };
-    let body_region = context.get_op(nest).regions()[0];
-    let body_block = context.get_region(body_region).block_ids()[0];
-    let old = context.get_block(body_block).op_ids()[0];
-
-    Fixture {
-        nest,
-        body_region,
-        body_block,
-        old: context.get_op(old).results()[0],
-    }
-}
-
 #[test]
 fn a_name_is_an_id_once_something_uses_it() {
     let first = Context::with_default_dialects();
@@ -203,99 +125,6 @@ fn module_with_function(context: &Context) -> (OpId, OpId, BlockHandle) {
     (module.id(), func, body)
 }
 
-// Migration skip: the storage revision API was removed.
-#[cfg(any())]
-#[test]
-fn every_edit_bumps_the_spine() {
-    type Edit = fn(&Context, &BlockHandle);
-
-    let cases: &[(&str, Edit)] = &[
-        ("append op", |context, body| {
-            body.append(func::ops::r#return(context, Operand::none()).build().id());
-        }),
-        ("insert op", |context, body| {
-            body.insert(
-                0,
-                func::ops::r#return(context, Operand::none()).build().id(),
-            );
-        }),
-        ("remove op", |context, body| {
-            let ret = func::ops::r#return(context, Operand::none()).build();
-            body.append(ret.id());
-            assert!(body.remove_op(ret.id()));
-        }),
-        ("replace op", |context, body| {
-            let old = func::ops::r#return(context, Operand::none()).build();
-            body.append(old.id());
-            let new = func::ops::r#return(context, Operand::none()).build();
-            assert!(body.replace_op(old.id(), new.id()));
-        }),
-        ("append block argument", |context, body| {
-            let i32 = builtin::IntegerType::new(context, 32);
-            context.append_block_argument(body.id(), i32);
-        }),
-        ("set block attribute", |_context, body| {
-            body.set_attr("tag", tir::attributes::AttributeValue::Bool(true));
-        }),
-        ("add block to region", |context, body| {
-            let region = context.parent_region(body.id()).unwrap();
-            let extra = context.create_block(vec![]);
-            context.get_region(region).add_block(extra.id());
-        }),
-        ("remove block from region", |context, body| {
-            let region = context.get_region(context.parent_region(body.id()).unwrap());
-            let extra = context.create_block(vec![]);
-            region.add_block(extra.id());
-            assert!(region.remove_block(extra.id()));
-        }),
-        ("set op attributes", |context, body| {
-            let ret = func::ops::r#return(context, Operand::none()).build();
-            body.append(ret.id());
-            context.set_op_attributes(ret.id(), vec![]);
-        }),
-        ("set op operand", |context, body| {
-            let i32 = builtin::IntegerType::new(context, 32);
-            let a = context.create_value(i32, None);
-            let b = context.create_value(i32, None);
-            let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            context.insert(body.end(), add.id());
-            context.set_op_operand(add.id(), 1, b.id());
-        }),
-        ("set op operands", |context, body| {
-            let i32 = builtin::IntegerType::new(context, 32);
-            let a = context.create_value(i32, None);
-            let b = context.create_value(i32, None);
-            let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            context.insert(body.end(), add.id());
-            context.set_op_operands(add.id(), vec![b.id(), b.id()]);
-        }),
-        ("replace value uses", |context, body| {
-            let i32 = builtin::IntegerType::new(context, 32);
-            let a = context.create_value(i32, None);
-            let b = context.create_value(i32, None);
-            let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            context.insert(body.end(), add.id());
-            context.replace_value_uses(a.id(), b.id());
-        }),
-    ];
-
-    for (name, edit) in cases {
-        let context = Context::with_default_dialects();
-        let (module, func, body) = module_with_function(&context);
-        let module_before = context.op_version(module);
-        let func_before = context.op_version(func);
-        edit(&context, &body);
-        assert!(
-            context.op_version(func) > func_before,
-            "{name}: the edited op's owner must be dirtied"
-        );
-        assert!(
-            context.op_version(module) > module_before,
-            "{name}: the bump must propagate root-ward"
-        );
-    }
-}
-
 #[test]
 fn adopting_a_value_makes_the_block_define_it() {
     let context = Context::with_default_dialects();
@@ -318,21 +147,6 @@ fn adopting_a_value_makes_the_block_define_it() {
         context.get_op(reader.id()).operands().as_slice(),
         vec![result; 2]
     );
-}
-
-// Migration skip: the storage revision API was removed.
-#[cfg(any())]
-#[test]
-fn an_untouched_function_keeps_its_version() {
-    let context = Context::with_default_dialects();
-    let (_, edited, body) = module_with_function(&context);
-    let (_, untouched, _) = module_with_function(&context);
-    let before = context.op_version(untouched);
-
-    body.append(func::ops::r#return(&context, Operand::none()).build().id());
-
-    assert!(context.op_version(edited) > 0);
-    assert_eq!(context.op_version(untouched), before);
 }
 
 #[test]
@@ -566,14 +380,18 @@ fn growing_an_op_promotes_its_run_and_keeps_its_uses() {
     assert!(context.uses_of(d).iter().all(|r#use| r#use.op == add));
 }
 
-// Migration skip: the storage revision API was removed.
-#[cfg(any())]
 proptest::proptest! {
     #[test]
-    fn block_permutations_preserve_identity_and_invalidate_the_owner(keys in proptest::collection::vec(proptest::num::u32::ANY, 2..24)) {
+    fn block_permutations_preserve_identity(keys in proptest::collection::vec(proptest::num::u32::ANY, 2..24)) {
         let context = Context::with_default_dialects();
-        let f = fixture(&context);
-        let region = context.get_region(f.body_region);
+        let (_, function, entry) = module_with_function(&context);
+        let body = context.get_op(function).regions()[0];
+        let region = context.get_region(body);
+        let i32 = builtin::IntegerType::new(&context, 32);
+        let value = context.create_value(i32, None);
+        let add = builtin::ops::addi(&context, value.id(), value.id(), i32).build();
+        context.insert(entry.end(), add.id());
+        let result = context.get_op(add.id()).results()[0];
         for _ in &keys {
             region.add_block(context.create_block(vec![]).id());
         }
@@ -581,24 +399,62 @@ proptest::proptest! {
         let mut tail: Vec<_> = original[1..].iter().copied().zip(&keys).collect();
         tail.sort_by_key(|(_, key)| *key);
         let order: Vec<_> = std::iter::once(original[0]).chain(tail.into_iter().map(|(block, _)| block)).collect();
-        let version = context.op_version(f.nest);
-        let contents = context.get_block(f.body_block).op_ids();
-        context.reorder_region_blocks(f.body_region, order.clone()).unwrap();
+        let contents = entry.op_ids();
+        context.reorder_region_blocks(body, order.clone()).unwrap();
         proptest::prop_assert_eq!(region.block_ids(), order.clone());
-        proptest::prop_assert_eq!(context.op_version(f.nest) != version, order != original);
-        proptest::prop_assert_eq!(context.get_block(f.body_block).op_ids(), contents);
+        proptest::prop_assert_eq!(entry.op_ids(), contents);
+        proptest::prop_assert!(context.has_value(result));
         for block in original {
-            proptest::prop_assert_eq!(context.parent_region(block), Some(f.body_region));
+            proptest::prop_assert_eq!(context.parent_region(block), Some(body));
         }
-        proptest::prop_assert!(context.has_value(f.old));
-        let version = context.op_version(f.nest);
         let mut duplicate = order.clone();
         duplicate[1] = duplicate[0];
-        proptest::prop_assert!(context.reorder_region_blocks(f.body_region, duplicate).is_err());
+        proptest::prop_assert!(context.reorder_region_blocks(body, duplicate).is_err());
         let mut changed_entry = order.clone();
         changed_entry.swap(0, 1);
-        proptest::prop_assert!(context.reorder_region_blocks(f.body_region, changed_entry).is_err());
+        proptest::prop_assert!(context.reorder_region_blocks(body, changed_entry).is_err());
         proptest::prop_assert_eq!(region.block_ids(), order);
-        proptest::prop_assert_eq!(context.op_version(f.nest), version);
     }
+}
+
+#[test]
+fn insertion_points_place_and_move_operations_without_duplicate_membership() {
+    use tir::InsertionPoint;
+
+    let context = Context::with_default_dialects();
+    let ty = builtin::IntegerType::new(&context, 32);
+    let block = context.create_block(vec![]);
+    let graph = context.create_nodes_region(vec![], vec![], vec![]);
+    let root = builtin::ops::constant(&context, 0, ty)
+        .at(InsertionPoint::Root)
+        .build();
+    assert_eq!(context.insertion_point(root.id()), InsertionPoint::Root);
+
+    let tail = builtin::ops::constant(&context, 1, ty)
+        .at(block.end())
+        .build();
+    let head = builtin::ops::constant(&context, 2, ty)
+        .at(InsertionPoint::Block {
+            block: block.id(),
+            position: 0,
+        })
+        .build();
+    let middle = builtin::ops::constant(&context, 3, ty)
+        .at(context.insertion_point(tail.id()))
+        .build();
+    assert_eq!(block.op_ids(), vec![head.id(), middle.id(), tail.id()]);
+
+    context.insert(block.end(), head.id());
+    assert_eq!(block.op_ids(), vec![middle.id(), tail.id(), head.id()]);
+    let node = builtin::ops::constant(&context, 4, ty)
+        .at(InsertionPoint::Region(graph.id()))
+        .build();
+    context.insert(InsertionPoint::Region(graph.id()), middle.id());
+    assert_eq!(context.parent_nodes_region(node.id()), Some(graph.id()));
+    assert_eq!(context.parent_nodes_region(middle.id()), Some(graph.id()));
+    assert_eq!(block.op_ids(), vec![tail.id(), head.id()]);
+
+    context.insert(InsertionPoint::Root, tail.id());
+    assert_eq!(block.op_ids(), vec![head.id()]);
+    assert_eq!(context.insertion_point(tail.id()), InsertionPoint::Root);
 }

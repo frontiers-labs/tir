@@ -1,12 +1,5 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
-
-// Restructuring turns the guarded edge into a gate, and the driver assumes the
-// gate's condition inside the arm it guards. The redundant compare in that arm
-// hash-conses with %c, whose class now carries the boolean constant, so it folds
-// to `true`. The defining compare outside the gate (where %c is unknown) stays.
+// RUN: tir opt --pass fixpoint<3>(eqsat,dce) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat,dce)) --verify %s | filecheck %s
 
 module {
   %fn_f = func.func @f(%a: !i32, %b: !i32) -> !i1 {
@@ -21,8 +14,13 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[C:[0-9]+]] = cmpi
+// CHECK-LABEL: func.func @f
+// CHECK: %[[GUARD:[0-9]+]] = cmpi
+// CHECK-NEXT: cfg.cond_br %[[GUARD]], ^bb1, ^bb2
 // CHECK-NOT: cmpi
-// CHECK-NOT: scf.switch
-// CHECK: -> %[[C]]
+// CHECK: ^bb1:
+// CHECK-NEXT: %[[TRUE:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: func.return %[[TRUE]]
+// CHECK: ^bb2:
+// CHECK-NEXT: %[[FALSE:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT: func.return %[[FALSE]]

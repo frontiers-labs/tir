@@ -1,0 +1,42 @@
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat,memopt,dce)) --verify %s | filecheck %s
+
+module {
+  func.func @store(%p: !ptr.p<!i32>, %x: !i32) -> !i32 {
+    %start = state.entry_state : !state<memory>
+    %written = ptr.store %x, %p state(%start)
+    %read = ptr.load %p state(%written) : !i32
+    func.return %read state(%written)
+  }
+  func.func @different_width(%p: !ptr.p<!i32>, %x: !i32) -> !i16 {
+    %start = state.entry_state : !state<memory>
+    %written = ptr.store %x, %p state(%start)
+    %read = ptr.load %p state(%written) : !i16
+    func.return %read state(%written)
+  }
+  func.func @successor(%x: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %identity = addi %x, %zero : !i32
+    cfg.br ^bb1(%identity : !i32)
+  ^bb1(%arg: !i32):
+    func.return %arg
+  }
+  func.func @capture(%x: !f32) -> !f32 {
+    %computation = fp.capture %x : !fp.computation<!f32, nearest_even, separate>
+    %value = fp.materialize %computation : !f32
+    func.return %value
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @store(%{{[0-9]+}}: !ptr.p<!i32>, %[[X:[0-9]+]]: !i32)
+// CHECK: %[[STATE:[0-9]+]] = ptr.store %[[X]],
+// CHECK-NEXT: func.return %[[X]] state(%[[STATE]])
+// CHECK-LABEL: func.func @different_width
+// CHECK: %[[READ:[0-9]+]] = ptr.load {{.*}} : !i16
+// CHECK: func.return %[[READ]]
+// CHECK-LABEL: func.func @successor(%[[Y:[0-9]+]]: !i32)
+// CHECK-NOT: addi
+// CHECK: cfg.br ^bb1(%[[Y]] : !i32)
+// CHECK-LABEL: func.func @capture(%[[F:[0-9]+]]: !f32)
+// CHECK-NOT: fp.materialize
+// CHECK: func.return %[[F]]

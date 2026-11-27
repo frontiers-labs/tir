@@ -1,14 +1,15 @@
 use tmdl::{Action, Compiler, OutputKind};
 
 fn main() {
-    tir_cdsl::compile([(
-        "tir-unit-tests::*",
-        tir_cdsl::OutputKind::OpDef("core_fixtures.rs"),
-    )])
-    .unwrap();
-
     let input = "tests/conditional-latency.tmdl";
     let output = std::env::var("OUT_DIR").unwrap();
+    use tir_cdsl::OutputKind::{OpDef, Program};
+    tir_cdsl::compile([
+        ("tir-unit-tests::*", OpDef("core_fixtures.rs")),
+        ("tir-unit-tests::dialects::test::*", OpDef("eqsat_ops.rs")),
+        ("tir-unit-tests::eqsat::*", Program("eqsat_rules.rs")),
+    ])
+    .unwrap();
     println!("cargo:rerun-if-changed={input}");
     for (action, name) in [
         (Action::EmitRust, "latency.rs"),

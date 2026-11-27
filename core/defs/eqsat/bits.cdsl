@@ -1,0 +1,272 @@
+// `Expr` e-graph lifting (with flat `OpExpr` SSI `Pi` operand wrapping),
+// commutativity, and monotonic `KnownZeros` lattice.
+
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use std::ir::{
+    dialect_commute_rules, dialect_lift_bin_int_rules, dialect_mark_bin_int_rules,
+    fp_lift_rules, fp_mark_rules,
+};
+use dialects::builtin;
+use dialects::fp;
+use dialects::ptr;
+
+pub let int_types: List<Rule> = {
+    let integer<ty, ctor, args, decl, default>: Rule(
+        (TypeTerm(ty, ctor, args), TypeCtor(ctor, "builtin", "i", decl, default))
+        -> EqSatInteger(ty)
+    );
+    let width_and_mask<ty, ctor, args, w>: Rule(
+        (EqSatInteger(ty), TypeTerm(ty, ctor, args), w == integer_width(args))
+        -> (TypeWidth(ty, w), TypeMask(ty, (shl(bigint(1), w) - bigint(1))))
+    );
+    let ptr_ty<ty, ctor, args, decl, default>: Rule(
+        (TypeTerm(ty, ctor, args), TypeCtor(ctor, "ptr", "p", decl, default))
+        -> EqSatPointerType(ty)
+    );
+    List(integer, width_and_mask, ptr_ty)
+};
+
+pub let wrap_flags: List<Rule> = {
+    let nsw<node, attr>: Rule(
+        (EqSatLive(node), Attribute("operation", node, "nsw", attr), eqsat_attr_bool(attr) == true)
+        -> EqSatNoSignedWrap(node)
+    );
+    let nuw<node, attr>: Rule(
+        (EqSatLive(node), Attribute("operation", node, "nuw", attr), eqsat_attr_bool(attr) == true)
+        -> EqSatNoUnsignedWrap(node)
+    );
+    List(nsw, nuw)
+};
+
+pub let mark_lifted: List<Rule> = {
+    let constant_op<node, kind, pl, hm, pos, dp, lc, res, ty, decl, attr>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node), EqSatConstantImplementation(kind),
+            Operation(node, kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl), EqSatInteger(ty),
+            Attribute("operation", node, "value", attr),
+        ) -> (ExprLifted(res), EqSatLiftedOp(node))
+    );
+    let trunci_op<node, pl, hm, pos, dp, lc, x, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::trunci.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, x), Value(res, ty, "result", node, 0, decl), EqSatInteger(ty),
+        ) -> (ExprLifted(res), EqSatLiftedOp(node))
+    );
+    let extui_op<node, pl, hm, pos, dp, lc, x, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::extui.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, x), Value(res, ty, "result", node, 0, decl), EqSatInteger(ty),
+        ) -> (ExprLifted(res), EqSatLiftedOp(node))
+    );
+    let extsi_op<node, pl, hm, pos, dp, lc, x, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::extsi.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, x), Value(res, ty, "result", node, 0, decl), EqSatInteger(ty),
+        ) -> (ExprLifted(res), EqSatLiftedOp(node))
+    );
+    let bitcast_op<node, pl, hm, pos, dp, lc, x, res, ty, decl, xk, xo, xs, xd>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::bitcast.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, x), Value(res, ty, "result", node, 0, decl), EqSatInteger(ty),
+            Value(x, ty, xk, xo, xs, xd),
+        ) -> (ExprLifted(res), EqSatLiftedOp(node))
+    );
+    let cmpi_op<node, pl, hm, pos, dp, lc, x, y, res, ty, decl, attr>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::cmpi.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, x), Operand(node, 1, y),
+            Value(res, ty, "result", node, 0, decl), EqSatInteger(ty),
+            Attribute("operation", node, "predicate", attr),
+        ) -> (ExprLifted(res), EqSatLiftedOp(node))
+    );
+    let cmpi_scoped<node, pl, hm, pos, dp, lc, x, y, res, ty, decl, attr, pred, bit>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::cmpi.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, x), Operand(node, 1, y),
+            Value(res, ty, "result", node, 0, decl), EqSatInteger(ty),
+            Attribute("operation", node, "predicate", attr), pred == eqsat_attr_case(attr),
+            ScopeCmpConst(hm, pred, x, y, bit),
+        ) -> ScopeCmpOp(node)
+    );
+    let ptradd_op<node, pl, hm, pos, dp, lc, base, disp, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, ptr::ptradd.kind, pl, hm, pos, dp, lc),
+            EqSatLayoutScoped(node),
+            Operand(node, 0, base), Operand(node, 1, disp),
+            Value(res, ty, "result", node, 0, decl),
+            !EqSatHasAttr(node, "inbounds"),
+            !EqSatHasAttr(node, "nuw"),
+            !EqSatHasAttr(node, "nsw"),
+        ) -> (ExprLifted(res), EqSatLiftedOp(node))
+    );
+    append(
+        dialect_mark_bin_int_rules(builtin::all_ops),
+        append(
+            fp_mark_rules(fp::all_ops),
+            List(constant_op, trunci_op, extui_op, extsi_op, bitcast_op, cmpi_op, cmpi_scoped, ptradd_op),
+        ),
+    )
+};
+
+pub let seed_opaque: List<Rule> = {
+    let opaque<val, ty, def, owner, slot, decl>: Rule(
+        (Value(val, ty, def, owner, slot, decl), !ExprLifted(val))
+        -> ValExpr(val, Expr::Var(val))
+    );
+    let constant_val<node, kind, pl, hm, pos, dp, lc, res, ty, decl, attr, mask, raw, bits>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node), EqSatConstantImplementation(kind),
+            Operation(node, kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl), TypeMask(ty, mask),
+            Attribute("operation", node, "value", attr),
+            raw == eqsat_attr_int(attr),
+            bits == bit_and(raw, mask),
+        ) -> (ValExpr(res, Expr::Const(ty, bits)), EqSatBaseConst(res))
+    );
+    List(opaque, constant_val)
+};
+
+pub let lift_ops: List<Rule> = {
+    // Route every operand through `OpExpr`: constrained operands inside a branch scope
+    // wrap in `Expr::Pi(home, e)`, unconstrained operands pass straight through.
+    let opnd_plain<node, k, pl, hm, pos, dp, lc, slot, val, ev>: Rule(
+        (
+            EqSatLive(node), Operation(node, k, pl, hm, pos, dp, lc),
+            Operand(node, slot, val), ValExpr(val, ev), !ScopeConstrained(hm, val),
+        ) -> OpExpr(node, slot, ev)
+    );
+    let opnd_pi<node, k, pl, hm, pos, dp, lc, slot, val, ev>: Rule(
+        (
+            EqSatLive(node), Operation(node, k, pl, hm, pos, dp, lc),
+            Operand(node, slot, val), ValExpr(val, ev), ScopeConstrained(hm, val),
+        ) -> OpExpr(node, slot, Expr::Pi(hm, ev))
+    );
+    let trunci_lift<node, pl, hm, pos, dp, lc, ex, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::trunci.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl),
+            ExprLifted(res), OpExpr(node, 0, ex),
+        ) -> ValExpr(res, Expr::Unary(builtin::trunci.kind, ty, ex))
+    );
+    let extui_lift<node, pl, hm, pos, dp, lc, ex, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::extui.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl),
+            ExprLifted(res), OpExpr(node, 0, ex),
+        ) -> ValExpr(res, Expr::Unary(builtin::extui.kind, ty, ex))
+    );
+    let extsi_lift<node, pl, hm, pos, dp, lc, ex, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::extsi.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl),
+            ExprLifted(res), OpExpr(node, 0, ex),
+        ) -> ValExpr(res, Expr::Unary(builtin::extsi.kind, ty, ex))
+    );
+    let bitcast_lift<node, pl, hm, pos, dp, lc, ex, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, builtin::bitcast.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl),
+            ExprLifted(res), OpExpr(node, 0, ex),
+        ) -> ValExpr(res, Expr::Unary(builtin::bitcast.kind, ty, ex))
+    );
+    let cmpi_lift<node, pl, hm, pos, dp, lc, ex, ey, res, ty, decl, attr, pred>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node), !ScopeCmpOp(node),
+            Operation(node, builtin::cmpi.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl),
+            ExprLifted(res), OpExpr(node, 0, ex), OpExpr(node, 1, ey),
+            Attribute("operation", node, "predicate", attr),
+            pred == eqsat_attr_case(attr),
+        ) -> ValExpr(res, Expr::Compare(pred, ty, ex, ey))
+    );
+    let cmpi_scoped_lift<node, pl, hm, pos, dp, lc, x, y, res, ty, decl, attr, pred, bit>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node), ScopeCmpOp(node),
+            Operation(node, builtin::cmpi.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, x), Operand(node, 1, y),
+            Value(res, ty, "result", node, 0, decl),
+            Attribute("operation", node, "predicate", attr), pred == eqsat_attr_case(attr),
+            ScopeCmpConst(hm, pred, x, y, bit),
+        ) -> ValExpr(res, Expr::Const(ty, bigint_of(bit)))
+    );
+    let ptradd_lift<node, pl, hm, pos, dp, lc, eb, ed, res, ty, decl>: Rule(
+        (
+            EqSatLive(node), !EqSatPinnedOp(node),
+            Operation(node, ptr::ptradd.kind, pl, hm, pos, dp, lc),
+            EqSatLayoutScoped(node),
+            Value(res, ty, "result", node, 0, decl),
+            ExprLifted(res), OpExpr(node, 0, eb), OpExpr(node, 1, ed),
+        ) -> ValExpr(res, Expr::Bin(ptr::ptradd.kind, ty, eb, ed))
+    );
+    append(
+        dialect_lift_bin_int_rules(builtin::all_ops),
+        append(
+            fp_lift_rules(fp::all_ops),
+            List(
+                opnd_plain, opnd_pi,
+                trunci_lift, extui_lift, extsi_lift, bitcast_lift,
+                cmpi_lift, cmpi_scoped_lift, ptradd_lift,
+            ),
+        ),
+    )
+};
+
+pub let commute: List<Rule> = dialect_commute_rules(builtin::all_ops);
+
+pub let known_bits: List<Rule> = {
+    let constant<e, ty, bits, mask>: Rule(
+        (e == Expr::Const(ty, bits), TypeMask(ty, mask))
+        -> KnownZeros(e, bit_and(bit_not(bits), mask))
+    );
+    let and_left<e, ty, a, b, zeros>: Rule(
+        (e == Expr::Bin(builtin::andi.kind, ty, a, b), KnownZeros(a, zeros))
+        -> KnownZeros(e, zeros)
+    );
+    let and_right<e, ty, a, b, zeros>: Rule(
+        (e == Expr::Bin(builtin::andi.kind, ty, a, b), KnownZeros(b, zeros))
+        -> KnownZeros(e, zeros)
+    );
+    let or_both<e, ty, a, b, za, zb>: Rule(
+        (e == Expr::Bin(builtin::ori.kind, ty, a, b), KnownZeros(a, za), KnownZeros(b, zb))
+        -> KnownZeros(e, bit_and(za, zb))
+    );
+    let shl_zeros<e, ty, a, s, w, amt>: Rule(
+        (
+            e == Expr::Bin(builtin::shli.kind, ty, a, Expr::Const(ty, s)),
+            TypeWidth(ty, w),
+            amt == eqsat_shift_amount(s),
+            less(amt, w) == true,
+        ) -> KnownZeros(e, (shl(bigint(1), amt) - bigint(1)))
+    );
+    let redundant_mask<e, ty, a, kept, zeros, all>: Rule(
+        (
+            e == Expr::Bin(builtin::andi.kind, ty, a, Expr::Const(ty, kept)),
+            KnownZeros(a, zeros),
+            TypeMask(ty, all),
+            bit_or(kept, zeros) == all,
+        ) -> e == a
+    );
+    List(constant, and_left, and_right, or_both, shl_zeros, redundant_mask)
+};
+
+extract rust int_types   => "@ct";
+extract rust wrap_flags  => "@ct";
+extract rust mark_lifted => "@ct";
+extract rust seed_opaque => "@ct";
+extract rust lift_ops    => "@ct";
+extract rust commute     => "@ct";
+extract rust known_bits  => "@ct";

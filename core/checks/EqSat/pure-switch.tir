@@ -1,0 +1,33 @@
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
+
+module {
+  func.func @trapping_input(%x: !i32) -> !i32 {
+    %yes = constant {value = 1} : !i1
+    %one = constant {value = 1} : !i32
+    %zero = constant {value = 0} : !i32
+    %bad = divsi %x, %zero : !i32
+    %result = scf.switch %yes args(%bad) (%left) {
+      -> %one
+    } (%right) {
+      -> %one
+    }
+    -> %result
+  }
+  func.func @unproven_selector(%c: !i1, %x: !i32) -> !i32 {
+    %result = scf.switch %c {
+      -> %x
+    } {
+      -> %x
+    }
+    -> %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @trapping_input
+// CHECK: %[[BAD:[0-9]+]] = divsi
+// CHECK: %[[SWITCH:[0-9]+]] = scf.switch {{.*}} args(%[[BAD]])
+// CHECK: -> %[[SWITCH]]
+// CHECK-LABEL: func.func @unproven_selector
+// CHECK: %[[SWITCH:[0-9]+]] = scf.switch
+// CHECK: -> %[[SWITCH]]

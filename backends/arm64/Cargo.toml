@@ -12,8 +12,7 @@ doctest = false
 tir.workspace = true
 
 [build-dependencies]
-tmdl.workspace = true
-tir-cdsl.workspace = true
+tmdl = { workspace = true, features = ["rust-cli"] }
 
 [lints]
 workspace = true

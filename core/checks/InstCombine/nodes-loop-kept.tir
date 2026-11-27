@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,memopt,control-simplify,dce) --verify %s | filecheck %s
 
 // A loop whose values nothing reads but whose body writes memory: the read
 // after it observes the state it leaves, so the loop is demanded and stays
@@ -12,21 +10,21 @@ module {
     %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %zero = constant {value = 0} : !i32
     %one = constant {value = 1} : !i32
-    cfg.br ^body(%zero : !i32)
-  ^body(%i: !i32):
-    ptr.store %i, %p
-    %next = addi %i, %one : !i32
-    %more = cmpi %next, %n {predicate = "slt"} : !i1
-    cfg.cond_br %more, ^body(%next : !i32), ^exit
-  ^exit:
-    %last = ptr.load %p : !i32
-    func.return %last
+    %entry = state.entry_state : !state<memory>
+    %last_index, %memory = scf.loop (%i = %zero, %current = %entry) {
+      %written = ptr.store %i, %p state(%current)
+      %next = addi %i, %one : !i32
+      %more = cmpi %next, %n {predicate = "slt"} : !i1
+      -> %more, %next, %written, %i, %written
+    }
+    %last, %observed = ptr.load %p state(%memory) : !i32
+    -> %last, %observed
   }
   module_end
 }
 
 // CHECK: func.func @f(%{{[0-9]+}}: !i32)
-// CHECK: scf.loop
+// CHECK: %{{[0-9]+}}, %[[MEMORY:[0-9]+]] = scf.loop
 // CHECK: ptr.store
-// CHECK: %[[V:[0-9]+]], %[[S:[0-9]+]] = ptr.load
+// CHECK: %[[V:[0-9]+]], %[[S:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[MEMORY]])
 // CHECK: -> %[[V]], %[[S]]

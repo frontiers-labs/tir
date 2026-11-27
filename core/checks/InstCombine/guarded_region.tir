@@ -1,10 +1,6 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat,dce)) --verify %s | filecheck %s
 
-// Inside the arm the gate enters on %0 the engine assumes %0 is 1, so
-// muli(%0, %1) folds to %1 there. The identical multiply outside the gate stays
-// (%0 is unknown).
+// The multiply folds inside the true arm and remains dependent on the predicate outside it.
 
 module {
   %fn_f = func.func @f(%0: !i1, %1: !i1) -> !i1 {
@@ -22,11 +18,13 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[OUTER:[0-9]+]] = muli %0, %1
-// CHECK: scf.switch
-// CHECK: }
+// CHECK-LABEL: func.func @f(%[[COND:[0-9]+]]: !i1, %[[VALUE:[0-9]+]]: !i1)
+// CHECK: %[[OUTER:[0-9]+]] = muli %[[COND]], %[[VALUE]]
+// CHECK: scf.switch %[[COND]]
+// CHECK-NEXT: %[[ZERO:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT: -> %[[ZERO]]
+// CHECK-NEXT: }
 // CHECK-NEXT: {
-// CHECK-NEXT: -> %1
+// CHECK-NEXT: -> %[[VALUE]]
 // CHECK-NOT: muli
 // CHECK: xori %[[OUTER]]

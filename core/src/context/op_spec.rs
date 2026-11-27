@@ -191,6 +191,17 @@ impl Context {
         Some(self.engine().value_to_base::<Converter>(Value::new(raw)).0)
     }
 
+    pub(crate) fn kinds_implementing<I: ?Sized + 'static>(&self) -> Vec<NativeIdentity> {
+        let engine = self.engine();
+        let db = engine.database();
+        let iface = i64::from(db.base(Interface(TypeId::of::<I>())).raw());
+        let table = db.table("OpSpec").expect("operation registry");
+        db.rows(table)
+            .filter(|row| db.base_value::<i64>(row[1]) == iface)
+            .map(|row| db.base_value(row[0]))
+            .collect()
+    }
+
     pub(crate) fn kind_has_interface<I: ?Sized + 'static>(&self, kind: &NativeIdentity) -> bool {
         self.find_op_interface::<I>(kind).is_some()
     }

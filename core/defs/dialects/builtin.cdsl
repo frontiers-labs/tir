@@ -70,28 +70,28 @@ pub let divsi<w: Nat> = op {
     rust_name: "DivSIOp",
     signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
     exec: |lhs, rhs| bits::sdiv(lhs, rhs),
-    interfaces: (SameOperandAndResultType, IntegerArithmetic),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, OpCost(16)),
 };
 
 pub let divui<w: Nat> = op {
     rust_name: "DivUIOp",
     signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
     exec: |lhs, rhs| bits::udiv(lhs, rhs),
-    interfaces: (SameOperandAndResultType, IntegerArithmetic),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, OpCost(16)),
 };
 
 pub let remsi<w: Nat> = op {
     rust_name: "RemSIOp",
     signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
     exec: |lhs, rhs| bits::srem(lhs, rhs),
-    interfaces: (SameOperandAndResultType, IntegerArithmetic),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, OpCost(16)),
 };
 
 pub let remui<w: Nat> = op {
     rust_name: "RemUIOp",
     signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
     exec: |lhs, rhs| bits::urem(lhs, rhs),
-    interfaces: (SameOperandAndResultType, IntegerArithmetic),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, OpCost(16)),
 };
 
 pub let andi<w: Nat> = op {

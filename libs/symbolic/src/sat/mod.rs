@@ -59,17 +59,11 @@ struct Clause {
     lits: Vec<Lit>,
 }
 
-struct VariableActivity {
-    scores: Vec<f64>,
-    increment: f64,
-}
+struct ActivityIncrement(f64);
 
-impl Default for VariableActivity {
+impl Default for ActivityIncrement {
     fn default() -> Self {
-        Self {
-            scores: Vec::new(),
-            increment: 1.0,
-        }
+        Self(1.0)
     }
 }
 
@@ -87,7 +81,8 @@ pub struct Solver {
     reason: Vec<Option<usize>>,
     /// Saved last polarity per variable, for phase saving.
     phase: Vec<bool>,
-    activity: VariableActivity,
+    activity: Vec<f64>,
+    var_inc: ActivityIncrement,
     /// Assignment stack in chronological order.
     trail: Vec<Lit>,
     /// Index into `trail` of the first not-yet-propagated literal.
@@ -122,7 +117,7 @@ impl Solver {
         self.level.push(0);
         self.reason.push(None);
         self.phase.push(false);
-        self.activity.scores.push(0.0);
+        self.activity.push(0.0);
         self.watches.push(Vec::new());
         self.watches.push(Vec::new());
         self.order_slot.push(usize::MAX);
@@ -413,7 +408,7 @@ impl Solver {
     }
 
     fn ahead(&self, a: u32, b: u32) -> bool {
-        (self.activity.scores[a as usize], a) > (self.activity.scores[b as usize], b)
+        (self.activity[a as usize], a) > (self.activity[b as usize], b)
     }
 
     fn queue(&mut self, var: u32) {
@@ -467,13 +462,13 @@ impl Solver {
     }
 
     fn bump(&mut self, var: Var) {
-        let a = &mut self.activity.scores[var.index()];
-        *a += self.activity.increment;
+        let a = &mut self.activity[var.index()];
+        *a += self.var_inc.0;
         if *a > 1e100 {
-            for act in &mut self.activity.scores {
+            for act in &mut self.activity {
                 *act *= 1e-100;
             }
-            self.activity.increment *= 1e-100;
+            self.var_inc.0 *= 1e-100;
             // Scaling can round distinct activities into a tie.
             for slot in (0..self.order.len() / 2).rev() {
                 self.sift_down(slot);
@@ -486,7 +481,7 @@ impl Solver {
     }
 
     fn decay(&mut self) {
-        self.activity.increment /= 0.95;
+        self.var_inc.0 /= 0.95;
     }
 }
 

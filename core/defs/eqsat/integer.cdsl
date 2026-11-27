@@ -1,0 +1,148 @@
+// `Expr`-level power-of-2 strength reduction, modular constant reassociation,
+// definedness propagation, and `EqSatReplace` -> `Expr` e-class bridging.
+
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use dialects::builtin;
+use dialects::func;
+use dialects::ptr;
+
+pub let strength: List<Rule> = {
+    let mul_pow2<e, ty, x, bits, log, amt>: Rule(
+        (
+            e == Expr::Bin(builtin::muli.kind, ty, x, Expr::Const(ty, bits)),
+            log == (big_bits(bits) - bigint(1)),
+            amt == eqsat_shift_amount(log),
+            less(amt, int_lit(0)) == false,
+            shl(bigint(1), amt) == bits,
+        ) -> e == Expr::Bin(builtin::shli.kind, ty, x, Expr::Const(ty, log))
+    );
+    let divui_pow2<e, ty, x, bits, log, amt>: Rule(
+        (
+            e == Expr::Bin(builtin::divui.kind, ty, x, Expr::Const(ty, bits)),
+            log == (big_bits(bits) - bigint(1)),
+            amt == eqsat_shift_amount(log),
+            less(amt, int_lit(0)) == false,
+            shl(bigint(1), amt) == bits,
+        ) -> e == Expr::Bin(builtin::shrui.kind, ty, x, Expr::Const(ty, log))
+    );
+    let remui_pow2<e, ty, x, bits, log, amt>: Rule(
+        (
+            e == Expr::Bin(builtin::remui.kind, ty, x, Expr::Const(ty, bits)),
+            log == (big_bits(bits) - bigint(1)),
+            amt == eqsat_shift_amount(log),
+            less(amt, int_lit(0)) == false,
+            shl(bigint(1), amt) == bits,
+        ) -> e == Expr::Bin(builtin::andi.kind, ty, x, Expr::Const(ty, (bits - bigint(1))))
+    );
+    let reassociate_add<e, ty, x, a, b, mask>: Rule(
+        (
+            e == Expr::Bin(
+                builtin::addi.kind, ty,
+                Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, a)),
+                Expr::Const(ty, b),
+            ),
+            TypeMask(ty, mask),
+        ) -> e == Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, bit_and(big_add(a, b), mask)))
+    );
+    let reassociate_offsets<e, ty, x, y, vx, vy, a, b, mask>: Rule(
+        (
+            e == Expr::Bin(
+                builtin::addi.kind, ty,
+                Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, a)),
+                Expr::Bin(builtin::addi.kind, ty, y, Expr::Const(ty, b)),
+            ),
+            ValExpr(vx, x),
+            ValExpr(vy, y),
+            less(vy, vx) == false,
+            TypeMask(ty, mask),
+        ) -> e == Expr::Bin(
+            builtin::addi.kind, ty,
+            Expr::Bin(builtin::addi.kind, ty, x, y),
+            Expr::Const(ty, bit_and(big_add(a, b), mask)),
+        )
+    );
+    let reassociate_sub<e, ty, x, a, b, mask>: Rule(
+        (
+            e == Expr::Bin(
+                builtin::subi.kind, ty,
+                Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, a)),
+                Expr::Const(ty, b),
+            ),
+            TypeMask(ty, mask),
+        ) -> e == Expr::Bin(builtin::addi.kind, ty, x, Expr::Const(ty, bit_and(big_sub(a, b), mask)))
+    );
+    let reassociate_mul<e, ty, x, a, b, mask>: Rule(
+        (
+            e == Expr::Bin(
+                builtin::muli.kind, ty,
+                Expr::Bin(builtin::muli.kind, ty, x, Expr::Const(ty, a)),
+                Expr::Const(ty, b),
+            ),
+            TypeMask(ty, mask),
+        ) -> e == Expr::Bin(builtin::muli.kind, ty, x, Expr::Const(ty, bit_and(big_mul(a, b), mask)))
+    );
+    let reassociate_ptradd<e, ty, idx, p, a, b, mask, total>: Rule(
+        (
+            e == Expr::Bin(
+                ptr::ptradd.kind, ty,
+                Expr::Bin(ptr::ptradd.kind, ty, p, Expr::Const(idx, a)),
+                Expr::Const(idx, b),
+            ),
+            TypeMask(idx, mask),
+            big_le(big_add(a, a), mask) == true,
+            big_le(big_add(b, b), mask) == true,
+            total == big_add(a, b),
+            big_le(big_add(total, total), mask) == true,
+        ) -> e == Expr::Bin(ptr::ptradd.kind, ty, p, Expr::Const(idx, total))
+    );
+    List(
+        mul_pow2, divui_pow2, remui_pow2,
+        reassociate_add, reassociate_offsets, reassociate_sub, reassociate_mul,
+        reassociate_ptradd,
+    )
+};
+
+pub let arguments: List<Rule> = {
+    let cfg_parameter<f, k, h, p, d, l, region, slot, entry, value, ty, i, decl>: Rule(
+        (Operation(f, func::func.kind, k, h, p, d, l), Region(region, "cfg", f, slot, entry), Value(value, ty, "block", entry, i, decl))
+        -> EqSatIncomingParameter(value)
+    );
+    let graph_parameter<f, k, h, p, d, l, region, slot, entry, value, ty, i, decl>: Rule(
+        (Operation(f, func::func.kind, k, h, p, d, l), Region(region, "graph", f, slot, entry), Value(value, ty, "region", region, i, decl))
+        -> EqSatIncomingParameter(value)
+    );
+    let freeze<node, input, out, pl, hm, pos, dp, lc, ty, decl>: Rule(
+        (
+            EqSatLive(node),
+            Operation(node, builtin::freeze.kind, pl, hm, pos, dp, lc),
+            Operand(node, 0, input),
+            Value(out, ty, "result", node, 0, decl),
+            EqSatIncomingParameter(input),
+        ) -> EqSatArgumentFreeze(node, out)
+    );
+    List(cfg_parameter, graph_parameter, freeze)
+};
+
+pub let defined_frozen: List<Rule> = {
+    let frozen<node, value>: Rule(EqSatArgumentFreeze(node, value) -> EqSatDefined(value));
+    List(frozen)
+};
+
+pub let defined_bridge: List<Rule> = {
+    let const_defined<e, ty, bits>: Rule(e == Expr::Const(ty, bits) -> ExprDefined(e));
+    let val_to_expr<v, e>: Rule((EqSatDefined(v), ValExpr(v, e)) -> ExprDefined(e));
+    let expr_to_val<v, e>: Rule((ExprDefined(e), ValExpr(v, e)) -> EqSatDefined(v));
+    // Bridge `EqSatReplace` (from extra RuleCollections / memory / loop rules) into `Expr` e-classes!
+    let replace_to_expr<op, old, new, eo, en>: Rule(
+        (EqSatReplace(op, old, new), ValExpr(old, eo), ValExpr(new, en))
+        -> eo == en
+    );
+    List(const_defined, val_to_expr, expr_to_val, replace_to_expr)
+};
+
+extract rust strength       => "@ct";
+extract rust arguments      => "@ct";
+extract rust defined_frozen => "@ct";
+extract rust defined_bridge => "@ct";

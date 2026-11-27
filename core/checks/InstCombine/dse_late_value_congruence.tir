@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // Both writes store 0, which is what they fold to and not what they are spelled
 // as. Dead-store elimination used to be an e-graph law asserting that the
@@ -32,4 +30,4 @@ module {
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state : !state<memory>
 // CHECK: %[[ZERO:[0-9]+]] = constant {value = 0}
 // CHECK-NEXT: %[[S:[0-9]+]] = ptr.store %[[ZERO]], %[[P]] state(%[[ENTRY]])
-// CHECK-NEXT: -> %[[S]]
+// CHECK-NEXT: func.return state(%[[S]])

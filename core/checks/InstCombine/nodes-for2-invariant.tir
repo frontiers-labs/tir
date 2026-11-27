@@ -1,10 +1,7 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat,control-simplify,dce)) --verify %s | filecheck %s
 
-// A counted loop carrying `7 + 0` round each iteration. The hypothesis proves
-// the port constant, so every read of it folds; the loop's exit entry for the
-// port stays the port, as a counted loop pins it, and the loop keeps counting.
+// A counted loop forwards 7 each iteration. Its body uses the square of that
+// invariant while the other carry still changes on every iteration.
 
 module {
   %fn_f = func.func @f(%n: !i32) -> !i32 {
@@ -12,9 +9,10 @@ module {
     %one = constant {value = 1} : !i32
     %seven = constant {value = 7} : !i32
     %i1_end, %r, %k = scf.ordered_for %i1 = %zero to %n step %one (%iv = %zero, %c = %seven) {
-      %w = addi %c, %zero : !i32
-      %next = addi %iv, %one : !i32
-      scf.yield %next, %w
+      %square = muli %c, %c : !i32
+      %next = addi %iv, %square : !i32
+      %reset = constant {value = 7} : !i32
+      scf.yield %next, %reset
     }
     %s = addi %k, %r : !i32
     func.return %s
@@ -24,7 +22,12 @@ module {
 
 // CHECK: func.func @f
 // CHECK: %[[SEVEN:[0-9]+]] = constant {value = 7} : !i32
-// CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (%{{[0-9]+}} = %{{[0-9]+}}, %{{[0-9]+}} = %[[SEVEN]]) {
-// CHECK: -> %{{[0-9]+}}, %[[SEVEN]]
-// CHECK: }
-// CHECK: addi %[[SEVEN]], %{{[0-9]+}}
+// CHECK: %{{[0-9]+}}, %[[SUM:[0-9]+]], %{{[0-9]+}} = scf.ordered_for {{.*}} (%[[ACC:[0-9]+]] = %{{[0-9]+}}, %[[PORT:[0-9]+]] = %[[SEVEN]]) {
+// CHECK-NOT: muli
+// CHECK: %[[SQUARE:[0-9]+]] = constant {value = 49} : !i32
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[ACC]], %[[SQUARE]] : !i32
+// CHECK-NEXT: %[[RESET:[0-9]+]] = constant {value = 7} : !i32
+// CHECK-NEXT: scf.yield %[[NEXT]], %[[RESET]]
+// CHECK-NEXT: }
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = addi %[[SEVEN]], %[[SUM]] : !i32
+// CHECK-NEXT: func.return %[[RESULT]]

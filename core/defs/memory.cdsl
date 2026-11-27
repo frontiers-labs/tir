@@ -1,0 +1,209 @@
+// Reusable pointer-offset, allocation/escape, and memory-access site analysis.
+//
+// Consumes `analysis::value_info` facts plus host `DataLayout` query results.
+
+use std::core::*;
+use std::bigint::*;
+use std::int::*;
+use std::ir::{OperationId, OperationKind, ValueId};
+use dialects::{func, ptr};
+
+// Host-supplied DataLayout facts (populated by `common::resolve_layout_queries`).
+pub let MemLayoutQuery: Relation<(OperationId, OperationKind)>;
+pub let MemPointerSize: Relation<(OperationId, Int)>;
+pub let MemStoreLayout: Relation<(OperationId, BigInt, BigInt)>;
+pub let MemLayoutScoped: Relation<OperationId>;
+
+// Derived pointer, allocation, escape, and access-site relations.
+pub let MemAddressSlot: Relation<(OperationKind, Int)>;
+pub let MemAllocation: Relation<ValueId>;
+pub let MemEscapes: Relation<ValueId>;
+pub let MemHasOperand: Relation<(OperationId, Int)>;
+pub let MemOrdinaryAccess: Relation<OperationId>;
+pub let MemOpaqueMemory: Relation<OperationKind>;
+pub let MemMixedRegion: Relation<Int>;
+pub let MemStoreSite: Relation<(OperationId, ValueId, Int, ValueId, ValueId, String, Int, Int, Int)>;
+pub let MemLoadSite: Relation<(OperationId, ValueId, Int, ValueId, ValueId, String, Int)>;
+pub let MemPlainStore: Relation<(OperationId, Int, Int, ValueId, Int, ValueId)>;
+pub let MemPlainLoad: Relation<(OperationId, Int, Int, ValueId, Int, ValueId)>;
+pub let MemOffsetStep: Relation<(ValueId, ValueId, Int, Int, Int, BigInt, BigInt)>;
+pub let MemAddress: Relation<(ValueId, ValueId, Int, Int, Int, BigInt)>;
+pub let MemAddressEquals: Relation<(ValueId, ValueId)>;
+pub let MemLocalAddress: Relation<(ValueId, ValueId, BigInt)>;
+pub let MemOrdered: Relation<(OperationId, ValueId)>;
+
+pub let layout_query_rules: List<Rule> = {
+    let ptradd<node, pl, hm, pos, d, l>: Rule(
+        (ValLive(node), Operation(node, ptr::ptradd.kind, pl, hm, pos, d, l))
+        -> MemLayoutQuery(node, ptr::ptradd.kind)
+    );
+    let store<node, pl, hm, pos, d, l>: Rule(
+        (ValLive(node), Operation(node, ptr::store.kind, pl, hm, pos, d, l))
+        -> MemLayoutQuery(node, ptr::store.kind)
+    );
+    let load<node, pl, hm, pos, d, l>: Rule(
+        (ValLive(node), Operation(node, ptr::load.kind, pl, hm, pos, d, l))
+        -> MemLayoutQuery(node, ptr::load.kind)
+    );
+    List(ptradd, store, load)
+};
+
+pub let alloc_and_site_seed: List<Rule> = {
+    let alloc<node, pl, hm, pos, d, l, addr, ty, decl>: Rule(
+        (ValLive(node), Operation(node, ptr::alloca.kind, pl, hm, pos, d, l), Value(addr, ty, "result", node, 0, decl))
+        -> MemAllocation(addr)
+    );
+    let slot_load: Rule(() -> MemAddressSlot(ptr::load.kind, 0));
+    let slot_store: Rule(() -> MemAddressSlot(ptr::store.kind, 1));
+    let opnd<node, slot, val>: Rule(Operand(node, slot, val) -> MemHasOperand(node, slot));
+    let opaque_call: Rule(() -> MemOpaqueMemory(func::call.kind));
+    let opaque_memcpy: Rule(() -> MemOpaqueMemory(ptr::memcpy.kind));
+    let opaque_memset: Rule(() -> MemOpaqueMemory(ptr::memset.kind));
+    let opaque_copy: Rule(() -> MemOpaqueMemory(ptr::copy.kind));
+    List(alloc, slot_load, slot_store, opnd, opaque_call, opaque_memcpy, opaque_memset, opaque_copy)
+};
+
+pub let escape_and_sites: List<Rule> = {
+    let esc_use<addr, user, slot, kind, pl, hm, pos, d, l>: Rule(
+        (MemAllocation(addr), Operand(user, slot, addr), Operation(user, kind, pl, hm, pos, d, l), !MemAddressSlot(kind, slot))
+        -> MemEscapes(addr)
+    );
+    let esc_yield<addr, region, slot>: Rule(
+        (MemAllocation(addr), Yield(region, slot, addr))
+        -> MemEscapes(addr)
+    );
+    let ordinary<node, kind, pl, hm, pos, d, l, slot>: Rule(
+        (
+            ValLive(node), Operation(node, kind, pl, hm, pos, d, l), MemAddressSlot(kind, slot),
+            !ValHasAttr(node, "volatile"), !ValHasAttr(node, "atomic"),
+            !ValHasAttr(node, "align"), !ValHasAttr(node, "alignment"),
+        ) -> MemOrdinaryAccess(node)
+    );
+    let store_site<node, pl, hm, pos, d, l, addr, ty, data, st_val, st_ty, sd, dk, owner, slot, decl>: Rule(
+        (
+            ValLive(node), Operation(node, ptr::store.kind, pl, hm, pos, d, l),
+            Operand(node, 0, data), Operand(node, 1, addr),
+            Value(data, ty, dk, owner, slot, decl),
+            Value(st_val, st_ty, "result", node, 0, sd),
+        ) -> MemStoreSite(node, addr, ty, data, st_val, pl, hm, pos, st_ty)
+    );
+    let load_site<node, pl, hm, pos, d, l, addr, ty, res, st_val, decl>: Rule(
+        (
+            ValLive(node), Operation(node, ptr::load.kind, pl, hm, pos, d, l),
+            Operand(node, 0, addr), Operand(node, 1, st_val),
+            Value(res, ty, "result", node, 0, decl),
+        ) -> MemLoadSite(node, addr, ty, res, st_val, pl, hm)
+    );
+    List(esc_use, esc_yield, ordinary, store_site, load_site)
+};
+
+pub let plain_sites_and_barriers: List<Rule> = {
+    let plain_store<node, blk, pos, d, l, data, addr, ty, dk, owner, slot, decl>: Rule(
+        (
+            ValLive(node), Operation(node, ptr::store.kind, "block", blk, pos, d, l),
+            Operand(node, 0, data), Operand(node, 1, addr), !MemHasOperand(node, 2),
+            Value(data, ty, dk, owner, slot, decl), ValIntType(ty), MemOrdinaryAccess(node),
+        ) -> (MemPlainStore(node, blk, pos, addr, ty, data), MemAddressEquals(addr, addr))
+    );
+    let plain_load<node, blk, pos, d, l, data, addr, ty, decl>: Rule(
+        (
+            ValLive(node), Operation(node, ptr::load.kind, "block", blk, pos, d, l),
+            Operand(node, 0, addr), !MemHasOperand(node, 1),
+            Value(data, ty, "result", node, 0, decl), ValIntType(ty), MemOrdinaryAccess(node),
+        ) -> MemPlainLoad(node, blk, pos, addr, ty, data)
+    );
+    let unthreaded<node, k, blk, p, d, l, region, ord, addr_slot, tok>: Rule(
+        (
+            Operation(node, k, "block", blk, p, d, l), Block(blk, region, ord),
+            MemAddressSlot(k, addr_slot), tok == (addr_slot + 1), !MemHasOperand(node, tok),
+        ) -> MemMixedRegion(region)
+    );
+    let flagged<node, k, blk, p, d, l, region, ord, addr_slot>: Rule(
+        (
+            ValLive(node), Operation(node, k, "block", blk, p, d, l), Block(blk, region, ord),
+            MemAddressSlot(k, addr_slot), !MemOrdinaryAccess(node),
+        ) -> MemMixedRegion(region)
+    );
+    let opaque<node, k, blk, p, d, l, region, ord>: Rule(
+        (Operation(node, k, "block", blk, p, d, l), Block(blk, region, ord), MemOpaqueMemory(k))
+        -> MemMixedRegion(region)
+    );
+    List(plain_store, plain_load, unthreaded, flagged, opaque)
+};
+
+pub let address_rules: List<Rule> = {
+    let step<node, pl, hm, p, d, l, base, disp, addr, ty, decl, idx, dk, owner, slot, id, width, offset, mask>: Rule(
+        (
+            ValLive(node), Operation(node, ptr::ptradd.kind, pl, hm, p, d, l),
+            MemLayoutScoped(node), MemPointerSize(node, width),
+            Operand(node, 0, base), Operand(node, 1, disp),
+            Value(addr, ty, "result", node, 0, decl),
+            Value(disp, idx, dk, owner, slot, id),
+            ValConstInt(disp, idx, offset), ValIntMask(idx, mask),
+            big_le(big_add(offset, offset), mask) == true,
+            !ValHasAttr(node, "inbounds"), !ValHasAttr(node, "nuw"), !ValHasAttr(node, "nsw"),
+        ) -> MemOffsetStep(addr, base, ty, idx, width, offset, mask)
+    );
+    let direct<addr, base, ty, idx, width, offset, mask>: Rule(
+        MemOffsetStep(addr, base, ty, idx, width, offset, mask)
+        -> MemAddress(addr, base, ty, idx, width, offset)
+    );
+    let add<addr, parent, base, ty, idx, width, offset, prior, total, mask>: Rule(
+        (
+            MemOffsetStep(addr, parent, ty, idx, width, offset, mask),
+            MemAddress(parent, base, ty, idx, width, prior),
+            total == big_add(offset, prior),
+            big_le(big_add(total, total), mask) == true,
+        ) -> MemAddress(addr, base, ty, idx, width, total)
+    );
+    let twins<a, b, base, ty, idx, width, offset>: Rule(
+        (MemAddress(a, base, ty, idx, width, offset), MemAddress(b, base, ty, idx, width, offset))
+        -> MemAddressEquals(a, b)
+    );
+    let root<base>: Rule(MemAllocation(base) -> MemLocalAddress(base, base, bigint(0)));
+    let local<addr, base, ty, idx, width, offset>: Rule(
+        (MemAddress(addr, base, ty, idx, width, offset), MemAllocation(base))
+        -> MemLocalAddress(addr, base, offset)
+    );
+    List(step, direct, add, twins, root, local)
+};
+
+pub let ordering_rules: List<Rule> = {
+    let block_write<read, write, kind, blk, origin, region, ord, prior, q, e, loc, st_val, ty, slot, decl, addr, out, ot>: Rule(
+        (
+            MemLoadSite(read, addr, ot, out, st_val, "block", blk), ValLive(write),
+            Operation(write, kind, "block", origin, q, e, loc),
+            Block(blk, region, ord), Block(origin, region, prior), !MemMixedRegion(region),
+            Value(st_val, ty, "result", write, slot, decl),
+        ) -> MemOrdered(read, st_val)
+    );
+    let block_arg<read, blk, st_val, ty, slot, decl, region, ord, addr, out, ot>: Rule(
+        (
+            MemLoadSite(read, addr, ot, out, st_val, "block", blk),
+            Value(st_val, ty, "block", blk, slot, decl),
+            Block(blk, region, ord), !MemMixedRegion(region),
+        ) -> MemOrdered(read, st_val)
+    );
+    List(block_write, block_arg)
+};
+
+extract rust layout_query_rules       => "@ct";
+extract rust alloc_and_site_seed      => "@ct";
+extract rust escape_and_sites         => "@ct";
+extract rust plain_sites_and_barriers => "@ct";
+extract rust address_rules            => "@ct";
+extract rust ordering_rules           => "@ct";
+
+pub let query_layouts = || -> Schedule {
+    Schedule::Once(layout_query_rules)
+};
+
+pub let run_analysis = || -> Schedule {
+    Schedule::Seq(List(
+        Schedule::Once(alloc_and_site_seed),
+        Schedule::Once(escape_and_sites),
+        Schedule::Once(plain_sites_and_barriers),
+        Schedule::Saturate(address_rules),
+        Schedule::Saturate(ordering_rules),
+    ))
+};

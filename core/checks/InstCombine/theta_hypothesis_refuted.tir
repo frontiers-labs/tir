@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,control-simplify,dce) --verify %s | filecheck %s
 
 // The same shape with a latch that advances the port. Under the hypothesis the
 // latch folds to 8, which is not the 7 the loop was entered on, so the edge
@@ -23,8 +21,8 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[LB:[0-9]+]]: !i64, %[[UB:[0-9]+]]: !i64, %[[STEP:[0-9]+]]: !i64)
 // CHECK: %[[SEVEN:[0-9]+]] = constant {value = 7} : !i32
 // CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
-// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] = scf.for %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[STEP]] (%[[K:[0-9]+]] = %[[SEVEN]]) {
+// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] = scf.ordered_for %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[STEP]] (%[[K:[0-9]+]] = %[[SEVEN]]) {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[K]], %[[ONE]] : !i32
-// CHECK-NEXT: -> %[[NEXT]]
+// CHECK-NEXT: scf.yield %[[NEXT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %[[RESULT]]
+// CHECK-NEXT: func.return %[[RESULT]]

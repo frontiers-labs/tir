@@ -302,7 +302,7 @@ fn env_regex(var: &str) -> Option<Regex> {
 /// Collect every check in the workspace, run the tests through libtest-mimic
 /// and exit the process.
 ///
-/// The workspace root is found by walking up from `CARGO_MANIFEST_DIR`;
+/// The workspace root is found by walking up from `CARGO_MANIFEST_DIR` or the current directory.
 /// every `checks` directory with a sibling `Cargo.toml` below it contributes
 /// tests named `<crate dir>/<path under checks>`. Suite manifests map command
 /// aliases to binary names in `TIR_TEST_BIN_DIR`. Suites with missing binaries
@@ -310,9 +310,18 @@ fn env_regex(var: &str) -> Option<Regex> {
 /// restrict which tests run (see the crate docs).
 pub fn workspace_harness_main() {
     let args = Arguments::from_args();
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let root = find_workspace_root(Path::new(&manifest_dir)).unwrap_or_else(|| {
-        eprintln!("tir-lit: no [workspace] Cargo.toml above {manifest_dir}");
+    let start = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .map_or_else(std::env::current_dir, Ok)
+        .unwrap_or_else(|error| {
+            eprintln!("tir-lit: cannot read the current directory: {error}");
+            std::process::exit(2);
+        });
+    let root = find_workspace_root(&start).unwrap_or_else(|| {
+        eprintln!(
+            "tir-lit: no [workspace] Cargo.toml above {}",
+            start.display()
+        );
         std::process::exit(2);
     });
     let manifests = discover_suites(&root).unwrap_or_else(|e| {

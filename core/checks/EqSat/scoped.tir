@@ -1,0 +1,34 @@
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
+
+module {
+  func.func @scoped(%x: !i8) -> !i8 {
+    %one = constant {value = 1} : !i8
+    %masked = andi %x, %one : !i8
+    %condition = trunci %masked : !i1
+    cfg.cond_br %condition, ^bb1, ^bb2
+  ^bb1:
+    %two = constant {value = 2} : !i8
+    %left = muli %masked, %two : !i8
+    cfg.br ^bb3(%left : !i8)
+  ^bb2:
+    %four = constant {value = 4} : !i8
+    %right = muli %masked, %four : !i8
+    cfg.br ^bb3(%right : !i8)
+  ^bb3(%merged: !i8):
+    %result = addi %merged, %masked : !i8
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @scoped
+// CHECK: %[[MASKED:[0-9]+]] = andi
+// CHECK: trunci %[[MASKED]]
+// CHECK: ^bb1:
+// CHECK-NEXT: %[[TWO:[0-9]+]] = constant {value = 2} : !i8
+// CHECK-NEXT: cfg.br ^bb3(%[[TWO]] : !i8)
+// CHECK: ^bb2:
+// CHECK-NEXT: %[[ZERO:[0-9]+]] = constant {value = 0} : !i8
+// CHECK-NEXT: cfg.br ^bb3(%[[ZERO]] : !i8)
+// CHECK: ^bb3
+// CHECK: addi %{{[0-9]+}}, %[[MASKED]]

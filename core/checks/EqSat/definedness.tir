@@ -1,0 +1,51 @@
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
+
+module {
+  func.func @frozen(%arg: !i8) -> !i8 {
+    %x = freeze %arg : !i8
+    %value = xori %x, %x : !i8
+    func.return %value
+  }
+  func.func @unproven(%arg: !i8) -> !i8 {
+    %value = xori %arg, %arg : !i8
+    func.return %value
+  }
+  func.func @cancel(%x: !i8, %arg: !i8) -> !i8 {
+    %y = freeze %arg : !i8
+    %sum = addi %x, %y : !i8
+    %value = subi %sum, %y : !i8
+    func.return %value
+  }
+  func.func @nowrap(%x: !i8, %arg: !i8) -> !i8 {
+    %y = freeze %arg : !i8
+    %sum = addi %x, %y {nsw = true} : !i8
+    %value = subi %sum, %y : !i8
+    func.return %value
+  }
+  func.func @unproven_complement(%x: !i8) -> !i8 {
+    %mask = constant {value = -1} : !i8
+    %inverse = xori %x, %mask : !i8
+    %value = andi %x, %inverse : !i8
+    func.return %value
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @frozen
+// CHECK-NOT: xori
+// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i8
+// CHECK-NEXT: func.return %[[ZERO]]
+// CHECK-LABEL: func.func @unproven
+// CHECK: %[[KEEP:[0-9]+]] = xori
+// CHECK-NEXT: func.return %[[KEEP]]
+// CHECK-LABEL: func.func @cancel(%[[X:[0-9]+]]: !i8
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK: func.return %[[X]]
+// CHECK-LABEL: func.func @nowrap
+// CHECK: addi {{.*}} {nsw = true}
+// CHECK: %[[RESULT:[0-9]+]] = subi
+// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-LABEL: func.func @unproven_complement
+// CHECK: %[[KEPT:[0-9]+]] = andi
+// CHECK-NEXT: func.return %[[KEPT]]

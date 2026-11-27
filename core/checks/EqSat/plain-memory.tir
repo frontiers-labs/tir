@@ -1,0 +1,81 @@
+// RUN: tir opt --pass func.func(memopt,dce) --verify %s | filecheck %s
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  func.func @private() -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %q = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %a = constant {value = 3} : !i32
+    %b = constant {value = 7} : !i32
+    ptr.store %a, %p
+    ptr.store %b, %q
+    %read = ptr.load %p : !i32
+    func.return %read
+  }
+  func.func @overlap(%p: !ptr.p<!i32>, %other: !ptr.p<!i32>) -> !i32 {
+    %a = constant {value = 3} : !i32
+    %b = constant {value = 7} : !i32
+    ptr.store %a, %p
+    ptr.store %b, %other
+    %read = ptr.load %p : !i32
+    func.return %read
+  }
+  func.func @volatile_window(%p: !ptr.p<!i32>, %x: !i32) -> !i32 {
+    ptr.store %x, %p
+    %read = ptr.load %p {volatile = true} : !i32
+    %out = ptr.load %p : !i32
+    func.return %out
+  }
+  func.func @derived_escape() -> !ptr.p<!i32> {
+    %p = ptr.alloca {size = 8, align = 8} : !ptr.p<!i32>
+    %offset = constant {value = 4} : !i64
+    %q = ptr.ptradd %p, %offset : !ptr.p<!i32>
+    %v = constant {value = 7} : !i32
+    ptr.store %v, %q
+    func.return %q
+  }
+  func.func @derived_overrun() {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %offset = constant {value = 4} : !i64
+    %q = ptr.ptradd %p, %offset : !ptr.p<!i32>
+    %v = constant {value = 7} : !i32
+    ptr.store %v, %q
+    func.return
+  }
+  func.func @derived_misaligned() {
+    %p = ptr.alloca {size = 8, align = 8} : !ptr.p<!i32>
+    %offset = constant {value = 2} : !i64
+    %q = ptr.ptradd %p, %offset : !ptr.p<!i32>
+    %v = constant {value = 7} : !i32
+    ptr.store %v, %q
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @private
+// CHECK-NOT: ptr.
+// CHECK: %[[THREE:[0-9]+]] = constant {value = 3} : !i32
+// CHECK-NEXT: func.return %[[THREE]]
+// CHECK-LABEL: func.func @overlap
+// CHECK: ptr.store
+// CHECK: ptr.store
+// CHECK: %[[LOADED:[0-9]+]] = ptr.load
+// CHECK-NEXT: func.return %[[LOADED]]
+// CHECK-LABEL: func.func @volatile_window
+// CHECK: ptr.load {{.*}} {volatile = true}
+// CHECK-NEXT: %[[AFTER:[0-9]+]] = ptr.load
+// CHECK-NEXT: func.return %[[AFTER]]
+// CHECK-LABEL: func.func @derived_escape
+// CHECK: %[[ESCAPED:[0-9]+]] = ptr.ptradd
+// CHECK: ptr.store %{{[0-9]+}}, %[[ESCAPED]]
+// CHECK-NEXT: func.return %[[ESCAPED]]
+// CHECK-LABEL: func.func @derived_overrun
+// CHECK: %[[OOB:[0-9]+]] = ptr.ptradd
+// CHECK: ptr.store %{{[0-9]+}}, %[[OOB]]
+// CHECK-NEXT: func.return
+// CHECK-LABEL: func.func @derived_misaligned
+// CHECK: %[[UNALIGNED:[0-9]+]] = ptr.ptradd
+// CHECK: ptr.store %{{[0-9]+}}, %[[UNALIGNED]]
+// CHECK-NEXT: func.return

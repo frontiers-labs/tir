@@ -1,0 +1,106 @@
+// Unit-test EqSat rules, rewrite collection, and memoized scalar/query tests.
+
+use std::core::*;
+use std::ir::{OperationId, OperationKind, ValueId};
+use dialects::test::keep_left;
+
+// Link live IR and EqSat tables by engine name (dev-dependency test crate).
+pub enum Expr {
+    CustomConst(OperationKind, String, BigInt),
+}
+
+let Operation: Relation<{
+    id: OperationId,
+    kind: OperationKind,
+    placement: String,
+    container: Int,
+    position: Int,
+    display: Int,
+    location: Int,
+}>;
+let Operand: Table<(OperationId, Int), ValueId, Merge::Unique>;
+let Value: Relation<(ValueId, Int, String, Int, Int, Int)>;
+let TypeTerm: Relation<(Int, Int, Int)>;
+let TypeCtor: Relation<(Int, String, String, Int, Int)>;
+let Attribute: Table<(String, Int, String), Int, Merge::Unique>;
+let EqSatLive: Relation<(OperationId,)>;
+let EqSatPinnedOp: Relation<(OperationId,)>;
+let EqSatPinned: Relation<(ValueId,)>;
+let EqSatReplace: Relation<(OperationId, ValueId, ValueId)>;
+let EqSatErase: Relation<(OperationId,)>;
+let EqSatDefinition: Relation<(OperationId, ValueId, Expr)>;
+pub let eqsat_attr_int: Int -> BigInt;
+
+let same<x>: Rewrite(keep_left(x, x) -> x);
+extract rust same => "@ct";
+
+pub let keep_left_rewrites = || -> List<Rewrite> { List(same) };
+
+pub enum ProbeTerm {
+    Original,
+    Input,
+}
+
+let ScratchVal: Relation<Int>;
+let ScratchOff: Relation<(Int, Int)>;
+let ScratchProbe: Relation<ProbeTerm>;
+let AltProbe: Relation<ProbeTerm>;
+
+pub let scoped_value = memo |input: Int| {
+    let seed: Rule(() -> ScratchVal(arg(0)));
+    (
+        Schedule::Saturate(List(seed)),
+        {
+            let next = input + 1;
+            if next == 8 { next } else { next + 1 }
+        },
+    )
+};
+
+pub let scoped_offset = memo |rows: Int| {
+    let seed: Rule(() -> ScratchOff(arg(0), arg(0)));
+    (
+        Schedule::Saturate(List(seed)),
+        { scratch: "ScratchOff" },
+        |x: Int, next: Bool| -> Bool {
+            let offset = rows - 5;
+            if next {
+                let key = x + 1;
+                has_row(ScratchOff, (rows, key + offset))
+            } else {
+                has_row(ScratchOff, (rows, x))
+            }
+        },
+    )
+};
+
+pub let ProbeSeen: Relation<(ProbeTerm,)>;
+pub let ProbeAlternate: Relation<(ProbeTerm,)>;
+
+pub let scoped_query = memo || {
+    let copy<term>: Rule(ProbeSeen(term) -> ScratchProbe(term));
+    let copy_alt<term>: Rule(ProbeAlternate(term) -> AltProbe(term));
+    (
+        Schedule::Saturate(List(copy, copy_alt)),
+        { rows: "ScratchProbe", alternate: "AltProbe" },
+        |term: ProbeTerm, first: Bool| -> Bool {
+            if first { has_row(ScratchProbe, term) } else { has_row(AltProbe, term) }
+        },
+    )
+};
+
+pub let scoped_pair = memo |x: Int| {
+    let seed: Rule(() -> ScratchVal(arg(0)));
+    (
+        Schedule::Saturate(List(seed)),
+        {
+            let pair = (x + 1, true);
+            (pair._0, 2)
+        },
+    )
+};
+
+pub let scoped_projection = memo |x: Int, flag: Bool| {
+    let pair = if flag { (x + 1, 2) } else { (x + 2, 4) };
+    pair._1
+};

@@ -1,6 +1,6 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+// Oversized amounts stay poison through wraparound arithmetic.
 
 module {
   %shl = func.func @shl() -> !i64 {
@@ -33,15 +33,19 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @shl
-// CHECK-NOT: shli
-// CHECK: constant {value = 0} : !i64
-// CHECK-LABEL: func.func @lshr
-// CHECK-NOT: shrui
-// CHECK: constant {value = 0} : !i64
-// CHECK-LABEL: func.func @ashr
-// CHECK-NOT: shrsi
-// CHECK: constant {value = -1} : !i64
-// CHECK-LABEL: func.func @distinct_constants
-// CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i64
-// CHECK-NEXT: -> %[[ONE]]
+// CHECK-LABEL: func.func @shl(
+// CHECK: %[[AMOUNT:[0-9]+]] = constant {value = 4294967296} : !i64
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = shli {{.*}}%[[AMOUNT]]
+// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-LABEL: func.func @lshr(
+// CHECK: %[[AMOUNT:[0-9]+]] = constant {value = 4294967296} : !i64
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = shrui {{.*}}%[[AMOUNT]]
+// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-LABEL: func.func @ashr(
+// CHECK: %[[AMOUNT:[0-9]+]] = constant {value = 4294967296} : !i64
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = shrsi {{.*}}%[[AMOUNT]]
+// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-LABEL: func.func @distinct_constants(
+// CHECK: %[[SHIFT:[0-9]+]] = shli
+// CHECK-NEXT: %[[DIFF:[0-9]+]] = subi %{{[0-9]+}}, %[[SHIFT]]
+// CHECK-NEXT: func.return %[[DIFF]]

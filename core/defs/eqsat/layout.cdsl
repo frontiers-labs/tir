@@ -1,0 +1,38 @@
+// Data-layout constant queries (`sizeof`, `alignof`, `offsetof`) and pointer layout facts.
+
+use std::core::*;
+use std::bigint::*;
+use dialects::layout;
+use dialects::ptr;
+
+pub let layout_queries: List<Rule> = {
+    let size:      Rule(() -> EqSatLayoutKind(layout::sizeof.kind));
+    let alignment: Rule(() -> EqSatLayoutKind(layout::alignof.kind));
+    let offset:    Rule(() -> EqSatLayoutKind(layout::offsetof.kind));
+    let pointer:   Rule(() -> EqSatLayoutKind(ptr::ptradd.kind));
+    let write:     Rule(() -> EqSatLayoutKind(ptr::store.kind));
+    let read:      Rule(() -> EqSatLayoutKind(ptr::load.kind));
+    let query<node, kind, place, home, pos, display, loc>: Rule(
+        (
+            EqSatLive(node),
+            EqSatLayoutKind(kind),
+            Operation(node, kind, place, home, pos, display, loc),
+        ) -> EqSatLayoutQuery(node, kind)
+    );
+    List(size, alignment, offset, pointer, write, read, query)
+};
+
+pub let layout_values: List<Rule> = {
+    let fold<node, value, result, ty, declared, mask, bits>: Rule(
+        (
+            EqSatLayoutValue(node, value),
+            Value(result, ty, "result", node, 0, declared),
+            TypeMask(ty, mask),
+            bits == bit_and(value, mask),
+        ) -> ValExpr(result, Expr::Const(ty, bits))
+    );
+    List(fold)
+};
+
+extract rust layout_queries => "@ct";
+extract rust layout_values  => "@ct";

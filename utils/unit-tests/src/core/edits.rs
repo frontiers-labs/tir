@@ -105,6 +105,32 @@ fn growing_a_loop_state_port_keeps_the_carried_shape() {
     tir::check_types(&context).expect("the grown loop verifies");
 }
 
+proptest::proptest! {
+    #[test]
+    fn growing_loop_value_ports_keeps_state_results_last(count in 1usize..5) {
+        let (context, module) = fixtures::parse(LOOP);
+        let body = body_of(&context, function(&context, &module));
+        let loop_op = find::<LoopOp>(&context, body);
+        let entry = tir::state::EntryStateOpBuilder::new(&context)
+            .state_result(tir::builtin::StateType::memory(&context))
+            .build();
+        context.insert(tir::InsertionPoint::Region(body), entry.id());
+
+        let mut expected = context.get_op(loop_op).results().to_vec();
+        let chain = entry.result();
+        let state_type = context.get_value(chain).ty();
+        let state = context.grow_port(loop_op, state_type, Some(chain), |_, port| port);
+        let init = context.get_region(body).ports()[0].id();
+        let ty = context.get_value(init).ty();
+        for _ in 0..count {
+            expected.push(context.grow_port(loop_op, ty, Some(init), |_, port| port));
+        }
+        expected.push(state);
+
+        proptest::prop_assert_eq!(context.get_op(loop_op).results().to_vec(), expected);
+    }
+}
+
 const SWITCH: &str = r#"module {
   %fn_main = func.func @main(%0: !i32, %1: !i32) -> !i32 {
     scf.switch %0 {

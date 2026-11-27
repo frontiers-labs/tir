@@ -1,9 +1,6 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s --implicit-check-not "constant {value = 3}"
+// RUN: tir opt --pass func.func(eqsat,control-simplify,dce) --verify %s | filecheck %s --implicit-check-not "constant {value = 3}"
 
-// The two arms carry different literals and both run, so the value they merge is
-// no literal at all and nothing is folded onto it.
+// Both edges can reach the same block with different literals.
 
 module {
   %fn_f = func.func @f(%c: !i1) -> !i32 {
@@ -19,6 +16,10 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[M:[0-9]+]] = scf.switch
+// CHECK: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
+// CHECK: %[[TWO:[0-9]+]] = constant {value = 2} : !i32
+// CHECK: cfg.cond_br %{{[0-9]+}}, ^[[JOIN:bb[0-9]+]](%[[ONE]] : !i32)
+// CHECK-SAME: , ^[[JOIN]](%[[TWO]] : !i32)
+// CHECK-NEXT: ^[[JOIN]](%[[M:[0-9]+]]: !i32):
 // CHECK: %[[SUM:[0-9]+]] = addi %[[M]], %{{[0-9]+}} : !i32
-// CHECK-NEXT: -> %[[SUM]]
+// CHECK-NEXT: func.return %[[SUM]]

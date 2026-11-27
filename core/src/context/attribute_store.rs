@@ -137,3 +137,45 @@ impl PartialEq for Stored {
 }
 
 impl Eq for Stored {}
+
+pub(super) fn bind_integer_attributes(
+    db: &mut tir_egglog::Database,
+) -> Result<(), tir_egglog::Error> {
+    use crate::passes::eqsat::generated;
+    use tir_egglog::{PrimCtx, sort::BigInt};
+    let read = |p: &PrimCtx, handle: i64| {
+        let raw = u32::try_from(handle).ok()?;
+        Some(p.base_value::<Stored>(Value::new(raw)).0)
+    };
+    generated::bind_eqsat_attr_bool(db, move |p, handle| {
+        let AttributeValue::Bool(value) = *read(p, handle)? else {
+            return None;
+        };
+        Some(value)
+    })?;
+    generated::bind_eqsat_attr_int(db, move |p, handle| match read(p, handle)?.as_ref() {
+        AttributeValue::Int(value) => Some(BigInt::new(*value)),
+        AttributeValue::UInt(value) => value.to_string().parse().ok(),
+        AttributeValue::Wide(words) => crate::utils::APInt::from_limbs(
+            u64::try_from(words.len()).ok()?.checked_mul(64)?,
+            words,
+        )
+        .to_string()
+        .parse()
+        .ok(),
+        _ => None,
+    })?;
+    generated::bind_eqsat_attr_case(db, move |p, handle| {
+        let AttributeValue::Predicate(value) = *read(p, handle)? else {
+            return None;
+        };
+        Some(value.name().to_owned())
+    })?;
+    generated::bind_eqsat_shift_amount(db, |_, value: BigInt| {
+        value.to_string().parse::<i64>().ok()
+    })?;
+    generated::bind_eqsat_bool_bit(db, |_, value: bool| Some(BigInt::new(i64::from(value))))?;
+    generated::bind_eqsat_pick_case(db, |_, key, label, yes, no| {
+        Some(if key == label { yes } else { no })
+    })
+}

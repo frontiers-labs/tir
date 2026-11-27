@@ -1,33 +1,8 @@
 use std::core::*;
 use std::ir::BackendReg;
 
-pub let inst = op {
-    dialect: "test",
-    rust_name: "TestInstOp",
-    signature: () -> (results: ..Any),
-    macro_def: true,
-};
-
-pub let beq = op {
-    dialect: "test",
-    rust_name: "BeqDecodeOp",
-    signature: () -> (),
-    macro_def: true,
-};
-
-pub let cmv = op {
-    dialect: "test",
-    rust_name: "CmvDecodeOp",
-    signature: () -> (),
-    macro_def: true,
-};
-
-pub let narrow = op {
-    dialect: "test",
-    rust_name: "NarrowDecodeOp",
-    signature: () -> (),
-    macro_def: true,
-};
+pub mod dialects;
+pub mod eqsat;
 
 pub let def_reg = op {
     dialect: "dep",
@@ -70,5 +45,26 @@ pub let exit = op {
     rust_name: "ExitOp",
     signature: (values: ..Any) -> (),
     interfaces: (Terminator, NonLocalExit),
+    macro_def: true,
+};
+
+pub let beq = op {
+    dialect: "test",
+    rust_name: "BeqDecodeOp",
+    signature: () -> (),
+    macro_def: true,
+};
+
+pub let cmv = op {
+    dialect: "test",
+    rust_name: "CmvDecodeOp",
+    signature: () -> (),
+    macro_def: true,
+};
+
+pub let narrow = op {
+    dialect: "test",
+    rust_name: "NarrowDecodeOp",
+    signature: () -> (),
     macro_def: true,
 };

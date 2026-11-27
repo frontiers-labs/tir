@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(control-simplify) --verify %s | filecheck %s
 
 // A port every edge carries round unchanged is the value the loop was entered
 // with, at every read of it inside the loop and after it. A port the body
@@ -23,8 +21,8 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[C:[0-9]+]] = constant {value = 7} : !i32
-// CHECK: %{{[0-9]+}}, %{{[0-9]+}}, %[[N:[0-9]+]] = scf.for {{.*}} (%[[P:[0-9]+]] = %[[C]]
+// CHECK: %{{[0-9]+}}, %{{[0-9]+}}, %[[N:[0-9]+]] = scf.ordered_for {{.*}} (%[[P:[0-9]+]] = %[[C]]
 // CHECK: %[[NEXT:[0-9]+]] = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
-// CHECK-NEXT: -> %[[P]], %[[NEXT]]
+// CHECK-NEXT: scf.yield %[[P]], %[[NEXT]]
 // CHECK: %[[SUM:[0-9]+]] = addi %[[C]], %[[N]] : !i32
-// CHECK-NEXT: -> %[[SUM]]
+// CHECK-NEXT: func.return %[[SUM]]

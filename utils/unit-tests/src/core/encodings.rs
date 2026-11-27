@@ -2,13 +2,13 @@
 
 use tir::attributes::{AttributeValue, RegisterAttr};
 use tir::backend::binary::{
-    decode_with, encode_with, encoded_width, patch_with, CmpOp, DecodeField, DecodeFieldKind,
-    DecodeShape, DecodeSpec, EncodeField, EncodeShape, EncodeSpec, EncodedInst, FieldRun,
-    FixupTarget, Guard, PatchField,
+    decode_with, encode_with, encoded_width, patch_with, BinaryEmitError, CmpOp, DecodeField,
+    DecodeFieldKind, DecodeShape, DecodeSpec, EncodeField, EncodeShape, EncodeSpec, EncodedInst,
+    FieldRun, FixupTarget, Guard, PatchField,
 };
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
 use tir::backend::{RegAssignment, RegClassType};
-use tir::{Context, InsertionPoint, NewOp, NewOpParts, OpHandle};
+use tir::{Context, InsertionPoint, NewOp, NewOpParts, OpHandle, Operation};
 
 use super::fixtures::{ops, r, reg_class};
 
@@ -64,8 +64,8 @@ const fn decoded(
     DecodeField { attr, kind, runs }
 }
 
-fn enc(op: &OpHandle, spec: &EncodeSpec) -> Option<EncodedInst> {
-    encode_with(op, spec, &RegAssignment::default()).ok()
+fn enc(op: &OpHandle, spec: &EncodeSpec) -> Result<EncodedInst, BinaryEmitError> {
+    encode_with(op, spec, &RegAssignment::default())
 }
 
 fn op_with(attrs: Vec<(&str, AttributeValue)>) -> (Context, tir::OpHandle) {
@@ -83,7 +83,7 @@ fn build(
         .into_iter()
         .map(|(name, value)| context.named_attribute(name, value))
         .collect();
-    let instance = NewOp::new::<ops::TestInstOp>(
+    let instance = NewOp::new::<ops::AddTestOp>(
         context.clone(),
         vec![],
         results,
@@ -122,7 +122,7 @@ fn encode_scatters_register_and_immediate() {
 #[test]
 fn encode_rejects_out_of_range_and_unallocated() {
     let (_context, op) = op_with(vec![("rd", phys(5)), ("imm", AttributeValue::Int(1048576))]);
-    assert!(enc(&op, &LUI).is_none());
+    assert!(enc(&op, &LUI).is_err());
 
     // SSA register results cannot be encoded directly.
     let context = Context::with_default_dialects();
@@ -133,7 +133,7 @@ fn encode_rejects_out_of_range_and_unallocated() {
         vec![("imm", AttributeValue::Int(1))],
         vec![unplaced],
     );
-    assert!(enc(&op, &LUI).is_none());
+    assert!(enc(&op, &LUI).is_err());
 
     let (_context, op) = op_with(vec![("rd", phys(5)), ("imm", AttributeValue::Int(1))]);
     let encoded = enc(&op, &LUI).expect("assembly encodes");
@@ -163,10 +163,10 @@ const ADDI4SPN: EncodeSpec = EncodeSpec {
 #[test]
 fn encode_rejects_values_the_operand_constraints_exclude() {
     let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(6))]);
-    assert!(enc(&op, &ADDI4SPN).is_none());
+    assert!(enc(&op, &ADDI4SPN).is_err());
 
     let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(0))]);
-    assert!(enc(&op, &ADDI4SPN).is_none());
+    assert!(enc(&op, &ADDI4SPN).is_err());
 
     let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(8))]);
     let encoded = enc(&op, &ADDI4SPN).expect("encodes");
@@ -373,7 +373,7 @@ fn a_guard_over_an_unresolved_operand_selects_no_shape() {
     // The symbol's value decides the shape, and it is not known yet: refusing
     // to encode is the only honest answer.
     let (_context, op) = op_with(vec![("imm", AttributeValue::Str("g".into()))]);
-    assert!(enc(&op, &TEST_IMM).is_none());
+    assert!(enc(&op, &TEST_IMM).is_err());
 }
 
 // `beq rs1, rs2, imm`: 99 | 0 << 12 | rs1 << 15 | rs2 << 20, imm scattered.
@@ -413,8 +413,21 @@ fn patch_rejects_unrepresentable_values() {
     assert!(patch_with(&mut bytes[..2], 16, &BEQ_PATCH).is_none());
 }
 
+fn decoded_op<T: Operation>(
+    context: &Context,
+    attributes: Vec<tir::attributes::NamedAttribute>,
+) -> NewOp {
+    NewOp::new::<T>(
+        context.clone(),
+        vec![],
+        vec![],
+        vec![],
+        NewOpParts { attributes },
+    )
+}
+
 const BEQ_DECODE: DecodeSpec = DecodeSpec {
-    op: ("test", "beq"),
+    construct: decoded_op::<ops::BeqDecodeOp>,
     attrs: &["rs1", "imm"],
     shapes: &[DecodeShape {
         fixed_mask: 28799,
@@ -443,7 +456,7 @@ fn decode_matches_and_gathers() {
 // `c.mv rd, rs`: a two-byte shape, matched out of the same 32-bit fetch window
 // as any wider instruction.
 const CMV_DECODE: DecodeSpec = DecodeSpec {
-    op: ("test", "cmv"),
+    construct: decoded_op::<ops::CmvDecodeOp>,
     attrs: &["rd", "rs"],
     shapes: &[DecodeShape {
         fixed_mask: 0xf003,
@@ -481,7 +494,7 @@ static HOLEY: RegClassInfo = reg_class(
 /// A three-bit field of a class spanning `x8..x15`, like RVC `GPRC`, and one
 /// of a class with members on both sides of the field, like x86 `GPRaddrIndex`.
 const NARROW_DECODE: DecodeSpec = DecodeSpec {
-    op: ("test", "narrow"),
+    construct: decoded_op::<ops::NarrowDecodeOp>,
     attrs: &["rc", "rh"],
     shapes: &[DecodeShape {
         fixed_mask: 0,

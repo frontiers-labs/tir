@@ -1,0 +1,102 @@
+// EqSat stage builders — single flat `Color::BASE` saturation (zero `Color` overlays!)
+// covering algebraic/bitwise/FP/pointer rewrites, `KnownZeros` lattice, SSI `Pi`
+// branch refinement, RVSDG state-threaded memory, and RVSDG `Gamma2`/`Theta`.
+
+use std::core::*;
+use std::ir::integers::integer_fold_rules;
+use std::ir::rewrites::lower_eqsat_rewrites;
+use dialects::builtin;
+use eqsat::{bits, context, integer, layout, rvsdg};
+
+let int_fold: List<Rule> = integer_fold_rules(builtin::all_ops);
+
+let constant_defined_rules: List<Rule> = {
+    let constant_defined<node, kind, place, home, pos, display, loc, value, ty, decl>: Rule(
+        (
+            EqSatLive(node),
+            EqSatConstantImplementation(kind),
+            Operation(node, kind, place, home, pos, display, loc),
+            Value(value, ty, "result", node, 0, decl),
+            EqSatInteger(ty),
+        ) -> EqSatDefined(value)
+    );
+    List(constant_defined)
+};
+
+let cat = |lists: List<List<Rule>>| -> List<Rule> {
+    flat_map(|xs: List<Rule>| -> List<Rule> { xs }, lists)
+};
+
+let frame_rules: List<Rule> = cat(List(
+    context::attributes, bits::wrap_flags, integer::arguments,
+    context::counted_pins, constant_defined_rules, integer::defined_frozen,
+    context::scope_prep,
+));
+
+let base_global_rules: List<Rule> = cat(List(
+    bits::commute, bits::known_bits,
+    integer::defined_bridge, integer::strength,
+    layout::layout_values,
+    rvsdg::axioms,
+    int_fold,
+));
+
+let all_mark_rules: List<Rule> = append(bits::mark_lifted, rvsdg::mark_rvsdg);
+let all_lift_rules: List<Rule> = append(bits::lift_ops, rvsdg::lift_rvsdg);
+
+pub let publish_aliases_stage: Schedule = Schedule::Seq(List(
+    Schedule::Repeat(64, context::paths),
+    Schedule::Once(context::used),
+    Schedule::Repeat(4, context::edits),
+));
+
+pub let build_analyze = |rules: List<Rewrite>| -> Schedule {
+    let base_rules = append(base_global_rules, lower_eqsat_rewrites("eqsat::rw", rules));
+    let scoped_rules = append(base_rules, context::pi_equalities);
+    let base_sat = Schedule::Repeat(64, base_rules);
+    let scoped_sat = Schedule::RepeatNamed("eqsat::global", 64, scoped_rules);
+    Schedule::Seq(List(
+        Schedule::Once(rvsdg::prep_seed),
+        Schedule::Once(rvsdg::prep_guards),
+        Schedule::Once(rvsdg::prep_barriers),
+        Schedule::Saturate(rvsdg::mem_ordering),
+        Schedule::Repeat(16, context::scope_constraints),
+        Schedule::Once(all_mark_rules),
+        Schedule::Once(bits::seed_opaque),
+        Schedule::Saturate(all_lift_rules),
+        base_sat,
+        Schedule::Once(context::detect_dead_scope),
+        scoped_sat,
+        Schedule::Once(rvsdg::post_default_arm),
+        scoped_sat,
+        Schedule::Once(rvsdg::state_dse_uses),
+        Schedule::Once(rvsdg::state_dse_apply),
+        Schedule::Once(context::scoped_edits),
+        publish_aliases_stage,
+    ))
+};
+
+pub let prepare_custom_stage: Schedule = Schedule::Seq(List(
+    Schedule::Saturate(context::select),
+    Schedule::Saturate(bits::int_types),
+    Schedule::Repeat(8, frame_rules),
+));
+
+pub let prepare_stage: Schedule = Schedule::Seq(List(
+    Schedule::Saturate(context::select),
+    Schedule::Saturate(bits::int_types),
+    Schedule::Repeat(8, frame_rules),
+    Schedule::Repeat(4, layout::layout_queries),
+));
+
+extract rust int_fold               => "@ct";
+extract rust constant_defined_rules => "@ct";
+extract rust cat                    => "@ct";
+extract rust frame_rules            => "@ct";
+extract rust base_global_rules      => "@ct";
+extract rust all_mark_rules         => "@ct";
+extract rust all_lift_rules         => "@ct";
+extract rust publish_aliases_stage  => "@ct";
+extract rust build_analyze          => "@ct";
+extract rust prepare_custom_stage   => "@ct";
+extract rust prepare_stage          => "@ct";

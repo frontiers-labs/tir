@@ -702,11 +702,11 @@ fn json_disabled() -> TMDLError {
 /// The table names every input by file and inlines it with `include_str!`.
 /// A backend `include!`s it for hardware model checking, so the sources it
 /// embeds cannot drift from the ones it was generated from.
-pub fn build_backend<E: Into<Box<dyn std::error::Error>>>(
-    dialect: &str,
-    inputs: &[&str],
-    writer: impl Fn(&str, &str) -> Result<String, E>,
-) -> Result<(), Box<dyn std::error::Error>> {
+#[cfg(feature = "rust-cli")]
+pub fn build_backend(dialect: &str, inputs: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let writer = |source: &str, package: &str| {
+        Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?)
+    };
     let out_dir = std::env::var("OUT_DIR")?;
     for input in inputs {
         println!("cargo:rerun-if-changed={input}");
@@ -719,9 +719,7 @@ pub fn build_backend<E: Into<Box<dyn std::error::Error>>>(
         for input in inputs {
             builder = builder.add_input(input);
         }
-        builder
-            .build()
-            .compile_with_rust_writer(|source, package| writer(source, package).map_err(Into::into))
+        builder.build().compile_with_rust_writer(writer)
     };
 
     let mut table = String::from("const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[\n");

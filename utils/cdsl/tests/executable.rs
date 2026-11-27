@@ -393,3 +393,109 @@ pub let to_int=|c:Color|->Int{match c{Color::Red=>1,Color::Green=>2,Color::Blue=
     assert_eq!(first, second);
     compile_source(&second).unwrap();
 }
+
+#[test]
+fn table_merge_with_lowers_primitives_lambdas_and_externs() {
+    use tir_egglog::sort::BigInt;
+
+    let source = r#"
+use std::core::*;
+use std::bigint::bigint;
+
+let bigint_or: (BigInt, BigInt) -> BigInt;
+extract egglog bigint_or => "bit_or";
+
+let host_merge: (Int, Int) -> Int;
+
+pub let KnownZeros: Table<Int, BigInt, Merge::With(bigint_or)>;
+pub let Sum: Table<Int, Int, Merge::With(|a, b| a + b)>;
+pub let Custom: Table<Int, Int, Merge::With(host_merge)>;
+
+let seed_bits: Rule(() -> (KnownZeros(1, bigint(5)), KnownZeros(1, bigint(3))));
+let seed_sum: Rule(() -> (Sum(1, 10), Sum(1, 32)));
+let seed_custom: Rule(() -> (Custom(1, 4), Custom(1, 9)));
+
+pub let run: Schedule = Schedule::Once(List(seed_bits, seed_sum, seed_custom));
+"#;
+
+    let mut checked = compile_source(source).unwrap();
+    let ml = checked
+        .erase_for_mode(None, tir_cdsl::erase::EraseMode::Program)
+        .unwrap();
+    let bundle = ml
+        .decls
+        .iter()
+        .find_map(|d| match d {
+            tir_cdsl::erase::MlDecl::ProgramBundle(b) => Some(b),
+            _ => None,
+        })
+        .expect("program bundle");
+    // Built-in egglog primitive must not generate a host binder; private custom extern must be kept.
+    assert!(
+        bundle.externs.iter().all(|e| e.engine_name != "bigint_or"),
+        "unexpected host extern for built-in egglog primitive: {:?}",
+        bundle.externs
+    );
+    assert!(
+        bundle.externs.iter().any(|e| e.engine_name == "host_merge"),
+        "missing private Merge::With extern in bundle: {:?}",
+        bundle.externs
+    );
+
+    let mut engine = EGraph::default();
+    let db = engine.database_mut();
+    let i64_sort = db.sort("i64").unwrap();
+    db.add_primitive(
+        "host_merge",
+        tir_egglog::Signature {
+            inputs: vec![i64_sort, i64_sort],
+            output: i64_sort,
+        },
+        |ctx, args| {
+            let a = ctx.base_value::<i64>(args[0]);
+            let b = ctx.base_value::<i64>(args[1]);
+            Some(ctx.base(a * 100 + b))
+        },
+    );
+
+    let _ = Program::from_bytes(&bundle.catalog_bytes, db).unwrap();
+    let mut program = Program::from_bytes(bundle.code_bytes.as_deref().unwrap(), db).unwrap();
+    let sched = match &bundle.schedules[0].schedule {
+        tir_cdsl::tegg::IrSchedule::Run(rs, 1) => Schedule::run(rs),
+        other => panic!("unexpected schedule: {other:?}"),
+    };
+    program.run(db, &sched, &[]).unwrap();
+
+    let zeros = db
+        .lookup(db.table("KnownZeros").unwrap(), &[db.base(1_i64)])
+        .unwrap();
+    assert_eq!(db.base_value::<BigInt>(zeros), BigInt::new(7));
+
+    let sum = db
+        .lookup(db.table("Sum").unwrap(), &[db.base(1_i64)])
+        .unwrap();
+    assert_eq!(db.base_value::<i64>(sum), 42);
+
+    let custom = db
+        .lookup(db.table("Custom").unwrap(), &[db.base(1_i64)])
+        .unwrap();
+    assert_eq!(db.base_value::<i64>(custom), 409);
+
+    // Unsupported multi-op Merge::With body must fail cleanly instead of emitting `"custom"`.
+    let mut bad = compile_source(
+        r#"
+use std::core::*;
+pub let Bad: Table<Int, Int, Merge::With(|a, b| (a + b) + 1)>;
+let seed: Rule(() -> Bad(1, 2));
+pub let run: Schedule = Schedule::Once(List(seed));
+"#,
+    )
+    .unwrap();
+    let err = bad
+        .erase_for_mode(None, tir_cdsl::erase::EraseMode::Program)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Merge::With"),
+        "unexpected error: {err}"
+    );
+}

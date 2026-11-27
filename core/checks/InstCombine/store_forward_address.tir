@@ -1,4 +1,4 @@
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass eqsat,dce --verify %s | filecheck %s
 
 // The store and the load name different addresses, so the load keeps reading
 // memory.
@@ -13,5 +13,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.load
+// CHECK-LABEL: func.func @f
+// CHECK: %[[STATE:[0-9]+]] = ptr.store
+// CHECK-NEXT: %[[READ:[0-9]+]] = ptr.load {{.*}} state(%[[STATE]])
+// CHECK-NEXT: func.return %[[READ]]

@@ -1,7 +1,5 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
 
 // A loop carries no reasoning yet — its port is an anchor — but its body is read
 // like any other region, so `muli %6, 2` there becomes a shift.

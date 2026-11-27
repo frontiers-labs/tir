@@ -1,23 +1,20 @@
-const SOURCES: &[&str] = &[
-    "defs/main.tmdl",
-    "defs/encoding.tmdl",
-    "defs/base.tmdl",
-    "defs/arith_ext.tmdl",
-    "defs/conditional.tmdl",
-    "defs/memory_ext.tmdl",
-    "defs/atomics.tmdl",
-    "defs/bmi.tmdl",
-    "defs/bmi2.tmdl",
-    "defs/ordering.tmdl",
-    "defs/float.tmdl",
-    "defs/perf.tmdl",
-    "defs/cpu/intel/tiger_lake.tmdl",
-];
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tmdl::build_backend(
         "x86_64",
-        SOURCES,
-        tir_cdsl::CheckedProgram::emit_rust_source,
+        &[
+            "defs/main.tmdl",
+            "defs/encoding.tmdl",
+            "defs/base.tmdl",
+            "defs/arith_ext.tmdl",
+            "defs/conditional.tmdl",
+            "defs/memory_ext.tmdl",
+            "defs/atomics.tmdl",
+            "defs/bmi.tmdl",
+            "defs/bmi2.tmdl",
+            "defs/ordering.tmdl",
+            "defs/float.tmdl",
+            "defs/perf.tmdl",
+            "defs/cpu/intel/tiger_lake.tmdl",
+        ],
     )
 }

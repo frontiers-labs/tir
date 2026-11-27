@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
 
 // Two reads of one state are one term, so the second is common-subexpression
 // eliminated. The join closing their fork stays: it is what orders the write
@@ -8,19 +6,36 @@
 // instead would order it against nothing.
 
 module {
-  %fn_f = func.func @f(%p: !ptr.p<!i32>, %q: !ptr.p<!i32>) -> !i32 {
-    %0 = ptr.load %p : !i32
-    %1 = ptr.load %p : !i32
-    %2 = addi %0, %1 : !i32
-    ptr.store %2, %p
-    func.return %2
+  func.func @f(%p: !ptr.p<!i32>) -> !i32 {
+    %entry = state.entry_state : !state<memory>
+    %a, %a_state = ptr.load %p state(%entry) : !i32
+    %b, %b_state = ptr.load %p state(%entry) : !i32
+    %sum = addi %a, %b : !i32
+    %joined = state.join state(%a_state, %b_state)
+    %written = ptr.store %sum, %p state(%joined)
+    -> %sum, %written
+  }
+  func.func @volatile_reads(%p: !ptr.p<!i32>) -> !i32 {
+    %entry = state.entry_state : !state<memory>
+    %a, %a_state = ptr.load %p state(%entry) {volatile = true} : !i32
+    %b, %b_state = ptr.load %p state(%entry) {volatile = true} : !i32
+    %sum = addi %a, %b : !i32
+    %joined = state.join state(%a_state, %b_state)
+    -> %sum, %joined
   }
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: !ptr.p<!i32>, %{{[0-9]+}}: !ptr.p<!i32>)
+// CHECK-LABEL: func.func @f(%[[P:[0-9]+]]: !ptr.p<!i32>)
 // CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state<memory>
 // CHECK-NEXT: %[[V:[0-9]+]], %[[R:[0-9]+]] = ptr.load %[[P]] state(%[[ENTRY]]) : !i32
-// CHECK-NEXT: %{{[0-9]+}} = addi %[[V]], %[[V]] : !i32
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[V]], %[[V]] : !i32
 // CHECK-NEXT: %[[J:[0-9]+]] = state.join state(%[[R]], %[[ENTRY]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %[[P]] state(%[[J]])
+// CHECK-NEXT: %[[W:[0-9]+]] = ptr.store %[[SUM]], %[[P]] state(%[[J]])
+// CHECK-NEXT: -> %[[SUM]], %[[W]]
+// CHECK-LABEL: func.func @volatile_reads
+// CHECK: %[[A:[0-9]+]], %[[AS:[0-9]+]] = ptr.load {{.*}} {volatile = true}
+// CHECK-NEXT: %[[B:[0-9]+]], %[[BS:[0-9]+]] = ptr.load {{.*}} {volatile = true}
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[A]], %[[B]]
+// CHECK-NEXT: %[[J:[0-9]+]] = state.join state(%[[AS]], %[[BS]])
+// CHECK-NEXT: -> %[[SUM]], %[[J]]

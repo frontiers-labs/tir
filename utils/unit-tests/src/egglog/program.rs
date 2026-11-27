@@ -1585,3 +1585,47 @@ mod review_regressions {
         }
     }
 }
+
+#[test]
+fn extra_rules_match_the_same_rows_in_each_selected_round() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let input = db.add_relation("input", &[int]);
+    let middle = db.add_relation("middle", &[int]);
+    let output = db.add_relation("output", &[int]);
+    let mut base_rules = Rules::new();
+    base_rules
+        .rule(&db, "phase", facts![(input x)], actions![(middle x)])
+        .unwrap();
+    let mut extra_rules = Rules::new();
+    extra_rules
+        .rule(&db, "extra", facts![(middle x)], actions![(output x)])
+        .unwrap();
+    let mut base = base_rules.compile(&db).unwrap();
+    let mut extra = extra_rules.compile(&db).unwrap();
+    let row = [db.base(1_i64)];
+    db.insert(input, &row).unwrap();
+
+    let schedule = Schedule::run("phase");
+    base.run_with(
+        &mut db,
+        &schedule,
+        &[],
+        "phase",
+        &mut [(&mut extra, "extra")],
+    )
+    .unwrap();
+    assert_eq!(db.row_count(middle), 1);
+    assert_eq!(db.row_count(output), 0);
+
+    base.run_with(
+        &mut db,
+        &schedule,
+        &[],
+        "phase",
+        &mut [(&mut extra, "extra")],
+    )
+    .unwrap();
+    let result = db.rows(output).next().unwrap();
+    assert_eq!(db.base_value::<i64>(result[0]), 1);
+}

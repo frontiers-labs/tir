@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass func.func(instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // A tested loop's body runs under the condition its test yields. The condition
 // is spelled over the ports' per-iteration heads, so it holds on every

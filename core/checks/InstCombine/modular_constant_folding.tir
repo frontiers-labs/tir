@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass eqsat --verify %s | filecheck %s
 
 module {
   %f = func.func @add_wraps_at_i64(%x: !i64) -> !i64 {

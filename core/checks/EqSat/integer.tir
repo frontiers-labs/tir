@@ -1,0 +1,35 @@
+// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+
+module {
+  func.func @multiply(%x: !i32) -> !i32 {
+    %eight = constant {value = 8} : !i32
+    %product = muli %x, %eight : !i32
+    func.return %product
+  }
+  func.func @mask(%x: !i8) -> !i8 {
+    %small = constant {value = 15} : !i8
+    %wide = constant {value = 31} : !i8
+    %first = andi %x, %small : !i8
+    %last = andi %first, %wide : !i8
+    func.return %last
+  }
+  func.func @overshift() -> !i8 {
+    %one = constant {value = 1} : !i8
+    %eight = constant {value = 8} : !i8
+    %shifted = shli %one, %eight : !i8
+    func.return %shifted
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @multiply(%[[IN:[0-9]+]]: !i32)
+// CHECK-NOT: muli
+// CHECK: %[[THREE:[0-9]+]] = constant {value = 3} : !i32
+// CHECK-NEXT: %[[PRODUCT:[0-9]+]] = shli %[[IN]], %[[THREE]]
+// CHECK-NEXT: func.return %[[PRODUCT]]
+// CHECK-LABEL: func.func @mask
+// CHECK: %[[FIRST:[0-9]+]] = andi
+// CHECK-NEXT: func.return %[[FIRST]]
+// CHECK-LABEL: func.func @overshift
+// CHECK: %[[OVERSHIFT:[0-9]+]] = shli
+// CHECK-NEXT: func.return %[[OVERSHIFT]]

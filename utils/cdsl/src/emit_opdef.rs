@@ -612,7 +612,13 @@ fn emit_op_body(sig: &Signature, op: &MlOpDef, in_macro: bool, out: &mut String)
     if in_macro {
         out.push_str("$(const { let name = stringify!($host); let mut start = name.len(); while start > 0 && name.as_bytes()[start - 1] != b':' { start -= 1; } name.split_at(start).1.trim_ascii() }),*");
     }
-    out.push_str("],\n    regions: ");
+    let schema_cost = iface_entries
+        .iter()
+        .find_map(|(_, _, _, c)| *c)
+        .unwrap_or(1);
+    out.push_str("],\n    cost: ");
+    let _ = write!(out, "{schema_cost}u32");
+    out.push_str(",\n    regions: ");
     emit_region_schemas(&op.regions, out);
     let _ = writeln!(out, ",\n    binding_inputs: {binding_inputs},");
     let _ = writeln!(out, "    counted_groups: {counted_groups},");

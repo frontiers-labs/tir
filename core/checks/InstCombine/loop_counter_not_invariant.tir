@@ -1,6 +1,4 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(control-simplify,dce) --verify %s | filecheck %s
 
 // A counter's next value is the counter at offset one, which is not the
 // counter: the hypothesis that the port holds the zero it was entered on is
@@ -22,6 +20,8 @@ module {
 }
 
 // CHECK-LABEL: func.func @f
-// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] = scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}
-// CHECK-NEXT: addi %[[I]], %{{[0-9]+}} : !i32
-// CHECK: -> %[[RESULT]]
+// CHECK: ^[[BODY:bb[0-9]+]](%[[I:[0-9]+]]: !i32):
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[I]], %{{[0-9]+}} : !i32
+// CHECK: cfg.cond_br %{{[0-9]+}}, ^[[BODY]](%[[NEXT]] : !i32), ^[[EXIT:bb[0-9]+]]
+// CHECK-NEXT: ^[[EXIT]]:
+// CHECK-NEXT: func.return %[[NEXT]]

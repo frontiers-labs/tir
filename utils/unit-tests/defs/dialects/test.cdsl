@@ -1,0 +1,19 @@
+use std::core::*;
+use std::ir::Bits;
+use std::bits;
+
+pub let keep_left = op {
+    signature: (lhs: Bits<8>, rhs: Bits<8>) -> (result: Bits<8>),
+    exec: |lhs, rhs| lhs,
+};
+
+pub let deferred_add = op {
+    signature: (lhs: Bits<8>, rhs: Bits<8>) -> (result: Bits<8>),
+    exec: |lhs, rhs| bits::add_wrapping(lhs, rhs),
+};
+
+pub let deferred_xor = op {
+    rust_name: "DeferredXOrOp",
+    signature: (lhs: Bits<8>, rhs: Bits<8>) -> (result: Bits<8>),
+    exec: |lhs, rhs| bits::xor(lhs, rhs),
+};

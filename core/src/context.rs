@@ -118,6 +118,8 @@ impl Context {
         .unwrap_or_else(|error| panic!("IR type argument: {error}"));
         ir_program::bind_std_ir_fp_format(engine.database_mut(), tir_symbolic::term::fp_format)
             .unwrap_or_else(|error| panic!("IR floating-point format: {error}"));
+        attribute_store::bind_integer_attributes(engine.database_mut())
+            .unwrap_or_else(|error| panic!("IR integer attributes: {error}"));
         op_spec::bind_native(&mut engine);
         ir_program::attach(&mut engine).unwrap_or_else(|error| panic!("IR rules: {error}"));
         keys::install(&mut engine).expect("IR entity keys");
@@ -155,6 +157,21 @@ impl Context {
     pub fn egraph(&self) -> RefMut<'_, EGraph> {
         self.0.queries.verification(&mut self.engine());
         self.engine()
+    }
+
+    pub(crate) fn eqsat_database(&self) -> Result<tir_egglog::Database, tir_egglog::Error> {
+        let mut db = self.egraph().database().clone();
+        attribute_store::bind_integer_attributes(&mut db)?;
+        Ok(db)
+    }
+
+    pub(crate) fn eqsat_database_with_tables(
+        &self,
+        tables: &[&tir_egglog::LocalTable],
+    ) -> Result<(tir_egglog::Database, Vec<tir_egglog::LocalTable>), tir_egglog::Error> {
+        let (mut db, tables) = self.egraph().database().clone_with_local_tables(tables)?;
+        attribute_store::bind_integer_attributes(&mut db)?;
+        Ok((db, tables))
     }
 
     fn engine(&self) -> RefMut<'_, EGraph> {
@@ -589,8 +606,12 @@ impl Context {
         (row.definition == "block").then(|| BlockId::new(row.owner as u32))
     }
     pub fn parent_block(&self, op: OpId) -> Option<BlockId> {
+        self.block_placement(op).map(|(block, _)| block)
+    }
+    pub(crate) fn block_placement(&self, op: OpId) -> Option<(BlockId, i64)> {
         let row = self.record::<OperationRow>(op.raw())?;
-        (row.placement == "block").then(|| BlockId::new(row.container as u32))
+        let block = BlockId::new(u32::try_from(row.container).ok()?);
+        (row.placement == "block").then_some((block, row.position))
     }
     pub fn parent_nodes_region(&self, op: OpId) -> Option<RegionId> {
         let row = self.record::<OperationRow>(op.raw())?;

@@ -93,7 +93,7 @@ pub mod utils;
 mod value;
 
 pub mod helpers {
-    pub use tir_macros::{dialect, operation};
+    pub use tir_macros::dialect;
 }
 pub mod parse;
 
@@ -154,4 +154,4 @@ pub use dialects::scf;
 pub use dialects::state;
 pub use dialects::vector;
 
-pub use tir_macros::{dialect, operation};
+pub use tir_macros::dialect;
