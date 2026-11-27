@@ -348,14 +348,16 @@ impl FnCodegen<'_> {
         lhs: ValueId,
         rhs: ValueId,
     ) -> ValueId {
-        fp::CmpOpBuilder::new(self.context)
-            .lhs(lhs)
-            .rhs(rhs)
-            .predicate(predicate)
-            .result_type(IntegerType::new(self.context, 1))
-            .at(self.builder.end())
-            .build()
-            .result()
+        fp::cmp(
+            self.context,
+            lhs,
+            rhs,
+            predicate,
+            IntegerType::new(self.context, 1),
+        )
+        .at(self.builder.end())
+        .build()
+        .result()
     }
 
     pub(super) fn emit_fp_binop(&self, kind: AstKind, lhs: ValueId, rhs: ValueId) -> ValueId {

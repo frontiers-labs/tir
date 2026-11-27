@@ -1,6 +1,8 @@
 use std::error::Error;
 
-use tir::{Context, Operation, attributes::AttributeValue, builtin::ModuleOp, func::FuncOp};
+use tir::{
+    Context, Operation, attributes::AttributeValue, builtin::ModuleOp, cfg::BranchOp, func::FuncOp,
+};
 use tir_egglog::{EGraph, Read, Value};
 
 fn parse(context: &Context, source: &str) -> Result<ModuleOp, Box<dyn Error>> {
@@ -203,18 +205,19 @@ fn verify_metadata_ownership(context: &Context, branch: tir::OpId) -> Result<(),
         let mut engine = context.egraph();
         let db = engine.database_mut();
         let table = db.table("OpSpec")?;
-        let index = db.add_kept_index(table, &[0, 1], &[]);
-        let key = [
-            db.base("cfg.br".to_owned()),
-            db.base(std::any::type_name::<dyn tir::Terminator>().to_owned()),
-        ];
-        let row = db
-            .listed(index, &key)
-            .next()
-            .ok_or("registered branch interface")?;
-        let key = [row[0], row[1], row[2]];
-        db.remove(table, &key);
+        let index = db.add_kept_index(table, &[0], &[]);
+        let kind = db.base(BranchOp::native_identity());
+        let declaration = db.base(-1_i64);
+        let interfaces: Vec<_> = db
+            .listed(index, &[kind])
+            .map(|row| row[1])
+            .filter(|&interface| interface != declaration)
+            .collect();
+        for interface in interfaces {
+            db.remove(table, &[kind, interface]);
+        }
     }
+    assert!(context.get_op(branch).is::<BranchOp>());
     assert!(
         !context
             .get_op(branch)
@@ -236,7 +239,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .parent_region(module.body().id())
         .ok_or("module body region")?;
     let parameter = block.arguments()[0].id();
-    tir::check_types(&context, &[module.id()])?;
+    tir::check_types(&context)?;
     assert!(context.egraph().database().table_count() <= 20);
     assert_eq!(context.egraph().get_size("Successor"), 1);
     assert_eq!(
