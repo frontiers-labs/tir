@@ -1,7 +1,7 @@
 use super::{Attr, Check, Failures};
 use crate::{
     OpHandle, TypeArg, TypeId,
-    builtin::{FnType, IndexType, TupleType, UnitType, VarArgsType},
+    builtin::{FnType, IndexType, TupleType, UnitType},
     ptr::PtrType,
 };
 
@@ -282,7 +282,7 @@ impl Check<'_> {
                     .is_some_and(|(sig, args)| {
                         let params = sig.params();
                         let matches = match params.split_last() {
-                            Some((&last, fixed)) if VarArgsType::view(self.ctx, last).is_some() => {
+                            Some((&last, fixed)) if self.ctx.is_variadic_tail(last) => {
                                 args.starts_with(fixed)
                             }
                             _ => args == params,

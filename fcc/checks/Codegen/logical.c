@@ -1,5 +1,3 @@
-// IR migration: instruction selection and backend lowering are unavailable.
-// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_logical.c | filecheck %s
 
 // `&&` evaluates its right operand only in the true arm of the switch and `||`

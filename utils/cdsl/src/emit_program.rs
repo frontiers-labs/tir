@@ -1031,7 +1031,11 @@ fn emit_program_memo(sig: &Signature, memo: &MlProgramMemo, out: &mut String) {
     let _ = writeln!(out, "    install_schema(db)?;");
     let _ = writeln!(out, "    db.rebuild()?;");
     let _ = writeln!(out, "    let args = [{arg_enc}];");
-    let stamp_mut = if memo.reads.is_empty() { "" } else { "mut " };
+    let stamp_mut = if memo.reads.is_empty() || scoped_root {
+        ""
+    } else {
+        "mut "
+    };
     if scoped_root {
         let _ = writeln!(
             out,
@@ -1043,7 +1047,9 @@ fn emit_program_memo(sig: &Signature, memo: &MlProgramMemo, out: &mut String) {
             "    let {stamp_mut}stamp = vec![db.equality_revision(color)];"
         );
     }
-    if !memo.reads.is_empty() {
+    // For a scoped memo the caller supplies the revision for all of its reads.
+    // Whole-table versions would also invalidate the result on unrelated edits.
+    if !scoped_root && !memo.reads.is_empty() {
         out.push_str("    stamp.extend([");
         for (i, r) in memo.reads.iter().enumerate() {
             if i > 0 {

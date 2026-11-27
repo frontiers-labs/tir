@@ -1031,7 +1031,7 @@ fn emit_bind_impl(op: &MlOpDef, rname: &str, bind: &MlBind, out: &mut String) {
                  \x20       let operands = segs[{first}usize].start..segs[{last}usize].end;\n\
                  \x20       let n = operands.len();\n\
                  \x20       let p = {predicate_slot}usize;\n\
-                 \x20       tir::Binding {{ operands, ports: 0..n, continue_: (p + 1)..(p + 1 + n), exit: (p + 1 + n)..(p + 1 + 2 * n), results: 0..n }}\n\
+                 \x20       tir::Binding {{ operands, ports: 0..n, continue_: (p + 1)..(p + 1 + n), exit: (p + 1 + n)..(p + 1 + 2 * n), results: 0..self.0.results().len() }}\n\
                  \x20   }}\n\
                  \x20   fn predicate(&self) -> tir::ValueId {{ self.0.context.get_region(self.{bm}()).results()[{predicate_slot}usize] }}\n\
                  }}\n"
