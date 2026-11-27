@@ -2,7 +2,11 @@ use super::{
     Attr, Check, Failures,
     structure::{BindingRole, Control},
 };
-use crate::{OpHandle, Operation, RegionId, ValueId};
+use crate::{
+    OpHandle, Operation, RegionId, ValueId,
+    schema::{ConstraintPort, TypeConstraint},
+};
+use tir_egglog::NativeIdentity;
 
 impl Check<'_> {
     fn group_start(&self, field: usize) -> Option<usize> {
@@ -127,7 +131,16 @@ impl Check<'_> {
         errors.require(increment, "must advance the counter by the step");
     }
 
-    fn ordered(&self, errors: &mut Failures) {
+    fn exit_has_role(&self, kind: NativeIdentity, roles: &[&str]) -> bool {
+        self.ctx.schema_for_kind(kind).is_some_and(|schema| {
+            schema.type_constraints.iter().any(|constraint| {
+                matches!(constraint, TypeConstraint::ExitRole(role) if roles.contains(role))
+            })
+        })
+    }
+
+    fn ordered(&self, carried: usize, latch_role: &str, errors: &mut Failures) {
+        let carried = self.inputs.spans.get(carried);
         let mut shape = false;
         for &rid in &self.op.regions() {
             let Some(block) = self.ctx.region_entry(rid) else {
@@ -137,11 +150,9 @@ impl Check<'_> {
             let latch = self.ctx.block_ops(block).last().copied().filter(|op| {
                 self.ctx
                     .operation_kind(*op)
-                    .map(tir_egglog::NativeIdentity::as_str)
-                    == Some("scf.yield")
+                    .is_some_and(|kind| self.exit_has_role(kind, &[latch_role]))
             });
             let latch_args = latch.map(|op| self.ctx.op_operands(op));
-            let carried = self.inputs.spans.get(1);
             shape |= latch_args
                 .as_ref()
                 .zip(carried)
@@ -168,43 +179,42 @@ impl Check<'_> {
         errors.require(shape, "ordered_for shape");
     }
 
-    fn cir(&self, roles: &[&str], errors: &mut Failures) {
-        for (i, r) in self.ctx.typecheck_regions(self.op.id) {
-            let Some(role) = roles.get(i as usize) else {
+    fn region_exits(
+        &self,
+        region: RegionId,
+        roles: &[&str],
+        invalid: &'static str,
+        missing: &'static str,
+        errors: &mut Failures,
+    ) {
+        let mut valid_exit = false;
+        for block in self.ctx.region_blocks(region) {
+            let Some(&last) = self.ctx.block_ops(block).last() else {
                 continue;
             };
-            let mut valid_exit = false;
-            for b in self.ctx.region_blocks(r) {
-                let Some(&last) = self.ctx.block_ops(b).last() else {
-                    continue;
-                };
-                let Some(name) = self.ctx.operation_kind(last) else {
-                    continue;
-                };
-                if self
-                    .ctx
-                    .kind_has_interface::<dyn crate::BranchTerminator>(&name)
-                {
-                    continue;
-                }
-                let allowed = matches!(
-                    (*role, name.as_str()),
-                    ("condition", "cir.condition")
-                        | ("step", "cir.yield")
-                        | ("body", "cir.yield" | "cir.break" | "cir.continue")
-                );
-                errors.require(allowed, "invalid CIR region exit");
-                valid_exit |= allowed;
+            let Some(kind) = self.ctx.operation_kind(last) else {
+                continue;
+            };
+            if self
+                .ctx
+                .kind_has_interface::<dyn crate::BranchTerminator>(&kind)
+            {
+                continue;
             }
-            errors.require(valid_exit, "CIR region has no valid exit");
+            let allowed = self.exit_has_role(kind, roles);
+            errors.require(allowed, invalid);
+            valid_exit |= allowed;
         }
+        errors.require(valid_exit, missing);
     }
 
-    fn switch(&self, errors: &mut Failures) {
-        let width = self
-            .op
-            .operands()
-            .first()
+    fn switch(&self, selector: usize, errors: &mut Failures) {
+        let operands = self.op.operands();
+        let selector =
+            self.inputs.spans.get(..selector).and_then(|prefix| {
+                operands.get(prefix.iter().map(|span| span.len()).sum::<usize>())
+            });
+        let width = selector
             .and_then(|v| self.ty(*v))
             .and_then(|t| self.ctx.terms().int_width(t));
         let cases = self
@@ -231,7 +241,8 @@ impl Check<'_> {
             counts.is_some_and(|(edges, total)| {
                 Some(edges) == dests
                     && cases.is_some_and(|count| count.checked_add(1) == Some(edges))
-                    && self.op.operands().len().checked_sub(1) == Some(total)
+                    && selector.is_some()
+                    && operands.len().checked_sub(1) == Some(total)
             }),
             "switch cases and argument counts",
         );
@@ -299,16 +310,30 @@ impl Check<'_> {
         if let Some(c) = &control {
             self.binding_shape(c, errors);
         }
-        if let Some(groups) = self.schema.and_then(|s| s.counted_groups) {
+        let Some(schema) = self.schema else { return };
+        if let Some(groups) = schema.counted_groups {
             self.counted(control.as_ref(), groups, errors);
         }
-        match self.kind.as_str() {
-            "scf.ordered_for" => self.ordered(errors),
-            "cfg.switch" => self.switch(errors),
-            "cir.for" => self.cir(&["condition", "step", "body"], errors),
-            "cir.while" => self.cir(&["condition", "body"], errors),
-            "cir.do" => self.cir(&["body", "condition"], errors),
-            _ => {}
+        let mut regions = None;
+        for &constraint in schema.type_constraints {
+            match constraint {
+                TypeConstraint::RegionExits(index, roles, invalid, missing) => {
+                    let regions =
+                        regions.get_or_insert_with(|| self.ctx.typecheck_regions(self.op.id));
+                    for &(slot, region) in regions.iter() {
+                        if slot as usize == index {
+                            self.region_exits(region, roles, invalid, missing, errors);
+                        }
+                    }
+                }
+                TypeConstraint::OrderedLoop(ConstraintPort::Input(carried), latch_role) => {
+                    self.ordered(carried, latch_role, errors);
+                }
+                TypeConstraint::SwitchCases(ConstraintPort::Input(selector)) => {
+                    self.switch(selector, errors);
+                }
+                _ => {}
+            }
         }
     }
 }

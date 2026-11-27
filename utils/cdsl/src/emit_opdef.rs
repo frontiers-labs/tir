@@ -630,8 +630,14 @@ fn emit_op_body(sig: &Signature, op: &MlOpDef, in_macro: bool, out: &mut String)
                 MlConstraintArg::Output(index) => {
                     let _ = write!(out, "tir::schema::ConstraintPort::Output({index}), ");
                 }
+                MlConstraintArg::Region(index) => {
+                    let _ = write!(out, "{index}, ");
+                }
                 MlConstraintArg::Text(text) => {
                     let _ = write!(out, "{text:?}, ");
+                }
+                MlConstraintArg::TextList(entries) => {
+                    let _ = write!(out, "&{entries:?}, ");
                 }
             }
         }
