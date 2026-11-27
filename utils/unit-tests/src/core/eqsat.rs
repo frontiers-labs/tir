@@ -1,8 +1,8 @@
 use tir::{
-    AnalysisManager, Context, OpId, Operation, OperationRef, Pass, PassError, PassManager, Symbol,
-    builtin::{ModuleOp, ops},
+    builtin::{ops, ModuleOp},
     func::FuncOp,
-    passes::{EqSatPass, eqsat::add_zero_rewrites},
+    passes::{eqsat::add_zero_rewrites, EqSatPass},
+    AnalysisManager, Context, OpId, Operation, OperationRef, Pass, PassError, PassManager, Symbol,
 };
 
 use super::fixtures::{module_ops, parse_in};

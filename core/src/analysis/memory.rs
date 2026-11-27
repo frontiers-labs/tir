@@ -11,8 +11,8 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/memory_analysis.rs"));
 }
 
-/// Populate `analysis::memory` tables into `db` using precomputed `value_info`
-/// bindings and host `DataLayout` queries.
+// Populate `analysis::memory` tables into `db` using precomputed `value_info`
+// bindings and host `DataLayout` queries.
 pub(crate) fn populate(
     context: &Context,
     db: &mut Database,
