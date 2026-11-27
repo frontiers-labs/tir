@@ -39,9 +39,7 @@ fn control_flow_derived_from_pc_writes() {
         &context,
         tir::Operand::none(),
         tir::Operand::none(),
-        tir::Operand::none(),
         imm.clone(),
-        vec![],
         vec![],
         vec![],
         tir::NewOpParts {
@@ -56,7 +54,6 @@ fn control_flow_derived_from_pc_writes() {
     // jal writes PC unconditionally (and the link register).
     let jal = tir_riscv::JumpAndLinkOp::new(
         &context,
-        tir::Operand::none(),
         imm.clone(),
         vec![],
         vec![],
@@ -69,7 +66,6 @@ fn control_flow_derived_from_pc_writes() {
     assert_eq!(cf(&jal), ControlFlow::Unconditional);
     let jalr = tir_riscv::JumpAndLinkRegOp::new(
         &context,
-        tir::Operand::none(),
         tir::Operand::none(),
         imm.clone(),
         vec![],
@@ -88,7 +84,6 @@ fn control_flow_derived_from_pc_writes() {
         &context,
         tir::Operand::none(),
         tir::Operand::none(),
-        tir::Operand::none(),
         vec![],
         vec![],
         vec![],
@@ -105,7 +100,6 @@ fn control_flow_derived_from_pc_writes() {
     // auipc reads PC but never writes it.
     let auipc = tir_riscv::AddUpperImmToPCOp::new(
         &context,
-        tir::Operand::none(),
         imm.clone(),
         vec![],
         vec![],
@@ -119,9 +113,7 @@ fn control_flow_derived_from_pc_writes() {
 
     let b_eq = tir_arm64::BranchEqOp::new(
         &context,
-        tir::Operand::none(),
         imm.clone(),
-        vec![],
         vec![],
         vec![],
         Default::default(),
@@ -131,8 +123,6 @@ fn control_flow_derived_from_pc_writes() {
     let ret = tir_arm64::ReturnOp::new(
         &context,
         tir::Operand::none(),
-        tir::Operand::none(),
-        vec![],
         vec![],
         vec![],
         tir::NewOpParts {
@@ -143,9 +133,7 @@ fn control_flow_derived_from_pc_writes() {
     assert_eq!(cf(&ret), ControlFlow::Unconditional);
     let bl = tir_arm64::BranchLinkOp::new(
         &context,
-        tir::Operand::none(),
         imm,
-        vec![],
         vec![],
         vec![],
         Default::default(),
