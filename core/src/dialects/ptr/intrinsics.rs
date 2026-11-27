@@ -45,6 +45,7 @@ impl Intrinsic for MemcpyOp {
             &operation,
             "memcpy",
             vec![destination, source, size],
+            false,
         )
     }
 }
@@ -100,6 +101,7 @@ impl Intrinsic for MemsetOp {
             &operation,
             "memset",
             vec![destination, value, size],
+            true,
         )
     }
 }
@@ -279,6 +281,7 @@ fn library_call(
     operation: &OperationRef,
     name: &str,
     mut args: Vec<ValueId>,
+    extend_fill: bool,
 ) -> Result<(), PassError> {
     let mut parent = context.parent_op(operation.op().id);
     let module = loop {
@@ -291,14 +294,10 @@ fn library_call(
     };
     let pointer = PtrType::opaque(context);
     let size = IntegerType::new(context, 64);
-    let fill = IntegerType::new(context, 32);
-    let types = if name == "memset" {
-        [pointer, fill, size]
-    } else {
-        [pointer, pointer, size]
-    };
+    let fill = extend_fill.then_some(IntegerType::new(context, 32));
+    let types = [pointer, fill.unwrap_or(pointer), size];
     let callee = ensure_lambda(context, &module, name, pointer, &types)?;
-    if name == "memset" {
+    if let Some(fill) = fill {
         let extended = b::extui(
             context,
             args[1],

@@ -85,18 +85,3 @@ libs/adt/src/simd/x86.rs::and_words libs/adt/src/simd/x86.rs::and_words
 # rust_rule_full passes readable FullState to full matching callbacks. The
 # typed adapters preserve these capabilities; EGraph::rust_rule shares registration.
 libs/egglog/src/prelude.rs::rust_rule libs/egglog/src/prelude.rs::rust_rule_full
-
-# These emit different instruction-selection attribute variants and fields.
-tmdl/src/rustgen/isel_spec.rs::emit_attr_fixed_use tmdl/src/rustgen/isel_spec.rs::emit_attr_physical
-
-# Spill stores and reloads emit different instructions and operand roles.
-backends/riscv/src/lib.rs::reg_store backends/riscv/src/lib.rs::reg_reload
-
-# Instruction roots and constant-foldable operations are different sets.
-tmdl/src/rustgen/instruction_analysis.rs::scalar_root_kind tmdl/src/rustgen/flag_analysis.rs::foldable_kind
-
-# One maps rounded float operations; the other complements comparisons.
-libs/symbolic/src/lang/rounded.rs::operation core/src/sem/egraph.rs::complement_comparison
-
-# The targets use different features, branch emitters and call emitters.
-backends/arm64/src/lib.rs::create_isel_pass_for backends/x86_64/src/lib.rs::create_isel_pass_for

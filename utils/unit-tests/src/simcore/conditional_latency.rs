@@ -63,7 +63,6 @@ fn fusion_pair(
         let op_id = AddImmOp::new(
             &context,
             tir::Operand::none(),
-            tir::Operand::none(),
             AttributeValue::Int(imm),
             vec![],
             vec![],
@@ -205,7 +204,6 @@ fn add_imm_latency(imm: i64) -> u16 {
     let op = AddImmOp::new(
         &context,
         tir::Operand::none(),
-        tir::Operand::none(),
         AttributeValue::Int(imm),
         vec![],
         vec![],
@@ -245,7 +243,6 @@ fn div_schedule(
         .collect();
     let op = DivOp::new(
         &context,
-        tir::Operand::none(),
         tir::Operand::none(),
         tir::Operand::none(),
         vec![],
