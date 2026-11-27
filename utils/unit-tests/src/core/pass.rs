@@ -572,6 +572,11 @@ fn random_cfgs_restructure_preserving_semantics() {
             .build();
         }
         let func = func_ops::lambda(&context, "f", i64_ty, &region).build();
+        #[cfg(feature = "interp")]
+        let cfg_program = spec
+            .iter()
+            .all(|&(arith, _)| arith < 2)
+            .then(|| tir::interp::build(&func).unwrap());
         let mut pm = PassManager::new();
         pm.add_pass(tir::passes::RestructureNodesPass::new());
         pm.run(&context, func.id())
@@ -584,8 +589,26 @@ fn random_cfgs_restructure_preserving_semantics() {
         tir::verify_state_forks(&context, func.id())
             .unwrap_or_else(|e| panic!("seed {seed_idx} failed state forks: {e}"));
 
+        #[cfg(feature = "interp")]
+        let programs = cfg_program.map(|cfg| [cfg, tir::interp::build(&func).unwrap()]);
         for (l, r) in [(0, 0), (1, 2), (-3, 7), (11, -5)] {
             let expected = eval_cfg(&spec, l, r);
+            #[cfg(feature = "interp")]
+            if let Some(programs) = &programs {
+                for program in programs {
+                    use tir::interp::{APInt, Func, Outcome};
+                    let args = [l, r].map(|x| APInt::new(64, x as u64)).into();
+                    let Outcome::Returned(bits) = program.run(Func(0), args, 100_000).unwrap()
+                    else {
+                        panic!("unexpected load on arithmetic seed {seed_idx}")
+                    };
+                    assert_eq!(
+                        bits.limbs(),
+                        [expected as u64],
+                        "seed {seed_idx}, f({l}, {r})"
+                    );
+                }
+            }
             let mut env = Vec::new();
             let actual = eval_region(&context, func.body_region().id(), &[l, r], &mut env);
             assert_eq!(

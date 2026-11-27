@@ -1,0 +1,1075 @@
+
+// Each domain is activated on one graph path. Theta's predicate, feedback, and
+// exit have separate domains so a continuation cannot observe an exit effect.
+use std::core::*;
+use std::int::less;
+use std::ir::{OperationId, OperationKind, ValueId};
+
+pub enum Domain {
+    Root(Int),
+    ArmBody(Domain, Int),
+    Predicate(Domain, Int),
+    Feedback(Domain, Int),
+    Exit(Domain, Int)
+}
+pub enum Label {
+    Cfg(Int),
+    Enter(Domain, OperationId),
+    Test(Label, Int),
+    Eval(Domain, OperationId),
+    Start(Domain),
+    At(Domain, OperationId),
+    End(Domain)
+}
+pub let InterpRoot: Relation<OperationId>;
+let FunctionBody: Relation<(OperationId, Int, String, Int)>;
+pub let Entry: Relation<(OperationId, Label)>;
+let Active: Relation<(OperationId, Domain, Int)>;
+let Need: Relation<(Domain, ValueId)>;
+let Compute: Relation<(Domain, OperationId)>;
+let ResultNeeded: Relation<(Domain, OperationId, Int)>;
+let Nested: Relation<(Domain, Domain, OperationId, Int)>;
+let Gamma: Relation<(Domain, OperationId, ValueId)>;
+let Theta: Relation<(Domain, OperationId, Int, ValueId)>;
+let ControlOp: Relation<OperationId>;
+let DefRegion: Relation<(ValueId, Int)>;
+let StateTy: Relation<Int>;
+let Rank: Table<OperationId, Int, Merge::Max>;
+let Placed: Relation<(Domain, OperationId)>;
+let Before: Relation<(Domain, OperationId, OperationId)>;
+let Middle: Relation<(Domain, OperationId, OperationId)>;
+let HasPrev: Relation<(Domain, OperationId)>;
+let HasNext: Relation<(Domain, OperationId)>;
+let Nonempty: Relation<Domain>;
+let Next: Relation<(Domain, OperationId, Label)>;
+let Site: Relation<(OperationId, Label, Int, OperationId, OperationKind)>;
+let Owned: Relation<(OperationId, Label)>;
+let Param: Relation<(Label, Int, ValueId)>;
+pub let Flow: Relation<{ block: Label, side: Int, target: Label }>;
+let BindArg: Relation<(Label, Int, ValueId, ValueId)>;
+let Code: Relation<(Label, Int, OperationId, String, Int, Int, Int)>;
+pub let Arg: Relation<{ operation: OperationId, slot: Int, value: Int }>;
+let Selected: Relation<OperationId>;
+pub let ErrorOp: Relation<(OperationId, OperationKind)>;
+let Defines: Relation<(Label, Int)>;
+let Reads: Relation<(Label, Int)>;
+let Live: Relation<(Label, Int)>;
+pub let OutParam: Relation<{ block: Label, position: Int, order: Int, value: Int }>;
+pub let OutArg: Relation<{ block: Label, side: Int, position: Int, order: Int, value: Int }>;
+let demand = || -> Schedule {
+    let func<f, r, m, e, place, home, pos, display, loc>: Rule((
+        InterpRoot(f),
+        Operation(f, dialects::func::func.kind, place, home, pos, display, loc),
+        Region(r, m, f, 0, e)
+    )
+        -> FunctionBody(f, r, m, e));
+    let cfg<f, r, e>: Rule(FunctionBody(f, r, "cfg", e) -> Entry(f, Label::Cfg(e)));
+    let graph<f, r, e>: Rule(FunctionBody(f, r, "graph", e)
+        -> (Entry(f, Label::Start(Domain::Root(r))), Active(f, Domain::Root(r), r)));
+    let yield_root<f, r, e, s, v>: Rule((FunctionBody(f, r, "graph", e), Output(r, s, v))
+        -> Need(Domain::Root(r), v));
+    let result_home<v, t, o, s, dt, k, r, p, h, l>: Rule((
+        Value(v, t, "result", o, s, dt),
+        Operation(o, k, "graph", r, p, h, l)
+    )
+        -> DefRegion(v, r));
+    let port_home<v, t, r, s, dt>: Rule(Value(v, t, "region", r, s, dt) -> DefRegion(v, r));
+    let value<f, d, r, v, t, o, s, dt, k, p, h, l>: Rule((
+        Active(f, d, r),
+        Need(d, v),
+        Value(v, t, "result", o, s, dt),
+        Operation(o, k, "graph", r, p, h, l)
+    )
+        -> (Compute(d, o), ResultNeeded(d, o, s)));
+    let operands<d, o, s, v>: Rule((Compute(d, o), !ControlOp(o), Input(o, s, v)) -> Need(d, v));
+    let gamma<d, o, s, h, b, p, k, v>: Rule((
+        Compute(d, o),
+        Control(o, true, s, h, b, p, k),
+        Input(o, s, v)
+    )
+        -> (Gamma(d, o, v), Need(d, v)));
+    let arm<f, d, r, o, v, def, k, a>: Rule((Active(f, d, r), Gamma(d, o, v), Arm(o, def, k, a))
+        -> (Active(f, Domain::ArmBody(d, a), a), Nested(Domain::ArmBody(d, a), d, o, a)));
+    let arm_yield<child, d, o, a, i, j, v>: Rule((
+        Nested(child, d, o, a),
+        child == Domain::ArmBody(d, a),
+        ResultNeeded(d, o, j),
+        Binding(a, "exit", j, i),
+        Output(a, i, v)
+    )
+        -> Need(child, v));
+    let theta<f, d, r, o, s, b, p, v>: Rule((
+        Active(f, d, r),
+        Compute(d, o),
+        Control(o, false, s, true, b, p, "true"),
+        Output(b, p, v)
+    )
+        -> (
+        Theta(d, o, b, v),
+        Active(f, Domain::Predicate(d, b), b),
+        Active(f, Domain::Feedback(d, b), b),
+        Active(f, Domain::Exit(d, b), b),
+        Nested(Domain::Predicate(d, b), d, o, b),
+        Nested(Domain::Feedback(d, b), d, o, b),
+        Nested(Domain::Exit(d, b), d, o, b),
+        Need(Domain::Predicate(d, b), v)
+    ));
+    let exit_yield<d, o, b, p, i, j, v>: Rule((
+        Theta(d, o, b, p),
+        ResultNeeded(d, o, j),
+        Binding(b, "exit", j, i),
+        Output(b, i, v)
+    )
+        -> Need(Domain::Exit(d, b), v));
+    let capture<child, d, o, r, v, home>: Rule((
+        Nested(child, d, o, r),
+        Need(child, v),
+        DefRegion(v, home),
+        !DeferredValue(v),
+        home != r
+    )
+        -> Need(d, v));
+    let state_ty<t, c, a, k, decl, def>: Rule((TypeTerm(t, c, a), TypeCtor(c, k, "state", decl, def))
+        -> StateTy(t));
+    let cfg_block<f, r, e, b, layout>: Rule((FunctionBody(f, r, "cfg", e), Block(b, r, layout))
+        -> Owned(f, Label::Cfg(b)));
+    let cfg_op<f, b, o, k, p, h, l>: Rule((
+        Owned(f, Label::Cfg(b)),
+        Operation(o, k, "block", b, p, h, l)
+    )
+        -> Site(f, Label::Cfg(b), p, o, k));
+    let predicate_result<d, r, o, s>: Rule(ResultNeeded(Domain::Predicate(d, r), o, s)
+        -> PredResult(d, r, o, s));
+    let pred_op<d, r, o>: Rule(Compute(Domain::Predicate(d, r), o) -> PredOp(d, r, o));
+    let external_control<f, d, r, o, home, k, p, h, l, v, t, s, dt>: Rule((
+        Active(f, d, r),
+        Need(d, v),
+        DeferredValue(v),
+        Value(v, t, "result", o, s, dt),
+        ControlOp(o),
+        Operation(o, k, "graph", home, p, h, l),
+        home != r
+    )
+        -> (Compute(d, o), ResultNeeded(d, o, s), ExternalControl(o)));
+    let all_ports<child, d, o, r, p, v, t, j, dt>: Rule((
+        Theta(d, o, r, p),
+        Nested(child, d, o, r),
+        Need(child, v),
+        Value(v, t, "region", r, j, dt)
+    )
+        -> VisiblePort(o, j, v));
+    let shared_feedback<d, o, r, p, j, v, i, w>: Rule((
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        Binding(r, "feedback", j, i),
+        Output(r, i, w)
+    )
+        -> Need(Domain::Feedback(d, r), w));
+    let shared_initial<d, o, r, p, j, v, i, w>: Rule((
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        Binding(r, "entry", j, i),
+        Input(o, i, w)
+    )
+        -> Need(d, w));
+    let deferred<f, d, r, o, home, k, p, h, l, v, t, s, dt>: Rule((
+        Active(f, d, r),
+        Need(d, v),
+        Value(v, t, "result", o, s, dt),
+        Deferred(o),
+        Operation(o, k, "graph", home, p, h, l),
+        home != r
+    )
+        -> (Compute(d, o), Cached(o), ResultNeeded(d, o, s)));
+    let direct_rank<d, o, v, s, t, prev, j, dt, n>: Rule((
+        Compute(d, o),
+        Input(o, s, v),
+        Value(v, t, "result", prev, j, dt),
+        Rank(prev, n)
+    )
+        -> Rank(o, (n + 1)));
+    let rank<d, o>: Rule(Compute(d, o) -> Rank(o, 0));
+    let dep<f, d, r, o, prev, n>: Rule((
+        Active(f, d, r),
+        Compute(d, o),
+        DependsOn(r, o, prev),
+        Rank(prev, n)
+    )
+        -> Rank(o, (n + 1)));
+    let graph_call<d, o, k, r, p, h, l, callee, t, target, dt>: Rule((
+        Compute(d, o),
+        Operation(o, dialects::func::call.kind, k, r, p, h, l),
+        Input(o, 0, callee),
+        Value(callee, t, "result", target, 0, dt)
+    )
+        -> InterpRoot(target));
+    let call<f, l, p, o, callee, t, target, dt>: Rule((
+        Site(f, l, p, o, dialects::func::call.kind),
+        Input(o, 0, callee),
+        Value(callee, t, "result", target, 0, dt)
+    )
+        -> InterpRoot(target));
+    Schedule::Saturate(List(func, cfg, graph, yield_root, result_home, port_home, value, operands, gamma, arm,
+        arm_yield, theta, exit_yield, capture, state_ty, cfg_block, cfg_op, predicate_result,
+        pred_op, external_control, all_ports, shared_feedback, shared_initial, deferred,
+        direct_rank, rank, dep, graph_call, call))
+};
+let PredOp: Relation<(Domain, Int, OperationId)>;
+let placement = || -> Schedule {
+    let captured_theta<d, o, r, p>: Rule((Theta(d, o, r, p), ExternalControl(o)) -> ReplayTheta(o));
+    let captured_gamma<d, o, v>: Rule((Gamma(d, o, v), ExternalControl(o)) -> RepeatGamma(o));
+    let feedback_theta<d, r, o, b, v, s>: Rule((
+        Theta(Domain::Feedback(d, r), o, b, v),
+        PredOp(d, r, o),
+        ResultNeeded(Domain::Feedback(d, r), o, s),
+        !PredResult(d, r, o, s)
+    )
+        -> (Placed(Domain::Feedback(d, r), o), ReplayTheta(o)));
+    let exit_theta<d, r, o, b, v, s>: Rule((
+        Theta(Domain::Exit(d, r), o, b, v),
+        PredOp(d, r, o),
+        ResultNeeded(Domain::Exit(d, r), o, s),
+        !PredResult(d, r, o, s)
+    )
+        -> (Placed(Domain::Exit(d, r), o), ReplayTheta(o)));
+    let again_gamma<d, r, o, v, s>: Rule((
+        Gamma(Domain::Feedback(d, r), o, v),
+        PredOp(d, r, o),
+        ResultNeeded(Domain::Feedback(d, r), o, s),
+        !PredResult(d, r, o, s)
+    )
+        -> (Placed(Domain::Feedback(d, r), o), RepeatGamma(o)));
+    let exit_gamma<d, r, o, v, s>: Rule((
+        Gamma(Domain::Exit(d, r), o, v),
+        PredOp(d, r, o),
+        ResultNeeded(Domain::Exit(d, r), o, s),
+        !PredResult(d, r, o, s)
+    )
+        -> (Placed(Domain::Exit(d, r), o), RepeatGamma(o)));
+    let root<r, o>: Rule(Compute(Domain::Root(r), o) -> Placed(Domain::Root(r), o));
+    let arm<d, r, o>: Rule(Compute(Domain::ArmBody(d, r), o) -> Placed(Domain::ArmBody(d, r), o));
+    let pred<d, r, o>: Rule(Compute(Domain::Predicate(d, r), o) -> Placed(Domain::Predicate(d, r), o));
+    let again<d, r, o>: Rule((Compute(Domain::Feedback(d, r), o), !PredOp(d, r, o))
+        -> Placed(Domain::Feedback(d, r), o));
+    let done<d, r, o>: Rule((Compute(Domain::Exit(d, r), o), !PredOp(d, r, o))
+        -> Placed(Domain::Exit(d, r), o));
+    Schedule::Once(List(captured_theta, captured_gamma, feedback_theta, exit_theta, again_gamma, exit_gamma,
+        root, arm, pred, again, done))
+};
+let ordering = || -> Schedule {
+    let depth<d, a, b, x, y>: Rule((
+        Placed(d, a),
+        Placed(d, b),
+        Rank(a, x),
+        Rank(b, y),
+        less(x, y) == true
+    )
+        -> Before(d, a, b));
+    let tie<d, a, b, x>: Rule((
+        Placed(d, a),
+        Placed(d, b),
+        Rank(a, x),
+        Rank(b, x),
+        less(a, b) == true
+    )
+        -> Before(d, a, b));
+    let links<d, a, b>: Rule(Before(d, a, b) -> (HasNext(d, a), HasPrev(d, b)));
+    let between<d, a, b, c>: Rule((Before(d, a, b), Before(d, b, c)) -> Middle(d, a, c));
+    let nonempty<d, o>: Rule(Placed(d, o) -> Nonempty(d));
+    Schedule::Saturate(List(depth, tie, links, between, nonempty))
+};
+let layout = || -> Schedule {
+    let endpoints<f, d, r>: Rule(Active(f, d, r)
+        -> (Owned(f, Label::Start(d)), Owned(f, Label::End(d))));
+    let operation_site<f, d, r, o, k, home, p, h, l>: Rule((
+        Placed(d, o),
+        Active(f, d, r),
+        Operation(o, k, "graph", home, p, h, l),
+        !Cached(o)
+    )
+        -> (Owned(f, Label::At(d, o)), Site(f, Label::At(d, o), 0, o, k)));
+    let empty<f, d, r>: Rule((Active(f, d, r), !Nonempty(d))
+        -> Flow(Label::Start(d), 0, Label::End(d)));
+    let first<d, o>: Rule((Placed(d, o), !HasPrev(d, o)) -> Flow(Label::Start(d), 0, Label::At(d, o)));
+    let next<d, o, n>: Rule((Before(d, o, n), !Middle(d, o, n)) -> Next(d, o, Label::At(d, n)));
+    let last<d, o>: Rule((Placed(d, o), !HasNext(d, o)) -> Next(d, o, Label::End(d)));
+    let plain<d, o, n>: Rule((Next(d, o, n), !ControlOp(o), !Cached(o))
+        -> Flow(Label::At(d, o), 0, n));
+    let root_param<f, r, e, v, t, i, dt>: Rule((
+        FunctionBody(f, r, "graph", e),
+        Value(v, t, "region", r, i, dt),
+        !StateTy(t)
+    )
+        -> Param(Label::Start(Domain::Root(r)), i, v));
+    let cfg_param<f, b, v, t, i, dt>: Rule((
+        Owned(f, Label::Cfg(b)),
+        Value(v, t, "block", b, i, dt),
+        !StateTy(t)
+    )
+        -> Param(Label::Cfg(b), i, v));
+    let cfg_edge<f, b, p, o, k, s, to>: Rule((
+        Site(f, Label::Cfg(b), p, o, k),
+        Successor(o, s, to),
+        !SwitchOp(o)
+    )
+        -> Flow(Label::Cfg(b), s, Label::Cfg(to)));
+    let theta_start<d, o, r, v>: Rule((Placed(d, o), Theta(d, o, r, v), !ReplayTheta(o))
+        -> (Flow(Label::At(d, o), 0, Label::Start(Domain::Predicate(d, r))), Selected(o)));
+    let theta_test<d, o, r, v>: Rule(Theta(d, o, r, v)
+        -> (
+        Code(Label::End(Domain::Predicate(d, r)), 0, o, "branch", (0 - 1), v, (0 - 1)),
+        Flow(Label::End(Domain::Predicate(d, r)), 0, Label::Start(Domain::Feedback(d, r))),
+        Flow(Label::End(Domain::Predicate(d, r)), 1, Label::Start(Domain::Exit(d, r))),
+        Flow(Label::End(Domain::Feedback(d, r)), 0, Label::Start(Domain::Predicate(d, r)))
+    ));
+    let arm_done<d, o, v, r, def, k, n>: Rule((Gamma(d, o, v), Arm(o, def, k, r), Next(d, o, n))
+        -> Flow(Label::End(Domain::ArmBody(d, r)), 0, n));
+    let loop_done<d, o, r, v, n>: Rule((Theta(d, o, r, v), Next(d, o, n))
+        -> Flow(Label::End(Domain::Exit(d, r)), 0, n));
+    let exported<child, d, o, r, j, i, w, t, v, dt, n>: Rule((
+        Nested(child, d, o, r),
+        Flow(Label::End(child), 0, n),
+        Next(d, o, n),
+        ResultNeeded(d, o, j),
+        Value(v, t, "result", o, j, dt),
+        !StateTy(t),
+        Binding(r, "exit", j, i),
+        Output(r, i, w)
+    )
+        -> BindArg(Label::End(child), 0, v, w));
+    let init<d, o, r, p, v, t, j, dt, i, w>: Rule((
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        Value(v, t, "region", r, j, dt),
+        !StateTy(t),
+        Binding(r, "entry", j, i),
+        Input(o, i, w),
+        !ReplayTheta(o)
+    )
+        -> BindArg(Label::At(d, o), 0, v, w));
+    let replay_init<d, o, r, p, v, t, j, dt, i, w>: Rule((
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        Value(v, t, "region", r, j, dt),
+        !StateTy(t),
+        Binding(r, "entry", j, i),
+        Input(o, i, w),
+        ReplayTheta(o)
+    )
+        -> BindArg(Label::Enter(d, o), 0, v, w));
+    let carry<d, o, r, p, v, t, j, dt, i, w>: Rule((
+        Theta(d, o, r, p),
+        VisiblePort(o, j, v),
+        Value(v, t, "region", r, j, dt),
+        !StateTy(t),
+        Binding(r, "feedback", j, i),
+        Output(r, i, w)
+    )
+        -> BindArg(Label::End(Domain::Feedback(d, r)), 0, v, w));
+    Schedule::Saturate(List(endpoints, operation_site, empty, first, next, last, plain, root_param, cfg_param,
+        cfg_edge, theta_start, theta_test, arm_done, loop_done, exported, init, replay_init,
+        carry))
+};
+let select = || -> Schedule {
+    let load_op<f, l, p, o, addr, v, t, dt>: Rule((
+        Site(f, l, p, o, dialects::ptr::load.kind),
+        !SpecialLoad(o),
+        Input(o, 0, addr),
+        Value(v, t, "result", o, 0, dt),
+        IntegerType(t)
+    )
+        -> Code(l, p, o, "load", v, addr, (0 - 1)));
+    let state_entry<f, l, p, o>: Rule(Site(f, l, p, o, dialects::state::entry_state.kind) -> Selected(o));
+    let state_join<f, l, p, o>: Rule(Site(f, l, p, o, dialects::state::join.kind) -> Selected(o));
+    let state_split<f, l, p, o>: Rule(Site(f, l, p, o, dialects::state::split.kind) -> Selected(o));
+    let constant<f, l, p, o, v, t, dt>: Rule((
+        Site(f, l, p, o, dialects::builtin::constant.kind),
+        Value(v, t, "result", o, 0, dt)
+    )
+        -> Code(l, p, o, "constant", v, (0 - 1), (0 - 1)));
+    let arithmetic<f, l, p, o, v, t, dt, a, b, k, m, s, u>: Rule((
+        Site(f, l, p, o, k),
+        Arithmetic(k, m, s, u),
+        Value(v, t, "result", o, 0, dt),
+        Input(o, 0, a),
+        Input(o, 1, b)
+    )
+        -> Code(l, p, o, m, v, a, b));
+    let cmp<f, l, p, o, v, t, dt, a, b, h, k, kind, field, label>: Rule((
+        Site(f, l, p, o, kind),
+        PredicateMethod(kind, field, label, k),
+        Value(v, t, "result", o, 0, dt),
+        Input(o, 0, a),
+        Input(o, 1, b),
+        Attribute("operation", o, field, h),
+        label == eqsat::eqsat_attr_case(h)
+    )
+        -> Code(l, p, o, k, v, a, b));
+    let assume<f, l, p, o, v, k>: Rule((Site(f, l, p, o, k), RequireBit(k), Input(o, 0, v))
+        -> Code(l, p, o, "require", (0 - 1), v, (0 - 1)));
+    let cfg_return<f, l, p, o, v>: Rule((Site(f, l, p, o, dialects::func::r#return.kind), Input(o, 0, v))
+        -> Code(l, p, o, "return", (0 - 1), v, (0 - 1)));
+    let graph_return<f, r, e, i, v, t, k, owner, j, dt>: Rule((
+        FunctionBody(f, r, "graph", e),
+        Output(r, i, v),
+        Value(v, t, k, owner, j, dt),
+        !StateTy(t)
+    )
+        -> Code(Label::End(Domain::Root(r)), 0, f, "return", (0 - 1), v, (0 - 1)));
+    let cfg_jump<f, l, p, o>: Rule(Site(f, l, p, o, dialects::cfg::br.kind)
+        -> Code(l, p, o, "jump", (0 - 1), (0 - 1), (0 - 1)));
+    let cfg_branch<f, l, p, o, v>: Rule((Site(f, l, p, o, dialects::cfg::cond_br.kind), Input(o, 0, v))
+        -> Code(l, p, o, "branch", (0 - 1), v, (0 - 1)));
+    let call<f, l, p, o, v, t, dt, c, ft, g, fd>: Rule((
+        Site(f, l, p, o, dialects::func::call.kind),
+        Input(o, 0, c),
+        Value(c, ft, "result", g, 0, fd),
+        Value(v, t, "result", o, 0, dt)
+    )
+        -> (Code(l, p, o, "call", v, (0 - 1), (0 - 1)), Arg(o, (0 - 1), g)));
+    let call_arg<f, l, p, o, i, v, t, k, h, s, dt>: Rule((
+        Site(f, l, p, o, dialects::func::call.kind),
+        less(int_lit(0), i) == true,
+        Input(o, i, v),
+        Value(v, t, k, h, s, dt),
+        !StateTy(t)
+    )
+        -> (Arg(o, i, v), Reads(l, v)));
+    Schedule::Saturate(List(load_op, state_entry, state_join, state_split, constant, arithmetic, cmp, assume,
+        cfg_return, graph_return, cfg_jump, cfg_branch, call, call_arg))
+};
+let operands = || -> Schedule {
+    let selected<f, l, p, o, k, m, i, v, a, b>: Rule((
+        Site(f, l, p, o, k),
+        Emit(l, p, i, o, m, v, a, b)
+    )
+        -> Selected(o));
+    let dst<l, p, o, k, v, a, b>: Rule((Code(l, p, o, k, v, a, b), less(v, int_lit(0)) == false)
+        -> Defines(l, v));
+    let left<l, p, o, k, v, a, b>: Rule((Code(l, p, o, k, v, a, b), less(a, int_lit(0)) == false)
+        -> Reads(l, a));
+    let right<l, p, o, k, v, a, b>: Rule((Code(l, p, o, k, v, a, b), less(b, int_lit(0)) == false)
+        -> Reads(l, b));
+    let declared<l, i, v>: Rule(Param(l, i, v) -> (Defines(l, v), OutParam(l, 0, i, v)));
+    let given<l, s, to, i, v, w>: Rule((Flow(l, s, to), Param(to, i, v), BindArg(l, s, v, w))
+        -> (Reads(l, w), OutArg(l, s, 0, i, w)));
+    Schedule::Saturate(List(selected, dst, left, right, declared, given))
+};
+let liveness = || -> Schedule {
+    let use_value<l, v>: Rule((Reads(l, v), !Defines(l, v)) -> Live(l, v));
+    let renamed<l, s, to, v, w>: Rule((Flow(l, s, to), Live(to, v), BindArg(l, s, v, w))
+        -> (Reads(l, w), OutArg(l, s, 1, v, w)));
+    let passthrough<l, s, to, v>: Rule((Flow(l, s, to), Live(to, v), !Renamed(l, s, v))
+        -> (Reads(l, v), OutArg(l, s, 1, v, v)));
+    let carried<l, v>: Rule(Live(l, v) -> OutParam(l, 1, v, v));
+    Schedule::Saturate(List(use_value, renamed, passthrough, carried))
+};
+let Renamed: Relation<(Label, Int, Int)>;
+let bindings = || -> Schedule {
+    let renamed<l, s, v, w>: Rule(BindArg(l, s, v, w) -> Renamed(l, s, v));
+    let unknown<f, l, p, o, k>: Rule((Site(f, l, p, o, k), !Selected(o)) -> ErrorOp(o, k));
+    Schedule::Once(List(renamed, unknown))
+};
+let classify = || -> Schedule {
+    let switch<o, pl, r, p, h, l>: Rule(Operation(o, dialects::cfg::r#switch.kind, pl, r, p, h, l) -> SwitchOp(o));
+    let gamma_op<o, s, h, b, p, k>: Rule(Control(o, true, s, h, b, p, k) -> ControlOp(o));
+    let theta_op<o, g, s, b, p, k>: Rule(Control(o, g, s, true, b, p, k) -> ControlOp(o));
+    let nsw<o, h, k, m, s, u, pl, r, p, d, l>: Rule((
+        Operation(o, k, pl, r, p, d, l),
+        Arithmetic(k, m, s, u),
+        Attribute("operation", o, s, h),
+        eqsat::eqsat_attr_bool(h) == true
+    )
+        -> SignedOverflow(o));
+    let nuw<o, h, k, m, s, u, pl, r, p, d, l>: Rule((
+        Operation(o, k, pl, r, p, d, l),
+        Arithmetic(k, m, s, u),
+        Attribute("operation", o, u, h),
+        eqsat::eqsat_attr_bool(h) == true
+    )
+        -> UnsignedOverflow(o));
+    Schedule::Once(List(switch, gamma_op, theta_op, nsw, nuw))
+};
+
+pub let Emit: Relation<{ block: Label, position: Int, step: Int, operation: OperationId, opcode: String, output: Int, lhs: Int, rhs: Int }>;
+pub let Temp: Relation<(Int, Int)>; // virtual slot, value with the same width (-1 denotes i1)
+let Scratch: Relation<(OperationId, Int, Int, Int, Int, Int)>;
+let OrderCmp: Relation<(String, Bool, Bool, Bool)>; // signed, swap, invert
+let Compare: Relation<(Label, Int, OperationId, Bool, Bool, Int, Int, Int)>;
+let Equality: Relation<(String, Bool)>;
+let CmpResult: Relation<(Label, Int, OperationId, Int, Int, Bool)>;
+let Plain: Relation<String>;
+let expand = || -> Schedule {
+    let eq: Rule(() -> Equality("eq", false));
+    let ne: Rule(() -> Equality("ne", true));
+    let ult: Rule(() -> OrderCmp("ult", false, false, false));
+    let ule: Rule(() -> OrderCmp("ule", false, true, true));
+    let ugt: Rule(() -> OrderCmp("ugt", false, true, false));
+    let uge: Rule(() -> OrderCmp("uge", false, false, true));
+    let slt: Rule(() -> OrderCmp("slt", true, false, false));
+    let sle: Rule(() -> OrderCmp("sle", true, true, true));
+    let sgt: Rule(() -> OrderCmp("sgt", true, true, false));
+    let sge: Rule(() -> OrderCmp("sge", true, false, true));
+    let normal<l, p, o, k, v, a, b, s, n>: Rule((Code(l, p, o, k, v, a, b), OrderCmp(k, s, false, n))
+        -> Compare(l, p, o, s, n, v, a, b));
+    let reverse<l, p, o, k, v, a, b, s, n>: Rule((Code(l, p, o, k, v, a, b), OrderCmp(k, s, true, n))
+        -> Compare(l, p, o, s, n, v, b, a));
+    let temps<l, p, o, k, v, a, b, base>: Rule((
+        Code(l, p, o, k, v, a, b),
+        base == (0 - ((o * 16) + 2))
+    )
+        -> Scratch(o, base, (base - 1), (base - 2), (base - 3), (base - 4)));
+    let cmp_dst<l, p, o, k, v, a, b>: Rule(Code(l, p, o, k, v, a, b)
+        -> CmpResult(l, p, o, v, v, false));
+    let negated<l, p, o, k, v, a, b, m, x, y, z, t>: Rule((
+        Code(l, p, o, k, v, a, b),
+        Scratch(o, m, x, y, z, t)
+    )
+        -> CmpResult(l, p, o, v, z, true));
+    let equal<l, p, o, k, v, a, b, n, d>: Rule((
+        Code(l, p, o, k, v, a, b),
+        Equality(k, n),
+        CmpResult(l, p, o, v, d, n)
+    )
+        -> Emit(l, p, 3, o, "eq", d, a, b));
+    let unsigned<l, p, o, n, v, a, b, d>: Rule((
+        Compare(l, p, o, false, n, v, a, b),
+        CmpResult(l, p, o, v, d, n)
+    )
+        -> Emit(l, p, 3, o, "ult", d, a, b));
+    let signed<l, p, o, n, v, a, b, d, m, x, y, z, t>: Rule((
+        Compare(l, p, o, true, n, v, a, b),
+        CmpResult(l, p, o, v, d, n),
+        Scratch(o, m, x, y, z, t)
+    )
+        -> (
+        Temp(m, a),
+        Temp(x, a),
+        Temp(y, a),
+        Emit(l, p, 0, o, "signbit", m, a, a),
+        Emit(l, p, 1, o, "add", x, a, m),
+        Emit(l, p, 2, o, "add", y, b, m),
+        Emit(l, p, 3, o, "ult", d, x, y)
+    ));
+    let invert_order<l, p, o, v, a, b, s>: Rule(Compare(l, p, o, s, true, v, a, b)
+        -> Invert(l, p, o, v));
+    let invert_eq<l, p, o, v, a, b>: Rule(Code(l, p, o, "ne", v, a, b) -> Invert(l, p, o, v));
+    let invert<l, p, o, v, m, x, y, z, t>: Rule((Invert(l, p, o, v), Scratch(o, m, x, y, z, t))
+        -> (
+        Temp(z, (0 - 1)),
+        Temp(t, (0 - 1)),
+        Emit(l, p, 4, o, "zero", t, t, t),
+        Emit(l, p, 5, o, "eq", v, z, t)
+    ));
+    let keep<l, p, o, k, d, a, b>: Rule((Code(l, p, o, k, d, a, b), Plain(k))
+        -> Emit(l, p, 0, o, k, d, a, b));
+    let zero_kind: Rule(() -> Plain("zero"));
+    let one_kind: Rule(() -> Plain("one"));
+    let const_kind: Rule(() -> Plain("constant"));
+    let add_kind: Rule(() -> Plain("add"));
+    let sub_kind: Rule(() -> Plain("sub"));
+    let ret_kind: Rule(() -> Plain("return"));
+    let branch_kind: Rule(() -> Plain("branch"));
+    let jump_kind: Rule(() -> Plain("jump"));
+    let call_kind: Rule(() -> Plain("call"));
+    let require_kind: Rule(() -> Plain("require"));
+    let load_kind: Rule(() -> Plain("load"));
+    Schedule::Saturate(List(eq, ne, ult, ule, ugt, uge, slt, sle, sgt, sge, normal, reverse, temps, cmp_dst, negated,
+        equal, unsigned, signed, invert_order, invert_eq, invert, keep, zero_kind, one_kind,
+        const_kind, add_kind, sub_kind, ret_kind, branch_kind, jump_kind, call_kind,
+        require_kind, load_kind))
+};
+let Invert: Relation<(Label, Int, OperationId, Int)>;
+let IntegerType: Relation<Int>;
+let LoadMetadata: Relation<String>;
+pub let BadLoadAttr: Relation<(OperationId, String)>;
+let SpecialLoad: Relation<OperationId>;
+let memory_attrs = || -> Schedule {
+    let integer<t, c, args, decl, def>: Rule((
+        TypeTerm(t, c, args),
+        TypeCtor(c, "builtin", "i", decl, def)
+    )
+        -> IntegerType(t));
+    let segments: Rule(() -> LoadMetadata("operand_segment_sizes"));
+    Schedule::Once(List(integer, segments))
+};
+let load_attrs = || -> Schedule {
+    let flag<o, k, v, pl, h, p, d, l>: Rule((
+        Operation(o, dialects::ptr::load.kind, pl, h, p, d, l),
+        Attribute("operation", o, k, v),
+        !LoadMetadata(k)
+    )
+        -> (SpecialLoad(o), BadLoadAttr(o, k)));
+    Schedule::Once(List(flag))
+};
+
+let StructuredEffect: Relation<OperationId>;
+let ExternalControl: Relation<OperationId>;
+let Deferred: Relation<OperationId>;
+let DeferredValue: Relation<ValueId>;
+let Cached: Relation<OperationId>;
+let CacheFlag: Relation<(OperationId, Int)>;
+let Activation: Relation<(Domain, Int)>;
+let effects = || -> Schedule {
+    let theta_effect<o, g, s, r, p, k>: Rule(Control(o, g, s, true, r, p, k) -> StructuredEffect(o));
+    let arm_effect<o, def, k, r, s, v>: Rule((Arm(o, def, k, r), Output(r, s, v), DeferredValue(v))
+        -> StructuredEffect(o));
+    let selector_effect<o, s, t, r, p, k, v>: Rule((
+        Control(o, true, s, t, r, p, k),
+        Input(o, s, v),
+        DeferredValue(v)
+    )
+        -> StructuredEffect(o));
+    let structure_result<o, v, t, s, dt>: Rule((StructuredEffect(o), Value(v, t, "result", o, s, dt))
+        -> DeferredValue(v));
+    let read<o, r, p, h, l>: Rule(Operation(o, dialects::ptr::load.kind, "graph", r, p, h, l) -> Deferred(o));
+    let invoke<o, r, p, h, l>: Rule(Operation(o, dialects::func::call.kind, "graph", r, p, h, l) -> Deferred(o));
+    let result<o, v, t, s, dt>: Rule((Deferred(o), Value(v, t, "result", o, s, dt))
+        -> DeferredValue(v));
+    let dependent<o, v, s, r, k, p, h, l>: Rule((
+        Input(o, s, v),
+        DeferredValue(v),
+        Operation(o, k, "graph", r, p, h, l),
+        !ControlOp(o)
+    )
+        -> Deferred(o));
+    Schedule::Saturate(List(theta_effect, arm_effect, selector_effect, structure_result, read, invoke, result,
+        dependent))
+};
+let caching = || -> Schedule {
+    let root<f, r>: Rule(Active(f, Domain::Root(r), r) -> Activation(Domain::Root(r), r));
+    let arm<f, d, r, o, home, parent>: Rule((
+        Active(f, Domain::ArmBody(d, r), r),
+        Nested(Domain::ArmBody(d, r), d, o, r),
+        Active(f, d, home),
+        Activation(parent, home)
+    )
+        -> Activation(parent, r));
+    let loop_body<f, d, r>: Rule(Active(f, Domain::Predicate(d, r), r)
+        -> Activation(Domain::Predicate(d, r), r));
+    let repeat_arm<o, r, def, k, child, p, disp, loc, name>: Rule((
+        RepeatGamma(o),
+        Arm(o, def, k, r),
+        Operation(child, name, "graph", r, p, disp, loc),
+        Deferred(child)
+    )
+        -> Cached(child));
+    let nested_repeat<o, r, def, key, g, k, p, h, l>: Rule((
+        RepeatGamma(o),
+        Arm(o, def, key, r),
+        Operation(g, k, "graph", r, p, h, l),
+        ControlOp(g)
+    )
+        -> (RepeatGamma(g), ReplayTheta(g)));
+    let replay_effect<o, child, r, b, k, p, h, name, pos, disp, loc>: Rule((
+        ReplayTheta(o),
+        Control(o, false, p, true, r, h, k),
+        Encloses(r, b),
+        Operation(child, name, "graph", b, pos, disp, loc),
+        Deferred(child)
+    )
+        -> Cached(child));
+    let flag<o>: Rule(Cached(o) -> CacheFlag(o, (0 - ((o * 16) + 15))));
+    Schedule::Saturate(List(root, arm, loop_body, repeat_arm, nested_repeat, replay_effect, flag))
+};
+let cached_code = || -> Schedule {
+    let fresh<o, flag, r, k, p, h, l, d>: Rule((
+        CacheFlag(o, flag),
+        Operation(o, k, "graph", r, p, h, l),
+        Activation(d, r)
+    )
+        -> (
+        Temp(flag, (0 - 1)),
+        Code(Label::Start(d), 0, o, "zero", flag, (0 - 1), (0 - 1)),
+        Defines(Label::Start(d), flag)
+    ));
+    let placeholder<o, r, k, p, h, l, d, v, t, s, dt>: Rule((
+        Cached(o),
+        Operation(o, k, "graph", r, p, h, l),
+        Activation(d, r),
+        Value(v, t, "result", o, s, dt),
+        !StateTy(t)
+    )
+        -> Code(Label::Start(d), 0, o, "zero", v, (0 - 1), (0 - 1)));
+    let cached_site<f, d, r, o, k, home, p, h, l, n, flag>: Rule((
+        Placed(d, o),
+        Active(f, d, r),
+        Operation(o, k, "graph", home, p, h, l),
+        Next(d, o, n),
+        CacheFlag(o, flag)
+    )
+        -> (
+        Owned(f, Label::Eval(d, o)),
+        Owned(f, Label::At(d, o)),
+        Site(f, Label::Eval(d, o), 0, o, k),
+        Code(Label::At(d, o), 0, o, "branch", (0 - 1), flag, (0 - 1)),
+        Reads(Label::At(d, o), flag),
+        Flow(Label::At(d, o), 0, n),
+        Flow(Label::At(d, o), 1, Label::Eval(d, o)),
+        Code(Label::Eval(d, o), 1, o, "one", flag, (0 - 1), (0 - 1)),
+        Defines(Label::Eval(d, o), flag),
+        Flow(Label::Eval(d, o), 0, n)
+    ));
+    Schedule::Once(List(fresh, placeholder, cached_site))
+};
+
+let UnsignedOverflow: Relation<OperationId>;
+let SignedOverflow: Relation<OperationId>;
+let OverflowOrder: Relation<(Label, Int, OperationId, Int, Int, Int, Int)>;
+let overflow = || -> Schedule {
+    // For signed addition, a negative rhs makes the result smaller unless it
+    // overflowed. Subtraction reverses that comparison. Adding the sign bit
+    // maps signed order to the VM's unsigned order at every integer width.
+    let signed_add<l, p, o, v, a, b>: Rule((Code(l, p, o, "add", v, a, b), SignedOverflow(o))
+        -> OverflowOrder(l, p, o, v, b, v, a));
+    let signed_sub<l, p, o, v, a, b>: Rule((Code(l, p, o, "sub", v, a, b), SignedOverflow(o))
+        -> OverflowOrder(l, p, o, v, b, a, v));
+    let signed_test<l, p, o, v, b, left, right, mask, x, y, sign, cmp>: Rule((
+        OverflowOrder(l, p, o, v, b, left, right),
+        Scratch(o, mask, x, y, sign, cmp)
+    )
+        -> (
+        Temp(mask, b),
+        Temp(x, b),
+        Temp(y, b),
+        Temp(sign, (0 - 1)),
+        Temp(cmp, (0 - 1)),
+        Emit(l, p, 1, o, "signbit", mask, b, b),
+        Emit(l, p, 2, o, "add", x, left, mask),
+        Emit(l, p, 3, o, "add", y, right, mask),
+        Emit(l, p, 4, o, "ult", cmp, x, y),
+        Emit(l, p, 5, o, "ult", sign, b, mask),
+        Emit(l, p, 6, o, "eq", cmp, sign, cmp),
+        Emit(l, p, 7, o, "poison_if", v, v, cmp)
+    ));
+    let unsigned_add<l, p, o, v, a, b, m, x, y, z, flag>: Rule((
+        Code(l, p, o, "add", v, a, b),
+        UnsignedOverflow(o),
+        Scratch(o, m, x, y, z, flag)
+    )
+        -> (
+        Temp(flag, (0 - 1)),
+        Emit(l, p, 8, o, "ult", flag, v, a),
+        Emit(l, p, 9, o, "poison_if", v, v, flag)
+    ));
+    let unsigned_sub<l, p, o, v, a, b, m, x, y, z, flag>: Rule((
+        Code(l, p, o, "sub", v, a, b),
+        UnsignedOverflow(o),
+        Scratch(o, m, x, y, z, flag)
+    )
+        -> (
+        Temp(flag, (0 - 1)),
+        Emit(l, p, 8, o, "ult", flag, a, b),
+        Emit(l, p, 9, o, "poison_if", v, v, flag)
+    ));
+    Schedule::Saturate(List(signed_add, signed_sub, signed_test, unsigned_add, unsigned_sub))
+};
+
+let SwitchOp: Relation<OperationId>;
+// An explicit arm compares its literal. The last successor is the default.
+let Choice: Relation<(OperationId, Label, OperationId, ValueId, Int, Label, String)>;
+let DefaultChoice: Relation<(OperationId, Label, OperationId, ValueId, Int, Label)>;
+let Dispatch: Relation<(Label, Int, Label, Int)>;
+pub let CaseBits: Relation<{ block: Label, index: Int, literal: String }>;
+let CaseTest: Relation<(Label, OperationId, ValueId)>;
+let choices = || -> Schedule {
+    let graph_case<f, d, r, o, v, a, j, e, k>: Rule((
+        Active(f, d, r),
+        Placed(d, o),
+        Gamma(d, o, v),
+        Arm(o, false, k, a),
+        Region(a, "graph", o, j, e)
+    )
+        -> Choice(f, Label::At(d, o), o, v, j, Label::Start(Domain::ArmBody(d, a)), k));
+    let graph_default<f, d, r, o, v, a, j, e>: Rule((
+        Active(f, d, r),
+        Placed(d, o),
+        Gamma(d, o, v),
+        Arm(o, true, "", a),
+        Region(a, "graph", o, j, e)
+    )
+        -> DefaultChoice(f, Label::At(d, o), o, v, j, Label::Start(Domain::ArmBody(d, a))));
+    let cfg_case<f, l, p, o, v, j, to, next>: Rule((
+        Site(f, l, p, o, dialects::cfg::r#switch.kind),
+        Input(o, 0, v),
+        Successor(o, j, to),
+        Successor(o, (j + 1), next)
+    )
+        -> Choice(f, l, o, v, j, Label::Cfg(to), ""));
+    let cfg_slot<o, j, to>: Rule(Successor(o, j, to) -> HasSuccessor(o, j));
+    Schedule::Saturate(List(graph_case, graph_default, cfg_case, cfg_slot))
+};
+let HasSuccessor: Relation<(OperationId, Int)>;
+let dispatch = || -> Schedule {
+    let cfg_default<f, l, p, o, v, j, to, k>: Rule((
+        Site(f, l, p, o, dialects::cfg::r#switch.kind),
+        Input(o, 0, v),
+        Successor(o, j, to),
+        k == (j + 1),
+        !HasSuccessor(o, k)
+    )
+        -> DefaultChoice(f, l, o, v, j, Label::Cfg(to)));
+    let first<f, l, o, v, to, k>: Rule(Choice(f, l, o, v, 0, to, k)
+        -> (Flow(l, 0, Label::Test(l, 0)), Selected(o)));
+    let test<f, l, o, v, j, to, k>: Rule(Choice(f, l, o, v, j, to, k)
+        -> (
+        Owned(f, Label::Test(l, j)),
+        CaseBits(Label::Test(l, j), j, k),
+        CaseTest(Label::Test(l, j), o, v),
+        Flow(Label::Test(l, j), 0, to),
+        Dispatch(l, j, Label::Test(l, j), 0)
+    ));
+    let next<f, l, o, v, j, to, k, n, other, kk>: Rule((
+        Choice(f, l, o, v, j, to, k),
+        n == (j + 1),
+        Choice(f, l, o, v, n, other, kk)
+    )
+        -> Flow(Label::Test(l, j), 1, Label::Test(l, n)));
+    let last<f, l, o, v, j, to, k, n, other>: Rule((
+        Choice(f, l, o, v, j, to, k),
+        n == (j + 1),
+        DefaultChoice(f, l, o, v, n, other)
+    )
+        -> (Flow(Label::Test(l, j), 1, other), Dispatch(l, n, Label::Test(l, j), 1)));
+    let only<f, l, o, v, to>: Rule(DefaultChoice(f, l, o, v, 0, to)
+        -> (Selected(o), Flow(l, 0, to), Dispatch(l, 0, l, 0)));
+    let ordinary<f, l, p, o, k, s, to>: Rule((Site(f, l, p, o, k), Successor(o, s, to), !SwitchOp(o))
+        -> Dispatch(l, s, l, s));
+    let arg<f, b, p, o, k, s, to, i, j, v, w, t, dt, src, side>: Rule((
+        Site(f, Label::Cfg(b), p, o, k),
+        Successor(o, s, to),
+        SuccessorArgument(o, s, i, j),
+        Input(o, j, v),
+        Value(w, t, "block", to, i, dt),
+        Dispatch(Label::Cfg(b), s, src, side)
+    )
+        -> BindArg(src, side, w, v));
+    let condition<l, o, selector, v, base, m, flag>: Rule((
+        CaseTest(l, o, selector),
+        v == selector,
+        base == (0 - (o * 16)),
+        m == (base - 8),
+        flag == (base - 9)
+    )
+        -> (
+        Temp(m, v),
+        Temp(flag, (0 - 1)),
+        Reads(l, v),
+        Emit(l, 0, 0, o, "case_literal", m, v, v),
+        Emit(l, 0, 1, o, "eq", flag, v, m),
+        Emit(l, 0, 2, o, "branch", flag, flag, flag)
+    ));
+    Schedule::Saturate(List(cfg_default, first, test, next, last, only, ordinary, arg, condition))
+};
+
+let Arithmetic: Relation<(OperationKind, String, String, String)>;
+let PredicateMethod: Relation<(OperationKind, String, String, String)>;
+let RequireBit: Relation<OperationKind>;
+
+let instruction_kinds = || -> Schedule {
+    let add: Rule(() -> Arithmetic(dialects::builtin::addi.kind, "add", "nsw", "nuw"));
+    let sub: Rule(() -> Arithmetic(dialects::builtin::subi.kind, "sub", "nsw", "nuw"));
+    let eq: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "eq", "eq"));
+    let ne: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "ne", "ne"));
+    let ult: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "ult", "ult"));
+    let ule: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "ule", "ule"));
+    let ugt: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "ugt", "ugt"));
+    let uge: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "uge", "uge"));
+    let slt: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "slt", "slt"));
+    let sle: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "sle", "sle"));
+    let sgt: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "sgt", "sgt"));
+    let sge: Rule(() -> PredicateMethod(dialects::builtin::cmpi.kind, "predicate", "sge", "sge"));
+    let assume: Rule(() -> RequireBit(dialects::builtin::assume.kind));
+    Schedule::Once(List(add, sub, eq, ne, ult, ule, ugt, uge, slt, sle, sgt, sge, assume))
+};
+
+let PredResult: Relation<(Domain, Int, OperationId, Int)>;
+let RepeatGamma: Relation<OperationId>;
+pub let ReachBlock: Relation<{ function: OperationId, block: Label }>;
+let reachable = || -> Schedule {
+    let entry<f, l>: Rule(Entry(f, l) -> ReachBlock(f, l));
+    let cfg<f, b>: Rule(Owned(f, Label::Cfg(b)) -> ReachBlock(f, Label::Cfg(b)));
+    let edge<f, l, s, to>: Rule((ReachBlock(f, l), Flow(l, s, to)) -> ReachBlock(f, to));
+    Schedule::Saturate(List(entry, cfg, edge))
+};
+
+let Alias: Relation<(ValueId, ValueId)>;
+let IsAlias: Relation<ValueId>;
+let Source: Relation<(ValueId, ValueId)>;
+let Input: Relation<(OperationId, Int, ValueId)>;
+let Output: Relation<(Int, Int, ValueId)>;
+let aliases = || -> Schedule {
+    let arm_port<o, def, k, r, j, i, v, t, dt, w>: Rule((
+        Arm(o, def, k, r),
+        Binding(r, "entry", j, i),
+        Value(v, t, "region", r, j, dt),
+        Operand(o, i, w)
+    )
+        -> (Alias(v, w), IsAlias(v)));
+    Schedule::Once(List(arm_port))
+};
+let resolve_ports = || -> Schedule {
+    let direct<v, t, k, owner, s, dt>: Rule((Value(v, t, k, owner, s, dt), !IsAlias(v))
+        -> Source(v, v));
+    let bound<v, w, source>: Rule((Alias(v, w), Source(w, source)) -> Source(v, source));
+    let operand<o, s, v, w>: Rule((Operand(o, s, v), Source(v, w)) -> Input(o, s, w));
+    let result<r, s, v, w>: Rule((Yield(r, s, v), Source(v, w)) -> Output(r, s, w));
+    Schedule::Saturate(List(direct, bound, operand, result))
+};
+
+let HasTerminator: Relation<Label>;
+let terminators = || -> Schedule {
+    let jump<l, p, i, o, d, a, b>: Rule(Emit(l, p, i, o, "jump", d, a, b) -> HasTerminator(l));
+    let branch<l, p, i, o, d, a, b>: Rule(Emit(l, p, i, o, "branch", d, a, b) -> HasTerminator(l));
+    let ret<l, p, i, o, d, a, b>: Rule(Emit(l, p, i, o, "return", d, a, b) -> HasTerminator(l));
+    Schedule::Once(List(jump, branch, ret))
+};
+let finish = || -> Schedule {
+    let fallthrough<f, l, to>: Rule((ReachBlock(f, l), Flow(l, 0, to), !HasTerminator(l))
+        -> Emit(l, 9223372036854775807, 0, f, "jump", (0 - 1), (0 - 1), (0 - 1)));
+    Schedule::Once(List(fallthrough))
+};
+
+let VisiblePort: Relation<(OperationId, Int, ValueId)>;
+let ReplayTheta: Relation<OperationId>;
+let LexicalParent: Relation<(Int, Int)>;
+let Encloses: Relation<(Int, Int)>;
+let DeclaredIn: Relation<(Int, ValueId, Int)>;
+let FlagIn: Relation<(Int, Int)>;
+let Completed: Relation<(OperationId, Int)>;
+let theta_cache = || -> Schedule {
+    let lexical<r, m, o, s, e, k, home, p, h, l>: Rule((
+        Region(r, m, o, s, e),
+        Operation(o, k, "graph", home, p, h, l)
+    )
+        -> LexicalParent(home, r));
+    let body<d, o, r, p>: Rule(Theta(d, o, r, p) -> Encloses(r, r));
+    let inner<r, t, n>: Rule((Encloses(r, t), LexicalParent(t, n)) -> Encloses(r, n));
+    let port<v, t, r, s, dt>: Rule(Value(v, t, "region", r, s, dt) -> DeclaredIn(r, v, t));
+    let result<v, t, o, s, dt, k, r, p, h, l>: Rule((
+        Value(v, t, "result", o, s, dt),
+        Operation(o, k, "graph", r, p, h, l)
+    )
+        -> DeclaredIn(r, v, t));
+    let flag<o>: Rule(ReplayTheta(o) -> Completed(o, (0 - ((o * 16) + 14))));
+    Schedule::Saturate(List(lexical, body, inner, port, result, flag))
+};
+let theta_code = || -> Schedule {
+    let inner_cache<o, flag, k, r, p, h, l>: Rule((
+        CacheFlag(o, flag),
+        Operation(o, k, "graph", r, p, h, l)
+    )
+        -> FlagIn(r, flag));
+    let inner_theta<o, flag, k, r, p, h, l>: Rule((
+        Completed(o, flag),
+        Operation(o, k, "graph", r, p, h, l)
+    )
+        -> FlagIn(r, flag));
+    let initial_flag<o, d, r, p, inner, bit, home, k, pos, h, l, start>: Rule((
+        ReplayTheta(o),
+        Theta(d, o, r, p),
+        Encloses(r, inner),
+        FlagIn(inner, bit),
+        Operation(o, k, "graph", home, pos, h, l),
+        Activation(start, home)
+    )
+        -> (
+        Code(Label::Start(start), 0, o, "zero", bit, (0 - 1), (0 - 1)),
+        Defines(Label::Start(start), bit)
+    ));
+    let first<o, bit, home, k, p, h, l, start>: Rule((
+        Completed(o, bit),
+        Operation(o, k, "graph", home, p, h, l),
+        Activation(start, home)
+    )
+        -> (
+        Temp(bit, (0 - 1)),
+        Code(Label::Start(start), 0, o, "zero", bit, (0 - 1), (0 - 1)),
+        Defines(Label::Start(start), bit)
+    ));
+    let initial_slots<o, d, r, p, inner, v, t, home, k, pos, h, l, start>: Rule((
+        ReplayTheta(o),
+        Theta(d, o, r, p),
+        Encloses(r, inner),
+        DeclaredIn(inner, v, t),
+        !StateTy(t),
+        Operation(o, k, "graph", home, pos, h, l),
+        Activation(start, home)
+    )
+        -> Code(Label::Start(start), 0, o, "zero", v, (0 - 1), (0 - 1)));
+    let resume<f, d, home, o, r, p, flag>: Rule((
+        Active(f, d, home),
+        Placed(d, o),
+        Theta(d, o, r, p),
+        Completed(o, flag)
+    )
+        -> (
+        Owned(f, Label::Enter(d, o)),
+        Flow(Label::At(d, o), 0, Label::Start(Domain::Exit(d, r))),
+        Flow(Label::At(d, o), 1, Label::Enter(d, o)),
+        Flow(Label::Enter(d, o), 0, Label::Start(Domain::Predicate(d, r))),
+        Code(Label::At(d, o), 0, o, "branch", (0 - 1), flag, (0 - 1)),
+        Reads(Label::At(d, o), flag),
+        Code(Label::Start(Domain::Exit(d, r)), 0, o, "one", flag, (0 - 1), (0 - 1)),
+        Defines(Label::Start(Domain::Exit(d, r)), flag),
+        Selected(o)
+    ));
+    Schedule::Saturate(List(inner_cache, inner_theta, initial_flag, first, initial_slots, resume))
+};
+
+pub let compile = || -> Schedule {
+    Schedule::Seq(List(memory_attrs(),
+        load_attrs(),
+        instruction_kinds(),
+        classify(),
+        aliases(),
+        resolve_ports(),
+        effects(),
+        demand(),
+        placement(),
+        theta_cache(),
+        caching(),
+        theta_cache(),
+        ordering(),
+        layout(),
+        choices(),
+        dispatch(),
+        cached_code(),
+        theta_code(),
+        select(),
+        expand(),
+        overflow(),
+        operands(),
+        bindings(),
+        liveness(),
+        reachable(),
+        terminators(),
+        finish()))
+};
+
+extract rust demand => "@ct";
+extract rust placement => "@ct";
+extract rust ordering => "@ct";
+extract rust layout => "@ct";
+extract rust select => "@ct";
+extract rust operands => "@ct";
+extract rust liveness => "@ct";
+extract rust bindings => "@ct";
+extract rust classify => "@ct";
+extract rust expand => "@ct";
+extract rust memory_attrs => "@ct";
+extract rust load_attrs => "@ct";
+extract rust effects => "@ct";
+extract rust caching => "@ct";
+extract rust cached_code => "@ct";
+extract rust overflow => "@ct";
+extract rust choices => "@ct";
+extract rust dispatch => "@ct";
+extract rust instruction_kinds => "@ct";
+extract rust reachable => "@ct";
+extract rust aliases => "@ct";
+extract rust resolve_ports => "@ct";
+extract rust terminators => "@ct";
+extract rust finish => "@ct";
+extract rust theta_cache => "@ct";
+extract rust theta_code => "@ct";

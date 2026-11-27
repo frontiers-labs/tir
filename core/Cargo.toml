@@ -11,6 +11,9 @@ bench = false
 test = false
 doctest = false
 
+[features]
+interp = []
+
 [dependencies]
 tir-macros.workspace = true
 tir-egglog.workspace = true

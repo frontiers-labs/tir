@@ -1,11 +1,10 @@
-use tir_cdsl::{
-    Error,
-    OutputKind::{OpDef, Program},
-};
+use tir_cdsl::OutputKind::{OpDef, Program};
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tir_cdsl::compile([
         ("core::ir::*", Program("ir_program.rs")),
+        #[cfg(feature = "interp")]
+        ("core::interp::*", Program("interp.rs")),
         ("core::std::ir::interfaces::*", OpDef("interfaces.rs")),
         ("core::dialects::builtin::*", OpDef("builtin.rs")),
         ("core::dialects::fp::*", OpDef("fp.rs")),
@@ -28,5 +27,6 @@ fn main() -> Result<(), Error> {
             Program("control_simplify.rs"),
         ),
         ("core::passes::restructure::*", Program("restructure.rs")),
-    ])
+    ])?;
+    Ok(())
 }
