@@ -1,0 +1,146 @@
+use std::core::*;
+use std::ir::{OperationId, ValueId};
+
+// ── Live IR Fact Tables ──────────────────────────────────────────────────────
+
+pub let Arm: Table<(OperationId, Bool, String), Int, Merge::Unique>;
+pub let Attribute: Table<(String, Int, String), Int, Merge::Unique>;
+pub let Binding: Table<(Int, String, Int), Int, Merge::Unique>;
+pub let Block: Relation<(Int, Int, Int)>;
+pub let Bypass: Relation<(Int, Int, Int)>;
+pub let Control: Relation<(OperationId, Bool, Int, Bool, Int, Int, String)>;
+pub let CyclePath: Relation<(Int, OperationId, OperationId)>;
+pub let DependsOn: Relation<(Int, OperationId, OperationId)>;
+pub let OpSpec: Table<(String, String, Int), Int, Merge::Unique>;
+pub let Operand: Table<(OperationId, Int), ValueId, Merge::Unique>;
+pub let Operation: Relation<{
+    id: OperationId,
+    kind: String,
+    placement: String,
+    container: Int,
+    position: Int,
+    display: Int,
+    location: Int,
+}>;
+pub let ReaderAt: Relation<(OperationId, Int, OperationId)>;
+pub let Region: Relation<(Int, String, OperationId, Int, Int)>;
+pub let Successor: Table<(OperationId, Int), Int, Merge::Unique>;
+pub let SuccessorArgument: Table<(OperationId, Int, Int), Int, Merge::Unique>;
+pub let Symbol: Relation<(Int, String, Int, Int)>;
+pub let TypeCtor: Relation<(Int, String, String, Int, Int)>;
+pub let TypeTerm: Relation<(Int, Int, Int)>;
+pub let Value: Relation<(ValueId, Int, String, Int, Int, Int)>;
+pub let Yield: Table<(Int, Int), ValueId, Merge::Unique>;
+
+// ── Structure Derivation Rules ───────────────────────────────────────────────
+
+let graph<operation, kind, region, position, display, location>: Rule(
+    (Operation(operation, kind, "graph", region, position, display, location)) ->
+    (ReaderAt(operation, region, operation))
+);
+
+let cfg_reader<operation, kind, block, position, display, location, region, layout>: Rule(
+    (
+        Operation(operation, kind, "block", block, position, display, location),
+        Block(block, region, layout),
+    ) ->
+    (ReaderAt(operation, region, operation))
+);
+
+let lift<reader, region, member, mode, parent, region_slot, entry, outer, representative>: Rule(
+    (
+        ReaderAt(reader, region, member),
+        Region(region, mode, parent, region_slot, entry),
+        ReaderAt(parent, outer, representative),
+    ) ->
+    (ReaderAt(reader, outer, representative))
+);
+
+let operand_dep<operation, slot, value, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>: Rule(
+    (
+        Operand(operation, slot, value),
+        Value(value, ty, "result", producer, result_slot, declared),
+        ReaderAt(operation, region, sibling),
+        Operation(producer, kind, "graph", region, position, display, location),
+    ) ->
+    (DependsOn(region, sibling, producer))
+);
+
+let yield_dep<inner, slot, value, mode, operation, region_slot, entry, ty, producer, result_slot, declared, region, sibling, kind, position, display, location>: Rule(
+    (
+        Yield(inner, slot, value),
+        Region(inner, mode, operation, region_slot, entry),
+        Value(value, ty, "result", producer, result_slot, declared),
+        ReaderAt(operation, region, sibling),
+        Operation(producer, kind, "graph", region, position, display, location),
+    ) ->
+    (DependsOn(region, sibling, producer))
+);
+
+// ── Flow Derivation Rules ────────────────────────────────────────────────────
+
+let cycle_start<region, start_op, next_op>: Rule(
+    (DependsOn(region, start_op, next_op), next_op >= start_op) ->
+    (CyclePath(region, start_op, next_op))
+);
+
+let cycle_path<region, start_op, next_op, end_op>: Rule(
+    (CyclePath(region, start_op, next_op), DependsOn(region, next_op, end_op)) ->
+    (CyclePath(region, start_op, end_op))
+);
+
+let avoid_param<operation, kind, use_block, position, display, location, slot, value, ty, definition, result_slot, declared, region, layout, other_layout, mode, owner, region_slot, entry>: Rule(
+    (
+        Operation(operation, kind, "block", use_block, position, display, location),
+        Operand(operation, slot, value),
+        Value(value, ty, "block", definition, result_slot, declared),
+        Block(use_block, region, layout),
+        Block(definition, region, other_layout),
+        Region(region, mode, owner, region_slot, entry),
+        use_block != definition,
+        definition != entry,
+        entry >= 0,
+    ) ->
+    (Bypass(region, definition, entry))
+);
+
+let avoid_result<operation, kind, use_block, position, display, location, slot, value, ty, producer, result_slot, declared, producer_kind, definition, producer_pos, producer_display, producer_location, region, layout, other_layout, mode, owner, region_slot, entry>: Rule(
+    (
+        Operation(operation, kind, "block", use_block, position, display, location),
+        Operand(operation, slot, value),
+        Value(value, ty, "result", producer, result_slot, declared),
+        Operation(producer, producer_kind, "block", definition, producer_pos, producer_display, producer_location),
+        Block(use_block, region, layout),
+        Block(definition, region, other_layout),
+        Region(region, mode, owner, region_slot, entry),
+        use_block != definition,
+        definition != entry,
+        entry >= 0,
+    ) ->
+    (Bypass(region, definition, entry))
+);
+
+let bypass_step<region, definition, current, terminator, kind, position, display, location, layout, slot, target, other_layout>: Rule(
+    (
+        Bypass(region, definition, current),
+        Block(current, region, layout),
+        Operation(terminator, kind, "block", current, position, display, location),
+        Successor(terminator, slot, target),
+        Block(target, region, other_layout),
+        target != definition,
+    ) ->
+    (Bypass(region, definition, target))
+);
+
+// ── Schedules ────────────────────────────────────────────────────────────────
+
+let structure_rules: List<Rule> = List(graph, cfg_reader, lift, operand_dep, yield_dep);
+let flow_rules: List<Rule> = List(cycle_start, cycle_path, avoid_param, avoid_result, bypass_step);
+extract rust structure_rules => "@ct";
+extract rust flow_rules => "@ct";
+
+pub let derive_structure = || -> Schedule { Schedule::Saturate(structure_rules) };
+pub let derive_flow = || -> Schedule { Schedule::Saturate(flow_rules) };
+pub let index = || -> Schedule {
+    Schedule::Seq(List(Schedule::Saturate(structure_rules), Schedule::Saturate(flow_rules)))
+};

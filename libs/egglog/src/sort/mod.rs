@@ -184,6 +184,7 @@ pub fn literal_sort(literal: &Literal) -> ArcSort {
         Literal::Int(_) => I64Sort.to_arcsort(),
         Literal::Float(_) => F64Sort.to_arcsort(),
         Literal::String(_) => StringSort.to_arcsort(),
+        Literal::Native(_) => NativeIdentitySort.to_arcsort(),
         Literal::Bool(_) => BoolSort.to_arcsort(),
         Literal::Unit => UnitSort.to_arcsort(),
         Literal::Arg(_) => unreachable!("a run argument has no sort of its own"),
@@ -264,6 +265,23 @@ base_sort!(StringSort, "String", String, register_string, |x| {
 });
 base_sort!(UnitSort, "Unit", (), register_unit, |_x| Literal::Unit);
 
+base_sort!(
+    NativeIdentitySort,
+    "NativeIdentity",
+    crate::NativeIdentity,
+    register_unit,
+    |id| Literal::Native(id)
+);
+
+pub(crate) fn register_native_identity(db: &mut Database) {
+    let kind = db.sort("NativeIdentity").expect("native identity sort");
+    let int = db.sort("i64").expect("integer sort");
+    let unit = db.sort("Unit").expect("unit sort");
+    prim!(db, "native-ports", [kind, int, int] -> unit, |id: crate::NativeIdentity, inputs: i64, outputs: i64| {
+        (id.ports() == Some((usize::try_from(inputs).ok()?, usize::try_from(outputs).ok()?))).then_some(())
+    });
+}
+
 fn register_unit(_db: &mut Database) {}
 
 #[rustfmt::skip]
@@ -286,14 +304,16 @@ fn register_i64(db: &mut Database) {
     prim!(db, ">", [i, i] -> u, |a: i64, b: i64| (a > b).then_some(()));
     prim!(db, "<=", [i, i] -> u, |a: i64, b: i64| (a <= b).then_some(()));
     prim!(db, ">=", [i, i] -> u, |a: i64, b: i64| (a >= b).then_some(()));
-    prim!(db, "bool-=", [i, i] -> b, |x: i64, y: i64| Some(x == y));
-    prim!(db, "bool-<", [i, i] -> b, |x: i64, y: i64| Some(x < y));
+    prim!(db, "equal", [i, i] -> b, |x: i64, y: i64| Some(x == y));
+    prim!(db, "less", [i, i] -> b, |x: i64, y: i64| Some(x < y));
     prim!(db, "bool->", [i, i] -> b, |x: i64, y: i64| Some(x > y));
     prim!(db, "bool-<=", [i, i] -> b, |x: i64, y: i64| Some(x <= y));
     prim!(db, "bool->=", [i, i] -> b, |x: i64, y: i64| Some(x >= y));
     prim!(db, "min", [i, i] -> i, |a: i64, b: i64| Some(a.min(b)));
     prim!(db, "max", [i, i] -> i, |a: i64, b: i64| Some(a.max(b)));
     prim!(db, "to-string", [i] -> s, |a: i64| Some(a.to_string()));
+    prim!(db, "parse-hex-i64", [s] -> i, |text: String| i64::from_str_radix(&text, 16).ok());
+    prim!(db, "hex-power-of-two", [s] -> b, |text: String| u64::from_str_radix(&text, 16).ok().map(u64::is_power_of_two));
     prim!(db, "count-matches", [s, s] -> i, |a: String, b: String| i64::try_from(a.matches(&b).count()).ok());
 }
 

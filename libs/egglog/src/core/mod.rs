@@ -5,10 +5,13 @@ mod database;
 mod group;
 mod index;
 mod keymap;
+mod local;
+mod native;
 mod rebuild;
 mod schema;
 mod table;
 mod uf;
+mod unique;
 mod value;
 
 pub use base::{BaseValue, BaseValues, F64};
@@ -16,9 +19,12 @@ pub use color::Color;
 pub(crate) use color::{Colors, check_pure};
 pub use containers::{ContainerValue, ContainerValues};
 pub(crate) use database::View;
-pub use database::{Database, PrimCtx, PrimFn, Row, Rows};
+pub use database::{Database, DatabaseId, PrimCtx, PrimFn, Row, Rows};
 pub(crate) use group::{GroupRow, GroupView, group_at};
 pub(crate) use keymap::{EMPTY, RowTable, l2, same_key};
+pub(crate) use local::LocalTables;
+pub use local::{CapturedTable, LocalTable};
+pub use native::{NativeDeclaration, NativeIdentity};
 pub(crate) use rebuild::Delta;
 pub(crate) use schema::close_group;
 pub use schema::{

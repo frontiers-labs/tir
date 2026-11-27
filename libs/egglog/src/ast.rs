@@ -27,6 +27,7 @@ pub enum Literal {
     Int(i64),
     Float(F64),
     String(String),
+    Native(crate::NativeIdentity),
     Bool(bool),
     Unit,
     /// The `n`th argument of the run, of the sort its uses give it. See
@@ -299,6 +300,7 @@ impl Display for Literal {
             }
             Self::Unit => f.write_str("()"),
             Self::Arg(n) => write!(f, "${n}"),
+            Self::Native(identity) => write!(f, "{}", identity.as_str()),
         }
     }
 }

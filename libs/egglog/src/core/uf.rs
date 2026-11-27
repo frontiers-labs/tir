@@ -1,3 +1,10 @@
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
+use tir_adt::FxBuildHasher;
+
+pub(crate) type ClassRoots = HashMap<u32, u32, FxBuildHasher>;
+
 // One union-find over the ids of every Eq sort and container. The younger of
 // two roots joins the older and paths are never compressed, so `parents` is
 // the map `select_moved` reads: a cell has moved exactly when its parent is
@@ -7,6 +14,8 @@ pub(crate) struct UnionFind {
     parents: Vec<u32>,
     // The ids that joined another root since the last `take_moved`.
     moved: Vec<u32>,
+    revision: u64,
+    captured: OnceLock<Arc<ClassRoots>>,
 }
 
 impl UnionFind {
@@ -30,6 +39,7 @@ impl UnionFind {
         );
         self.parents.truncate(len as usize);
         self.moved.retain(|&id| id < len);
+        self.captured.take();
     }
 
     pub(crate) fn contains(&self, x: u32) -> bool {
@@ -59,12 +69,34 @@ impl UnionFind {
         if younger != older {
             self.parents[younger as usize] = older;
             self.moved.push(younger);
+            self.revision += 1;
+            self.captured.take();
         }
         older
     }
 
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub(crate) fn parents(&self) -> &[u32] {
         &self.parents
+    }
+
+    // Captures share the non-root entries until the next union. Fresh roots
+    // are implicit in the map, so allocating an id never invalidates it.
+    pub(crate) fn capture(&self) -> Arc<ClassRoots> {
+        Arc::clone(self.captured.get_or_init(|| {
+            let mut roots = ClassRoots::default();
+            if self.revision != 0 {
+                for (id, &parent) in (0..).zip(&self.parents) {
+                    if id != parent {
+                        roots.insert(id, roots.get(&parent).copied().unwrap_or(parent));
+                    }
+                }
+            }
+            Arc::new(roots)
+        }))
     }
 
     pub(crate) fn unions(&self) -> usize {

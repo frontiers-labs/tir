@@ -11,7 +11,9 @@ use tir_adt::FxBuildHasher;
 
 use super::code::{Action, ActionRef, Bind, Binds, Node, NodeRef, Reg, Slice, Step, StepRef};
 use crate::ast::Literal;
-use crate::{Database, ExternId, F64, Merge, Shape, SortId, SortKind, TableId, TableKind, Value};
+use crate::{
+    Database, ExternId, F64, LocalTable, Merge, Shape, SortId, SortKind, TableId, TableKind, Value,
+};
 
 const MAGIC: [u8; 4] = *b"TEGG";
 const VERSION: u32 = 15;
@@ -283,6 +285,7 @@ impl Writer {
                 self.word(u32::from(*b));
             }
             Literal::Unit => self.word(4u32),
+            Literal::Native(_) => unreachable!("native declarations serialize as imports"),
             Literal::Arg(n) => {
                 self.word(5u32);
                 self.word(*n);
@@ -958,7 +961,9 @@ fn check(
     rules: &[Vec<u32>],
 ) -> Load<Vec<u8>> {
     let mut required = vec![0; file.externs.len()];
+    let mut table_names = std::collections::BTreeSet::new();
     for table in &file.tables {
+        ensure(table_names.insert(&table.name), "duplicate table name")?;
         let len = table.columns.len();
         let keys_ok = match table.kind {
             TableKind::Relation => {
@@ -1286,7 +1291,58 @@ fn walk(
 // Maps the sorts, tables and primitives of `file` to `db` by name, and
 // declares the Eq sorts and tables `db` lacks. Returns the ids of the
 // tables and primitives.
-pub(crate) fn bind(file: &ProgramFile, db: &mut Database) -> Load<(Vec<TableId>, Vec<ExternId>)> {
+pub(super) struct Bindings {
+    pub(super) tables: Vec<TableId>,
+    pub(super) externs: Vec<ExternId>,
+    pub(super) locals: Vec<LocalTable>,
+    pub(super) inputs: Vec<LocalTable>,
+}
+
+enum TableBinding<'a> {
+    Input(&'a LocalTable),
+    Existing(TableId),
+    Named,
+    Local(usize),
+}
+
+pub(super) fn bind(
+    file: &ProgramFile,
+    db: &mut Database,
+    locals: &[&str],
+    inputs: &[(&str, &LocalTable)],
+) -> Load<Bindings> {
+    let mismatch = |name: &str| LoadError::TableMismatch {
+        name: name.to_owned(),
+    };
+    let mut overrides = HashMap::<&str, TableBinding, FxBuildHasher>::default();
+    for (i, &name) in locals.iter().enumerate() {
+        if overrides.insert(name, TableBinding::Local(i)).is_some() {
+            return Err(mismatch(name));
+        }
+    }
+    for &(name, table) in inputs {
+        if overrides.insert(name, TableBinding::Input(table)).is_some() {
+            return Err(mismatch(name));
+        }
+    }
+    let bindings: Vec<TableBinding> = file
+        .tables
+        .iter()
+        .map(|decl| {
+            overrides.remove(decl.name.as_str()).unwrap_or_else(|| {
+                db.schema()
+                    .table_named(&decl.name)
+                    .map_or(TableBinding::Named, TableBinding::Existing)
+            })
+        })
+        .collect();
+    if let Some(name) = overrides
+        .iter()
+        .filter_map(|(&name, binding)| matches!(binding, TableBinding::Local(_)).then_some(name))
+        .min()
+    {
+        return Err(mismatch(name));
+    }
     let mut sorts: Vec<SortId> = Vec::new();
     for decl in &file.sorts {
         let class = |kind: SortKind| match kind {
@@ -1327,27 +1383,71 @@ pub(crate) fn bind(file: &ProgramFile, db: &mut Database) -> Load<(Vec<TableId>,
         };
         externs.push(found);
     }
-    // A table the database lacks gets the next id, in file order.
-    let mut next = db.schema().tables().count();
-    let tables: Vec<TableId> = (file.tables.iter())
-        .map(|decl| {
-            db.schema().table_named(&decl.name).unwrap_or_else(|| {
-                next += 1;
-                TableId::new(next - 1)
+    // Resolve all table IDs before remapping merge expressions, which may refer
+    // to a later declaration.
+    let mut vacant = db.locals.vacant_tables.iter().rev().copied();
+    let mut next = db.tables.len();
+    let mut next_id = || {
+        next += 1;
+        TableId::new(next - 1)
+    };
+    let mut local_ids = vec![TableId::new(0); locals.len()];
+    let tables: Vec<TableId> = bindings
+        .iter()
+        .zip(&file.tables)
+        .map(|(binding, decl)| {
+            Ok(match *binding {
+                TableBinding::Input(table) => table.id(db).map_err(|_| mismatch(&decl.name))?,
+                TableBinding::Existing(id) => id,
+                TableBinding::Named => next_id(),
+                TableBinding::Local(at) => {
+                    let id = vacant.next().unwrap_or_else(&mut next_id);
+                    local_ids[at] = id;
+                    id
+                }
             })
         })
-        .collect();
-    for decl in &file.tables {
+        .collect::<Load<_>>()?;
+    let is_local = |at: usize| {
+        matches!(
+            bindings[at],
+            TableBinding::Input(_) | TableBinding::Local(_)
+        )
+    };
+    for decl in &file.groups {
+        if std::iter::once(decl.keyed)
+            .chain(decl.members.iter().copied())
+            .any(|t| is_local(t as usize))
+        {
+            return Err(mismatch(&file.tables[decl.keyed as usize].name));
+        }
+    }
+    let mut install = Vec::new();
+    let mut dependencies = vec![Vec::new(); locals.len()];
+    for (i, decl) in file.tables.iter().enumerate() {
         let columns: Vec<SortId> = decl.columns.iter().map(sort).collect();
+        let mut references_local = Vec::new();
         let merge = decl.merge.as_ref().map(|merge| {
-            let mut table = |t: TableId| tables[t.index()];
+            let mut table = |t: TableId| {
+                let id = tables[t.index()];
+                if is_local(t.index()) && id != tables[i] {
+                    references_local.push(id);
+                }
+                id
+            };
             let mut prim = |p: ExternId| externs[p.index()];
             let mut konst = |c: Value| consts[c.raw() as usize];
             map_merge(merge, &mut table, &mut prim, &mut konst)
         });
         let default = decl.default.map(|c| consts[c as usize]);
-        if let Some(id) = db.schema().table_named(&decl.name) {
-            let have = db.schema().table(id);
+        if !is_local(i) && !references_local.is_empty() {
+            return Err(mismatch(&decl.name));
+        }
+        if matches!(
+            bindings[i],
+            TableBinding::Existing(_) | TableBinding::Input(_)
+        ) {
+            let have = db.schema().table(tables[i]);
             let same = have.kind() == decl.kind
                 && have.columns() == columns
                 && have.key_arity() == decl.keys
@@ -1359,24 +1459,30 @@ pub(crate) fn bind(file: &ProgramFile, db: &mut Database) -> Load<(Vec<TableId>,
             }
             continue;
         }
-        let (keys, out) = (&columns[..decl.keys], columns.get(decl.keys).copied());
-        let id = match (decl.kind, out, merge) {
-            (TableKind::Function, Some(out), Some(merge)) => {
-                db.add_function(&decl.name, keys, out, merge)
-            }
-            (TableKind::Constructor, Some(out), _) => db.add_constructor(&decl.name, keys, out),
-            _ => db.add_relation(&decl.name, keys),
-        };
-        db.set_shapes(id, &decl.shapes)
-            .expect("a checked table has a shape per column");
-        if let Some(cost) = decl.cost {
-            db.set_cost(id, cost);
+        if let TableBinding::Local(at) = bindings[i] {
+            dependencies[at] = references_local;
         }
-        db.set_unextractable(id, decl.unextractable);
-        if let Some(default) = default {
-            db.set_default(id, default);
+        let mut schema = db.table_schema(&decl.name, decl.kind, columns, decl.keys, merge);
+        schema.shapes = decl.shapes.clone();
+        schema.cost = decl.cost;
+        schema.unextractable = decl.unextractable;
+        schema.default = default;
+        install.push((tables[i], schema, is_local(i)));
+    }
+    for (id, schema, local) in install {
+        if local {
+            db.install_local(id, schema);
+        } else {
+            let previous = db.table_names.insert(schema.name.clone(), id);
+            debug_assert!(previous.is_none());
+            db.tables.push(crate::core::Table::new(schema));
         }
     }
+    let locals = local_ids
+        .into_iter()
+        .zip(dependencies)
+        .map(|(id, dependencies)| db.lease_local_table(id, dependencies))
+        .collect();
     for decl in &file.groups {
         let keyed = tables[decl.keyed as usize];
         let members: Vec<TableId> = decl.members.iter().map(|&t| tables[t as usize]).collect();
@@ -1400,5 +1506,17 @@ pub(crate) fn bind(file: &ProgramFile, db: &mut Database) -> Load<(Vec<TableId>,
                 .map_err(|_| mismatch())?;
         }
     }
-    Ok((tables, externs))
+    let inputs = bindings
+        .into_iter()
+        .filter_map(|binding| match binding {
+            TableBinding::Input(table) => Some(table.clone()),
+            _ => None,
+        })
+        .collect();
+    Ok(Bindings {
+        tables,
+        externs,
+        locals,
+        inputs,
+    })
 }

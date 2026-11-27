@@ -364,12 +364,20 @@ fn register_bigint(db: &mut Database) {
     prim!(db, "*", [z, z] -> z, |a: BigInt, c: BigInt| Some(a.mul(&c)));
     prim!(db, "/", [z, z] -> z, |a: BigInt, c: BigInt| a.div(&c));
     prim!(db, "%", [z, z] -> z, |a: BigInt, c: BigInt| a.rem(&c));
-    prim!(db, "&", [z, z] -> z, |a: BigInt, c: BigInt| Some(a.apply(&c, 0, APInt::and)));
-    prim!(db, "|", [z, z] -> z, |a: BigInt, c: BigInt| Some(a.apply(&c, 0, APInt::or)));
+    for name in ["&", "bit_and"] {
+        prim!(db, name, [z, z] -> z, |a: BigInt, c: BigInt| Some(a.apply(&c, 0, APInt::and)));
+    }
+    for name in ["|", "bit_or"] {
+        prim!(db, name, [z, z] -> z, |a: BigInt, c: BigInt| Some(a.apply(&c, 0, APInt::or)));
+    }
     prim!(db, "^", [z, z] -> z, |a: BigInt, c: BigInt| Some(a.apply(&c, 0, APInt::xor)));
-    prim!(db, "<<", [z, i] -> z, |a: BigInt, n: i64| a.shift(n, true));
+    for name in ["<<", "shl"] {
+        prim!(db, name, [z, i] -> z, |a: BigInt, n: i64| a.shift(n, true));
+    }
     prim!(db, ">>", [z, i] -> z, |a: BigInt, n: i64| a.shift(n, false));
-    prim!(db, "not-Z", [z] -> z, |a: BigInt| Some(BigInt::minimal(a.0.not())));
+    for name in ["not-Z", "bit_not"] {
+        prim!(db, name, [z] -> z, |a: BigInt| Some(BigInt::minimal(a.0.not())));
+    }
     prim!(db, "bits", [z] -> z, |a: BigInt| {
         let magnitude = a.abs().0;
         i64::try_from(magnitude.width() - magnitude.count_leading_zeros()).ok().map(BigInt::new)
@@ -378,15 +386,24 @@ fn register_bigint(db: &mut Database) {
     prim!(db, ">", [z, z] -> u, |a: BigInt, c: BigInt| (a > c).then_some(()));
     prim!(db, "<=", [z, z] -> u, |a: BigInt, c: BigInt| (a <= c).then_some(()));
     prim!(db, ">=", [z, z] -> u, |a: BigInt, c: BigInt| (a >= c).then_some(()));
-    prim!(db, "bool-=", [z, z] -> b, |a: BigInt, c: BigInt| Some(a == c));
+    prim!(db, "equal", [z, z] -> b, |a: BigInt, c: BigInt| Some(a == c));
     prim!(db, "bool-<", [z, z] -> b, |a: BigInt, c: BigInt| Some(a < c));
     prim!(db, "bool->", [z, z] -> b, |a: BigInt, c: BigInt| Some(a > c));
-    prim!(db, "bool-<=", [z, z] -> b, |a: BigInt, c: BigInt| Some(a <= c));
-    prim!(db, "bool->=", [z, z] -> b, |a: BigInt, c: BigInt| Some(a >= c));
+    prim!(db, "le", [z, z] -> b, |a: BigInt, c: BigInt| Some(a <= c));
+    prim!(db, "ge", [z, z] -> b, |a: BigInt, c: BigInt| Some(a >= c));
     prim!(db, "min", [z, z] -> z, |a: BigInt, c: BigInt| Some(a.min(c)));
     prim!(db, "max", [z, z] -> z, |a: BigInt, c: BigInt| Some(a.max(c)));
-    prim!(db, "to-string", [z] -> s, |a: BigInt| Some(a.to_string()));
-    prim!(db, "from-string", [s] -> z, |a: String| a.parse::<BigInt>().ok());
+    for name in ["to-string", "to_string"] {
+        prim!(db, name, [z] -> s, |a: BigInt| Some(a.to_string()));
+    }
+    for name in ["from-string", "from_string"] {
+        prim!(db, name, [s] -> z, |a: String| a.parse::<BigInt>().ok());
+    }
+    prim!(db, "fits-unsigned-hex", [s, z] -> b, |digits: String, width: BigInt| {
+        let n = u64::from_str_radix(&digits, 16).ok()?;
+        let required = BigInt::new(i64::from(u64::BITS - n.leading_zeros()));
+        Some(required <= width)
+    });
 }
 
 #[rustfmt::skip]

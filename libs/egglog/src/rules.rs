@@ -1,5 +1,7 @@
 //! Typed rules grouped in rulesets, and their compilation into a [`Program`].
 
+use std::collections::BTreeSet;
+
 use crate::ast::{
     Action, Actions, Command, Expr, Fact, Facts, Literal, Rewrite, Rule, RuleEvalMode, RunConfig,
     Schedule,
@@ -45,9 +47,99 @@ pub struct Rules {
     rulesets: Vec<Ruleset>,
 }
 
+/// The table footprint of a checked materialization phase.
+pub struct TableFootprint {
+    pub reads: BTreeSet<TableId>,
+    pub writes: BTreeSet<TableId>,
+}
+
+/// A checked, reusable selection of rules emitted by the CDSL compiler.
+#[derive(Clone, Copy)]
+pub struct RuleCollection {
+    code: &'static [u8],
+    ruleset: &'static str,
+    install: fn(&mut Database) -> Result<(), crate::LoadError>,
+}
+
+impl RuleCollection {
+    /// Package a compiler-generated ruleset with its schema bindings.
+    pub const fn from_static(
+        code: &'static [u8],
+        ruleset: &'static str,
+        install: fn(&mut Database) -> Result<(), crate::LoadError>,
+    ) -> Self {
+        Self {
+            code,
+            ruleset,
+            install,
+        }
+    }
+
+    /// Bind the checked rules to a database for a fresh invocation.
+    pub fn load(&self, db: &mut Database) -> Result<(Program, &'static str), crate::LoadError> {
+        (self.install)(db)?;
+        Ok((Program::from_static(self.code, db)?, self.ruleset))
+    }
+}
+
 impl Rules {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Derive the reads and writes allowed in a table materialization phase.
+    pub fn materialization_footprints<'a>(
+        &self,
+        db: &Database,
+        schedules: impl IntoIterator<Item = &'a Schedule>,
+    ) -> Result<Vec<TableFootprint>, Error> {
+        let mut footprints = Vec::new();
+        for schedule in schedules {
+            let mut reads = BTreeSet::new();
+            let mut writes = BTreeSet::new();
+            let schema = db.schema();
+            let ordinary = |table| schema.table(table).kind() != TableKind::Constructor;
+            let pure = |id| {
+                schema
+                    .primitive_contexts(id)
+                    .contains(&crate::Context::Pure)
+            };
+            for rule in self.schedule_rules(schedule) {
+                let tables = |atom: &hir::Atom| match atom.target {
+                    Target::Table(table) => Some(table),
+                    Target::Prim(_) => None,
+                };
+                reads.extend(rule.premise.iter().chain(&rule.absent).filter_map(tables));
+                for action in &rule.actions {
+                    match action {
+                        hir::Act::Insert(table, _)
+                            if ordinary(*table)
+                                && schema.table(*table).merge() != Some(&crate::Merge::Union) =>
+                        {
+                            writes.insert(*table);
+                        }
+                        hir::Act::Lookup(table, _)
+                            if ordinary(*table)
+                                && schema.table(*table).default_value().is_none() =>
+                        {
+                            reads.insert(*table);
+                        }
+                        hir::Act::Prim(id, _) if pure(*id) => {}
+                        _ => return Err(Error::Unsupported("invalid analysis action".into())),
+                    }
+                }
+            }
+            if writes
+                .intersection(&reads)
+                .any(|&id| matches!(schema.table(id).merge(), Some(crate::Merge::Prim(..))))
+            {
+                return Err(Error::Unsupported(
+                    "analysis reads its own unfinished aggregate".into(),
+                ));
+            }
+            footprints.push(TableFootprint { reads, writes });
+        }
+        Ok(footprints)
     }
 
     /// Declares an empty ruleset; adding a rule declares its ruleset too.
@@ -228,11 +320,34 @@ impl Rules {
 
     /// Plans every ruleset from the schema of `db`.
     pub fn compile(&self, db: &Database) -> Result<Program, Error> {
-        self.compile_with(db, |_, _| None, false)
+        self.compile_with(db, |_, _| None, |_| false)
+    }
+
+    /// Encodes all schema declarations without activating any rules.
+    /// Loading the resulting bytes binds existing tables and installs missing ones.
+    pub fn compile_schema(db: &Database) -> Result<Program, Error> {
+        Self::new().compile_with_schema(db)
+    }
+
+    /// Retain additional checked table declarations in the compiled file.
+    pub fn compile_with_tables(
+        &self,
+        db: &Database,
+        tables: &BTreeSet<TableId>,
+    ) -> Result<Program, Error> {
+        self.compile_with(db, |_, _| None, |table| tables.contains(&table))
+    }
+
+    /// Encode the persistent schema, omitting the caller's local templates.
+    pub fn compile_schema_without(
+        db: &Database,
+        local: &BTreeSet<TableId>,
+    ) -> Result<Program, Error> {
+        Self::new().compile_with(db, |_, _| None, |table| !local.contains(&table))
     }
 
     pub(crate) fn compile_with_schema(&self, db: &Database) -> Result<Program, Error> {
-        self.compile_with(db, |_, _| None, true)
+        self.compile_with(db, |_, _| None, |_| true)
     }
 
     /// Plans every ruleset like [`Rules::compile`], keeping what `previous`
@@ -245,7 +360,7 @@ impl Rules {
         self.compile_with(
             db,
             |ruleset, rule| previous.last_run_of(ruleset, rule),
-            false,
+            |_| false,
         )
     }
 
@@ -255,7 +370,7 @@ impl Rules {
         &self,
         db: &Database,
         last: impl Fn(&str, &str) -> Option<u32>,
-        keep_schema: bool,
+        keep_table: impl Fn(TableId) -> bool,
     ) -> Result<Program, Error> {
         let (mut sources, mut last_run) = (Vec::new(), Vec::new());
         for ruleset in &self.rulesets {
@@ -288,7 +403,7 @@ impl Rules {
                 last_run.push(time);
             }
         }
-        let (file, tables, externs) = plan::compile(&sources, db.schema(), keep_schema)?;
+        let (file, tables, externs) = plan::compile(&sources, db.schema(), keep_table)?;
         Ok(Program::new(&file, tables, externs, last_run, db))
     }
 
@@ -339,6 +454,78 @@ impl Rules {
             }
         }
         Ok(())
+    }
+
+    /// Retain the rulesets needed by the supplied schedules and rule collections.
+    pub fn select(&self, schedules: &[Schedule], collections: &[&str]) -> Self {
+        let mut names = BTreeSet::new();
+        let mut push = |name: &str| {
+            let mut pending = vec![name];
+            while let Some(name) = pending.pop() {
+                if let Some(ruleset) = self.rulesets.iter().find(|ruleset| ruleset.name == name)
+                    && names.insert(ruleset.name.as_str())
+                {
+                    pending.extend(ruleset.members.iter().map(String::as_str));
+                }
+            }
+        };
+        let mut pending = schedules.iter().collect::<Vec<_>>();
+        while let Some(schedule) = pending.pop() {
+            match schedule {
+                Schedule::Run(_, config) => {
+                    push(&config.ruleset);
+                    if let Some(facts) = &config.until {
+                        push(&until_name(facts));
+                    }
+                }
+                Schedule::Repeat(_, _, child) | Schedule::Saturate(_, child) => pending.push(child),
+                Schedule::Sequence(_, children) => pending.extend(children),
+            }
+        }
+        for name in collections {
+            push(name);
+        }
+        Self {
+            rulesets: self
+                .rulesets
+                .iter()
+                .filter(|set| names.contains(set.name.as_str()))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Whether a schedule reads or changes any of these tables.
+    pub fn touches_tables(&self, schedule: &Schedule, tables: &BTreeSet<TableId>) -> bool {
+        self.schedule_rules(schedule).into_iter().any(|rule| {
+            rule.premise
+                .iter()
+                .chain(&rule.absent)
+                .any(|atom| matches!(atom.target, Target::Table(table) if tables.contains(&table)))
+                || rule.actions.iter().any(|action| match action {
+                    hir::Act::Insert(table, _)
+                    | hir::Act::Lookup(table, _)
+                    | hir::Act::Delete(table, _)
+                    | hir::Act::Subsume(table, _) => tables.contains(table),
+                    hir::Act::FindOrMake(group, _) => {
+                        group.iter().any(|table| tables.contains(table))
+                    }
+                    _ => false,
+                })
+        })
+    }
+
+    fn schedule_rules(&self, schedule: &Schedule) -> Vec<&hir::Rule> {
+        match schedule {
+            Schedule::Run(_, config) => self.typed_rules_of(&config.ruleset),
+            Schedule::Repeat(_, _, child) | Schedule::Saturate(_, child) => {
+                self.schedule_rules(child)
+            }
+            Schedule::Sequence(_, children) => children
+                .iter()
+                .flat_map(|child| self.schedule_rules(child))
+                .collect(),
+        }
     }
 
     // The typed rules a run of `name` runs, combined members included.
@@ -454,6 +641,40 @@ fn rewrite(lhs: Expr, rhs: Expr) -> Rewrite {
 }
 
 impl Schedule {
+    pub(crate) fn execute(
+        &self,
+        run: &mut impl FnMut(&Schedule, &RunConfig) -> Result<crate::RunReport, Error>,
+    ) -> Result<crate::RunReport, Error> {
+        let mut report = crate::RunReport::default();
+        match self {
+            Self::Run(_, config) => return run(self, config),
+            Self::Repeat(_, times, schedule) => {
+                for _ in 0..*times {
+                    let iteration = schedule.execute(run)?;
+                    let stop = iteration.can_stop;
+                    report.union(iteration);
+                    if stop {
+                        break;
+                    }
+                }
+            }
+            Self::Saturate(_, schedule) => loop {
+                let iteration = schedule.execute(run)?;
+                let updated = iteration.updated;
+                report.union(iteration);
+                if !updated {
+                    break;
+                }
+            },
+            Self::Sequence(_, schedules) => {
+                for schedule in schedules {
+                    report.union(schedule.execute(run)?);
+                }
+            }
+        }
+        Ok(report)
+    }
+
     /// One iteration of a ruleset.
     pub fn run(ruleset: &str) -> Self {
         let config = RunConfig {

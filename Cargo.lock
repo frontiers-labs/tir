@@ -1988,8 +1988,8 @@ dependencies = [
  "smallvec",
  "tir-adt",
  "tir-bench",
+ "tir-cdsl",
  "tir-egglog",
- "tir-ir-schema",
  "tir-macros",
  "tir-pdl",
  "tir-symbolic",
@@ -2064,6 +2064,7 @@ dependencies = [
  "clap",
  "tir",
  "tir-arm64",
+ "tir-cdsl",
  "tir-egglog",
  "tir-gpu",
  "tir-llvm",
@@ -2086,7 +2087,6 @@ dependencies = [
 name = "tir-egglog"
 version = "0.1.0"
 dependencies = [
- "chumsky",
  "criterion",
  "fearless_simd",
  "tir-adt",
@@ -2113,13 +2113,6 @@ dependencies = [
  "tir",
  "tir-symbolic",
  "tmdl",
-]
-
-[[package]]
-name = "tir-ir-schema"
-version = "0.1.0"
-dependencies = [
- "tir-egglog",
 ]
 
 [[package]]
@@ -2215,8 +2208,8 @@ dependencies = [
  "chumsky",
  "smallvec",
  "tir-adt",
+ "tir-cdsl",
  "tir-egglog",
- "tir-ir-schema",
 ]
 
 [[package]]

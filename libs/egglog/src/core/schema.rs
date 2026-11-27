@@ -118,6 +118,7 @@ pub struct TableSchema {
     pub(crate) merge: Option<Merge>,
     // The columns that hold union-find ids, which a rebuild canonicalizes.
     pub(crate) ids: Vec<usize>,
+    pub(crate) native: Vec<usize>,
     pub(crate) symmetries: Vec<Vec<usize>>,
     pub(crate) cost: Option<u64>,
     pub(crate) unextractable: bool,
@@ -234,7 +235,9 @@ impl<'a> Schema<'a> {
 
     pub fn tables(self) -> impl Iterator<Item = (TableId, &'a TableSchema)> {
         let tables = self.db.tables.iter().enumerate();
-        tables.map(|(i, table)| (TableId::new(i), &table.schema))
+        tables
+            .map(|(i, table)| (TableId::new(i), &table.schema))
+            .filter(move |&(id, _)| !self.db.locals.contains(id))
     }
 
     /// The name and signature of a primitive.
@@ -268,6 +271,11 @@ pub enum Error {
         old: Value,
         new: Value,
     },
+    /// Two different relation rows have the same secondary key.
+    DuplicateKey {
+        table: String,
+        columns: Vec<usize>,
+    },
     /// No sort or table has this name.
     UnknownName(String),
     /// A row or key has the wrong number of columns.
@@ -282,6 +290,10 @@ pub enum Error {
         column: usize,
         value: Value,
     },
+    /// A typed e-class handle belongs to a different database.
+    ForeignClass,
+    /// A local table handle belongs to a different database.
+    ForeignLocalTable,
     /// `set_shapes` got the wrong number of shapes.
     Shape {
         table: String,
@@ -301,10 +313,6 @@ pub enum Error {
     Panic(String),
     /// The operation needs what this API does not offer.
     Unsupported(String),
-    /// Text did not parse as a program.
-    Parse(String),
-    /// Text ended inside a command.
-    Unfinished(Span),
     /// A misuse of a table that the Rust API caught at run time.
     ApiError(ApiError),
     /// A `check` found no match of these facts.
@@ -334,6 +342,9 @@ impl fmt::Display for Error {
             Self::Conflict { table, old, new } => {
                 write!(f, "merge of `{table}` rejects {old:?} and {new:?}")
             }
+            Self::DuplicateKey { table, columns } => {
+                write!(f, "duplicate key on columns {columns:?} of `{table}`")
+            }
             Self::UnknownName(name) => write!(f, "no sort or table named `{name}`"),
             Self::Arity {
                 table,
@@ -349,6 +360,8 @@ impl fmt::Display for Error {
             } => {
                 write!(f, "column {column} of `{table}` holds ids, got {value:?}")
             }
+            Self::ForeignLocalTable => write!(f, "local table belongs to a different database"),
+            Self::ForeignClass => write!(f, "e-class belongs to a different database"),
             Self::Shape {
                 table,
                 expected,
@@ -361,8 +374,6 @@ impl fmt::Display for Error {
             Self::Desugar(span, message) => write!(f, "{span}: {message}"),
             Self::Panic(message) => write!(f, "panic: {message}"),
             Self::Unsupported(message) => write!(f, "unsupported: {message}"),
-            Self::Parse(message) => write!(f, "parse error: {message}"),
-            Self::Unfinished(span) => write!(f, "{span}: the text ends inside a command"),
             Self::ApiError(error) => error.fmt(f),
             Self::CheckError(facts, span) => {
                 write!(f, "{span}: check failed:")?;

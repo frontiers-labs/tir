@@ -124,7 +124,16 @@ macro_rules! impl_value_for_base {
     )+};
 }
 
-impl_value_for_base!(i64, bool, (), F64, String, BigInt, BigRat);
+impl_value_for_base!(
+    i64,
+    bool,
+    (),
+    F64,
+    String,
+    BigInt,
+    BigRat,
+    crate::NativeIdentity
+);
 
 impl IntoValue for &str {
     fn into_value(self, bv: &BaseValues) -> Value {

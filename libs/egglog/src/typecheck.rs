@@ -140,6 +140,7 @@ impl Typer<'_> {
             Literal::Int(_) => Some("i64"),
             Literal::Float(_) => Some("f64"),
             Literal::String(_) => Some("String"),
+            Literal::Native(_) => Some("NativeIdentity"),
             Literal::Bool(_) => Some("bool"),
             Literal::Unit => Some("Unit"),
             Literal::Arg(_) => None,

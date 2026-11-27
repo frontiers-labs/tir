@@ -14,18 +14,17 @@ Run from the TIR repository root. Inspect local instructions and `git status` fi
 Read these sources for the parts the prototype needs:
 
 - `tir/src/egglog.rs` for CLI arguments, REPL behavior and timing boundaries.
-- `libs/symbolic/src/ir-schema.egg` for authoritative relation names, sorts, invariants and index schedules.
-- `tir/checks/Inputs/egglog-batch.egg` for an executable imported-IR example.
-- `libs/egglog/src/ast.rs` and `libs/egglog/src/grammar.rs` for additional syntax. This is TIR's engine; verify unfamiliar syntax locally.
+- `core/defs/ir.cdsl` for relation names, sorts, invariants and index schedules.
+- `tir/checks/Inputs/egglog-rules.cdsl` for an executable imported-IR example.
 
-Build `cargo build -p tir-cli` when the binary is missing or stale. Check `target/debug/tir egglog --help`. The command takes a TIR file, followed by an optional Egglog file.
+Build `cargo build -p tir-cli` when the binary is missing or stale. Check `target/debug/tir egglog --help`. The command takes a TIR file, followed by an optional CDSL file. Use `--schedule` to select a schedule other than `execute`.
 
 ```sh
-target/debug/tir egglog input.tir pass.egg
+target/debug/tir egglog input.tir pass.cdsl
 target/debug/tir egglog input.tir
 ```
 
-The second form keeps imported facts, declarations and previous successful commands in one REPL session. Multiline commands work. Save the experiment as a batch file before reporting it: REPL errors print diagnostics and execution continues, so its exit status alone does not establish success. Restart after a failed mutation; do not assume rollback.
+The second form keeps imported facts and accepted CDSL declarations in one session. It runs the selected schedule when available after each accepted revision. Save the experiment as a batch file before reporting it. A REPL diagnostic can leave the exit status successful. Restart after a failed mutation; do not assume rollback.
 
 ## Express the pass as rules
 
@@ -33,20 +32,17 @@ State the decision and its observable answer before writing rules. Choose a smal
 
 Use the existing database and schema. Add pass-specific relations and named rulesets. Express matching, recursive analyses and candidate decisions as joins and rules. Do not implement graph walks, per-operation stepping or host-language copies of the IR to supply the answers.
 
-Select the intended scope explicitly. This minimal batch selects module roots and demonstrates the index/query schedule:
+Declare the IR relations used by the pass and expose a named schedule:
 
-```lisp
-(ruleset prototype-select)
-(rule ((= (OpKind op) "builtin.module"))
-      ((Scope op) (SelectedScope op)) :ruleset prototype-select)
-(run-schedule (saturate prototype-select)
-              (saturate ir-index)
-              (saturate ir-query))
-(check (SelectedOp root root))
-(print-function SelectedOp)
+```cdsl
+pub let Operation: (Int, String, String, Int, Int, Int, Int) -> Prop;
+pub let Selected: Int -> Prop;
+pub mod rules {
+    pub let select<id, place, parent, position, order, location>:
+        Operation(id, "builtin.module", place, parent, position, order, location) -> Selected(id);
+}
+pub let execute = std::schedule::saturate(rules);
 ```
-
-`Scope` requests containment materialization; `SelectedScope` requests selection over it. `Within` includes the root and nested functions. Use `OwningFunction` when the pass must stop at nested function boundaries. Run the required indexes after establishing scope, before consuming their derived views.
 
 Preserve the schema's distinctions:
 
@@ -57,10 +53,10 @@ Preserve the schema's distinctions:
 
 ## Observe and decide
 
-Run the saved batch on the real CLI. Use `check` for expected answers and print the candidate relation for inspection. Include a case that must not match when it distinguishes the approaches. Derive expected behavior from the pass contract, not from the rules under examination. Avoid assertions about allocated numeric IDs.
+Run the saved batch on the real CLI. The timing only confirms execution. For an observable result, inspect the derived relation through the database API in a focused probe. Include a case that must not match when it distinguishes the approaches. Derive expected behavior from the pass contract, not from the rules under examination. Avoid assertions about allocated numeric IDs.
 
 When comparing designs, use the same inputs in fresh processes and keep the variants separately runnable. Report failures and unsupported cases. A candidate relation proves the algorithm produced those candidates; it does not prove that IR edits, verification or compiled execution work.
 
-The CLI writes answers to stdout and `egglog: compile=...s exec=...s` to stderr. These durations exclude IR import, source-rule setup, user-source parsing and output rendering. Compilation includes rule/query/action/schedule planning; execution covers the remaining command processing. Do not call them whole-pass or compiler timings. For performance decisions, use the repository's benchmark workflow and load the `benchmark-checklist` skill.
+The CLI writes `egglog: compile=...s exec=...s` to stderr. These durations cover CDSL lowering, compilation and loading, then schedule execution. They exclude IR import and source parsing. For performance decisions, use the repository's benchmark workflow and load the `benchmark-checklist` skill.
 
 Deliver the decision, exact replay command, scratch path, observed answers and remaining integration limits. Preserve the runnable artifact. Do not promote the scratch implementation into production without the requested integration and its acceptance gates.
