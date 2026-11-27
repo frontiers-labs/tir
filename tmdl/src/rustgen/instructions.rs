@@ -357,9 +357,8 @@ fn operation_cdsl(
     }
     let name = ctx.op_name;
     let rname = rust_name.to_string();
-    let let_ident = format!("op_{}", name.replace('.', "_"));
     let mut body = format!(
-        "pub let {let_ident} = op {{\n    dialect: {dialect:?},\n    name: {name:?},\n    rust_name: {rname:?},\n    signature: ({}) -> ({}),\n",
+        "pub let op_{rname} = op {{\n    dialect: {dialect:?},\n    name: {name:?},\n    rust_name: {rname:?},\n    signature: ({}) -> ({}),\n",
         op_ports.join(", "),
         res_ports.join(", "),
     );
@@ -1221,6 +1220,23 @@ fn emit_instruction(
         sched_tables,
         &inst.name,
     );
+    let register_attrs: Vec<_> = ops
+        .iter()
+        .filter(|(_, ty)| matches!(ty, Type::Struct(_)))
+        .map(|(name, _)| {
+            let role = if !defined_register_operands.contains(name) {
+                quote! { Use }
+            } else if read_register_operands.contains(name) {
+                quote! { ReadWrite }
+            } else {
+                quote! { Def }
+            };
+            quote! { (#name, tir::attributes::AttributeRole::#role) }
+        })
+        .collect();
+    if !register_attrs.is_empty() {
+        info_fields.push(quote! { register_attrs: &[#(#register_attrs),*] });
+    }
     if let Some(cases) = sched_tables.latency_cases.get(&inst.name) {
         let cases = emit_latency_cases(
             cases,
