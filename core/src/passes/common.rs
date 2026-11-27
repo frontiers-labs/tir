@@ -222,7 +222,6 @@ pub(crate) fn apply_uses(context: &Context, edits: &[CheckedEdit]) -> Result<(),
     Ok(())
 }
 
-/// Validate and apply alias/constant edits plus safe op erasures.
 pub(crate) fn apply_edits(
     context: &Context,
     aliases: Vec<Alias>,

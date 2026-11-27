@@ -21,6 +21,12 @@
     {
       "id": "instruction-specific-semantics",
       "description": "Flag generic compiler inference, semantic analysis or rewrite generation that special-cases individual instruction names to supply behavior which should derive from signatures, declared operand or register types, behavior graphs, or declarative rules. Renaming an instruction with unchanged declarations and behavior should not change such generic semantics. Target-specific opcode encoding, relocation dispatch, parsing registered names, and diagnostic labels legitimately use instruction names and pass. Require a demonstrated semantic override, not merely a string comparison.",
+      "exceptions": [
+        "CDSL lowering may recognize fixed rule-action syntax and translate it to the corresponding action constructor.",
+        "VM lowering may recognize Egglog builtins when it uses the engine-defined signature for that primitive.",
+        "An extraction cost model may distinguish constructors of its internal expression representation when it obtains operation-specific costs from operation metadata.",
+        "An independent test oracle may implement operation behavior by matching operation names."
+      ],
       "severity": "warning",
       "kinds": [
         "function"

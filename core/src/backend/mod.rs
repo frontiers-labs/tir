@@ -375,6 +375,8 @@ pub struct InstrInfo {
     pub width_bytes: (u8, u8),
     pub control_flow: ControlFlow,
     pub program: exec::Program,
+    /// Physical register attributes in the assembly form and their access roles.
+    pub register_attrs: &'static [(&'static str, tir::attributes::AttributeRole)],
     /// Fixed registers the behavior touches without naming them in an operand.
     pub implicit_regs: &'static [tir::attributes::ImplicitReg],
     /// FP flag accumulations that an out-of-order scheduler may rename independently.
@@ -405,6 +407,7 @@ impl InstrInfo {
         width_bytes: (0, 0),
         control_flow: ControlFlow::None,
         program: exec::Program::Unsupported("instruction has no behavior"),
+        register_attrs: &[],
         implicit_regs: &[],
         implicit_or_updates: &[],
         copy: None,

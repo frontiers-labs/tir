@@ -1,11 +1,15 @@
-// RUN: tir opt %s | filecheck %s
+// RUN: tir opt --verify %s | tir opt --verify - | filecheck %s
 
 module {
   %f = func.func @constant() -> !f64 {
-    %value = fp.constant {bits = 9221120237041090561} : !f64
+    %bits = constant {value = 9221120237041090561} : !i64
+    %value = bitcast %bits : !f64
     func.return %value
   }
   module_end
 }
 
-// CHECK: %{{[0-9]+}} = fp.constant {bits = 9221120237041090561} : !f64
+// CHECK-LABEL: func.func @constant() -> !f64
+// CHECK-NEXT: %[[BITS:[0-9]+]] = constant {value = 9221120237041090561} : !i64
+// CHECK-NEXT: %[[VALUE:[0-9]+]] = bitcast %[[BITS]] : !f64
+// CHECK-NEXT: func.return %[[VALUE]]
