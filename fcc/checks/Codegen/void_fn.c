@@ -1,5 +1,3 @@
-// IR migration: instruction selection and backend lowering are unavailable.
-// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/void_fn.c | filecheck %s
 
 // A void function with no locals has no stack slots and just returns.

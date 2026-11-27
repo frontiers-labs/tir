@@ -9,6 +9,5 @@ module {
 }
 
 // CHECK-NOT: panicked at
-// CHECK: verification failed
-// CHECK: references unknown value %99
+// CHECK: failed typechecking: dangling value
 // CHECK-NOT: panicked at

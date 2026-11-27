@@ -1,5 +1,3 @@
-// IR migration: instruction selection and backend lowering are unavailable.
-// XFAIL: *
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
 
 // The mid-end takes structured control flow only: no combination of C

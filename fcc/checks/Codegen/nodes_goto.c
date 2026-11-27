@@ -1,5 +1,3 @@
-// IR migration: instruction selection and backend lowering are unavailable.
-// XFAIL: *
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
 
 // A function holding a label is a flat graph of blocks; the backward `goto`
