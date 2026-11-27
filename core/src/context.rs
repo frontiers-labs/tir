@@ -177,6 +177,35 @@ impl Context {
         self.invalidate_indexes();
         self.engine()
     }
+
+    /// Access the authoritative engine with support for adding egglog rules.
+    /// The first call replaces the precompiled IR program with its source
+    /// rules, preserving the database. Later calls retain user rules.
+    #[cfg(feature = "egglog-rules")]
+    pub fn egraph_with_rules(&self) -> Result<RefMut<'_, EGraph>, tir_egglog::Error> {
+        use tir_egglog::{Rules, ast::Command};
+
+        let mut engine = self.egraph();
+        if engine.uses_loaded_program() {
+            let mut rules = Rules::new();
+            rules.add_ruleset("");
+            for command in engine.parse_program("IR schema", tir_symbolic::term::IR_SCHEMA)? {
+                match command {
+                    Command::AddRuleset(_, name) => rules.add_ruleset(&name),
+                    Command::UnstableCombinedRuleset(_, name, members) => {
+                        rules.add_combined_ruleset(&name, &members)?;
+                    }
+                    command @ Command::Rule { .. } => {
+                        rules.add_command(engine.database(), command)?;
+                    }
+                    _ => {}
+                }
+            }
+            engine.set_rules(rules)?;
+        }
+        Ok(engine)
+    }
+
     fn engine(&self) -> RefMut<'_, EGraph> {
         self.0.engine.borrow_mut()
     }
