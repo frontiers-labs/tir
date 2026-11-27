@@ -11,7 +11,7 @@ pub let def = op {
         layout: Option<DictAttr>,
         body: Option<TypeAttr>,
     },
-    interfaces: (Symbol,),
+    interfaces: (Symbol, Check(TypeConstraint::ModuleScope("type definition outside module scope"))),
     custom_format: true,
     macro_def: true,
 };
