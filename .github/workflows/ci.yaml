@@ -148,7 +148,8 @@ jobs:
   # Stage 1 entity diet lands and the ratchet becomes enforceable.
   peak-rss:
     needs: build
-    if: github.event_name != 'push'
+    # FCC cannot emit objects during the IR migration.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
