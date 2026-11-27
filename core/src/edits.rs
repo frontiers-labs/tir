@@ -175,7 +175,7 @@ impl Context {
         } else {
             panic!("grow_declared_port needs a Theta or Gamma");
         }
-        let result = self.create_value(ty, Some(op)).id();
+        let result = self.create_value(ty, None).id();
         let results = handle.results();
         let binding = crate::binding::declared(&self.get_op(op)).expect("a loop or a gate");
         self.insert_result_at(op, at(&results, binding.results), result);
