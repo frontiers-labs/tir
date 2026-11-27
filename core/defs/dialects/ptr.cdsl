@@ -23,31 +23,47 @@ pub let cmp<P0, P1> = op {
 pub let ptradd<P0, W: Nat, P1> = op {
     rust_name: "PtrAddOp",
     signature: (base: Ptr<P0>, offset: Bits<W>) -> (result: Ptr<P1>),
-    interfaces: (Additive,),
+    interfaces: (
+        Additive,
+        Check(TypeConstraint::PointerWidth(ConstraintPort::Input("offset"), "pointer offset width")),
+    ),
     macro_def: true,
 };
 
 pub let ptrdiff<P0, P1, W: Nat> = op {
     rust_name: "PtrDiffOp",
     signature: (lhs: Ptr<P0>, rhs: Ptr<P1>) -> (result: Bits<W>),
-    interfaces: (Subtractive,),
+    interfaces: (
+        Subtractive,
+        Check(TypeConstraint::PointerWidth(ConstraintPort::Output("result"), "pointer difference width")),
+    ),
     macro_def: true,
 };
 
 pub let disjoint<P0, W0: Nat, P1, W1: Nat> = op {
     signature: (lhs: Ptr<P0>, lhs_size: Bits<W0>, rhs: Ptr<P1>, rhs_size: Bits<W1>) -> (result: Bits<1>),
+    interfaces: (
+        Check(TypeConstraint::EqualType(
+            ConstraintPort::Input("lhs_size"), ConstraintPort::Input("rhs_size"), "disjoint size types"
+        )),
+        Check(TypeConstraint::PointerWidth(ConstraintPort::Input("lhs_size"), "disjoint size width")),
+    ),
     macro_def: true,
 };
 
 pub let load<P, T> = op {
     signature: (ptr: Ptr<P>, state: ..State) -> (result: T, out_state: ..State),
-    interfaces: (MemoryRead, ResourceEffects),
+    interfaces: (MemoryRead, ResourceEffects, Check(TypeConstraint::NonFunction(
+        ConstraintPort::Output("result"), "load moves a function value through memory",
+    ))),
     macro_def: true,
 };
 
 pub let store<T, P> = op {
     signature: (value: T, ptr: Ptr<P>, state: ..State) -> (out_state: ..State),
-    interfaces: (MemoryWrite, ResourceEffects),
+    interfaces: (MemoryWrite, ResourceEffects, Check(TypeConstraint::NonFunction(
+        ConstraintPort::Input("value"), "store moves a function value through memory",
+    ))),
     macro_def: true,
 };
 
