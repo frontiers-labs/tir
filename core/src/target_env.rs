@@ -15,7 +15,6 @@
 //! memory size, a cache hierarchy).
 
 use crate::attributes::AttributeValue;
-use crate::scoped_attr::invalid_spec;
 use crate::{AttributeDict, Context, OpId, scoped_dict};
 
 /// The attribute a target environment spec is carried in.
@@ -99,35 +98,6 @@ pub fn target_env_spec(arch: &str, features: &[String]) -> AttributeValue {
         ]
         .into(),
     ))
-}
-
-pub(crate) fn verify_spec(value: &AttributeValue) -> Result<(), crate::Error> {
-    let AttributeValue::Dict(entries) = value else {
-        return Err(invalid_spec("target_env must be a dictionary"));
-    };
-
-    for (key, value) in entries.iter() {
-        match key.as_str() {
-            "arch" | "cpu" if string(Some(value)).is_none() => {
-                return Err(invalid_spec(format!("target_env '{key}' must be a string")));
-            }
-            "features" => {
-                let AttributeValue::Array(features) = value else {
-                    return Err(invalid_spec("target_env 'features' must be an array"));
-                };
-                if features
-                    .iter()
-                    .any(|feature| string(Some(feature)).is_none())
-                {
-                    return Err(invalid_spec(
-                        "target_env 'features' must hold extension name strings",
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 fn string(value: Option<&AttributeValue>) -> Option<&str> {

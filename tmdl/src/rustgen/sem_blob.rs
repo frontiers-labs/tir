@@ -3,7 +3,7 @@
 // constants, which dominated the memory footprint of the generated backends.
 //
 // The builder is ambient rather than threaded through the emitters because
-// every one of the seven `emit_dag_as_code` call sites sits several frames deep
+// the serialization call sites sit several frames deep
 // in unrelated emission code. Code generation is single-threaded, and
 // [`begin_sem_blob`]/[`finish_sem_blob`] bracket one whole-crate emission.
 

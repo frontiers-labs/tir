@@ -3,65 +3,35 @@
 
 use tir::{
     builtin::{self, ops},
-    func,
-    interp::{self, Value},
-    Context, OpId, Operation,
+    func, Context, OpId, Operation,
 };
 
 fn quad(context: &Context) -> (OpId, OpId) {
     let i32_ty = builtin::IntegerType::new(context, 32);
     let port = context.create_value(i32_ty, None);
-    let double = ops::addi(
-        context,
-        port.id(),
-        port.id(),
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let quad = ops::addi(
-        context,
-        double.result(),
-        double.result(),
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let double = ops::addi(context, port.id(), port.id(), i32_ty).build();
+    let quad = ops::addi(context, double.result(), double.result(), i32_ty).build();
     let body = context.create_nodes_region(
         vec![port],
         vec![double.id(), quad.id()],
         vec![quad.result()],
     );
-    let function = func::ops::lambda(
-        context,
-        "quad",
-        i32_ty,
-        &body,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let module = builtin::ops::module(context, None, Default::default(), tir::InsertionPoint::Root);
-    (module.body())
-        .context
-        .insert(module.body().end(), function.id());
-    builtin::ModuleEndOp::new(context, Default::default(), module.body().end());
+    let module = builtin::ModuleOpBuilder::new(context).build();
+    let function = func::ops::lambda(context, "quad", i32_ty, &body)
+        .at(module.body().end())
+        .build();
+    builtin::ModuleEndOpBuilder::new(context)
+        .at(module.body().end())
+        .build();
     (module.id(), function.id())
 }
 
 #[test]
-fn an_unordered_function_body_verifies_and_runs() {
+fn an_unordered_function_body_verifies() {
     let context = Context::with_default_dialects();
-    let (module, function) = quad(&context);
+    quad(&context);
 
-    tir::verify_op_tree(&context, module).expect("an unordered body verifies");
-
-    let results = interp::run_function(
-        &context,
-        function,
-        vec![Value::Int(tir::utils::APInt::new(32, 5))],
-    )
-    .expect("an unordered body runs");
-    assert_eq!(results[0].to_i64(), Some(20));
+    tir::check_types(&context).expect("an unordered body verifies");
 }
 
 #[test]

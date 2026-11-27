@@ -1,30 +1,10 @@
 use crate::builtin::UnitType;
-use crate::operation;
 use crate::symbol_table::{symbol_name_of, visibility_of};
 
 use crate as tir;
-use crate::{Callable, Context, Error, Operation, Symbol, Terminator, Visibility};
+use crate::{Callable, Context, Operation, Symbol, Terminator, Visibility};
 
-operation! {
-    FuncOp {
-        name: "func",
-        dialect: "func",
-        scheme: "() -> fn<_, _>",
-        format: "custom",
-        verifier: "true",
-        interfaces: [Symbol, Callable],
-        attributes: A {
-            sym_name: "Str",
-            ret_type: "Type",
-        },
-        results: R { result },
-        regions: R {
-            body: Region {
-                kind: Any,
-            }
-        }
-    }
-}
+__cdsl_func_FuncOp!();
 
 /// A λ definition named `name`, its `!fn` type read off the entry block of
 /// `body` so the signature can never disagree with the parameters.
@@ -33,19 +13,49 @@ pub fn lambda(
     name: &str,
     ret_type: tir::TypeId,
     body: &tir::RegionHandle,
-    parts: tir::NewOpParts,
-    insertion: tir::InsertionPoint,
-) -> FuncOp {
+) -> FuncOpBuilder {
     let parameters: Vec<_> = body.ports().iter().map(tir::Value::ty).collect();
-    FuncOp::new(
-        context,
-        name,
-        ret_type,
-        tir::builtin::FnType::new(context, &parameters, ret_type),
-        Some(body.id()),
-        parts,
-        insertion,
-    )
+    FuncOpBuilder::new(context)
+        .sym_name(name)
+        .ret_type(ret_type)
+        .result_type(tir::builtin::FnType::new(context, &parameters, ret_type))
+        .body(body.id())
+}
+
+impl FuncOpBuilder {
+    pub fn result_address(self) -> Self {
+        self.attr(
+            "result_address",
+            tir::attributes::AttributeValue::Bool(true),
+        )
+    }
+
+    pub fn noalias(self, arguments: &[usize]) -> Self {
+        self.attr(
+            "noalias",
+            tir::attributes::AttributeValue::Array(
+                arguments
+                    .iter()
+                    .map(|&argument| tir::attributes::AttributeValue::UInt(argument as u64))
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        )
+    }
+
+    pub fn argument_alignments(self, alignments: &[u64]) -> Self {
+        self.attr(
+            "argument_alignments",
+            tir::attributes::AttributeValue::Array(
+                alignments
+                    .iter()
+                    .copied()
+                    .map(tir::attributes::AttributeValue::UInt)
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        )
+    }
 }
 
 impl Callable for FuncOp {
@@ -219,121 +229,32 @@ impl FuncOp {
         let parameters: Vec<tir::TypeId> = block_args.iter().map(tir::Value::ty).collect();
         let body_region = parser.parse_region_with_entry_args(context, block_args)?;
 
-        let mut parts = tir::NewOpParts::default();
+        let mut builder = FuncOpBuilder::new(context)
+            .sym_name(sym_name.as_str())
+            .ret_type(ret_type)
+            .result_type(tir::builtin::FnType::new(context, &parameters, ret_type))
+            .body(body_region.id());
         if result_address {
-            parts.attributes.push(context.named_attribute(
-                "result_address",
-                tir::attributes::AttributeValue::Bool(true),
-            ));
+            builder = builder.result_address();
         }
         if let Some(argument_alignments) = argument_alignments {
-            parts
-                .attributes
-                .push(context.named_attribute("argument_alignments", argument_alignments));
+            builder = builder.attr("argument_alignments", argument_alignments);
         }
         if let Some(noalias) = noalias {
-            parts
-                .attributes
-                .push(context.named_attribute("noalias", noalias));
+            builder = builder.attr("noalias", noalias);
         }
         if is_private {
-            parts.attributes.push(context.named_attribute(
+            builder = builder.attr(
                 "sym_visibility",
                 tir::attributes::AttributeValue::Str("private".to_string().into()),
-            ));
+            );
         }
 
-        Ok(Box::new(FuncOp::new(
-            context,
-            sym_name.as_str(),
-            ret_type,
-            tir::builtin::FnType::new(context, &parameters, ret_type),
-            Some(body_region.id()),
-            parts,
-            tir::InsertionPoint::Root,
-        )))
+        Ok(Box::new(builder.build()))
     }
 }
 
-impl FuncOp {
-    fn verify_nodes_results(&self, context: &Context) -> Result<(), Error> {
-        let body = self.body_region();
-        if !body.is_nodes() {
-            return Ok(());
-        }
-        let produced: Vec<tir::TypeId> = body
-            .value_results()
-            .iter()
-            .map(|result| context.get_value(*result).ty())
-            .collect();
-        let declared = match self.ret_type() {
-            unit if unit == UnitType::new(context) => vec![],
-            ty => vec![ty],
-        };
-        if produced == declared {
-            return Ok(());
-        }
-        let spell = |types: &[tir::TypeId]| match types {
-            [one] => context.type_to_string(*one),
-            many => format!(
-                "({})",
-                many.iter()
-                    .map(|ty| context.type_to_string(*ty))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        };
-        Err(Error::VerificationError(format!(
-            "function '@{}' produces {}, but its signature returns {}",
-            self.symbol_name(),
-            spell(&produced),
-            spell(&declared)
-        )))
-    }
-}
-
-impl tir::Verifiable for FuncOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        super::verify_argument_alignments(self, self.parameters().len(), "function")?;
-        let parameters: Vec<_> = self.parameters().iter().map(tir::Value::ty).collect();
-        super::verify_noalias_arguments(context, self, &parameters)?;
-        let expected = tir::builtin::FnType::new(context, &parameters, self.ret_type());
-        if context.get_value(self.fn_value()).ty() != expected {
-            return Err(Error::VerificationError(format!(
-                "function '@{}' produces {}, but its signature is {}",
-                self.symbol_name(),
-                context.type_to_string(context.get_value(self.fn_value()).ty()),
-                context.type_to_string(expected)
-            )));
-        }
-        self.verify_nodes_results(context)?;
-        if !self.has_result_address() {
-            return Ok(());
-        }
-        let Some(argument) = self.parameters().first().cloned() else {
-            return Err(Error::VerificationError(
-                "result-address function requires a destination argument".to_string(),
-            ));
-        };
-        if crate::ptr::PtrType::view(context, argument.ty()).is_none() {
-            return Err(Error::VerificationError(
-                "result-address function destination must have pointer type".to_string(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-operation! {
-    ReturnOp {
-        name: "return",
-        dialect: "func",
-        scheme: "(_?) -> ()",
-        operands: O { value },
-        interfaces: [Terminator],
-        state: "in",
-    }
-}
+__cdsl_func_ReturnOp!();
 
 impl ReturnOp {
     /// The value the function returns, or `None` for a void return. The

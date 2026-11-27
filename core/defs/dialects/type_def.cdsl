@@ -1,0 +1,17 @@
+use std::core::*;
+use std::ir::{ArrayAttr, DictAttr, TypeAttr};
+
+pub let def = op {
+    dialect: "type",
+    rust_name: "TypeDefOp",
+    signature: () -> (),
+    attributes: {
+        sym_name: String,
+        params: Option<ArrayAttr>,
+        layout: Option<DictAttr>,
+        body: Option<TypeAttr>,
+    },
+    interfaces: (Symbol, Check(TypeConstraint::ModuleScope("type definition outside module scope"))),
+    custom_format: true,
+    macro_def: true,
+};

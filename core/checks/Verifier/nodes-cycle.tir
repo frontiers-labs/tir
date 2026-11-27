@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // Nothing orders an unordered region but its dependencies, so a def-use cycle
 // inside one has no evaluation order and is rejected.
@@ -12,4 +12,4 @@ module {
   module_end
 }
 
-// CHECK: addi closes a dependency cycle
+// CHECK: failed typechecking: unordered dependency cycle

@@ -536,7 +536,7 @@ impl Analyzer<'_> {
             match (self.types.kind(operands[0]), self.types.kind(operands[1])) {
                 (TypeKind::Pointer(left), TypeKind::Pointer(right))
                     if self.types.kind(*left) == self.types.kind(*right)
-                        && self.type_size(*left).is_some() =>
+                        && self.is_complete_object_type(*left) =>
                 {
                     Some(
                         self.types
@@ -577,7 +577,7 @@ impl Analyzer<'_> {
             let TypeKind::Pointer(pointee) = self.types.kind(result) else {
                 unreachable!("pointer arithmetic result has pointer type")
             };
-            if self.type_size(*pointee).is_some() {
+            if self.is_complete_object_type(*pointee) {
                 (result, ValueCategory::Value)
             } else {
                 self.diagnostics.push(

@@ -1,59 +1,28 @@
 //! Scalar conversions and arithmetic lowering for function bodies.
 
-use super::{FnCodegen, LoweredExpr, Slot, lower_type, source_type_layout};
+use super::{FnCodegen, LoweredExpr, Slot, lower_type};
 use crate::ast::AstKind;
 use crate::sema::{IntegerKind, QualType, TypeKind};
-use std::{cmp::Ordering, sync::Arc};
+use std::cmp::Ordering;
 use tir::NodeId;
 use tir::attributes::Predicate;
 use tir::builtin::{FloatType, IntegerType, ops as b};
-use tir::fp::{
-    ArithmeticSemantics, ComparisonBehavior, ComparisonSemantics, Exceptions,
-    IntegerConversionSemantics, InvalidConversion, Rounding, RoundingMode, SubnormalMode,
-    ops as fp,
-};
+use tir::fp::{self, BinaryOp};
 use tir::ptr::{PtrType, ops as p};
 use tir::{TypeId, ValueId};
 
 impl FnCodegen<'_> {
-    fn arithmetic_semantics(&self) -> Arc<tir::fp::Semantics> {
-        self.context
-            .intern_fp_semantics(ArithmeticSemantics::strict(
-                RoundingMode::TiesToEven,
-                Exceptions::Ignore,
-            ))
-    }
-
-    pub(super) fn comparison_semantics(&self) -> Arc<tir::fp::Semantics> {
-        self.context
-            .intern_fp_semantics(tir::fp::Semantics::Comparison(ComparisonSemantics {
-                behavior: ComparisonBehavior::Quiet,
-                exceptions: Exceptions::Ignore,
-                subnormals: SubnormalMode::Gradual,
-            }))
-    }
-
-    fn integer_conversion_semantics(&self) -> Arc<tir::fp::Semantics> {
-        self.context
-            .intern_fp_semantics(tir::fp::Semantics::IntegerConversion(
-                IntegerConversionSemantics {
-                    rounding: Rounding::Fixed(RoundingMode::TowardZero),
-                    exceptions: Exceptions::Ignore,
-                    subnormals: SubnormalMode::Gradual,
-                    invalid: InvalidConversion::Indeterminate,
-                },
-            ))
-    }
-
     pub(super) fn float_constant(&self, bits: u64, ty: TypeId) -> ValueId {
-        fp::ConstantOp::new(
-            self.context,
-            tir::attributes::AttributeValue::UInt(bits),
-            ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        let float = FloatType::view(&self.context, ty).expect("floating constant type");
+        let bits_ty = IntegerType::new(self.context, u64::from(float.bit_width()));
+        let bits = b::constant(self.context, bits as i64, bits_ty)
+            .at(self.builder.end())
+            .build()
+            .result();
+        b::bitcast(self.context, bits, ty)
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     pub(super) fn float_zero(&self, ty: TypeId) -> ValueId {
@@ -74,15 +43,9 @@ impl FnCodegen<'_> {
 
     pub(super) fn alloca(&mut self, elem: TypeId, size: u64, align: u64) -> Slot {
         let ptr_ty = PtrType::opaque(self.context);
-        let op = p::alloca(
-            self.context,
-            size,
-            align,
-            ptr_ty,
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        let op = p::alloca(self.context, size, align, ptr_ty)
+            .at(self.builder.end())
+            .build();
         Slot {
             ptr: op.result(),
             elem,
@@ -103,7 +66,10 @@ impl FnCodegen<'_> {
             {
                 let target = lower_type(self.context, self.typed, target);
                 LoweredExpr::Value(
-                    p::null(self.context, target, Default::default(), self.builder.end()).result(),
+                    p::null(self.context, target)
+                        .at(self.builder.end())
+                        .build()
+                        .result(),
                 )
             } else if matches!(self.typed.types().kind(source), TypeKind::Array(_, _))
                 && matches!(self.typed.types().kind(target), TypeKind::Pointer(_))
@@ -137,89 +103,44 @@ impl FnCodegen<'_> {
             TypeKind::Float | TypeKind::Double
         );
         if self.typed.integer_width(source).is_some() && target_floating {
+            let source_ty = lower_type(self.context, self.typed, source);
+            let value = if self.context.get_value(value).ty() == source_ty {
+                value
+            } else {
+                self.promote_boolean_result(value, source_ty)
+            };
             let target_ty = lower_type(self.context, self.typed, target);
             return if self.typed.integer_is_signed(source) == Some(true) {
-                fp::FromSiOp::new(
-                    self.context,
-                    value,
-                    tir::attributes::AttributeValue::FpSemantics(self.arithmetic_semantics()),
-                    target_ty,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                fp::from_si(self.context, value, target_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             } else {
-                fp::FromUiOp::new(
-                    self.context,
-                    value,
-                    tir::attributes::AttributeValue::FpSemantics(self.arithmetic_semantics()),
-                    target_ty,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                fp::from_ui(self.context, value, target_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             };
         }
-        if source_floating && let Some(target_width) = self.typed.integer_width(target) {
+        if source_floating && self.typed.integer_width(target).is_some() {
             let target_ty = lower_type(self.context, self.typed, target);
+            if matches!(
+                self.typed.types().kind(target),
+                TypeKind::Integer(IntegerKind::Bool)
+            ) {
+                let condition = self.compare_against_zero(value, Predicate::Ne);
+                return self.promote_boolean_result(condition, target_ty);
+            }
             return if self.typed.integer_is_signed(target) == Some(true) {
-                fp::ToSiOp::new(
-                    self.context,
-                    value,
-                    tir::attributes::AttributeValue::FpSemantics(
-                        self.integer_conversion_semantics(),
-                    ),
-                    target_ty,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
-            } else if target_width < 64 {
-                // Every value an unsigned type narrower than 64 bits can hold is
-                // also representable as a signed 64-bit integer, so the truncated
-                // signed conversion is exact and avoids a narrow unsigned conversion.
-                let wide = IntegerType::new(self.context, 64);
-                let converted = fp::ToSiOp::new(
-                    self.context,
-                    value,
-                    tir::attributes::AttributeValue::FpSemantics(
-                        self.integer_conversion_semantics(),
-                    ),
-                    wide,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result();
-                b::trunci(
-                    self.context,
-                    converted,
-                    target_ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                fp::to_si(self.context, value, target_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             } else {
-                fp::ToUiOp::new(
-                    self.context,
-                    value,
-                    tir::attributes::AttributeValue::FpSemantics(
-                        self.integer_conversion_semantics(),
-                    ),
-                    target_ty,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                fp::to_ui(self.context, value, target_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             };
         }
         if source_floating && target_floating {
@@ -227,17 +148,10 @@ impl FnCodegen<'_> {
             return if self.context.get_value(value).ty() == target_ty {
                 value
             } else {
-                fp::ConvertOp::new(
-                    self.context,
-                    value,
-                    tir::attributes::AttributeValue::FpSemantics(self.arithmetic_semantics()),
-                    target_ty,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                fp::convert(self.context, value, target_ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             };
         }
         if let Some(source_width) = self.typed.integer_width(source)
@@ -272,30 +186,18 @@ impl FnCodegen<'_> {
     fn resize(&mut self, value: ValueId, from: u32, to: u32, signed: bool) -> ValueId {
         let ty = IntegerType::new(self.context, u64::from(to));
         match to.cmp(&from) {
-            Ordering::Greater if signed => b::extsi(
-                self.context,
-                value,
-                ty,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result(),
-            Ordering::Greater => b::extui(
-                self.context,
-                value,
-                ty,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result(),
-            Ordering::Less => b::trunci(
-                self.context,
-                value,
-                ty,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result(),
+            Ordering::Greater if signed => b::extsi(self.context, value, ty)
+                .at(self.builder.end())
+                .build()
+                .result(),
+            Ordering::Greater => b::extui(self.context, value, ty)
+                .at(self.builder.end())
+                .build()
+                .result(),
+            Ordering::Less => b::trunci(self.context, value, ty)
+                .at(self.builder.end())
+                .build()
+                .result(),
             Ordering::Equal => value,
         }
     }
@@ -311,15 +213,10 @@ impl FnCodegen<'_> {
         let signed = || self.typed.integer_is_signed(source_ty).unwrap();
         macro_rules! bin {
             ($op:path) => {
-                $op(
-                    self.context,
-                    lhs,
-                    rhs,
-                    ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                $op(self.context, lhs, rhs, ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             };
         }
         // A signed `int` or wider overflows only in undefined behavior: the
@@ -328,34 +225,16 @@ impl FnCodegen<'_> {
         let int = self.typed.target().integer_width(IntegerKind::Int);
         let nsw = signed() && self.typed.integer_width(source_ty).unwrap_or(0) >= int;
         match kind {
-            AstKind::Add | AstKind::AddAssign if nsw => b::addi(
-                self.context,
-                lhs,
-                rhs,
-                ty,
-                tir::NewOpParts {
-                    attributes: vec![
-                        (self.context)
-                            .named_attribute("nsw", tir::attributes::AttributeValue::Bool(true)),
-                    ],
-                },
-                self.builder.end(),
-            )
-            .result(),
-            AstKind::Sub | AstKind::SubAssign if nsw => b::subi(
-                self.context,
-                lhs,
-                rhs,
-                ty,
-                tir::NewOpParts {
-                    attributes: vec![
-                        (self.context)
-                            .named_attribute("nsw", tir::attributes::AttributeValue::Bool(true)),
-                    ],
-                },
-                self.builder.end(),
-            )
-            .result(),
+            AstKind::Add | AstKind::AddAssign if nsw => b::addi(self.context, lhs, rhs, ty)
+                .nsw(true)
+                .at(self.builder.end())
+                .build()
+                .result(),
+            AstKind::Sub | AstKind::SubAssign if nsw => b::subi(self.context, lhs, rhs, ty)
+                .nsw(true)
+                .at(self.builder.end())
+                .build()
+                .result(),
             AstKind::Add | AstKind::AddAssign => bin!(b::addi),
             AstKind::Sub | AstKind::SubAssign => bin!(b::subi),
             AstKind::Mul | AstKind::MulAssign => bin!(b::muli),
@@ -394,54 +273,39 @@ impl FnCodegen<'_> {
             (AstKind::Ne, _) => Predicate::Ne,
             _ => unreachable!(),
         };
-        b::CmpIOp::new(
-            self.context,
-            lhs,
-            rhs,
-            tir::attributes::AttributeValue::Predicate(predicate),
-            IntegerType::new(self.context, 1),
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        b::CmpIOpBuilder::new(self.context)
+            .lhs(lhs)
+            .rhs(rhs)
+            .predicate(predicate)
+            .result_type(IntegerType::new(self.context, 1))
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     fn pointer_as_address(&mut self, pointer: ValueId) -> ValueId {
         let address_ty =
             IntegerType::new(self.context, u64::from(self.typed.target().pointer_width()));
         let null = self.null_pointer();
-        p::ptrdiff(
-            self.context,
-            pointer,
-            null,
-            address_ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        p::ptrdiff(self.context, pointer, null, address_ty)
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     fn address_as_pointer(&mut self, address: ValueId) -> ValueId {
         let null = self.null_pointer();
-        p::ptradd(
-            self.context,
-            null,
-            address,
-            PtrType::opaque(self.context),
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        p::ptradd(self.context, null, address, PtrType::opaque(self.context))
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     pub(super) fn null_pointer(&mut self) -> ValueId {
-        p::null(
-            self.context,
-            PtrType::opaque(self.context),
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        p::null(self.context, PtrType::opaque(self.context))
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     pub(super) fn lower_pointer_compare(
@@ -450,16 +314,14 @@ impl FnCodegen<'_> {
         lhs: ValueId,
         rhs: ValueId,
     ) -> ValueId {
-        p::CmpOp::new(
-            self.context,
-            lhs,
-            rhs,
-            tir::attributes::AttributeValue::Predicate(predicate),
-            IntegerType::new(self.context, 1),
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        tir::ptr::CmpOpBuilder::new(self.context)
+            .lhs(lhs)
+            .rhs(rhs)
+            .predicate(predicate)
+            .result_type(IntegerType::new(self.context, 1))
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     pub(super) fn lower_floating_compare(
@@ -477,62 +339,36 @@ impl FnCodegen<'_> {
             AstKind::Ne => Predicate::Une,
             _ => unreachable!(),
         };
-        fp::CmpOp::new(
+        self.emit_fp_compare(predicate, lhs, rhs)
+    }
+
+    pub(super) fn emit_fp_compare(
+        &self,
+        predicate: Predicate,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> ValueId {
+        fp::cmp(
             self.context,
             lhs,
             rhs,
-            tir::attributes::AttributeValue::Predicate(predicate),
-            tir::attributes::AttributeValue::FpSemantics(self.comparison_semantics()),
+            predicate,
             IntegerType::new(self.context, 1),
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
         )
+        .at(self.builder.end())
+        .build()
         .result()
     }
 
-    pub(super) fn lower_floating_binary(
-        &mut self,
-        kind: AstKind,
-        lhs: ValueId,
-        rhs: ValueId,
-        source_ty: QualType,
-    ) -> ValueId {
-        let ty = lower_type(self.context, self.typed, source_ty);
-        self.emit_fp_binop(kind, lhs, rhs, ty)
-    }
-
-    pub(super) fn emit_fp_binop(
-        &self,
-        kind: AstKind,
-        lhs: ValueId,
-        rhs: ValueId,
-        ty: TypeId,
-    ) -> ValueId {
-        macro_rules! emit {
-            ($builder:ident) => {
-                fp::$builder::new(
-                    self.context,
-                    lhs,
-                    rhs,
-                    tir::attributes::AttributeValue::FpSemantics(self.arithmetic_semantics()),
-                    ty,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
-            };
-        }
-        match kind {
-            AstKind::Add | AstKind::AddAssign => emit!(AddOp),
-            AstKind::Sub | AstKind::SubAssign => emit!(SubOp),
-            AstKind::Mul | AstKind::MulAssign => emit!(MulOp),
-            AstKind::Div | AstKind::DivAssign => emit!(DivOp),
+    pub(super) fn emit_fp_binop(&self, kind: AstKind, lhs: ValueId, rhs: ValueId) -> ValueId {
+        let kind = match kind {
+            AstKind::Add | AstKind::AddAssign => BinaryOp::Add,
+            AstKind::Sub | AstKind::SubAssign => BinaryOp::Sub,
+            AstKind::Mul | AstKind::MulAssign => BinaryOp::Mul,
+            AstKind::Div | AstKind::DivAssign => BinaryOp::Div,
             _ => unreachable!(),
-        }
+        };
+        kind.materialize(self.context, &self.builder, lhs, rhs)
     }
 
     pub(super) fn lower_pointer_offset(
@@ -542,10 +378,8 @@ impl FnCodegen<'_> {
         index_ty: QualType,
         pointer_ty: QualType,
         subtract: bool,
+        stride: u64,
     ) -> ValueId {
-        let TypeKind::Pointer(pointee) = self.typed.types().kind(pointer_ty) else {
-            unreachable!("pointer arithmetic result has pointer type")
-        };
         let pointer_width = self.typed.target().pointer_width();
         let offset_ty = IntegerType::new(self.context, u64::from(pointer_width));
         // C adds the index's value, so it widens by the signedness of its type;
@@ -556,42 +390,23 @@ impl FnCodegen<'_> {
             pointer_width,
             self.typed.integer_is_signed(index_ty).unwrap(),
         );
-        let size = source_type_layout(self.typed, *pointee).0;
-        let scale = b::constant(
-            self.context,
-            size as i64,
-            offset_ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
-        let offset = b::muli(
-            self.context,
-            index,
-            scale,
-            offset_ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
-        let offset = if subtract {
-            let zero = b::constant(
-                self.context,
-                0,
-                offset_ty,
-                Default::default(),
-                self.builder.end(),
-            )
+        let scale = b::constant(self.context, stride as i64, offset_ty)
+            .at(self.builder.end())
+            .build()
             .result();
-            b::subi(
-                self.context,
-                zero,
-                offset,
-                offset_ty,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result()
+        let offset = b::muli(self.context, index, scale, offset_ty)
+            .at(self.builder.end())
+            .build()
+            .result();
+        let offset = if subtract {
+            let zero = b::constant(self.context, 0, offset_ty)
+                .at(self.builder.end())
+                .build()
+                .result();
+            b::subi(self.context, zero, offset, offset_ty)
+                .at(self.builder.end())
+                .build()
+                .result()
         } else {
             offset
         };
@@ -600,9 +415,9 @@ impl FnCodegen<'_> {
             base,
             offset,
             lower_type(self.context, self.typed, pointer_ty),
-            Default::default(),
-            self.builder.end(),
         )
+        .at(self.builder.end())
+        .build()
         .result()
     }
 
@@ -610,44 +425,26 @@ impl FnCodegen<'_> {
         &mut self,
         lhs: ValueId,
         rhs: ValueId,
-        pointer_ty: QualType,
+        stride: u64,
         result_ty: QualType,
     ) -> ValueId {
-        let TypeKind::Pointer(pointee) = self.typed.types().kind(pointer_ty) else {
-            unreachable!("pointer difference operand has pointer type")
-        };
         // The byte distance is a pointer-sized integer; the element count is
         // divided out at that width, then fitted to `ptrdiff_t`.
         let pointer_width = self.typed.target().pointer_width();
         let address_ty = IntegerType::new(self.context, u64::from(pointer_width));
-        let mut count = p::ptrdiff(
-            self.context,
-            lhs,
-            rhs,
-            address_ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
-        let size = source_type_layout(self.typed, *pointee).0;
-        if size != 1 {
-            let divisor = b::constant(
-                self.context,
-                size as i64,
-                address_ty,
-                Default::default(),
-                self.builder.end(),
-            )
+        let mut count = p::ptrdiff(self.context, lhs, rhs, address_ty)
+            .at(self.builder.end())
+            .build()
             .result();
-            count = b::divsi(
-                self.context,
-                count,
-                divisor,
-                address_ty,
-                Default::default(),
-                self.builder.end(),
-            )
-            .result();
+        if stride != 1 {
+            let divisor = b::constant(self.context, stride as i64, address_ty)
+                .at(self.builder.end())
+                .build()
+                .result();
+            count = b::divsi(self.context, count, divisor, address_ty)
+                .at(self.builder.end())
+                .build()
+                .result();
         }
         let result_width = self.typed.integer_width(result_ty).unwrap();
         self.resize(count, pointer_width, result_width, true)
@@ -659,22 +456,13 @@ impl FnCodegen<'_> {
         }
         let offset_ty =
             IntegerType::new(self.context, u64::from(self.typed.target().pointer_width()));
-        let offset = b::constant(
-            self.context,
-            offset as i64,
-            offset_ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result();
-        p::ptradd(
-            self.context,
-            base,
-            offset,
-            PtrType::opaque(self.context),
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        let offset = b::constant(self.context, offset as i64, offset_ty)
+            .at(self.builder.end())
+            .build()
+            .result();
+        p::ptradd(self.context, base, offset, PtrType::opaque(self.context))
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 }

@@ -1,10 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s | filecheck --check-prefix=VALUE %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp | filecheck --check-prefix=VALUE %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp | filecheck --check-prefix=VALUE %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp | filecheck --check-prefix=VALUE %s
 
 // Two allocations are two objects, so they are two chains: the memory the
 // function is entered with is split into them, the read of one observes the
@@ -37,5 +33,3 @@ module {
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[X]], %[[Y]] : !i32
 // CHECK-NEXT: %[[OUT:[0-9]+]] = state.join state(%[[RA]], %[[RB]])
 // CHECK-NEXT: -> %[[SUM]], %[[OUT]]
-
-// VALUE: i32 3

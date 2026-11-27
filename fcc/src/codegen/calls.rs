@@ -18,16 +18,10 @@ impl FnCodegen<'_> {
     pub(super) fn materialize(&mut self, expression: LoweredExpr) -> ValueId {
         match expression {
             LoweredExpr::Value(value) => value,
-            LoweredExpr::Address { ptr, elem } => p::load(
-                self.context,
-                ptr,
-                elem,
-                vec![],
-                vec![],
-                Default::default(),
-                self.builder.end(),
-            )
-            .result(),
+            LoweredExpr::Address { ptr, elem } => p::load(self.context, ptr, elem)
+                .at(self.builder.end())
+                .build()
+                .result(),
         }
     }
 
@@ -50,33 +44,19 @@ impl FnCodegen<'_> {
                 self.context,
                 size as i64,
                 IntegerType::new(self.context, 64),
-                Default::default(),
-                self.builder.end(),
             )
+            .at(self.builder.end())
+            .build()
             .result();
-            p::memcpy(
-                self.context,
-                destination,
-                source,
-                size,
-                vec![],
-                vec![],
-                Default::default(),
-                self.builder.end(),
-            );
+            p::memcpy(self.context, destination, source, size)
+                .at(self.builder.end())
+                .build();
             return Ok(());
         }
         let record = NamedType::new(self.context, record);
-        p::copy(
-            self.context,
-            destination,
-            source,
-            record,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        p::copy(self.context, destination, source, record)
+            .at(self.builder.end())
+            .build();
         Ok(())
     }
 
@@ -96,34 +76,21 @@ impl FnCodegen<'_> {
             };
             let source_ty = node_type(self.typed, node);
             let (size, align) = source_type_layout(self.typed, source_ty);
-            let destination = p::alloca(
-                self.context,
-                size,
-                align,
-                PtrType::opaque(self.context),
-                vec![],
-                Default::default(),
-                self.builder.end(),
-            )
-            .result();
+            let destination = p::alloca(self.context, size, align, PtrType::opaque(self.context))
+                .at(self.builder.end())
+                .build()
+                .result();
             let size = b::constant(
                 self.context,
                 size as i64,
                 IntegerType::new(self.context, 64),
-                Default::default(),
-                self.builder.end(),
             )
+            .at(self.builder.end())
+            .build()
             .result();
-            p::memcpy(
-                self.context,
-                destination,
-                source,
-                size,
-                vec![],
-                vec![],
-                Default::default(),
-                self.builder.end(),
-            );
+            p::memcpy(self.context, destination, source, size)
+                .at(self.builder.end())
+                .build();
             return Ok(vec![destination]);
         }
         if matches!(
@@ -147,16 +114,10 @@ impl FnCodegen<'_> {
                 .iter()
                 .map(|piece| {
                     let address = self.offset_address(ptr, piece.offset);
-                    p::load(
-                        self.context,
-                        address,
-                        piece.ty,
-                        vec![],
-                        vec![],
-                        Default::default(),
-                        self.builder.end(),
-                    )
-                    .result()
+                    p::load(self.context, address, piece.ty)
+                        .at(self.builder.end())
+                        .build()
+                        .result()
                 })
                 .collect::<Vec<_>>();
             if parameter.grouped {
@@ -165,14 +126,12 @@ impl FnCodegen<'_> {
                     parameter.pieces.iter().map(|piece| piece.ty).collect(),
                 );
                 return Ok(vec![
-                    b::MakeTupleOp::new(
-                        self.context,
-                        values,
-                        ty,
-                        Default::default(),
-                        self.builder.end(),
-                    )
-                    .result(),
+                    b::MakeTupleOpBuilder::new(self.context)
+                        .elements(values)
+                        .result_type(ty)
+                        .at(self.builder.end())
+                        .build()
+                        .result(),
                 ]);
             }
             return Ok(values);
@@ -199,53 +158,35 @@ impl FnCodegen<'_> {
             abi_size,
             align.max(abi_align),
             PtrType::opaque(self.context),
-            vec![],
-            Default::default(),
-            self.builder.end(),
         )
+        .at(self.builder.end())
+        .build()
         .result();
         for piece in pieces {
             let zero = match type_kind(self.context, piece.ty) {
                 ValueKind::Float => self.float_zero(piece.ty),
-                ValueKind::Int => b::constant(
-                    self.context,
-                    0,
-                    piece.ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result(),
+                ValueKind::Int => b::constant(self.context, 0, piece.ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result(),
                 ValueKind::Vector => unreachable!("ABI padding uses scalar carriers"),
             };
             let address = self.offset_address(destination, piece.offset);
-            p::store(
-                self.context,
-                zero,
-                address,
-                vec![],
-                vec![],
-                Default::default(),
-                self.builder.end(),
-            );
+            p::store(self.context, zero, address)
+                .at(self.builder.end())
+                .build();
         }
         let size = b::constant(
             self.context,
             size as i64,
             IntegerType::new(self.context, 64),
-            Default::default(),
-            self.builder.end(),
         )
+        .at(self.builder.end())
+        .build()
         .result();
-        p::memcpy(
-            self.context,
-            destination,
-            source,
-            size,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        p::memcpy(self.context, destination, source, size)
+            .at(self.builder.end())
+            .build();
         destination
     }
 
@@ -256,29 +197,21 @@ impl FnCodegen<'_> {
             .iter()
             .map(|piece| {
                 let address = self.offset_address(ptr, piece.offset);
-                p::load(
-                    self.context,
-                    address,
-                    piece.ty,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                p::load(self.context, address, piece.ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             })
             .collect::<Vec<_>>();
         if let [value] = values.as_slice() {
             return *value;
         }
-        b::MakeTupleOp::new(
-            self.context,
-            values,
-            self.return_abi.ty,
-            Default::default(),
-            self.builder.end(),
-        )
-        .result()
+        b::MakeTupleOpBuilder::new(self.context)
+            .elements(values)
+            .result_type(self.return_abi.ty)
+            .at(self.builder.end())
+            .build()
+            .result()
     }
 
     pub(super) fn store_return_value(&mut self, value: Option<NodeId>) -> Result<(), Diagnostic> {
@@ -299,20 +232,13 @@ impl FnCodegen<'_> {
                     self.context,
                     size as i64,
                     IntegerType::new(self.context, 64),
-                    Default::default(),
-                    self.builder.end(),
                 )
+                .at(self.builder.end())
+                .build()
                 .result();
-                p::memcpy(
-                    self.context,
-                    slot.ptr,
-                    source,
-                    size,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                );
+                p::memcpy(self.context, slot.ptr, source, size)
+                    .at(self.builder.end())
+                    .build();
             }
             Some(node) => {
                 let slot = self.return_slot.unwrap();
@@ -321,15 +247,9 @@ impl FnCodegen<'_> {
                 let source_ty = lower_type(self.context, self.typed, source);
                 let value = self.promote_boolean_result(value, source_ty);
                 let value = self.convert_scalar(value, source, self.result_type.unwrap());
-                p::store(
-                    self.context,
-                    value,
-                    slot.ptr,
-                    vec![],
-                    vec![],
-                    Default::default(),
-                    self.builder.end(),
-                );
+                p::store(self.context, value, slot.ptr)
+                    .at(self.builder.end())
+                    .build();
             }
             None => {}
         }
@@ -346,9 +266,9 @@ impl FnCodegen<'_> {
             self.context,
             size as i64,
             IntegerType::new(self.context, 64),
-            Default::default(),
-            self.builder.end(),
         )
+        .at(self.builder.end())
+        .build()
         .result();
         p::memcpy(
             self.context,
@@ -356,11 +276,9 @@ impl FnCodegen<'_> {
                 .expect("indirect return has a destination argument"),
             source,
             size,
-            vec![],
-            vec![],
-            Default::default(),
-            self.builder.end(),
-        );
+        )
+        .at(self.builder.end())
+        .build();
         Ok(())
     }
 
@@ -449,75 +367,45 @@ impl FnCodegen<'_> {
         let callee = match callee {
             Some(address) => {
                 let ty = FnType::new(self.context, &sig.argument_types(self.context), sig.ret.ty);
-                b::ptr_to_fn(
-                    self.context,
-                    address,
-                    ty,
-                    Default::default(),
-                    self.builder.end(),
-                )
-                .result()
+                b::ptr_to_fn(self.context, address, ty)
+                    .at(self.builder.end())
+                    .build()
+                    .result()
             }
             None => {
                 let name = name.clone().expect("direct call has a symbol name");
                 self.symbols.function(self.context, &name, &sig)
             }
         };
-        if sig.ret.indirect {
-            argument_alignments.insert(0, 1);
-        }
-        let mut parts = tir::NewOpParts::default();
-        if sig.ret.indirect {
-            parts.attributes.push(self.context.named_attribute(
-                "result_address",
-                tir::attributes::AttributeValue::Bool(true),
-            ));
-        }
-        if argument_alignments.iter().any(|&alignment| alignment > 1) {
-            parts.attributes.push(
-                self.context.named_attribute(
-                    "argument_alignments",
-                    tir::attributes::AttributeValue::Array(
-                        argument_alignments
-                            .iter()
-                            .copied()
-                            .map(tir::attributes::AttributeValue::UInt)
-                            .collect::<Vec<_>>()
-                            .into(),
-                    ),
-                ),
-            );
-        }
         Ok(if sig.ret.indirect {
             let (size, align) = source_type_layout(self.typed, source_ty);
             let slot = self.alloca(elem, size, align);
             args.insert(0, slot.ptr);
-            func_ops::CallOp::new(
-                self.context,
-                callee,
-                args,
-                sig.ret.ty,
-                vec![],
-                vec![],
-                parts,
-                self.builder.end(),
-            );
+            argument_alignments.insert(0, 1);
+            let mut call = func_ops::CallOpBuilder::new(self.context)
+                .callee(callee)
+                .args(args)
+                .result_address()
+                .result_type(sig.ret.ty);
+            if argument_alignments.iter().any(|&alignment| alignment > 1) {
+                call = call.argument_alignments(&argument_alignments);
+            }
+            call.at(self.builder.end()).build();
             LoweredExpr::Address {
                 ptr: slot.ptr,
                 elem,
             }
         } else {
-            let result = func_ops::CallOp::new(
-                self.context,
-                callee,
-                args,
-                sig.ret.ty,
-                vec![],
-                vec![],
-                parts,
-                self.builder.end(),
-            )
-            .result();
+            let result = {
+                let mut call = func_ops::CallOpBuilder::new(self.context)
+                    .callee(callee)
+                    .args(args)
+                    .result_type(sig.ret.ty);
+                if argument_alignments.iter().any(|&alignment| alignment > 1) {
+                    call = call.argument_alignments(&argument_alignments);
+                }
+                call.at(self.builder.end()).build().result()
+            };
             if let Some(pieces) = sig.ret.aggregate.as_deref() {
                 let (size, align) = source_type_layout(self.typed, source_ty);
                 let (abi_size, abi_align) = abi_storage_layout(self.context, pieces)
@@ -527,26 +415,18 @@ impl FnCodegen<'_> {
                     let value = if pieces.len() == 1 {
                         result
                     } else {
-                        b::TupleGetOp::new(
-                            self.context,
-                            result,
-                            tir::attributes::AttributeValue::UInt(index as u64),
-                            piece.ty,
-                            Default::default(),
-                            self.builder.end(),
-                        )
-                        .result()
+                        b::TupleGetOpBuilder::new(self.context)
+                            .tuple(result)
+                            .index(index as u64)
+                            .result_type(piece.ty)
+                            .at(self.builder.end())
+                            .build()
+                            .result()
                     };
                     let address = self.offset_address(slot.ptr, piece.offset);
-                    p::store(
-                        self.context,
-                        value,
-                        address,
-                        vec![],
-                        vec![],
-                        Default::default(),
-                        self.builder.end(),
-                    );
+                    p::store(self.context, value, address)
+                        .at(self.builder.end())
+                        .build();
                 }
                 LoweredExpr::Address {
                     ptr: slot.ptr,

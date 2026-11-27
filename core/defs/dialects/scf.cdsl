@@ -1,0 +1,47 @@
+use std::core::*;
+use std::ir::{Bits, Cfg, Counter, IndexOrInt, Nodes};
+
+let loop_latch_role = "scf.loop_latch";
+
+pub let r#yield = op {
+    signature: (values: ..Any) -> (),
+    interfaces: (Terminator, Check(TypeConstraint::ExitRole(loop_latch_role))),
+    macro_def: true,
+};
+
+pub let r#loop = op {
+    signature: (inits: ..Any) -> (results: ..Any),
+    regions: (body: Nodes),
+    interfaces: (ExitScope,),
+    binds: BindSpec::Theta("inits", "body", "1..n+1", "n+1..", "results", 0, 1),
+    macro_def: true,
+};
+
+pub let r#switch<w: Nat> = op {
+    signature: (predicate: Bits<w>, inputs: ..Any) -> (results: ..Any),
+    regions: (arms: ..Nodes),
+    interfaces: (ExitScope,),
+    binds: BindSpec::Gamma("predicate", "inputs", "arms", "results", ""),
+    macro_def: true,
+};
+
+pub let r#for<C: IndexOrInt> = op {
+    signature: (lb: Counter<C>, inits: ..Any, ub: Counter<C>, step: Counter<C>) -> (results: ..Any),
+    regions: (body: Nodes),
+    interfaces: (ExitScope,),
+    binds: BindSpec::Theta("(lb, inits)", "body", "1..n+1", "n+1..", "results", 0, 1),
+    counted: CountedSpec::Counted("lb", "ub", "step", "0", ""),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let ordered_for<C: IndexOrInt> = op {
+    signature: (lb: Counter<C>, inits: ..Any, ub: Counter<C>, step: Counter<C>) -> (results: ..Any),
+    regions: (body: Cfg),
+    interfaces: (
+        ExitScope, CountedLoop,
+        Check(TypeConstraint::OrderedLoop(ConstraintPort::Input("inits"), loop_latch_role)),
+    ),
+    custom_format: true,
+    macro_def: true,
+};

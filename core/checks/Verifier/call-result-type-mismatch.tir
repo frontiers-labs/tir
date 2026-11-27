@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s
+// RUN: not tir opt %s
 
 // The call result type must match the func.return type of the resolved overload.
 

@@ -1,6 +1,7 @@
 use crate::{Context, Error, OpHandle, OpId, RegionId};
 
-pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), Error> {
+/// Check concurrent state uses at a lowering boundary.
+pub fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), Error> {
     let mut consumers: tir_adt::IndexMap<crate::ValueId, Vec<(StateConsumer, bool)>> =
         tir_adt::IndexMap::new();
     let mut theta_paths = std::collections::HashMap::new();

@@ -1,9 +1,9 @@
 use std::error::Error;
 
+use tir_cdsl::OutputKind::OpDef;
 use tmdl::{Action, Compiler, OutputKind};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("cargo:rerun-if-changed=defs");
     let out_dir = std::env::var("OUT_DIR")?;
     let inputs = [
         "./defs/ptx/main.tmdl",
@@ -39,11 +39,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 builder = builder.split_input(input);
             }
         }
-        builder.build().compile()
+        builder.build().compile_with_rust_writer(|source, package| {
+            Ok(tir_cdsl::CheckedProgram::emit_rust_source(source, package)?)
+        })
     };
 
     compile(Action::EmitRust, "ptx.rs")?;
     compile(Action::EmitOperationList, "ptx_ops.rs")?;
 
+    tir_cdsl::compile([
+        ("gpu::manual::*", OpDef("spirv_manual.rs")),
+        ("gpu::generated::*", OpDef("spirv_generated.rs")),
+    ])?;
     Ok(())
 }

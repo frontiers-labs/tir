@@ -1,0 +1,90 @@
+use std::core::*;
+use std::ir::{BackendReg, Block, Cfg, Ptr, State, UInt};
+
+pub let section = op {
+    signature: () -> (),
+    regions: (body: Cfg),
+    macro_def: true,
+};
+
+pub let section_end = op {
+    signature: () -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
+};
+
+pub let symbol = op {
+    signature: () -> (),
+    regions: (body: Cfg),
+    macro_def: true,
+};
+
+pub let symbol_end = op {
+    signature: () -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
+};
+
+pub let literal = op {
+    signature: () -> (),
+    attributes: { kind: String },
+    macro_def: true,
+};
+
+pub let symbol_address = op {
+    signature: () -> (result: Ptr<Any>),
+    attributes: { sym_name: String },
+    interfaces: (PureInterface, Speculatable),
+    macro_def: true,
+};
+
+pub let data_reloc = op {
+    signature: () -> (),
+    attributes: { symbol: String, width: UInt, addend: Int },
+    macro_def: true,
+};
+
+pub let block_end = op {
+    signature: () -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
+};
+
+pub let vret = op {
+    rust_name: "VirtualReturnOp",
+    signature: (values: ..Any) -> (),
+    interfaces: (Terminator,),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let vbr = op {
+    rust_name: "VirtualBranchOp",
+    signature: (dest_args: ..Any) -> (),
+    attributes: { dest: Block },
+    interfaces: (Terminator,),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let pcopy = op {
+    rust_name: "ParallelCopyOp",
+    signature: (sources: ..Any) -> (copies: ..Any),
+    macro_def: true,
+};
+
+pub let vcall = op {
+    rust_name: "VirtualCallOp",
+    signature: (args: ..Any, state: ..State) -> (results: ..Any, out_state: ..State),
+    attributes: { callee: String, outgoing_stack_size: UInt },
+    interfaces: (ResourceEffects,),
+    macro_def: true,
+};
+
+pub let vcall_indirect = op {
+    rust_name: "VirtualIndirectCallOp",
+    signature: (callee: BackendReg, args: ..Any, state: ..State) -> (results: ..Any, out_state: ..State),
+    attributes: { outgoing_stack_size: UInt },
+    interfaces: (ResourceEffects,),
+    macro_def: true,
+};

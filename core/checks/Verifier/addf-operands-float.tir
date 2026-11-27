@@ -1,14 +1,15 @@
-// RUN: not tir opt --verify %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
+// CHECK: failed typechecking: signature
 
-// fp.add requires float operands; integer operands fail verification even when
-// the annotated result type is a float.
+// fp.add accepts captured computations. An integer cannot stand in for one.
 
 module {
   %fn_f = func.func @f() -> !f32 {
     %0 = constant {value = 1} : !i32
     %1 = constant {value = 2} : !i32
-    %2 = fp.add %0, %1 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
-    func.return %2
+    %2 = fp.add %0, %1 : !fp.computation<!f32, nearest_even, separate>
+    %3 = fp.materialize %2 : !f32
+    func.return %3
   }
   module_end
 }

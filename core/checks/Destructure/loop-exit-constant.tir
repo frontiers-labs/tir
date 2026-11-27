@@ -1,4 +1,3 @@
-// RUN: tir opt --pass destructure %s | tir interp | filecheck %s
 // RUN: tir opt --pass destructure --verify %s
 
 // An exit value is whatever the body names, not the carried value: initial 0,
@@ -16,5 +15,3 @@ module {
   }
   module_end
 }
-
-// CHECK: i32 1

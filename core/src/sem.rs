@@ -1,12 +1,6 @@
-//! Semantic-expression substrate.
-//!
-//! The semantic graph, its interpreter, width inference, serialized wire format
-//! and equivalence oracles all live in the `tir-symbolic` crate now; this module
-//! re-exports them and adds the core-specific pieces: the graph annotated with
-//! [`NodeMeta`], type-resolving replay, the `AsSemExpr` trait and constant
-//! folding via [`Operation::semantic_expr`].
+//! Shared symbolic types and machine instruction value helpers.
 
-use crate::{NodeId, OpId, Operation, TypeId};
+use crate::{NodeId, OpId, TypeId};
 
 pub use tir_symbolic::lang::{
     AtomicRmwOp, BuildError, Continuation, MemOrdering, Memory, SCALAR_OPS, ScalarOp,
@@ -21,9 +15,8 @@ pub use tir_symbolic::sem::{
     SemPayloadDesc, SmtOracle, UnsupportedReason, confirm_bool_via_if,
     confirm_extension_via_shifts, decode_sem_ops, float_payload, int_payload,
 };
-pub(crate) use tir_symbolic::sem::{con, op};
 
-pub mod fp_refinement;
+use tir_symbolic::sem::{con, op};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NodeMeta {
@@ -35,33 +28,6 @@ pub struct NodeMeta {
 /// [`tir_symbolic::sem::SemGraph`] annotated with [`NodeMeta`], so a node can
 /// carry its originating op and inferred type.
 pub type SemGraph = tir_symbolic::sem::SemGraph<NodeMeta>;
-
-/// [`ExtendSemBytes`] for graphs that carry [`NodeMeta`], resolving
-/// [`SemOp::Typed`] widths against the context's interned integer types.
-pub trait ExtendSemBytesTyped {
-    fn extend_sem_bytes_typed(
-        &mut self,
-        context: &crate::Context,
-        kinds: &[SymKind],
-        blob: &[u8],
-        offset: u32,
-    ) -> NodeId;
-}
-
-impl ExtendSemBytesTyped for SemGraph {
-    fn extend_sem_bytes_typed(
-        &mut self,
-        context: &crate::Context,
-        kinds: &[SymKind],
-        blob: &[u8],
-        offset: u32,
-    ) -> NodeId {
-        self.extend_sem_bytes_with(kinds, blob, offset, |g, node, width| {
-            g.annotation_mut(node).actual_type =
-                Some(crate::builtin::IntegerType::new(context, u64::from(width)));
-        })
-    }
-}
 
 /// The definedness condition of a partial integer operation, materialized as new
 /// nodes in `g` over the operation's own operands. The partial kinds are the
@@ -111,21 +77,6 @@ fn ones_mask(width: u32) -> u64 {
     } else {
         (1u64 << width) - 1
     }
-}
-
-/// Build an operation's semantic expression into `g`, returning its root. Unlike
-/// [`Operation::semantic_expr`], the expression must build.
-pub trait AsSemExpr: Operation {
-    fn convert(&self, g: &mut SemGraph) -> NodeId;
-}
-
-/// Fold an operation over constant operand `values` by evaluating its declared
-/// semantic expression. Returns `None` for ops without one. This backs the
-/// `ConstantFold` impl the `operation!` macro derives from `sem`.
-pub fn fold_with_sem(op: &dyn Operation, values: &[Value]) -> Option<Value> {
-    let mut graph = SemGraph::new();
-    op.semantic_expr(&mut graph)?;
-    Some(execute(&graph, values))
 }
 
 // ── APInt boundary helpers ──────────────────────────────────────────────────

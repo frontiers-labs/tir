@@ -3,6 +3,14 @@ extern crate self as tir;
 // Re-exported so the `register_pass!` macro can reference linkme from
 // downstream crates without each of them depending on it directly.
 pub use linkme;
+pub use tir_egglog::{NativeDeclaration, NativeIdentity};
+
+#[doc(hidden)]
+pub fn bind_native_operation<T: NativeDeclaration>(
+    db: &mut tir_egglog::Database,
+) -> Result<(), tir_egglog::Error> {
+    db.bind_declaration::<T>()
+}
 
 /// Declares an entity's identity from the context-wide allocator.
 macro_rules! id_newtype {
@@ -34,6 +42,19 @@ macro_rules! id_newtype {
     };
 }
 
+#[macro_use]
+mod cdsl_operations {
+    include!(concat!(env!("OUT_DIR"), "/asm_ops.rs"));
+    include!(concat!(env!("OUT_DIR"), "/cfg_ops.rs"));
+    include!(concat!(env!("OUT_DIR"), "/func_ops.rs"));
+    include!(concat!(env!("OUT_DIR"), "/layout_ops.rs"));
+    include!(concat!(env!("OUT_DIR"), "/ptr_ops.rs"));
+    include!(concat!(env!("OUT_DIR"), "/scf_ops.rs"));
+    include!(concat!(env!("OUT_DIR"), "/state_ops.rs"));
+    include!(concat!(env!("OUT_DIR"), "/type_def_ops.rs"));
+    include!(concat!(env!("OUT_DIR"), "/vector_ops.rs"));
+}
+
 pub mod analysis;
 pub mod attributes;
 pub mod backend;
@@ -48,8 +69,7 @@ mod dialects;
 mod edits;
 mod error;
 mod idmap;
-mod interfaces;
-pub mod interp;
+pub mod interfaces;
 mod intrinsic;
 mod ir_formatter;
 pub mod layout;
@@ -86,15 +106,10 @@ pub use error::Error;
 pub use idmap::{IdMap, IdSet, RowId};
 pub use interfaces::{
     Additive, Apply, Binding, BranchGuard, BranchTerminator, Callable, CaseGuard, Commutative,
-    Congruent, ConstantFold, ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget,
-    Gamma, Global, HasResourceSemantics, IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit,
-    OpCost, PromotableAllocation, Pure, RegionBinding, ResourceAccess, ResourceEffect,
-    ResourceEffects, ResourceField, ResourceSemantics, SameOperandAndResultType, Speculatable,
-    Subtractive, Symbol, Terminator, Theta, Visibility,
-};
-pub use interp::{
-    ExecutionState, FloatEnvironment, Interp, InterpError, Memory as InterpMemory,
-    Value as InterpValue,
+    Congruent, ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget, Gamma, Global,
+    IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit, OpCost, PromotableAllocation, Pure,
+    RegionBinding, ResourceAccess, ResourceEffect, ResourceEffects, SameOperandAndResultType,
+    Speculatable, Subtractive, Symbol, Terminator, Theta, Visibility,
 };
 pub use intrinsic::Intrinsic;
 pub use ir_formatter::IRFormatter;
@@ -102,9 +117,8 @@ pub use layout::{DataLayout, Endianness, LAYOUT_SPEC, data_layout_spec};
 pub use operand::Operand;
 pub use operation::{
     DialectName, ErasedOpInterface, ImplementsOpInterface, InsertionPoint, NewOp, NewOpParts,
-    OpDefSpec, OpDefVerifiable, OpHandle, OpId, OpInterfaceConverter, Operation, OperationName,
-    RegionIds, ValueIds, Verifiable, downcast_op_interface, erase_op_interface,
-    op_interface_converter, verify_op_tree, verify_opdef_attributes, verify_opdef_operands,
+    OpHandle, OpId, OpInterfaceConverter, Operation, OperationName, RegionIds, ValueIds,
+    check_opdef_attributes, downcast_op_interface, erase_op_interface, op_interface_converter,
 };
 pub use pass::{
     OperationRef, PASSES, Pass, PassError, PassInfo, PassManager, PassTarget, parse_pipeline,
@@ -116,6 +130,7 @@ pub use schema::{
     AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, build_type, schema_json, type_schema_json,
 };
 pub use scoped_attr::{AttributeDict, scoped_dict};
+pub use state_verification::verify_state_forks;
 pub use symbol_table::{SymbolEntry, SymbolTable};
 pub use target_env::{TARGET_ENV, TargetEnv, target_env_spec};
 pub use tir_adt::Sym;
@@ -124,7 +139,10 @@ pub use ty::{
     Ctor, CtorId, Kind, Name, Param, Spellings, Terms, TypeArg, TypeCtor, TypeId, TypeParser,
     TypePrinter, TypeSpelling, TypeTerm,
 };
-pub use typecheck::{check_types, scheme_of};
+pub use typecheck::{
+    ObligationSite, OperandIndex, ResultIndex, TypeCheckError, TypeDiagnostic, TypeFailure,
+    check_types,
+};
 pub use value::{Use, Value, ValueId};
 
 pub use dialects::builtin;

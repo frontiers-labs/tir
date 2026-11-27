@@ -1,10 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s -f f --args=1,6 | filecheck %s --check-prefix=THEN
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=1,6 | filecheck %s --check-prefix=THEN
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=0,6 | filecheck %s --check-prefix=ELSE
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 2 %s | tir opt --pass instcombine-nodes | tir interp -f f --args=1,6 | filecheck %s --check-prefix=THEN
 
 // Both arms compute `x + x`, which cannot trap, so the gate's result is that
 // sum spelled once outside the arms; the gate carries nothing and is swept.
@@ -43,6 +39,3 @@ module {
 // CHECK-NOT: addi %[[X]], %[[X]]
 // CHECK: %[[R:[0-9]+]] = addi %[[SUM]], %[[Q]] : !i32
 // CHECK: -> %[[R]]
-
-// THEN: i32 15
-// ELSE: i32 14

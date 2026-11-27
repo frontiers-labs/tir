@@ -1,0 +1,109 @@
+use std::core::*;
+use std::ir::{ArrayAttr, Cfg, DictAttr};
+
+pub let module = op {
+    dialect: "spirv",
+    signature: () -> (),
+    attributes: { version: String, addressing_model: String, memory_model: String },
+    regions: (body: Cfg),
+    macro_def: true,
+};
+
+pub let module_end = op {
+    dialect: "spirv",
+    signature: () -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
+};
+
+pub let Capability = op {
+    dialect: "spirv",
+    rust_name: "CapabilityOp",
+    signature: () -> (),
+    attributes: { name: String },
+    macro_def: true,
+};
+
+pub let GlobalVariable = op {
+    dialect: "spirv",
+    rust_name: "GlobalVariableOp",
+    signature: () -> (result: Any),
+    attributes: { sym_name: String, storage_class: String, decorations: DictAttr },
+    macro_def: true,
+};
+
+pub let EntryPoint = op {
+    dialect: "spirv",
+    rust_name: "EntryPointOp",
+    signature: () -> (),
+    attributes: { execution_model: String, function: String, interfaces: ArrayAttr },
+    macro_def: true,
+};
+
+pub let ExecutionMode = op {
+    dialect: "spirv",
+    rust_name: "ExecutionModeOp",
+    signature: () -> (),
+    attributes: { function: String, mode: String, values: ArrayAttr },
+    macro_def: true,
+};
+
+pub let Constant = op {
+    dialect: "spirv",
+    rust_name: "ConstantOp",
+    signature: () -> (result: Any),
+    attributes: { value: Any },
+    macro_def: true,
+};
+
+pub let Load = op {
+    dialect: "spirv",
+    rust_name: "LoadOp",
+    signature: (pointer: Any) -> (result: Any),
+    macro_def: true,
+};
+
+pub let Store = op {
+    dialect: "spirv",
+    rust_name: "StoreOp",
+    signature: (pointer: Any, value: Any) -> (),
+    macro_def: true,
+};
+
+pub let ControlBarrier = op {
+    dialect: "spirv",
+    rust_name: "ControlBarrierOp",
+    signature: (execution_scope: Any, memory_scope: Any, memory_semantics: Any) -> (),
+    macro_def: true,
+};
+
+pub let MemoryBarrier = op {
+    dialect: "spirv",
+    rust_name: "MemoryBarrierOp",
+    signature: (memory_scope: Any, memory_semantics: Any) -> (),
+    macro_def: true,
+};
+
+pub let CompositeExtract = op {
+    dialect: "spirv",
+    rust_name: "CompositeExtractOp",
+    signature: (composite: Any) -> (result: Any),
+    attributes: { indices: ArrayAttr },
+    macro_def: true,
+};
+
+pub let AccessChain = op {
+    dialect: "spirv",
+    rust_name: "AccessChainOp",
+    signature: (base: Any, indices: ..Any) -> (result: Any),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let Return = op {
+    dialect: "spirv",
+    rust_name: "ReturnOp",
+    signature: (value: Option<Any>) -> (),
+    interfaces: (Terminator,),
+    macro_def: true,
+};

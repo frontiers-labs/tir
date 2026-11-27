@@ -1,9 +1,11 @@
 use tir::parse::common::Cursor;
 use tir::{
     Context, Ctor, Error, ExitScope, ExitScopeKind, ExitTarget, IRFormatter, Kind, NonLocalExit,
-    Operation, Terminator, Terms, TypeCtor, TypeId, TypeSpelling, dialect, operation, parse::Span,
+    Operation, Terminator, Terms, TypeCtor, TypeId, TypeSpelling, dialect, parse::Span,
 };
 use tir_symbolic::term::{no_carrier, valid};
+
+include!(concat!(env!("OUT_DIR"), "/cir.rs"));
 
 pub mod ops {
     pub use super::{
@@ -88,33 +90,11 @@ unit_type!(
     "A C `va_list`, written `!cir.va_list`."
 );
 
-operation! {
-    VaStartOp {
-        name: "va_start",
-        dialect: "cir",
-        scheme: "() -> cir.va_list",
-        results: R { result },
-    }
-}
+__cdsl_cir_VaStartOp!();
 
-operation! {
-    VaArgOp {
-        name: "va_arg",
-        dialect: "cir",
-        scheme: "(cir.va_list) -> _",
-        operands: O { list },
-        results: R { result },
-    }
-}
+__cdsl_cir_VaArgOp!();
 
-operation! {
-    VaEndOp {
-        name: "va_end",
-        dialect: "cir",
-        scheme: "(cir.va_list) -> ()",
-        operands: O { list },
-    }
-}
+__cdsl_cir_VaEndOp!();
 
 // C's loop statements, captured as they are written. The regions are CFG-form and
 // carry no ports: dataflow stays in the stack slots codegen emits, so what these ops
@@ -122,21 +102,7 @@ operation! {
 // for the `raise-loops` pass to reason about. Every loop it refuses is flattened to
 // the same blocks and branches codegen used to emit directly.
 
-operation! {
-    ForOp {
-        name: "for",
-        dialect: "cir",
-        scheme: "() -> ()",
-        format: "custom",
-        verifier: "true",
-        regions: R {
-            condition_region: Region {},
-            step_region: Region {},
-            body_region: Region {},
-        },
-        interfaces: [ExitScope],
-    }
-}
+__cdsl_cir_ForOp!();
 
 impl ExitScope for ForOp {
     fn exit_scope(&self) -> ExitScopeKind {
@@ -145,14 +111,6 @@ impl ExitScope for ForOp {
 
     fn label(&self) -> Option<String> {
         loop_label(self)
-    }
-}
-
-impl tir::Verifiable for ForOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_loop_region(context, self, 0, RegionRole::Condition, "cir.for condition")?;
-        verify_loop_region(context, self, 1, RegionRole::Step, "cir.for step")?;
-        verify_loop_region(context, self, 2, RegionRole::Body, "cir.for body")
     }
 }
 
@@ -169,35 +127,18 @@ impl ForOp {
         let condition = parse_loop_region(parser, context, "cond")?;
         let step = parse_loop_region(parser, context, "step")?;
         let body = parse_loop_region(parser, context, "body")?;
-        let attributes = label_attribute(label)
-            .map(|label| context.named_attribute("label", label))
-            .into_iter()
-            .collect();
-        Ok(Box::new(ForOp::new(
-            context,
-            Some(condition),
-            Some(step),
-            Some(body),
-            tir::NewOpParts { attributes },
-            tir::InsertionPoint::Root,
-        )))
+        let mut builder = ForOpBuilder::new(context)
+            .condition_region(condition)
+            .step_region(step)
+            .body_region(body);
+        if let Some(label) = label_attribute(label) {
+            builder = builder.attr("label", label);
+        }
+        Ok(Box::new(builder.build()))
     }
 }
 
-operation! {
-    WhileOp {
-        name: "while",
-        dialect: "cir",
-        scheme: "() -> ()",
-        format: "custom",
-        verifier: "true",
-        regions: R {
-            condition_region: Region {},
-            body_region: Region {},
-        },
-        interfaces: [ExitScope],
-    }
-}
+__cdsl_cir_WhileOp!();
 
 impl ExitScope for WhileOp {
     fn exit_scope(&self) -> ExitScopeKind {
@@ -206,19 +147,6 @@ impl ExitScope for WhileOp {
 
     fn label(&self) -> Option<String> {
         loop_label(self)
-    }
-}
-
-impl tir::Verifiable for WhileOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_loop_region(
-            context,
-            self,
-            0,
-            RegionRole::Condition,
-            "cir.while condition",
-        )?;
-        verify_loop_region(context, self, 1, RegionRole::Body, "cir.while body")
     }
 }
 
@@ -234,34 +162,17 @@ impl WhileOp {
         let label = parse_loop_label(parser)?;
         let condition = parse_loop_region(parser, context, "cond")?;
         let body = parse_loop_region(parser, context, "body")?;
-        let attributes = label_attribute(label)
-            .map(|label| context.named_attribute("label", label))
-            .into_iter()
-            .collect();
-        Ok(Box::new(WhileOp::new(
-            context,
-            Some(condition),
-            Some(body),
-            tir::NewOpParts { attributes },
-            tir::InsertionPoint::Root,
-        )))
+        let mut builder = WhileOpBuilder::new(context)
+            .condition_region(condition)
+            .body_region(body);
+        if let Some(label) = label_attribute(label) {
+            builder = builder.attr("label", label);
+        }
+        Ok(Box::new(builder.build()))
     }
 }
 
-operation! {
-    DoOp {
-        name: "do",
-        dialect: "cir",
-        scheme: "() -> ()",
-        format: "custom",
-        verifier: "true",
-        regions: R {
-            body_region: Region {},
-            condition_region: Region {},
-        },
-        interfaces: [ExitScope],
-    }
-}
+__cdsl_cir_DoOp!();
 
 impl ExitScope for DoOp {
     fn exit_scope(&self) -> ExitScopeKind {
@@ -270,13 +181,6 @@ impl ExitScope for DoOp {
 
     fn label(&self) -> Option<String> {
         loop_label(self)
-    }
-}
-
-impl tir::Verifiable for DoOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_loop_region(context, self, 0, RegionRole::Body, "cir.do body")?;
-        verify_loop_region(context, self, 1, RegionRole::Condition, "cir.do condition")
     }
 }
 
@@ -292,51 +196,25 @@ impl DoOp {
         let label = parse_loop_label(parser)?;
         let body = parse_loop_region(parser, context, "body")?;
         let condition = parse_loop_region(parser, context, "cond")?;
-        let attributes = label_attribute(label)
-            .map(|label| context.named_attribute("label", label))
-            .into_iter()
-            .collect();
-        Ok(Box::new(DoOp::new(
-            context,
-            Some(body),
-            Some(condition),
-            tir::NewOpParts { attributes },
-            tir::InsertionPoint::Root,
-        )))
+        let mut builder = DoOpBuilder::new(context)
+            .body_region(body)
+            .condition_region(condition);
+        if let Some(label) = label_attribute(label) {
+            builder = builder.attr("label", label);
+        }
+        Ok(Box::new(builder.build()))
     }
 }
 
-operation! {
-    ConditionOp {
-        name: "condition",
-        dialect: "cir",
-        scheme: "(int<1>) -> ()",
-        operands: O { condition },
-        interfaces: [Terminator],
-    }
-}
+__cdsl_cir_ConditionOp!();
 
 impl Terminator for ConditionOp {}
 
-operation! {
-    YieldOp {
-        name: "yield",
-        dialect: "cir",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
+__cdsl_cir_YieldOp!();
 
 impl Terminator for YieldOp {}
 
-operation! {
-    BreakOp {
-        name: "break",
-        dialect: "cir",
-        scheme: "() -> ()",
-        interfaces: [Terminator, NonLocalExit],
-    }
-}
+__cdsl_cir_BreakOp!();
 
 impl Terminator for BreakOp {}
 
@@ -353,14 +231,7 @@ impl NonLocalExit for BreakOp {
     }
 }
 
-operation! {
-    ContinueOp {
-        name: "continue",
-        dialect: "cir",
-        scheme: "() -> ()",
-        interfaces: [Terminator, NonLocalExit],
-    }
-}
+__cdsl_cir_ContinueOp!();
 
 impl Terminator for ContinueOp {}
 
@@ -386,77 +257,6 @@ fn exit_target(op: &impl Operation) -> ExitTarget {
         Some(label) => ExitTarget::Label(label),
         None => ExitTarget::InnermostLoop,
     }
-}
-
-/// What a region of a `cir` loop is, and so which terminators may leave it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RegionRole {
-    /// Decides whether the next iteration runs; leaves through `cir.condition`.
-    Condition,
-    /// Runs between iterations; falls through to the condition.
-    Step,
-    /// Leaves through a fallthrough, or through `break`/`continue`.
-    Body,
-}
-
-impl RegionRole {
-    fn admits(self, exit: &tir::OpHandle) -> bool {
-        match self {
-            RegionRole::Condition => exit.is::<ConditionOp>(),
-            RegionRole::Step => exit.is::<YieldOp>(),
-            RegionRole::Body => {
-                exit.is::<YieldOp>() || exit.is::<BreakOp>() || exit.is::<ContinueOp>()
-            }
-        }
-    }
-
-    fn expected(self) -> &'static str {
-        match self {
-            RegionRole::Condition => "cir.condition",
-            RegionRole::Step => "cir.yield",
-            RegionRole::Body => "cir.yield, cir.break or cir.continue",
-        }
-    }
-}
-
-fn verify_loop_region(
-    context: &Context,
-    op: &impl Operation,
-    index: usize,
-    role: RegionRole,
-    label: &str,
-) -> Result<(), Error> {
-    let region = context.get_region(op.regions().nth(index).unwrap().id());
-    let mut exits = 0;
-    for block in region.iter(context.clone()) {
-        let Some(&last) = block.op_ids().last() else {
-            return Err(Error::VerificationError(format!(
-                "{label} has a block with no terminator"
-            )));
-        };
-        let last = context.get_op(last);
-        if last
-            .clone()
-            .as_interface::<dyn tir::BranchTerminator>()
-            .is_some()
-        {
-            continue;
-        }
-        if !role.admits(&last) {
-            return Err(Error::VerificationError(format!(
-                "{label} must leave through {}",
-                role.expected()
-            )));
-        }
-        exits += 1;
-    }
-    if exits == 0 {
-        return Err(Error::VerificationError(format!(
-            "{label} must leave through {}",
-            role.expected()
-        )));
-    }
-    Ok(())
 }
 
 fn print_loop_regions(

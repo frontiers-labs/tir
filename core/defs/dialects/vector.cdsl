@@ -1,0 +1,23 @@
+use std::core::*;
+use std::ir::{Index, Vector};
+
+pub let vector_len = op {
+    signature: (avl: Index) -> (result: Index),
+    attributes: { sew: Int },
+    macro_def: true,
+};
+
+pub let add<N: Nat, T> = op {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Option<Index>) -> (result: Vector<N, T>),
+    macro_def: true,
+};
+
+pub let sub<N: Nat, T> = op {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Option<Index>) -> (result: Vector<N, T>),
+    macro_def: true,
+};
+
+pub let mul<N: Nat, T> = op {
+    signature: (lhs: Vector<N, T>, rhs: Vector<N, T>, vl: Option<Index>) -> (result: Vector<N, T>),
+    macro_def: true,
+};

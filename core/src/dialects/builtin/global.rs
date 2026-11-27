@@ -1,8 +1,8 @@
+pub use super::generated::{GlobalOp, GlobalOpBuilder, global};
+
 use crate::attributes::AttributeValue;
 use crate::symbol_table::visibility_of;
-use crate::{
-    Context, Error, Global, IRFormatter, Operation, Symbol, TypeId, Visibility, operation,
-};
+use crate::{Context, Error, Global, IRFormatter, Operation, Symbol, TypeId, Visibility};
 
 use crate as tir;
 
@@ -19,21 +19,6 @@ pub struct SymbolDifference {
 // A definition carries an alignment and either an initializer (`bytes`, plus the
 // `relocations` patched into it) or a zero-filled `size`. A declaration of an
 // object another module defines carries `external` and neither.
-operation! {
-    GlobalOp {
-        name: "global",
-        dialect: "builtin",
-        scheme: "() -> ptr.p<_>",
-        format: "custom",
-        verifier: "true",
-        interfaces: [Symbol, Global],
-        attributes: A {
-            sym_name: "Str",
-        },
-        results: R { result },
-    }
-}
-
 impl Global for GlobalOp {
     fn address(&self) -> crate::ValueId {
         self.result()
@@ -67,8 +52,8 @@ impl Symbol for GlobalOp {
     }
 }
 
-impl tir::Verifiable for GlobalOp {
-    fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
+impl GlobalOp {
+    pub(crate) fn verify_storage(&self) -> Result<(), Error> {
         self.symbol_differences()?;
         let name = self.sym_name();
         let defines = self.bytes().is_some() as u8 + self.size().is_some() as u8;
@@ -231,7 +216,7 @@ impl GlobalOp {
             .collect()
     }
 
-    fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
+    pub(crate) fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.clone();
         fmt.write(format!("%{} = global", self.address().number()))?;
         if self.symbol_visibility() == Visibility::Private {
@@ -265,7 +250,7 @@ impl GlobalOp {
         fmt.write("\n")
     }
 
-    fn custom_parse(
+    pub(crate) fn custom_parse(
         parser: &mut tir::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
@@ -278,36 +263,30 @@ impl GlobalOp {
             .ok_or_else(|| (parser.span(), Error::ExpectedSymbolName))?
             .to_string();
 
-        let mut parts = tir::NewOpParts::default();
+        let mut builder = GlobalOpBuilder::new(context)
+            .attr("sym_name", AttributeValue::Str(sym_name.into()))
+            .result_type(crate::ptr::PtrType::opaque(context));
         if is_private {
-            parts.attributes.push(context.named_attribute(
+            builder = builder.attr(
                 "sym_visibility",
                 AttributeValue::Str("private".to_string().into()),
-            ));
+            );
         }
         if is_external {
-            parts
-                .attributes
-                .push(context.named_attribute("external", AttributeValue::Bool(true)));
+            builder = builder.attr("external", AttributeValue::Bool(true));
         }
         if parser.parse_token("size") {
-            parts
-                .attributes
-                .push(context.named_attribute("size", AttributeValue::UInt(parse_number(parser)?)));
+            builder = builder.attr("size", AttributeValue::UInt(parse_number(parser)?));
         }
         if parser.parse_token("align") {
-            parts.attributes.push(
-                context.named_attribute("align", AttributeValue::UInt(parse_number(parser)?)),
-            );
+            builder = builder.attr("align", AttributeValue::UInt(parse_number(parser)?));
         }
         if parser.parse_token("section") {
             let section = parser
                 .parse_string()
                 .ok_or_else(|| (parser.span(), Error::ExpectedToken("section name")))?
                 .to_string();
-            parts
-                .attributes
-                .push(context.named_attribute("section", AttributeValue::Str(section.into())));
+            builder = builder.attr("section", AttributeValue::Str(section.into()));
         }
         for name in ["bytes", "relocations", "symbol_differences"] {
             if !parser.parse_token(name) {
@@ -316,16 +295,10 @@ impl GlobalOp {
             let value = parser
                 .parse_attribute_value(context)?
                 .ok_or_else(|| (parser.span(), Error::ExpectedToken("attribute value")))?;
-            parts.attributes.push(context.named_attribute(name, value));
+            builder = builder.attr(name, value);
         }
 
-        Ok(Box::new(GlobalOp::new(
-            context,
-            sym_name.as_str(),
-            crate::ptr::PtrType::opaque(context),
-            parts,
-            tir::InsertionPoint::Root,
-        )))
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -338,17 +311,10 @@ fn parse_number(parser: &mut tir::parse::text::Parser) -> Result<u64, (tir::pars
 }
 
 /// A δ definition holding `bytes`, aligned to `align`.
-pub fn global_bytes(
-    context: &Context,
-    name: &str,
-    bytes: Vec<u8>,
-    align: u64,
-    mut parts: tir::NewOpParts,
-    insertion: tir::InsertionPoint,
-) -> GlobalOp {
-    parts.attributes.insert(
-        0,
-        context.named_attribute(
+pub fn global_bytes(context: &Context, name: &str, bytes: Vec<u8>, align: u64) -> GlobalOpBuilder {
+    GlobalOpBuilder::new(context)
+        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
+        .attr(
             "bytes",
             AttributeValue::Array(
                 bytes
@@ -357,63 +323,24 @@ pub fn global_bytes(
                     .collect::<Vec<_>>()
                     .into(),
             ),
-        ),
-    );
-    parts.attributes.insert(
-        1,
-        context.named_attribute("align", AttributeValue::UInt(align)),
-    );
-    GlobalOp::new(
-        context,
-        name,
-        crate::ptr::PtrType::opaque(context),
-        parts,
-        insertion,
-    )
+        )
+        .attr("align", AttributeValue::UInt(align))
+        .result_type(crate::ptr::PtrType::opaque(context))
 }
 
 /// A δ definition reserving `size` zero bytes, aligned to `align`.
-pub fn global_zero(
-    context: &Context,
-    name: &str,
-    size: u64,
-    align: u64,
-    mut parts: tir::NewOpParts,
-    insertion: tir::InsertionPoint,
-) -> GlobalOp {
-    parts.attributes.insert(
-        0,
-        context.named_attribute("size", AttributeValue::UInt(size)),
-    );
-    parts.attributes.insert(
-        1,
-        context.named_attribute("align", AttributeValue::UInt(align)),
-    );
-    GlobalOp::new(
-        context,
-        name,
-        crate::ptr::PtrType::opaque(context),
-        parts,
-        insertion,
-    )
+pub fn global_zero(context: &Context, name: &str, size: u64, align: u64) -> GlobalOpBuilder {
+    GlobalOpBuilder::new(context)
+        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
+        .attr("size", AttributeValue::UInt(size))
+        .attr("align", AttributeValue::UInt(align))
+        .result_type(crate::ptr::PtrType::opaque(context))
 }
 
 /// A δ declaration of an object another module defines.
-pub fn global_external(
-    context: &Context,
-    name: &str,
-    mut parts: tir::NewOpParts,
-    insertion: tir::InsertionPoint,
-) -> GlobalOp {
-    parts.attributes.insert(
-        0,
-        context.named_attribute("external", AttributeValue::Bool(true)),
-    );
-    GlobalOp::new(
-        context,
-        name,
-        crate::ptr::PtrType::opaque(context),
-        parts,
-        insertion,
-    )
+pub fn global_external(context: &Context, name: &str) -> GlobalOpBuilder {
+    GlobalOpBuilder::new(context)
+        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
+        .attr("external", AttributeValue::Bool(true))
+        .result_type(crate::ptr::PtrType::opaque(context))
 }

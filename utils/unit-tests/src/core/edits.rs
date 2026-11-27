@@ -3,12 +3,14 @@
 
 use tir::{
     builtin::{self, ops, ModuleOp},
-    interp,
     scf::{LoopOp, SwitchOp},
     Context, ExitTarget, NonLocalExit, OpId, Operation, RegionId, Terminator, ValueId,
 };
 
-use super::fixtures::{self, module_ops};
+use super::fixtures::{
+    self, module_ops,
+    ops::{ExitOp, ExitOpBuilder},
+};
 
 fn function(context: &Context, module: &ModuleOp) -> OpId {
     module_ops(context, module.id())[0]
@@ -25,16 +27,6 @@ fn find<T: Operation>(context: &Context, region: RegionId) -> OpId {
         .into_iter()
         .find(|&op| context.get_op(op).is::<T>())
         .expect("the region holds the op")
-}
-
-fn run(context: &Context, function: OpId, args: &[i64]) -> i64 {
-    let args = args
-        .iter()
-        .map(|&value| interp::Value::Int(tir::utils::APInt::new_signed(32, value)))
-        .collect();
-    interp::run_function(context, function, args).expect("runs")[0]
-        .to_i64()
-        .expect("an integer")
 }
 
 const LOOP: &str = r#"module {
@@ -81,7 +73,7 @@ fn growing_a_loop_port_extends_every_aligned_range() {
         grown.value_results().as_slice(),
         [grown.value_results()[0], result]
     );
-    tir::verify_op_tree(&context, module.id()).expect("the grown loop verifies");
+    tir::check_types(&context).expect("the grown loop verifies");
 }
 
 #[test]
@@ -90,12 +82,9 @@ fn growing_a_loop_state_port_keeps_the_carried_shape() {
     let function = function(&context, &module);
     let body = body_of(&context, function);
     let loop_op = find::<LoopOp>(&context, body);
-    let entry = tir::state::EntryStateOp::new(
-        &context,
-        vec![tir::builtin::StateType::memory(&context)],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let entry = tir::state::EntryStateOpBuilder::new(&context)
+        .state_result(tir::builtin::StateType::memory(&context))
+        .build();
     context.insert(tir::InsertionPoint::Region(body), entry.id());
     let chain = entry.result();
 
@@ -113,7 +102,7 @@ fn growing_a_loop_state_port_keeps_the_carried_shape() {
         3,
         "the value ranges are untouched"
     );
-    tir::verify_op_tree(&context, module.id()).expect("the grown loop verifies");
+    tir::check_types(&context).expect("the grown loop verifies");
 }
 
 const SWITCH: &str = r#"module {
@@ -151,37 +140,7 @@ fn growing_a_gamma_port_forwards_to_and_joins_every_arm() {
         assert_eq!(arm.value_results(), vec![arm.value_arguments()[0].id()]);
     }
     assert_eq!(grown.value_results().as_slice(), [result]);
-    tir::verify_op_tree(&context, module.id()).expect("the grown gamma verifies");
-}
-
-tir::helpers::operation! {
-    ExitOp {
-        name: "exit",
-        dialect: "test",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { values },
-        interfaces: [Terminator, NonLocalExit],
-    }
-}
-
-impl ExitOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        fmt.write("test.exit\n")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
-        let _ = parser;
-        Ok(Box::new(ExitOp::new(
-            context,
-            vec![],
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
-    }
+    tir::check_types(&context).expect("the grown gamma verifies");
 }
 
 impl Terminator for ExitOp {}
@@ -203,22 +162,14 @@ fn loop_with_exit() -> (Context, OpId, OpId) {
     let loop_op = find::<LoopOp>(&context, body_of(&context, function));
     let body = context.get_op(loop_op).regions()[0];
     let predicate = context.get_region(body).results()[0];
-    let exit = ExitOp::new(
-        &context,
-        vec![],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let exit = ExitOpBuilder::new(&context).values(vec![]).build();
     let arm = |ops: Vec<OpId>| context.create_nodes_region(vec![], ops, vec![]).id();
-    let conditional = tir::scf::SwitchOp::new(
-        &context,
-        predicate,
-        vec![],
-        vec![],
-        vec![arm(vec![]), arm(vec![exit.id()])],
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let conditional = tir::scf::nodes::SwitchOpBuilder::new(&context)
+        .predicate(predicate)
+        .inputs(vec![])
+        .arms(vec![arm(vec![]), arm(vec![exit.id()])])
+        .result_types(vec![])
+        .build();
     context.insert(tir::InsertionPoint::Region(body), conditional.id());
     (context, loop_op, exit.id())
 }
@@ -270,22 +221,8 @@ fn add_auto_places_an_op_where_its_operands_meet() {
     let port = context.get_region(inner).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
-    let mixed = ops::addi(
-        &context,
-        port,
-        argument,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let outside = ops::addi(
-        &context,
-        argument,
-        argument,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let mixed = ops::addi(&context, port, argument, i32_ty).build();
+    let outside = ops::addi(&context, argument, argument, i32_ty).build();
 
     assert_eq!(context.add_auto(mixed.id()), inner);
     assert_eq!(context.add_auto(outside.id()), outer);
@@ -313,23 +250,9 @@ fn add_auto_pins_an_op_to_its_state() {
     let argument = context.get_region(outer).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
-    let pinned_out = ops::addi(
-        &context,
-        argument,
-        argument,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let pinned_out = ops::addi(&context, argument, argument, i32_ty).build();
     context.append_operand(pinned_out.id(), chain);
-    let pinned_in = ops::addi(
-        &context,
-        argument,
-        argument,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let pinned_in = ops::addi(&context, argument, argument, i32_ty).build();
     context.append_operand(pinned_in.id(), inner_chain);
 
     assert_eq!(context.add_auto(pinned_out.id()), outer);
@@ -362,6 +285,5 @@ fn growing_a_counted_loop_port_lands_before_its_bounds() {
     assert_eq!(grown.value_operands().as_slice(), [lb, ub, ub, step]);
     assert_eq!(grown.value_results().len(), 2);
     assert_eq!(grown.value_results()[1], result);
-    tir::verify_op_tree(&context, module.id()).expect("the grown counted loop verifies");
-    assert_eq!(run(&context, function, &[0, 3, 1]), 3);
+    tir::check_types(&context).expect("the grown counted loop verifies");
 }

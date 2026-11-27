@@ -1,0 +1,30 @@
+use std::core::*;
+use std::ir::{Bits, Block};
+
+pub let br = op {
+    rust_name: "BranchOp",
+    signature: (dest_args: ..Any) -> (),
+    attributes: { dest: Block },
+    interfaces: (Terminator, BranchTerminator),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let cond_br = op {
+    rust_name: "CondBranchOp",
+    signature: (condition: Bits<1>, true_args: ..Any, false_args: ..Any) -> (),
+    attributes: { true_dest: Block, false_dest: Block },
+    interfaces: (Terminator, BranchTerminator, BranchGuard),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let r#switch<w: Nat> = op {
+    signature: (selector: Bits<w>, args: ..Any) -> (),
+    interfaces: (
+        Terminator, BranchTerminator, CaseGuard,
+        Check(TypeConstraint::SwitchCases(ConstraintPort::Input("selector"))),
+    ),
+    custom_format: true,
+    macro_def: true,
+};

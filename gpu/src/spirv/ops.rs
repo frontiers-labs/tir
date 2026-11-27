@@ -1,150 +1,36 @@
-use tir::helpers::operation;
+#![allow(non_snake_case)]
+
 use tir::{Context, Error, Operation, Terminator, ValueId};
 
-use tir;
+include!(concat!(env!("OUT_DIR"), "/spirv_manual.rs"));
 
-operation! {
-    ModuleOp {
-        name: "module",
-        dialect: "spirv",
-        scheme: "() -> ()",
-        attributes: A {
-            version: "Str",
-            addressing_model: "Str",
-            memory_model: "Str",
-        },
-        regions: R { body: Region { kind: Blocks, } }
-    }
-}
+__cdsl_spirv_ModuleOp!();
 
-operation! {
-    ModuleEndOp {
-        name: "module_end",
-        dialect: "spirv",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
+__cdsl_spirv_ModuleEndOp!();
 
 impl Terminator for ModuleEndOp {}
 
-operation! {
-    CapabilityOp {
-        name: "Capability",
-        dialect: "spirv",
-        scheme: "() -> ()",
-        attributes: A { name: "Str", }
-    }
-}
+__cdsl_spirv_CapabilityOp!();
 
-operation! {
-    GlobalVariableOp {
-        name: "GlobalVariable",
-        dialect: "spirv",
-        scheme: "() -> _",
-        attributes: A {
-            sym_name: "Str",
-            storage_class: "Str",
-            decorations: "Dict",
-        },
-        results: R { result }
-    }
-}
+__cdsl_spirv_GlobalVariableOp!();
 
-operation! {
-    EntryPointOp {
-        name: "EntryPoint",
-        dialect: "spirv",
-        scheme: "() -> ()",
-        attributes: A {
-            execution_model: "Str",
-            function: "Str",
-            interfaces: "Array",
-        }
-    }
-}
+__cdsl_spirv_EntryPointOp!();
 
-operation! {
-    ExecutionModeOp {
-        name: "ExecutionMode",
-        dialect: "spirv",
-        scheme: "() -> ()",
-        attributes: A {
-            function: "Str",
-            mode: "Str",
-            values: "Array",
-        }
-    }
-}
+__cdsl_spirv_ExecutionModeOp!();
 
-operation! {
-    ConstantOp {
-        name: "Constant",
-        dialect: "spirv",
-        scheme: "() -> _",
-        attributes: A { value: "any", },
-        results: R { result }
-    }
-}
+__cdsl_spirv_ConstantOp!();
 
-operation! {
-    LoadOp {
-        name: "Load",
-        dialect: "spirv",
-        scheme: "(_) -> _",
-        operands: O { pointer },
-        results: R { result }
-    }
-}
+__cdsl_spirv_LoadOp!();
 
-operation! {
-    StoreOp {
-        name: "Store",
-        dialect: "spirv",
-        scheme: "(_, _) -> ()",
-        operands: O { pointer, value }
-    }
-}
+__cdsl_spirv_StoreOp!();
 
-operation! {
-    ControlBarrierOp {
-        name: "ControlBarrier",
-        dialect: "spirv",
-        scheme: "(_, _, _) -> ()",
-        operands: O { execution_scope, memory_scope, memory_semantics }
-    }
-}
+__cdsl_spirv_ControlBarrierOp!();
 
-operation! {
-    MemoryBarrierOp {
-        name: "MemoryBarrier",
-        dialect: "spirv",
-        scheme: "(_, _) -> ()",
-        operands: O { memory_scope, memory_semantics }
-    }
-}
+__cdsl_spirv_MemoryBarrierOp!();
 
-operation! {
-    CompositeExtractOp {
-        name: "CompositeExtract",
-        dialect: "spirv",
-        scheme: "(_) -> _",
-        attributes: A { indices: "Array", },
-        operands: O { composite },
-        results: R { result }
-    }
-}
+__cdsl_spirv_CompositeExtractOp!();
 
-operation! {
-    AccessChainOp {
-        name: "AccessChain",
-        dialect: "spirv",
-        scheme: "(_, _*) -> _",
-        format: "custom",
-        operands: O { base, indices },
-        results: R { result }
-    }
-}
+__cdsl_spirv_AccessChainOp!();
 
 impl AccessChainOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
@@ -178,14 +64,13 @@ impl AccessChainOp {
         let result_type = parser
             .parse_type(context)?
             .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-        Ok(Box::new(AccessChainOp::new(
-            context,
-            base,
-            indices,
-            result_type,
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
+        Ok(Box::new(
+            AccessChainOpBuilder::new(context)
+                .base(base)
+                .indices(indices)
+                .result_type(result_type)
+                .build(),
+        ))
     }
 
     pub fn base(&self) -> ValueId {
@@ -197,15 +82,7 @@ impl AccessChainOp {
     }
 }
 
-operation! {
-    ReturnOp {
-        name: "Return",
-        dialect: "spirv",
-        scheme: "(_?) -> ()",
-        operands: O { value },
-        interfaces: [Terminator],
-    }
-}
+__cdsl_spirv_ReturnOp!();
 
 impl Terminator for ReturnOp {}
 

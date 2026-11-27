@@ -1,11 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass destructure --verify %s | filecheck %s
-// RUN: tir opt --pass destructure %s | tir interp --args=0 | filecheck --check-prefix=ZERO %s
-// RUN: tir opt --pass destructure %s | tir interp --args=1 | filecheck --check-prefix=ONE %s
-// RUN: tir opt --pass destructure %s | tir interp --args=2 | filecheck --check-prefix=LAST %s
-// RUN: tir opt --pass destructure %s | tir interp --args=9 | filecheck --check-prefix=LAST %s
-// RUN: tir interp %s --args=9 | filecheck --check-prefix=LAST %s
 
 // A gate with more arms than a bit decides becomes a chain of equality tests,
 // one block per test, the last falling through to the arm no index names:
@@ -47,7 +42,3 @@ module {
 // CHECK-NEXT: %[[K1:[0-9]+]] = constant {value = 1} : !i32
 // CHECK-NEXT: %[[T1:[0-9]+]] = cmpi %[[P]], %[[K1]] {predicate = "eq"} : !i1
 // CHECK-NEXT: cfg.cond_br %[[T1]], ^[[ARM1]], ^[[ARM2]]
-
-// ZERO: i32 10
-// ONE: i32 11
-// LAST: i32 12

@@ -1,0 +1,24 @@
+use std::core::*;
+use std::ir::State;
+
+pub let entry_state = op {
+    signature: () -> (state: ..State),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let join = op {
+    signature: (states: ..State) -> (state: ..State),
+    interfaces: (Check(TypeConstraint::StateFan(
+        ConstraintPort::Output("state"), ConstraintPort::Input("states"), "memory join",
+    )),),
+    macro_def: true,
+};
+
+pub let split = op {
+    signature: (state: ..State) -> (states: ..State),
+    interfaces: (Check(TypeConstraint::StateFan(
+        ConstraintPort::Input("state"), ConstraintPort::Output("states"), "memory split",
+    )),),
+    macro_def: true,
+};

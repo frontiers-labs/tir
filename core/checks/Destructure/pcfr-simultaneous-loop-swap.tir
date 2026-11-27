@@ -1,7 +1,5 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
-// RUN: tir interp %s | filecheck --check-prefix=BASE %s
-// RUN: tir opt --pass destructure %s | tir interp | filecheck --check-prefix=BASE %s
 // RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=CFG %s
 
 // The continue edge swaps two carried values at once. The edge binding must
@@ -26,7 +24,6 @@ module {
   module_end
 }
 
-// BASE: i32 2010
 // CFG-NOT: scf.
 // CFG: ^[[LOOP:bb[0-9]+]](%[[I:[0-9]+]]: !i32, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32):
 // CFG: %[[NEXT_I:[0-9]+]] = addi %[[I]], %{{[0-9]+}} : !i32

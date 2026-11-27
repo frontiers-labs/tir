@@ -4,32 +4,14 @@
 use crate as tir;
 use crate::attributes::Predicate;
 use crate::binding::{self, PortBindings};
-use crate::builtin::{AddIOp, CmpIOp, IntegerType};
+use crate::builtin::{AddIOpBuilder, CmpIOpBuilder, IntegerType};
 use crate::parse::common::Cursor;
-use crate::{Context, Error, ExitScope, ExitScopeKind, Operation, Theta, ValueId, operation};
+use crate::{Context, Error, ExitScope, ExitScopeKind, Operation, Theta, ValueId};
 
 // A θ: every carried value enters as a port, and the body names the predicate,
 // the values the next iteration carries, then the values the loop produces
 // once the predicate is false. Only the cone the predicate selects runs.
-operation! {
-    LoopOp {
-        name: "loop",
-        dialect: "scf",
-        scheme: "(_*) -> _*",
-        operands: O { inits },
-        results: R { results },
-        regions: R {
-            body: Region {
-                kind: Nodes,
-            }
-        },
-        interfaces: [ExitScope],
-        binds: Theta {
-            carried: inits ~ body.ports ~ body.results[1..n+1] ~ body.results[n+1..] ~ results,
-            predicate: body.results[0],
-        },
-    }
-}
+__cdsl_scf_LoopOp!();
 
 impl ExitScope for LoopOp {
     fn exit_scope(&self) -> ExitScopeKind {
@@ -40,31 +22,22 @@ impl ExitScope for LoopOp {
 // A γ: arm `i` runs when the predicate equals case `i`, and the last arm, the
 // default, takes every other value. Without a `cases` attribute the cases are
 // the arm indices, so a predicate past the last arm selects the last arm.
-operation! {
-    SwitchOp {
-        name: "switch",
-        dialect: "scf",
-        scheme: "(int<_>, _*) -> _*",
-        operands: O { predicate, inputs },
-        results: R { results },
-        regions: R {
-            arms: Region {
-                kind: Nodes,
-                variadic: true,
-            }
-        },
-        interfaces: [ExitScope],
-        binds: Gamma {
-            predicate,
-            forwarded: inputs ~ arms.ports,
-            joined: arms.results ~ results,
-        },
-    }
-}
+__cdsl_scf_SwitchOp!();
 
 impl ExitScope for SwitchOp {
     fn exit_scope(&self) -> ExitScopeKind {
         ExitScopeKind::Switch
+    }
+}
+
+impl SwitchOpBuilder {
+    /// Run arm `i` on the predicate bits `cases[i]` and the last arm on every
+    /// other value.
+    pub fn cases(self, cases: &[u64]) -> Self {
+        match binding::gamma_cases_attribute(cases) {
+            Some(cases) => self.attr(binding::GAMMA_CASES, cases),
+            None => self,
+        }
     }
 }
 
@@ -76,27 +49,7 @@ impl ExitScope for SwitchOp {
 // The text elides what the shape pins: the counter's comparison, its
 // increment, and the exit values. `%i, %r = scf.for %c = %lb to %ub step %s
 // (%a = %init) { .. -> %next }` names the counter's final value first.
-operation! {
-    ForOp {
-        name: "for",
-        dialect: "scf",
-        scheme: "forall C: index | int<_>. (C, _*, C, C) -> _*",
-        format: "custom",
-        operands: O { lb, inits, ub, step },
-        results: R { results },
-        regions: R {
-            body: Region {
-                kind: Nodes,
-            }
-        },
-        interfaces: [ExitScope],
-        binds: Theta {
-            carried: (lb, inits) ~ body.ports ~ body.results[1..n+1] ~ body.results[n+1..] ~ results,
-            predicate: body.results[0],
-        },
-        counted: { induction: 0, lb, ub, step },
-    }
-}
+__cdsl_scf_ForOp!();
 
 impl ExitScope for ForOp {
     fn exit_scope(&self) -> ExitScopeKind {
@@ -163,17 +116,14 @@ impl ForOp {
 
         let mut result_types = vec![counter_type];
         result_types.extend(bound.ports.iter().map(tir::Value::ty));
-        Ok(Box::new(ForOp::new(
-            context,
-            lb,
-            bound.inits,
-            ub,
-            step,
-            result_types,
-            Some(body),
-            Default::default(),
-            tir::InsertionPoint::Root,
-        )))
+        let builder = ForOpBuilder::new(context)
+            .lb(lb)
+            .inits(bound.inits)
+            .ub(ub)
+            .step(step)
+            .body(body)
+            .result_types(result_types);
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -219,29 +169,25 @@ fn materialize_counted_shape(
             && op.operands().as_slice() == [counter, ub]
     })
     .unwrap_or_else(|| {
-        let compare = CmpIOp::new(
-            context,
-            counter,
-            ub,
-            Predicate::Slt,
-            IntegerType::new(context, 1),
-            Default::default(),
-            tir::InsertionPoint::Region(body),
-        );
+        let compare = CmpIOpBuilder::new(context)
+            .lhs(counter)
+            .rhs(ub)
+            .predicate(Predicate::Slt)
+            .result_type(IntegerType::new(context, 1))
+            .build();
+        context.insert(crate::InsertionPoint::Region(body), compare.id());
         compare.result()
     });
     let advance = existing(&|op| {
         op.is::<crate::builtin::AddIOp>() && op.operands().as_slice() == [counter, step]
     })
     .unwrap_or_else(|| {
-        let advance = AddIOp::new(
-            context,
-            counter,
-            step,
-            context.get_value(counter).ty(),
-            Default::default(),
-            tir::InsertionPoint::Region(body),
-        );
+        let advance = AddIOpBuilder::new(context)
+            .lhs(counter)
+            .rhs(step)
+            .result_type(context.get_value(counter).ty())
+            .build();
+        context.insert(crate::InsertionPoint::Region(body), advance.id());
         advance.result()
     });
 

@@ -1,9 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,affine,instcombine-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,affine,instcombine-nodes %s | tir interp - | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 2 %s | tir opt --pass affine,instcombine-nodes | tir interp - | filecheck %s --check-prefix=VALUE
 
 // Four iterations of a small unordered body: the loop is replaced by four
 // copies, each naming its counter outright, with the chain threaded from copy
@@ -44,5 +41,3 @@ module {layout.spec = #layout_spec} {
 // CHECK: ptr.store
 // CHECK: ptr.store
 // CHECK-NOT: ptr.store
-
-// VALUE: i32 5

@@ -283,6 +283,33 @@ pub enum Sem {
     Body { ty: Type, func: ty },
 }
 
+pub enum ConstraintPort {
+    Input(String),
+    Output(String),
+}
+
+pub enum ConstraintRegion {
+    Region(String),
+}
+
+pub enum TypeConstraint {
+    EqualWidth(ConstraintPort, ConstraintPort, String),
+    PointerWidth(ConstraintPort, String),
+    EqualType(ConstraintPort, ConstraintPort, String),
+    TupleElements(ConstraintPort, ConstraintPort),
+    TupleProjection(ConstraintPort, String, ConstraintPort),
+    StateFan(ConstraintPort, ConstraintPort, String),
+    NonFunction(ConstraintPort, String),
+    FunctionDefinition(ConstraintPort, String),
+    FunctionReturn(ConstraintPort),
+    FunctionCall(ConstraintPort, ConstraintPort, ConstraintPort),
+    ModuleScope(String),
+    RegionExits(ConstraintRegion, List<String>, String, String),
+    ExitRole(String),
+    OrderedLoop(ConstraintPort, String),
+    SwitchCases(ConstraintPort),
+}
+
 pub enum Interface {
     Pure,
     PureInterface,
@@ -316,6 +343,7 @@ pub enum Interface {
     RegionBinding,
     Theta,
     FloatingPoint,
+    Check(TypeConstraint),
     Custom(String),
 }
 

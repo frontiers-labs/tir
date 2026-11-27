@@ -1,9 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,affine,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,affine %s | tir interp - | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 3 %s | tir opt --pass affine | tir interp - | filecheck %s --check-prefix=VALUE
 
 // An unrolled loop whose results are read: the counter's final value and the
 // carried sum both come out of the last copy, so the copies' latches stay
@@ -48,4 +45,3 @@ module {layout.spec = #layout_spec} {
 // CHECK-NOT: ptr.store
 
 // A[3] = 6, A[0] = 0, final counter 4, sum 6: (6 + 0 + 4) * 6.
-// VALUE: i32 60

@@ -66,7 +66,7 @@ macro_rules! record {
 }
 
 record!(OperationRow, "Operation", {
-    kind: String, placement: String, container: i64, position: i64, display: i64, location: i64,
+    kind: tir_egglog::NativeIdentity, placement: String, container: i64, position: i64, display: i64, location: i64,
 });
 record!(RegionRow, "Region", { mode: String, owner: i64, slot: i64, entry: i64 });
 record!(BlockRow, "Block", { region: i64, layout: i64 });
@@ -107,7 +107,27 @@ impl Context {
 }
 
 impl Context {
-    pub(crate) fn operation_kind(&self, id: crate::OpId) -> Option<String> {
+    // Read only the projected columns, in index order.
+    pub(crate) fn index_rows<R: FromValues, const N: usize>(
+        &self,
+        name: &str,
+        (columns, keys): (&[usize], impl IntoValues),
+        order: &[usize],
+        project: [usize; N],
+    ) -> Vec<R> {
+        let mut engine = self.engine();
+        let db = engine.database_mut();
+        let keys: Vec<_> = keys.into_values(db.base_values()).collect();
+        let table = db.table(name).expect("declared IR table");
+        let index = db.add_kept_index(table, columns, order);
+        db.listed(index, &keys)
+            .map(|row| R::from_values(&project.map(|i| row[i]), db.base_values()))
+            .collect()
+    }
+}
+
+impl Context {
+    pub(crate) fn operation_kind(&self, id: crate::OpId) -> Option<tir_egglog::NativeIdentity> {
         self.record::<OperationRow>(id.number()).map(|row| row.kind)
     }
 }

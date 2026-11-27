@@ -17,7 +17,6 @@ members = [
     "libs/symbolic",
     "tools/isasim",
     "tools/llvm",
-    "utils/pdl",
     "utils/cdsl",
     "utils/cdsl/core",
     "libs/cst",
@@ -48,7 +47,6 @@ tir-llvm = { path = "tools/llvm" }
 tir-jit = { path = "libs/jit" }
 tir-egglog = { path = "libs/egglog" }
 tir-bench = { path = "utils/bench" }
-tir-pdl = { path = "utils/pdl", default-features = false }
 
 tir-cdsl = { path = "utils/cdsl" }
 tir-cdsl-core = { path = "utils/cdsl/core" }

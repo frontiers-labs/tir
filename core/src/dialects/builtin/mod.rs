@@ -1,3 +1,9 @@
+#[allow(dead_code, unused_imports)]
+#[macro_use]
+pub(crate) mod generated {
+    include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
+}
+
 mod arith;
 mod fn_type;
 mod global;
@@ -16,6 +22,10 @@ use crate as tir;
 
 pub use arith::*;
 pub use fn_type::*;
+pub use generated::{
+    Additive, Commutative, Congruent, ConstantLike, IntegerArithmetic, OpCost, PureInterface,
+    SameOperandAndResultType, Speculatable, Subtractive, Symbol, Terminator, Visibility,
+};
 pub use global::*;
 pub use module::*;
 pub use state::*;

@@ -1,21 +1,23 @@
 // RUN: tir opt --verify %s | tir opt --verify - | filecheck %s
 
-#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64, !f64]}
-
 module {
   %f = func.func @two_results(%a: !f64, %b: !f64) -> !f64 {
-    %sum, %product = fp.round (%x = %a, %y = %b) {contract = #contract} : (!f64, !f64) {
-      %s = fp.add %x, %y : !f64
-      %p = fp.mul %x, %y : !f64
-      -> %s, %p
-    }
+    %x = fp.capture %a : !fp.computation<!f64, nearest_even, permitted>
+    %y = fp.capture %b : !fp.computation<!f64, nearest_even, permitted>
+    %sum_expr = fp.add %x, %y : !fp.computation<!f64, nearest_even, permitted>
+    %product_expr = fp.mul %x, %y : !fp.computation<!f64, nearest_even, permitted>
+    %sum = fp.materialize %sum_expr : !f64
+    %product = fp.materialize %product_expr : !f64
     -> %product
   }
   module_end
 }
 
-// CHECK: %[[SUM:[0-9]+]], %[[PRODUCT:[0-9]+]] = fp.round (%[[X:[0-9]+]] = %{{[0-9]+}}, %[[Y:[0-9]+]] = %{{[0-9]+}}) {contract = {{.*}}result_formats = [!f64, !f64]{{.*}}} : (!f64, !f64) {
-// CHECK: %[[S:[0-9]+]] = fp.add %[[X]], %[[Y]] : !f64
-// CHECK: %[[P:[0-9]+]] = fp.mul %[[X]], %[[Y]] : !f64
-// CHECK: -> %[[S]], %[[P]]
-// CHECK: -> %[[PRODUCT]]
+// CHECK-LABEL: func.func @two_results(%[[A:[0-9]+]]: !f64, %[[B:[0-9]+]]: !f64) -> !f64 {
+// CHECK-NEXT: %[[X:[0-9]+]] = fp.capture %[[A]] : !fp.computation<!f64, nearest_even, permitted>
+// CHECK-NEXT: %[[Y:[0-9]+]] = fp.capture %[[B]] : !fp.computation<!f64, nearest_even, permitted>
+// CHECK-NEXT: %[[S:[0-9]+]] = fp.add %[[X]], %[[Y]] : !fp.computation<!f64, nearest_even, permitted>
+// CHECK-NEXT: %[[P:[0-9]+]] = fp.mul %[[X]], %[[Y]] : !fp.computation<!f64, nearest_even, permitted>
+// CHECK-NEXT: %{{[0-9]+}} = fp.materialize %[[S]] : !f64
+// CHECK-NEXT: %[[PRODUCT:[0-9]+]] = fp.materialize %[[P]] : !f64
+// CHECK-NEXT: -> %[[PRODUCT]]

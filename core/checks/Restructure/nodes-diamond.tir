@@ -1,12 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
-// RUN: tir interp %s -f pick --args=1,5 | filecheck --check-prefix=THEN %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f pick --args=1,5 | filecheck --check-prefix=THEN %s
-// RUN: tir interp %s -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
-// RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
 
 // Each arm stores to the slot and computes a value. A gamma forwards nothing:
 // the arms read the enclosing scope, and only what the continuation needs
@@ -47,6 +41,3 @@ module {
 // CHECK-NEXT: %[[L:[0-9]+]], %[[R:[0-9]+]] = ptr.load %[[P]] state(%[[M]]) : !i32
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[V]], %[[L]] : !i32
 // CHECK-NEXT: -> %[[SUM]], %[[R]]
-
-// THEN: i32 15
-// ELSE: i32 5

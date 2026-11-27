@@ -1,4 +1,4 @@
-use crate::{Terminator, dialect, operation};
+use crate::{Terminator, dialect};
 
 use crate as tir;
 
@@ -29,14 +29,6 @@ dialect! {
 // The back edge of an `scf.ordered_for`: it names what the next iteration
 // carries. An unordered body names its results outright and has no
 // terminator, so nothing else needs this.
-operation! {
-    YieldOp {
-        name: "yield",
-        dialect: "scf",
-        scheme: "(_*) -> ()",
-        operands: O { values },
-        interfaces: [Terminator],
-    }
-}
+__cdsl_scf_YieldOp!();
 
 impl Terminator for YieldOp {}

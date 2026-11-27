@@ -1,15 +1,18 @@
 //! Emits global data sections from frontend definitions.
 
-use tir::Context;
 use tir::builtin::ModuleOp;
 use tir::builtin::ops as b;
+use tir::{Context, InsertionPoint};
 
 /// Lower frontend data definitions immediately ahead of the machine backend.
 /// String uses become addresses into `.rodata`; scalar globals become symbols
 /// in `.data`.
 pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassError> {
     use tir::attributes::AttributeValue;
-    use tir::backend::{LiteralOp, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp};
+    use tir::backend::{
+        LiteralOpBuilder, SectionEndOpBuilder, SectionOpBuilder, SymbolEndOpBuilder,
+        SymbolOpBuilder,
+    };
 
     let mut globals = Vec::new();
     let mut read_only = Vec::new();
@@ -60,53 +63,33 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
     emit_data_section(context, &module_body, ".rodata", read_only);
 
     if !zero_globals.is_empty() {
-        let section = SectionOp::new(
-            context,
-            None,
-            tir::NewOpParts {
-                attributes: vec![
-                    (context)
-                        .named_attribute("name", AttributeValue::Str(".bss".to_string().into())),
-                ],
-            },
-            tir::InsertionPoint::Block {
+        let section = SectionOpBuilder::new(context)
+            .attr("name", AttributeValue::Str(".bss".to_string().into()))
+            .at(InsertionPoint::Block {
                 block: module_body.id(),
                 position: module_body.len().saturating_sub(1),
-            },
-        );
+            })
+            .build();
         for (name, size, align, binding) in zero_globals {
-            let symbol = SymbolOp::new(
-                context,
-                None,
-                tir::NewOpParts {
-                    attributes: vec![
-                        context.named_attribute("name", AttributeValue::Str(name.into())),
-                        context.named_attribute(
-                            "binding",
-                            AttributeValue::Str(binding.to_string().into()),
-                        ),
-                        context.named_attribute(
-                            "kind",
-                            AttributeValue::Str("object".to_string().into()),
-                        ),
-                        context.named_attribute("align", AttributeValue::UInt(align)),
-                    ],
-                },
-                section.body().end(),
-            );
-            LiteralOp::new(
-                context,
-                tir::attributes::AttributeValue::Str(("space").into()),
-                tir::NewOpParts {
-                    attributes: vec![
-                        context.named_attribute("value", AttributeValue::Int(size as i64)),
-                    ],
-                },
-                symbol.body().end(),
-            );
-            SymbolEndOp::new(context, Default::default(), symbol.body().end());
+            let symbol = SymbolOpBuilder::new(context)
+                .attr("name", AttributeValue::Str(name.into()))
+                .attr("binding", AttributeValue::Str(binding.to_string().into()))
+                .attr("kind", AttributeValue::Str("object".to_string().into()))
+                .attr("align", AttributeValue::UInt(align))
+                .at(section.body().end())
+                .build();
+            LiteralOpBuilder::new(context)
+                .kind("space")
+                .attr("value", AttributeValue::Int(size as i64))
+                .at(symbol.body().end())
+                .build();
+            SymbolEndOpBuilder::new(context)
+                .at(symbol.body().end())
+                .build();
         }
-        SectionEndOp::new(context, Default::default(), section.body().end());
+        SectionEndOpBuilder::new(context)
+            .at(section.body().end())
+            .build();
     }
     Ok(())
 }
@@ -118,91 +101,71 @@ fn emit_data_section(
     definitions: Vec<DataSymbol>,
 ) {
     use tir::attributes::AttributeValue;
-    use tir::backend::{DataRelocOp, LiteralOp, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp};
+    use tir::backend::{
+        DataRelocOpBuilder, LiteralOpBuilder, SectionEndOpBuilder, SectionOpBuilder,
+        SymbolEndOpBuilder, SymbolOpBuilder,
+    };
 
     if definitions.is_empty() {
         return;
     }
-    let byte = |insertion, value: u8| {
-        LiteralOp::new(
-            context,
-            tir::attributes::AttributeValue::Str(("byte").into()),
-            tir::NewOpParts {
-                attributes: vec![
-                    context.named_attribute("value", AttributeValue::Int(i64::from(value))),
-                ],
-            },
-            insertion,
-        )
+    let byte = |value: u8, insertion| {
+        LiteralOpBuilder::new(context)
+            .kind("byte")
+            .attr("value", AttributeValue::Int(i64::from(value)))
+            .at(insertion)
+            .build()
     };
-    let section = SectionOp::new(
-        context,
-        None,
-        tir::NewOpParts {
-            attributes: vec![
-                context.named_attribute("name", AttributeValue::Str(name.to_string().into())),
-            ],
-        },
-        tir::InsertionPoint::Block {
+    let section = SectionOpBuilder::new(context)
+        .attr("name", AttributeValue::Str(name.to_string().into()))
+        .at(InsertionPoint::Block {
             block: module_body.id(),
             position: module_body.len().saturating_sub(1),
-        },
-    );
+        })
+        .build();
     for (name, bytes, mut relocations, align, binding) in definitions {
-        let symbol = SymbolOp::new(
-            context,
-            None,
-            tir::NewOpParts {
-                attributes: vec![
-                    context.named_attribute("name", AttributeValue::Str(name.into())),
-                    context.named_attribute(
-                        "binding",
-                        AttributeValue::Str(binding.to_string().into()),
-                    ),
-                    (context)
-                        .named_attribute("kind", AttributeValue::Str("object".to_string().into())),
-                    context.named_attribute("align", AttributeValue::UInt(align)),
-                ],
-            },
-            section.body().end(),
-        );
+        let symbol = SymbolOpBuilder::new(context)
+            .attr("name", AttributeValue::Str(name.into()))
+            .attr("binding", AttributeValue::Str(binding.to_string().into()))
+            .attr("kind", AttributeValue::Str("object".to_string().into()))
+            .attr("align", AttributeValue::UInt(align))
+            .at(section.body().end())
+            .build();
         if let (true, Some(text)) = (relocations.is_empty(), c_string(&bytes)) {
-            LiteralOp::new(
-                context,
-                tir::attributes::AttributeValue::Str(("asciz").into()),
-                tir::NewOpParts {
-                    attributes: vec![
-                        context.named_attribute("value", AttributeValue::Str(text.into())),
-                    ],
-                },
-                symbol.body().end(),
-            );
-            SymbolEndOp::new(context, Default::default(), symbol.body().end());
-
+            LiteralOpBuilder::new(context)
+                .kind("asciz")
+                .attr("value", AttributeValue::Str(text.into()))
+                .at(symbol.body().end())
+                .build();
+            SymbolEndOpBuilder::new(context)
+                .at(symbol.body().end())
+                .build();
             continue;
         }
         relocations.sort_by_key(|relocation| relocation.0);
         let mut cursor = 0;
         for (offset, target, addend, width) in relocations {
             for &value in &bytes[cursor..offset as usize] {
-                byte(symbol.body().end(), value);
+                byte(value, symbol.body().end());
             }
-            DataRelocOp::new(
-                context,
-                tir::attributes::AttributeValue::Str((target).into()),
-                tir::attributes::AttributeValue::UInt(width),
-                tir::attributes::AttributeValue::Int(addend),
-                Default::default(),
-                symbol.body().end(),
-            );
+            DataRelocOpBuilder::new(context)
+                .symbol(target)
+                .width(width)
+                .addend(addend)
+                .at(symbol.body().end())
+                .build();
             cursor = (offset + width) as usize;
         }
         for &value in &bytes[cursor..] {
-            byte(symbol.body().end(), value);
+            byte(value, symbol.body().end());
         }
-        SymbolEndOp::new(context, Default::default(), symbol.body().end());
+        SymbolEndOpBuilder::new(context)
+            .at(symbol.body().end())
+            .build();
     }
-    SectionEndOp::new(context, Default::default(), section.body().end());
+    SectionEndOpBuilder::new(context)
+        .at(section.body().end())
+        .build();
 }
 
 fn c_string(bytes: &[u8]) -> Option<String> {

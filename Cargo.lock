@@ -642,6 +642,7 @@ dependencies = [
  "tir-adt",
  "tir-arm64",
  "tir-bench",
+ "tir-cdsl",
  "tir-riscv",
  "tir-symbolic",
  "tir-x86_64",
@@ -1991,7 +1992,6 @@ dependencies = [
  "tir-cdsl",
  "tir-egglog",
  "tir-macros",
- "tir-pdl",
  "tir-symbolic",
 ]
 
@@ -2010,6 +2010,7 @@ name = "tir-arm64"
 version = "0.1.0"
 dependencies = [
  "tir",
+ "tir-cdsl",
  "tmdl",
 ]
 
@@ -2101,7 +2102,6 @@ dependencies = [
  "tir",
  "tir-arm64",
  "tir-jit",
- "tir-pdl",
  "tir-riscv",
  "tmdl",
 ]
@@ -2111,6 +2111,7 @@ name = "tir-gpu"
 version = "0.1.0"
 dependencies = [
  "tir",
+ "tir-cdsl",
  "tir-symbolic",
  "tmdl",
 ]
@@ -2172,25 +2173,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "tir-pdl"
-version = "0.1.0"
-dependencies = [
- "ariadne",
- "chumsky",
- "clap",
- "logos",
- "prettyplease",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
- "tir-symbolic",
-]
-
-[[package]]
 name = "tir-riscv"
 version = "0.1.0"
 dependencies = [
  "tir",
+ "tir-cdsl",
  "tmdl",
 ]
 
@@ -2225,6 +2212,7 @@ dependencies = [
  "tir-adt",
  "tir-arm64",
  "tir-capi",
+ "tir-cdsl",
  "tir-cli",
  "tir-egglog",
  "tir-jit",
@@ -2256,6 +2244,7 @@ name = "tir-x86_64"
 version = "0.1.0"
 dependencies = [
  "tir",
+ "tir-cdsl",
  "tmdl",
 ]
 
@@ -2276,6 +2265,7 @@ dependencies = [
  "syn 2.0.118",
  "tir-adt",
  "tir-bench",
+ "tir-cdsl",
  "tir-symbolic",
 ]
 

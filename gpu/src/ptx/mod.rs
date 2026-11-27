@@ -1,4 +1,4 @@
-use tir::helpers::{dialect, operation};
+use tir::helpers::dialect;
 
 mod ptx_asm;
 
@@ -7,19 +7,7 @@ include!(concat!(env!("OUT_DIR"), "/ptx.rs"));
 dialect! {
     PtxDialect {
         name: "ptx",
-        operations: [LabelOp],
         operation_file: concat!(env!("OUT_DIR"), "/ptx_ops.rs"),
-    }
-}
-
-operation! {
-    LabelOp {
-        name: "label",
-        dialect: "ptx",
-        scheme: "() -> ()",
-        attributes: A {
-            name: "Str",
-        }
     }
 }
 

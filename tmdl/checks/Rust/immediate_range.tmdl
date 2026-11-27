@@ -1,5 +1,3 @@
-// IR migration: selector rule generation was removed.
-// XFAIL: *
 // A generated asm parser must reject an integer that does not fit its `bits<N>`
 // immediate, so per-mnemonic dispatch can backtrack to a wider form instead of
 // failing later in the encoder. The accepted set is the union of the signed and
@@ -51,15 +49,14 @@ instruction OpImm8 for [ImmIsa] {
 // CHECK: ParseStep::Immediate(
 // CHECK-NEXT: "imm",
 // CHECK-NEXT: false,
-// CHECK-NEXT: ImmConstraint {
-// CHECK-NEXT: range: Some((-128i64, 256i64)),
+// CHECK-NEXT: ImmediateConstraint {
+// CHECK-NEXT: bits: 8u16,
 // CHECK-NEXT: align: 1,
 // CHECK-NEXT: nonzero: false,
 
 // An operand's `#[align]`/`#[nonzero]` narrow that set further: the encoding
 // carries only `imm[9:2]`, so a misaligned or zero value has no encoding at
-// all. Every consumer of the operand — the parser, the encoder, the fixup
-// patcher and instruction selection — sees the same constraint.
+// all. The parser, encoder, and fixup patcher all enforce that constraint.
 instruction OpAligned for [ImmIsa] {
     param MNEMONIC: String = "opa";
 
@@ -87,8 +84,8 @@ instruction OpAligned for [ImmIsa] {
 // CHECK: ParseStep::Immediate(
 // CHECK-NEXT: "imm",
 // CHECK-NEXT: false,
-// CHECK-NEXT: ImmConstraint {
-// CHECK-NEXT: range: Some((-512i64, 1024i64)),
+// CHECK-NEXT: ImmediateConstraint {
+// CHECK-NEXT: bits: 10u16,
 // CHECK-NEXT: align: 4,
 // CHECK-NEXT: nonzero: true,
 // CHECK: fn parse_opimm8_inst
@@ -107,10 +104,4 @@ instruction OpAligned for [ImmIsa] {
 // CHECK-NEXT: attr: "imm",
 // CHECK-NEXT: range: Some((-512i64, 512i64)),
 // CHECK-NEXT: dropped_mask: 3u128,
-
-// CHECK: static RULE_OPALIGNED
-// CHECK: ImmRange {
-// CHECK-NEXT: width: 10,
-// CHECK-NEXT: signed: true,
-// CHECK-NEXT: align: 4,
 // CHECK-NEXT: nonzero: true,

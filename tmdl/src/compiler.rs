@@ -19,6 +19,9 @@ use crate::sema_analyze;
 use crate::smtlibgen::generate_smtlib;
 use crate::{Span, Spanned};
 
+pub(crate) type RustWriter<'a> =
+    dyn Fn(&str, &str) -> Result<String, Box<dyn std::error::Error>> + 'a;
+
 pub struct Compiler {
     action: Action,
     inputs: Vec<String>,
@@ -108,6 +111,18 @@ impl Compiler {
     }
 
     pub fn compile(&self) -> Result<(), TMDLError> {
+        self.compile_with_writer(None)
+    }
+
+    /// Compile with the shared CDSL writer available for Rust emission.
+    pub fn compile_with_rust_writer(
+        &self,
+        writer: impl Fn(&str, &str) -> Result<String, Box<dyn std::error::Error>>,
+    ) -> Result<(), TMDLError> {
+        self.compile_with_writer(Some(&writer))
+    }
+
+    fn compile_with_writer(&self, writer: Option<&RustWriter<'_>>) -> Result<(), TMDLError> {
         if matches!(self.action, Action::EmitAstJsonSchema) {
             if !self.inputs.is_empty() || !self.split_inputs.is_empty() {
                 return Err(TMDLError::Codegen(
@@ -137,7 +152,7 @@ impl Compiler {
             | Action::EmitOperationList
             | Action::EmitSmtlib
             | Action::EmitBtor2
-            | Action::EmitMarkdown => self.compile_whole_program(),
+            | Action::EmitMarkdown => self.compile_whole_program(writer),
             Action::EmitExpandedTokens => self.compile_expanded_tokens(),
             _ => self.compile_per_file(),
         }
@@ -292,7 +307,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_whole_program(&self) -> Result<(), TMDLError> {
+    fn compile_whole_program(&self, writer: Option<&RustWriter<'_>>) -> Result<(), TMDLError> {
         if matches!(self.action, Action::EmitRust) && self.dialect.is_none() {
             let mut cmd = Cli::command();
             cmd.error(
@@ -329,6 +344,9 @@ impl Compiler {
 
         match &self.action {
             Action::EmitRust => {
+                let writer = writer.ok_or_else(|| {
+                    TMDLError::Codegen("Rust emission requires the CDSL writer".into())
+                })?;
                 let generated = generate_rust_modules(
                     self.dialect.as_ref().unwrap(),
                     &parsed_files,
@@ -336,6 +354,7 @@ impl Compiler {
                     self.text_only,
                     self.custom_assembly,
                     &self.split_inputs,
+                    writer,
                 )?;
                 let mut output = self.create_output_writer()?;
                 output.write_all(generated.root.as_bytes())?;
@@ -357,7 +376,8 @@ impl Compiler {
                 if let Some(output_dir) = output_dir {
                     fs::create_dir_all(&output_dir)?;
                     fs::write(output_dir.join(SEM_BLOB_FILE), &generated.sem_blob)?;
-                    for (file_name, contents) in generated.modules {
+                    for (file_name, contents) in generated.modules.into_iter().chain(generated.cdsl)
+                    {
                         fs::write(output_dir.join(file_name), contents)?;
                     }
                 }
@@ -537,7 +557,10 @@ impl CompilerBuilder {
     }
 }
 
-pub fn compiler_main(args: Option<&ArgMatches>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn compiler_main(
+    args: Option<&ArgMatches>,
+    writer: impl Fn(&str, &str) -> Result<String, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let args = match args {
         Some(args) => Cli::from_arg_matches(args),
         None => Ok(Cli::parse()),
@@ -564,7 +587,9 @@ pub fn compiler_main(args: Option<&ArgMatches>) -> Result<(), Box<dyn std::error
 
     let compiler = compiler_builder.build();
 
-    compiler.compile().map_err(|err| Box::new(err).into())
+    compiler
+        .compile_with_rust_writer(writer)
+        .map_err(|err| Box::new(err).into())
 }
 
 fn print_errors<'src, T>(file_name: &str, source: &'src str, errors: Vec<Rich<'src, T, Span>>)
@@ -677,7 +702,11 @@ fn json_disabled() -> TMDLError {
 /// The table names every input by file and inlines it with `include_str!`.
 /// A backend `include!`s it for hardware model checking, so the sources it
 /// embeds cannot drift from the ones it was generated from.
-pub fn build_backend(dialect: &str, inputs: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+pub fn build_backend<E: Into<Box<dyn std::error::Error>>>(
+    dialect: &str,
+    inputs: &[&str],
+    writer: impl Fn(&str, &str) -> Result<String, E>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = std::env::var("OUT_DIR")?;
     for input in inputs {
         println!("cargo:rerun-if-changed={input}");
@@ -690,7 +719,9 @@ pub fn build_backend(dialect: &str, inputs: &[&str]) -> Result<(), Box<dyn std::
         for input in inputs {
             builder = builder.add_input(input);
         }
-        builder.build().compile()
+        builder
+            .build()
+            .compile_with_rust_writer(|source, package| writer(source, package).map_err(Into::into))
     };
 
     let mut table = String::from("const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[\n");

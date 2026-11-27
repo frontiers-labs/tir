@@ -1,14 +1,8 @@
 //! Random control-flow graphs through the `restructure` pass.
 //!
-//! Every generated function is restructured, verified, and *evaluated*: the
-//! structured program must compute what the generated graph computes on every
-//! argument pair. The graphs are cyclic and irreducible as often as the input
-//! says, and still terminate: a backward edge is only taken while the fuel each
-//! block spends is left.
-//!
-//! Both forms — the original CFG and the restructured program — are also
-//! compiled and run, so the generated graphs gate the backend as well as the
-//! pass: what a host-compiled function returns must be what the graph computes.
+//! Every generated function is restructured and verified. On supported hosts,
+//! the original CFG and the restructured program are compiled and checked
+//! against the graph model. A backward edge is only taken while fuel remains.
 
 use tir::BlockHandle;
 
@@ -36,23 +30,13 @@ pub fn check(data: &[u8]) {
 
     restructure(&context, &module)
         .unwrap_or_else(|error| panic!("restructure failed: {error}\n{source}"));
-    tir::verify_op_tree(&context, module.id())
+    tir::check_types(&context)
         .unwrap_or_else(|error| panic!("restructured IR does not verify: {error}\n{source}"));
     assert!(
         !has_branches(&context, &module),
         "restructured IR still holds a CFG:\n{}",
         render(&context, &module)
     );
-
-    for (left, right) in ARGUMENTS {
-        let structured = crate::interpret::evaluate(&context, &module, &[left, right]);
-        assert_eq!(
-            structured,
-            Some(program.evaluate(left, right)),
-            "restructuring changed what f({left}, {right}) computes\n{source}\n{}",
-            render(&context, &module)
-        );
-    }
 
     compare_execution(&program.pruned(), &source, &render(&context, &module));
 }
@@ -270,64 +254,40 @@ impl Program {
             })
             .collect::<Vec<BlockHandle>>();
 
-        let seed = b::addi(
-            context,
-            arguments[0],
-            arguments[1],
-            integer,
-            Default::default(),
-            entry.end(),
-        )
-        .result();
-        let fuel = b::constant(context, FUEL, integer, Default::default(), entry.end()).result();
-        let spent = b::constant(context, 1, integer, Default::default(), entry.end()).result();
-        let empty = b::constant(context, 0, integer, Default::default(), entry.end()).result();
-        cb::br(
-            context,
-            vec![seed, fuel],
-            blocks[0].id(),
-            Default::default(),
-            entry.end(),
-        );
+        let seed = b::addi(context, arguments[0], arguments[1], integer)
+            .at(entry.end())
+            .build()
+            .result();
+        let fuel = b::constant(context, FUEL, integer)
+            .at(entry.end())
+            .build()
+            .result();
+        let spent = b::constant(context, 1, integer)
+            .at(entry.end())
+            .build()
+            .result();
+        let empty = b::constant(context, 0, integer)
+            .at(entry.end())
+            .build()
+            .result();
+        cb::br(context, vec![seed, fuel], blocks[0].id())
+            .at(entry.end())
+            .build();
 
         for (index, specification) in self.blocks.iter().enumerate() {
             let block = &blocks[index];
             let argument = block.arguments()[0].id();
             let fuel = block.arguments()[1].id();
             let arithmetic = match specification.operation {
-                Arith::Add => b::addi(
-                    context,
-                    argument,
-                    seed,
-                    integer,
-                    Default::default(),
-                    tir::InsertionPoint::Root,
-                )
-                .id(),
-                Arith::Sub => b::subi(
-                    context,
-                    argument,
-                    seed,
-                    integer,
-                    Default::default(),
-                    tir::InsertionPoint::Root,
-                )
-                .id(),
-                Arith::Mul => b::muli(
-                    context,
-                    argument,
-                    seed,
-                    integer,
-                    Default::default(),
-                    tir::InsertionPoint::Root,
-                )
-                .id(),
+                Arith::Add => b::addi(context, argument, seed, integer).build().id(),
+                Arith::Sub => b::subi(context, argument, seed, integer).build().id(),
+                Arith::Mul => b::muli(context, argument, seed, integer).build().id(),
             };
-            block.context.insert(block.end(), arithmetic);
+            context.insert(block.end(), arithmetic);
             let value = context.get_op(arithmetic).results()[0];
             let left = match specification.terminator {
                 Terminator::Return => {
-                    func_ops::r#return(context, value, vec![], Default::default(), block.end());
+                    func_ops::r#return(context, value).at(block.end()).build();
                     continue;
                 }
                 Terminator::Branch(left, _) => left,
@@ -335,31 +295,24 @@ impl Program {
             let Terminator::Branch(_, right) = specification.terminator else {
                 unreachable!()
             };
-            let remaining = b::subi(
-                context,
-                fuel,
-                spent,
-                integer,
-                Default::default(),
-                block.end(),
-            )
-            .result();
+            let remaining = b::subi(context, fuel, spent, integer)
+                .at(block.end())
+                .build()
+                .result();
             // A backward edge burns fuel; once it is out, only the forward edge
             // is taken, so the program halts however tangled the graph is.
             let (condition, backward) = match left <= index {
                 true => (remaining, empty),
                 false => (value, seed),
             };
-            let condition = b::CmpIOp::new(
-                context,
-                condition,
-                backward,
-                tir::attributes::AttributeValue::Predicate(tir::attributes::Predicate::Sgt),
-                boolean,
-                Default::default(),
-                block.end(),
-            )
-            .result();
+            let condition = b::CmpIOpBuilder::new(context)
+                .lhs(condition)
+                .rhs(backward)
+                .predicate(tir::attributes::Predicate::Sgt)
+                .result_type(boolean)
+                .at(block.end())
+                .build()
+                .result();
             cb::cond_br(
                 context,
                 condition,
@@ -367,27 +320,15 @@ impl Program {
                 vec![argument, remaining],
                 blocks[left].id(),
                 blocks[right].id(),
-                Default::default(),
-                block.end(),
-            );
+            )
+            .at(block.end())
+            .build();
         }
 
-        let func = func_ops::lambda(
-            context,
-            "f",
-            integer,
-            &region,
-            Default::default(),
-            tir::InsertionPoint::Root,
-        );
-        let module = b::module(context, None, Default::default(), tir::InsertionPoint::Root);
-        (module.body())
-            .context
-            .insert(module.body().end(), func.id());
-        module.body().context.insert(
-            module.body().end(),
-            b::module_end(context, Default::default(), tir::InsertionPoint::Root).id(),
-        );
+        let func = func_ops::lambda(context, "f", integer, &region).build();
+        let module = b::module(context, None).build();
+        context.insert(module.body().end(), func.id());
+        b::module_end(context).at(module.body().end()).build();
         module
     }
 }

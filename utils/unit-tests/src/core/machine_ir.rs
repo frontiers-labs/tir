@@ -7,11 +7,12 @@
 use tir::attributes::AttributeValue;
 use tir::backend::regalloc::RegClassId;
 use tir::backend::{
-    phys_attr, verify_machine_ir, RegAssignment, RegClassType, SymbolOp, ASSIGNMENT_ATTR, PINS_ATTR,
+    phys_attr, verify_machine_ir, RegAssignment, RegClassType, SymbolOpBuilder, ASSIGNMENT_ATTR,
+    PINS_ATTR,
 };
-use tir::{Context, Operation, ValueId};
+use tir::{Context, InsertionPoint, NewOp, NewOpParts, Operand, Operation, TypeId, ValueId};
 
-use super::fixtures::{asm_symbol, r, r_high};
+use super::fixtures::{asm_symbol, ops::AddTestOp, r, r_high};
 
 // `add rd, rs`: one destination slot and one source slot, both of class `R`,
 // plus the implicit flag register the behavior writes.
@@ -22,14 +23,6 @@ static ADD_IMPLICIT: [tir::attributes::ImplicitReg; 1] = [tir::attributes::Impli
     role: tir::attributes::AttributeRole::Def,
 }];
 
-tir::operation! {
-    AddTestOp {
-        name: "add", dialect: "test", scheme: "(_?) -> _?",
-        operands: O { rs }, results: R { rd },
-        attributes: A { rd: "?Register", rs: "?Register" },
-        interfaces: [tir::backend::MachineInstruction],
-    }
-}
 super::fixtures::instr_info!(AddTestOp, "add", &ADD_IMPLICIT);
 
 fn value_of(context: &Context, class: RegClassId) -> ValueId {
@@ -50,7 +43,7 @@ fn function(build: impl FnOnce(&Context) -> AddTestOp) -> Function {
     let context = Context::with_default_dialects();
     AddTestOp::register_interfaces(&context);
     let add = build(&context);
-    let handle = add.get_handle();
+    let handle = add.handle().clone();
     let (symbol, _) = asm_symbol(&context, &[add.id()]);
     Function {
         context,
@@ -59,17 +52,27 @@ fn function(build: impl FnOnce(&Context) -> AddTestOp) -> Function {
     }
 }
 
-impl AddTestOp {
-    fn get_handle(&self) -> tir::OpHandle {
-        self.0.clone()
-    }
+fn add(
+    context: &Context,
+    source: impl Into<Operand>,
+    result_types: Vec<TypeId>,
+    parts: NewOpParts,
+    insertion: InsertionPoint,
+) -> AddTestOp {
+    let operands = source.into().into_option().into_iter().collect();
+    let results = result_types
+        .into_iter()
+        .map(|ty| context.create_value(ty, None).id())
+        .collect();
+    let op = NewOp::new::<AddTestOp>(context.clone(), operands, results, vec![], parts);
+    AddTestOp::from_op_instance(context.add_operation(insertion, op))
 }
 
 #[test]
 fn def_use_reads_ports_and_leaves_physical_registers_out() {
     let f = function(|context| {
         let source = value_of(context, r());
-        AddTestOp::new(
+        add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -86,12 +89,15 @@ fn def_use_reads_ports_and_leaves_physical_registers_out() {
     // The same instruction reading a register it names directly: no operand,
     // one physical read.
     let f = function(|context| {
-        AddTestOp::new(
+        add(
             context,
             tir::Operand::none(),
             vec![RegClassType::new(context, r())],
             tir::NewOpParts {
-                attributes: vec![context.named_attribute("rs", phys_attr((r(), 3)))],
+                attributes: vec![context.named_attribute(
+                    tir::analysis::defuse::USES_ATTR,
+                    AttributeValue::Array(vec![phys_attr((r(), 3))].into()),
+                )],
             },
             tir::InsertionPoint::Root,
         )
@@ -109,7 +115,7 @@ fn def_use_reads_ports_and_leaves_physical_registers_out() {
 fn data_values_are_not_physical_register_views() {
     let f = function(|context| {
         let source = value_of(context, r_high());
-        AddTestOp::new(
+        add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -127,7 +133,7 @@ fn scalar_values_need_no_register_class() {
         let source = context
             .create_value(tir::builtin::IntegerType::new(context, 32), None)
             .id();
-        AddTestOp::new(
+        add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -142,7 +148,7 @@ fn scalar_values_need_no_register_class() {
 fn a_result_without_a_port_is_rejected() {
     let f = function(|context| {
         let source = value_of(context, r());
-        AddTestOp::new(
+        add(
             context,
             source,
             vec![
@@ -161,7 +167,7 @@ fn a_result_without_a_port_is_rejected() {
 fn assignment_missing_a_value_is_rejected() {
     let f = function(|context| {
         let source = value_of(context, r());
-        AddTestOp::new(
+        add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -199,7 +205,7 @@ fn assignment_missing_a_value_is_rejected() {
 fn cross_view_pin_is_rejected() {
     let f = function(|context| {
         let source = value_of(context, r());
-        AddTestOp::new(
+        add(
             context,
             source,
             vec![RegClassType::new(context, r())],
@@ -226,17 +232,17 @@ fn cross_view_pin_is_rejected() {
 #[test]
 fn a_slot_holding_nothing_is_rejected() {
     let f = function(|context| {
-        AddTestOp::new(
+        add(
             context,
             tir::Operand::none(),
-            vec![],
+            vec![RegClassType::new(context, r())],
             Default::default(),
             tir::InsertionPoint::Root,
         )
     });
     let error = verify_machine_ir(&f.context, f.symbol.id()).expect_err("empty slot");
     assert!(
-        format!("{error:?}").contains("missing register attribute"),
+        format!("{error:?}").contains("missing required operand 'rs'"),
         "{error:?}",
     );
 }
@@ -262,17 +268,10 @@ fn the_assignment_round_trips_through_the_text_form() {
         .parse_attribute_value(&context)
         .expect("parses")
         .expect("an attribute");
-    let symbol = SymbolOp::new(
-        &context,
-        None,
-        tir::NewOpParts {
-            attributes: vec![
-                context.named_attribute("name", AttributeValue::Str("f".into())),
-                context.named_attribute(ASSIGNMENT_ATTR, parsed),
-            ],
-        },
-        tir::InsertionPoint::Root,
-    );
+    let symbol = SymbolOpBuilder::new(&context)
+        .attr("name", AttributeValue::Str("f".into()))
+        .attr(ASSIGNMENT_ATTR, parsed)
+        .build();
     let read_back = RegAssignment::of_op(symbol.handle(), ASSIGNMENT_ATTR);
     assert_eq!(read_back, assignment);
 }

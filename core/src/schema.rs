@@ -1,5 +1,5 @@
-//! Link-time schema of every operation, contributed by the `operation!` macro
-//! into [`OP_SCHEMAS`]. Lets tools enumerate dialects, ops, their operands,
+//! Link-time schema of every operation in [`OP_SCHEMAS`].
+//! Lets tools enumerate dialects, ops, their operands,
 //! results, attributes and interfaces without hand-written per-op code — for
 //! example to generate bindings for other languages.
 
@@ -9,6 +9,8 @@ use linkme::distributed_slice;
 
 use crate::ty::{Kind, Param, TypeArg};
 use crate::{Context, TypeId};
+
+pub use crate::typecheck::signature::{Argument, BinderKind, Pattern, Port, Signature};
 
 /// An operand or result: its name, its type in the op's scheme (`?` first
 /// for an optional one, `*` for a variadic segment), and whether it is a
@@ -28,19 +30,62 @@ pub struct AttrSchema {
     pub vocabulary: &'static [crate::attributes::Predicate],
 }
 
+/// The operands, results, and attributes of one operation form.
+pub struct OpLayout {
+    pub operands: &'static [FieldSchema],
+    pub results: &'static [FieldSchema],
+    pub attributes: &'static [AttrSchema],
+}
+
+/// The input or output group named by a CDSL type constraint.
+#[derive(Clone, Copy)]
+pub enum ConstraintPort {
+    Input(usize),
+    Output(usize),
+}
+
+/// Additional type obligations that depend on scoped or cross-port facts.
+#[derive(Clone, Copy)]
+pub enum TypeConstraint {
+    EqualWidth(ConstraintPort, ConstraintPort, &'static str),
+    PointerWidth(ConstraintPort, &'static str),
+    EqualType(ConstraintPort, ConstraintPort, &'static str),
+    TupleElements(ConstraintPort, ConstraintPort),
+    TupleProjection(ConstraintPort, &'static str, ConstraintPort),
+    StateFan(ConstraintPort, ConstraintPort, &'static str),
+    NonFunction(ConstraintPort, &'static str),
+    FunctionDefinition(ConstraintPort, &'static str),
+    FunctionReturn(ConstraintPort),
+    FunctionCall(ConstraintPort, ConstraintPort, ConstraintPort),
+    ModuleScope(&'static str),
+    RegionExits(usize, &'static [&'static str], &'static str, &'static str),
+    ExitRole(&'static str),
+    OrderedLoop(ConstraintPort, &'static str),
+    SwitchCases(ConstraintPort),
+}
+
 /// The declarative shape of one operation.
 pub struct OpSchema {
+    pub declaration: fn() -> tir_egglog::NativeIdentity,
+    pub bind: fn(&mut tir_egglog::Database) -> Result<(), tir_egglog::Error>,
+    pub construct: fn(crate::OpHandle) -> Box<dyn crate::Operation>,
     pub dialect: &'static str,
     pub name: &'static str,
     pub operands: &'static [FieldSchema],
     pub results: &'static [FieldSchema],
     pub attributes: &'static [AttrSchema],
     pub interfaces: &'static [&'static str],
+    pub regions: &'static [(crate::RegionKind, bool)],
+    pub binding_inputs: Option<(usize, usize)>,
+    pub counted_groups: Option<(usize, usize, usize)>,
     /// The signature scheme the operands and results are checked against;
     /// see [`tir_symbolic::scheme`].
     pub scheme: &'static str,
-    /// The op declares a `sem:`.
-    pub semantics: bool,
+    /// Type patterns and quantified binders from the CDSL signature.
+    pub signature: &'static Signature,
+    pub type_constraints: &'static [TypeConstraint],
+    /// The assembly form, when the fields above describe the pre-allocation form.
+    pub assembly: Option<OpLayout>,
 }
 
 /// Link-time registry of every operation schema reachable in the final binary.
@@ -82,6 +127,25 @@ fn fields_json(fields: &[FieldSchema], out: &mut String) {
     out.push(']');
 }
 
+fn layout_json(layout: &OpLayout, out: &mut String) {
+    out.push_str("\"operands\":");
+    fields_json(layout.operands, out);
+    out.push_str(",\"results\":");
+    fields_json(layout.results, out);
+    out.push_str(",\"attributes\":[");
+    for (i, attr) in layout.attributes.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"name\":");
+        escape(attr.name, out);
+        out.push_str(",\"type\":");
+        escape(attr.ty, out);
+        out.push('}');
+    }
+    out.push(']');
+}
+
 /// Serialize all registered op schemas as a JSON array.
 pub fn schema_json() -> String {
     let mut out = String::from("[");
@@ -93,22 +157,19 @@ pub fn schema_json() -> String {
         escape(op.dialect, &mut out);
         out.push_str(",\"name\":");
         escape(op.name, &mut out);
-        out.push_str(",\"operands\":");
-        fields_json(op.operands, &mut out);
-        out.push_str(",\"results\":");
-        fields_json(op.results, &mut out);
-        out.push_str(",\"attributes\":[");
-        for (j, a) in op.attributes.iter().enumerate() {
-            if j > 0 {
-                out.push(',');
-            }
-            out.push_str("{\"name\":");
-            escape(a.name, &mut out);
-            out.push_str(",\"type\":");
-            escape(a.ty, &mut out);
+        let primary = OpLayout {
+            operands: op.operands,
+            results: op.results,
+            attributes: op.attributes,
+        };
+        out.push(',');
+        layout_json(&primary, &mut out);
+        if let Some(assembly) = &op.assembly {
+            out.push_str(",\"assembly\":{");
+            layout_json(assembly, &mut out);
             out.push('}');
         }
-        out.push_str("],\"interfaces\":[");
+        out.push_str(",\"interfaces\":[");
         for (j, n) in op.interfaces.iter().enumerate() {
             if j > 0 {
                 out.push(',');

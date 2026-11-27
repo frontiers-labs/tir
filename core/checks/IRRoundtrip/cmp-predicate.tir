@@ -5,7 +5,7 @@
 module {layout.spec = #layout_spec} {
   %fn_compare = func.func @compare(%0: !i32, %1: !f32, %2: !ptr.p) -> !i1 {
     %3 = cmpi %0, %0 {predicate = "slt"} : !i1
-    %4 = fp.cmp %1, %1 {predicate = "olt", semantics = {behavior = "quiet", exceptions = "ignore", kind = "comparison", subnormals = "gradual"}} : !i1
+    %4 = fp.cmp %1, %1 {predicate = "olt"} : !i1
     %5 = ptr.cmp %2, %2 {predicate = "ule"} : !i1
     func.return %3
   }

@@ -1,0 +1,100 @@
+use std::core::*;
+use std::ir::{Bits, Cfg, VaList};
+
+let loop_test_role = "cir.loop_test";
+let loop_next_role = "cir.loop_next";
+let loop_break_role = "cir.loop_break";
+let loop_continue_role = "cir.loop_continue";
+let invalid_exit = "invalid CIR region exit";
+let missing_exit = "CIR region has no valid exit";
+
+let condition_exit = TypeConstraint::RegionExits(
+    ConstraintRegion::Region("condition_region"),
+    List(loop_test_role),
+    invalid_exit, missing_exit,
+);
+
+let step_exit = TypeConstraint::RegionExits(
+    ConstraintRegion::Region("step_region"),
+    List(loop_next_role),
+    invalid_exit, missing_exit,
+);
+
+let body_exit = TypeConstraint::RegionExits(
+    ConstraintRegion::Region("body_region"),
+    List(loop_next_role, loop_break_role, loop_continue_role),
+    invalid_exit, missing_exit,
+);
+
+pub let va_start = op {
+    dialect: "cir",
+    signature: () -> (result: VaList),
+    macro_def: true,
+};
+
+pub let va_arg = op {
+    dialect: "cir",
+    signature: (list: VaList) -> (result: Any),
+    macro_def: true,
+};
+
+pub let va_end = op {
+    dialect: "cir",
+    signature: (list: VaList) -> (),
+    macro_def: true,
+};
+
+pub let r#for = op {
+    dialect: "cir",
+    signature: () -> (),
+    regions: (condition_region: Cfg, step_region: Cfg, body_region: Cfg),
+    interfaces: (ExitScope, Check(condition_exit), Check(step_exit), Check(body_exit)),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let r#while = op {
+    dialect: "cir",
+    signature: () -> (),
+    regions: (condition_region: Cfg, body_region: Cfg),
+    interfaces: (ExitScope, Check(condition_exit), Check(body_exit)),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let r#do = op {
+    dialect: "cir",
+    signature: () -> (),
+    regions: (body_region: Cfg, condition_region: Cfg),
+    interfaces: (ExitScope, Check(body_exit), Check(condition_exit)),
+    custom_format: true,
+    macro_def: true,
+};
+
+pub let condition = op {
+    dialect: "cir",
+    signature: (condition: Bits<1>) -> (),
+    interfaces: (Terminator, Check(TypeConstraint::ExitRole(loop_test_role))),
+    macro_def: true,
+};
+
+pub let r#yield = op {
+    dialect: "cir",
+    signature: () -> (),
+    interfaces: (Terminator, Check(TypeConstraint::ExitRole(loop_next_role))),
+    macro_def: true,
+};
+
+pub let r#break = op {
+    dialect: "cir",
+    signature: () -> (),
+    interfaces: (Terminator, NonLocalExit, Check(TypeConstraint::ExitRole(loop_break_role))),
+    macro_def: true,
+};
+
+pub let r#continue = op {
+    dialect: "cir",
+    signature: () -> (),
+    interfaces: (Terminator, NonLocalExit, Check(TypeConstraint::ExitRole(loop_continue_role))),
+    macro_def: true,
+};

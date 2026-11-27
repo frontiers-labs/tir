@@ -12,6 +12,7 @@ pub mod exec;
 pub mod isel;
 mod lexer;
 pub mod lower;
+pub mod operand;
 mod operations;
 mod parser;
 pub mod pipeline;
@@ -374,6 +375,8 @@ pub struct InstrInfo {
     pub width_bytes: (u8, u8),
     pub control_flow: ControlFlow,
     pub program: exec::Program,
+    /// Physical register attributes in the assembly form and their access roles.
+    pub register_attrs: &'static [(&'static str, tir::attributes::AttributeRole)],
     /// Fixed registers the behavior touches without naming them in an operand.
     pub implicit_regs: &'static [tir::attributes::ImplicitReg],
     /// FP flag accumulations that an out-of-order scheduler may rename independently.
@@ -404,6 +407,7 @@ impl InstrInfo {
         width_bytes: (0, 0),
         control_flow: ControlFlow::None,
         program: exec::Program::Unsupported("instruction has no behavior"),
+        register_attrs: &[],
         implicit_regs: &[],
         implicit_or_updates: &[],
         copy: None,
@@ -461,6 +465,12 @@ impl InstrInfo {
 pub trait MachineInstruction {
     fn info(&self) -> &'static InstrInfo;
     fn instance(&self) -> &tir::OpHandle;
+    fn assembly_layout(&self) -> Option<&'static tir::schema::OpLayout> {
+        None
+    }
+    fn verify_immediates(&self, _context: &tir::Context) -> Result<(), tir::Error> {
+        Ok(())
+    }
     /// Scheduling facts for this instance, using register values before execution.
     /// See [`InstrInfo::sched_for`] for first-match and fallback behavior.
     fn sched_on(
@@ -750,16 +760,6 @@ pub(crate) fn fallthrough_branch(
 }
 
 /// The IEEE-754 bit pattern of an `fp.constant` f64.
-pub fn f64_constant_bits(context: &tir::Context, op: &crate::fp::ops::ConstantOp) -> Option<i64> {
-    let ty = context.get_value(op.result()).ty();
-    let is_f64 =
-        crate::builtin::FloatType::view(context, ty).is_some_and(|float| float.bit_width() == 64);
-    if !is_f64 {
-        return None;
-    }
-    Some(op.bits() as i64)
-}
-
 pub fn int_attr(op: &impl tir::Operation, name: &str) -> Option<i64> {
     as_int_attr(op.attr(name))
 }
@@ -864,11 +864,10 @@ pub fn emit_uncond_branch(
     dest: tir::BlockId,
     args: &[tir::ValueId],
 ) -> Box<dyn tir::Operation> {
-    Box::new(VirtualBranchOp::new(
-        context,
-        args.to_vec(),
-        tir::attributes::AttributeValue::Block(dest),
-        Default::default(),
-        tir::InsertionPoint::Root,
-    ))
+    Box::new(
+        VirtualBranchOpBuilder::new(context)
+            .dest_args(args.to_vec())
+            .dest(dest)
+            .build(),
+    )
 }

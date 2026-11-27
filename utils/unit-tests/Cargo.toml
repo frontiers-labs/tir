@@ -18,6 +18,7 @@ name = "torture"
 harness = false
 
 [dev-dependencies]
+tir-cdsl.workspace = true
 xtask = { path = "../xtask" }
 tir.workspace = true
 tir-adt.workspace = true
@@ -44,4 +45,5 @@ proptest.workspace = true
 workspace = true
 
 [build-dependencies]
+tir-cdsl.workspace = true
 tmdl = { workspace = true, default-features = false }

@@ -19,12 +19,10 @@ pub enum AttributeValue {
     Bool(bool),
     Array(Box<[AttributeValue]>),
     Dict(Box<BTreeMap<String, AttributeValue>>),
-    FpSemantics(Arc<crate::fp::Semantics>),
-    EvaluationContract(Arc<crate::fp::EvaluationContract>),
     /// A `#layout.spec<..>`: what a scope says types are laid out as.
     LayoutSpec(Arc<crate::layout::LayoutSpec>),
     Register(RegisterAttr),
-    /// The comparison a `cmpi`, `fp.cmp` or `ptr.cmp` performs.
+    /// The comparison a `cmpi` or `ptr.cmp` performs.
     Predicate(Predicate),
     /// A reference to an SSA value that is not an operand: the `asm.symbol`
     /// argument list, which names values the ABI places rather than values the
@@ -218,8 +216,6 @@ impl AttributeValue {
                 }
                 fmt.write("}")
             }
-            AttributeValue::FpSemantics(semantics) => semantics.print(fmt),
-            AttributeValue::EvaluationContract(contract) => contract.print(fmt, context),
             AttributeValue::LayoutSpec(spec) => {
                 if let Some(alias) = fmt.attribute_alias(self).map(str::to_string) {
                     return fmt.write(format!("#{alias}"));

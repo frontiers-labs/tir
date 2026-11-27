@@ -15,7 +15,7 @@ use tir_adt::IndexMap;
 
 use crate::analysis::{Analysis, AnalysisManager};
 use crate::attributes::AttributeValue;
-use crate::builtin::{NamedType, TypeDefOp};
+use crate::builtin::{GlobalOp, NamedType, TypeDefOp};
 use crate::ty::TypeArg;
 use crate::{Context, OpId, Operation, Symbol, TypeId, Visibility};
 
@@ -76,6 +76,13 @@ impl SymbolTable {
     pub fn verify(&self, context: &Context) -> Result<(), crate::Error> {
         for (name, entries) in &self.symbols {
             for (index, entry) in entries.iter().enumerate() {
+                let operation = context.get_op(entry.op);
+                if let Some(global) = operation.clone().as_op::<GlobalOp>() {
+                    global.verify_storage()?;
+                }
+                if let Some(definition) = operation.as_op::<TypeDefOp>() {
+                    definition.verify_declaration(context)?;
+                }
                 let rendered = || format_symbol(context, name, entry.signature.as_deref());
                 for earlier in &entries[..index] {
                     if earlier.signature == entry.signature {
@@ -197,8 +204,6 @@ pub fn merge_modules(context: &Context, into: OpId, from: OpId) -> Result<(), cr
                 old != rename_type(context, new, &renames, &mut memo)
                     || existing.params() != definition.params()
                     || existing.layout_options() != definition.layout_options()
-                    || existing.layout_region().is_some()
-                    || definition.layout_region().is_some()
             })
             .map(|(_, definition)| definition.sym_name())
             .collect();
@@ -362,15 +367,6 @@ fn rename_arg(
                 .collect(),
         ),
         other => other.clone(),
-    }
-}
-
-pub(crate) fn signature_accepts(context: &Context, signature: &[TypeId], args: &[TypeId]) -> bool {
-    match signature.split_last() {
-        Some((&last, fixed)) if context.is_variadic_tail(last) => {
-            args.len() >= fixed.len() && &args[..fixed.len()] == fixed
-        }
-        _ => signature == args,
     }
 }
 

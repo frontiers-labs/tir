@@ -48,26 +48,34 @@ impl AsmPrinter {
     }
 
     /// Render one instruction, or `None` if `op` is not a machine instruction.
-    /// `assignment` places the values its register slots hold.
     pub fn print_instruction(
         &self,
         context: &Context,
         op: &OpHandle,
-        assignment: &crate::backend::RegAssignment,
     ) -> Result<Option<String>, AsmPrintError> {
         let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() else {
             return Ok(None);
         };
+        if !op.operands().is_empty() || !op.results().is_empty() {
+            return Err(AsmPrintError::InvalidInstruction {
+                op: op.name().as_str(),
+            });
+        }
         let Some(desc) = mi.info().asm else {
             return Err(AsmPrintError::NoAssemblySyntax {
                 op: op.name().as_str(),
             });
         };
-        crate::backend::asm_desc::print(desc, context, op, assignment)
-            .map(Some)
-            .ok_or(AsmPrintError::InvalidInstruction {
-                op: op.name().as_str(),
-            })
+        crate::backend::asm_desc::print(
+            desc,
+            context,
+            op,
+            &crate::backend::registers::RegAssignment::default(),
+        )
+        .map(Some)
+        .ok_or(AsmPrintError::InvalidInstruction {
+            op: op.name().as_str(),
+        })
     }
 
     pub fn print_module(
@@ -76,12 +84,7 @@ impl AsmPrinter {
         module: &ModuleOp,
     ) -> Result<String, AsmPrintError> {
         let mut out = String::new();
-        self.print_block(
-            context,
-            module.body(),
-            &mut out,
-            &crate::backend::RegAssignment::default(),
-        )?;
+        self.print_block(context, module.body(), &mut out)?;
         Ok(out)
     }
 
@@ -90,10 +93,9 @@ impl AsmPrinter {
         context: &Context,
         block: tir::BlockHandle,
         out: &mut String,
-        assignment: &crate::backend::RegAssignment,
     ) -> Result<(), AsmPrintError> {
         for op_id in block.op_ids() {
-            self.print_op_in(context, &context.get_op(op_id), out, assignment)?;
+            self.print_op_in(context, &context.get_op(op_id), out)?;
         }
         Ok(())
     }
@@ -106,7 +108,7 @@ impl AsmPrinter {
         op: &OpHandle,
         out: &mut String,
     ) -> Result<(), AsmPrintError> {
-        self.print_op_in(context, op, out, &crate::backend::RegAssignment::default())
+        self.print_op_in(context, op, out)
     }
 
     fn print_op_in(
@@ -114,7 +116,6 @@ impl AsmPrinter {
         context: &Context,
         op: &OpHandle,
         out: &mut String,
-        assignment: &crate::backend::RegAssignment,
     ) -> Result<(), AsmPrintError> {
         let item = crate::backend::asm_item(op);
         if matches!(item, AsmItem::Skip) {
@@ -130,15 +131,11 @@ impl AsmPrinter {
                 out.push_str(&name);
                 out.push('\n');
             }
-            self.print_block(context, section.body(), out, assignment)?;
+            self.print_block(context, section.body(), out)?;
             return Ok(());
         }
 
         if matches!(item, AsmItem::Symbol) {
-            // Register allocation left the values in place and recorded where it
-            // put them; this is where that map is read.
-            let assignment =
-                &crate::backend::RegAssignment::of_op(op, crate::backend::ASSIGNMENT_ATTR);
             let name = as_string_attr(op.attr("name")).ok_or(AsmPrintError::MissingSymbolName)?;
             if as_string_attr(op.attr("binding")).as_deref() != Some("local") {
                 out.push_str(".global ");
@@ -174,7 +171,7 @@ impl AsmPrinter {
                     .and_then(|&next| crate::backend::fallthrough_branch(context, block_id, next));
                 for op_id in block.op_ids() {
                     if Some(op_id) != omitted {
-                        self.print_op_in(context, &context.get_op(op_id), out, assignment)?;
+                        self.print_op_in(context, &context.get_op(op_id), out)?;
                     }
                 }
             }
@@ -235,7 +232,7 @@ impl AsmPrinter {
             return Ok(());
         }
 
-        if let Some(text) = self.print_instruction(context, op, assignment)? {
+        if let Some(text) = self.print_instruction(context, op)? {
             out.push('\t');
             out.push_str(&text);
             out.push('\n');

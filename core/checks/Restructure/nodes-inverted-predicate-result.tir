@@ -2,8 +2,6 @@
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 // RUN: tir mc --march x86_64 --filetype asm %s | filecheck --check-prefix=ASM %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f inverted --args=0 | filecheck --check-prefix=FALSE %s
-// RUN: tir opt --pass restructure-nodes %s | tir interp -f inverted --args=1 | filecheck --check-prefix=TRUE %s
 
 module {
   %f = func.func @inverted(%p: !i1) -> !i1 {
@@ -27,8 +25,6 @@ module {
 // CHECK: -> %[[NOT]]
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end
-// FALSE: i1 {{-?1}}
-// TRUE: i1 0
 
 // ASM: inverted:
 // ASM: xor

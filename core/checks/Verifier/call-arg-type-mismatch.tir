@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s
+// RUN: not tir opt %s
 
 // Overloads resolve on exact argument types: an i64 argument does not select
 // the i32 overload.

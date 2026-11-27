@@ -1,0 +1,38 @@
+// Explicit Gamma ports forward one producer into mutually exclusive consumers
+// with different arities. Recovery must preserve both consumers' values.
+// The unit test checks their partition compatibility before placement can
+// independently demote the shared producer to local comparisons.
+module {
+  %fn_main = func.func @main(%branch: !i1, %input: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %selector = addi %input, %zero : !i32
+    %a = constant {value = 100} : !i32
+    %b = constant {value = 200} : !i32
+    %x = constant {value = 10} : !i32
+    %y = constant {value = 20} : !i32
+    %z = constant {value = 30} : !i32
+    %result = scf.switch %branch args(%selector) (%left) {
+      %first = scf.switch %left {
+        -> %a
+      }
+      {
+        -> %b
+      }
+      -> %first
+    }
+    (%right) {
+      %second = scf.switch %right {
+        -> %x
+      }
+      () {
+        -> %y
+      }
+      () {
+        -> %z
+      }
+      -> %second
+    }
+    func.return %result
+  }
+  module_end
+}

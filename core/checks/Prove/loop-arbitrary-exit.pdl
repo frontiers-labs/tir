@@ -3,7 +3,7 @@
 // RUN: not tir prove %s | filecheck %s
 
 // An invariant continue value says nothing about the exit: initial 0, continue
-// port, exit 1, predicate false produces 1 (see Interp/loop-exit-constant.tir),
+// port, exit 1, predicate false produces 1,
 // so a rule replacing such a loop by its init is refuted at the exit
 // projection. A continue value that moves the port is refuted at the transition.
 

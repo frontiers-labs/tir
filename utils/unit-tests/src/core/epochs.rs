@@ -394,11 +394,11 @@ fn a_grown_port_is_aligned_before_and_after_commit() {
 
     let result = context.grow_port(loop_op, i32_ty, Some(init), |_, port| port);
     let before = text(&context, function);
-    tir::verify_op_tree(&context, function).expect("aligned before commit");
+    tir::check_types(&context).expect("aligned before commit");
 
     context.commit();
     let after = text(&context, function);
-    tir::verify_op_tree(&context, function).expect("aligned after commit");
+    tir::check_types(&context).expect("aligned after commit");
     assert_eq!(before, after, "the visible graph is the committed graph");
     assert!(context.get_op(loop_op).results().contains(&result));
 }

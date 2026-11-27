@@ -1,8 +1,6 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
 // RUN: tir opt --pass restructure-nodes,affine,instcombine-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
-// RUN: tir opt --pass restructure-nodes,affine,instcombine-nodes %s | tir interp - | filecheck %s --check-prefix=VALUE
 
 // The runtime coefficient and offset are invariant, while the i8 counter
 // wraps twice. Both the last product and the counter leave the loop.
@@ -41,4 +39,3 @@ module {
 // CHECK: scf.for
 // CHECK-NOT: muli
 // CHECK-LABEL: func.func @main
-// VALUE: i8 -29

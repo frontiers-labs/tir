@@ -1,4 +1,4 @@
-// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+// RUN: not tir opt %s 2>&1 | filecheck %s
 
 // A module holds blocks, so an unordered body is not a body it can have.
 
@@ -6,4 +6,4 @@ module {
   ->
 }
 
-// CHECK: declares a Blocks region
+// CHECK: failed typechecking: region shape

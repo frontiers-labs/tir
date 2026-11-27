@@ -4,13 +4,14 @@ use tir::RegionHandle;
 
 use tir::attributes::AttributeValue;
 use tir::{
-    BlockId, InsertionPoint, NewOpParts, Operation,
-    builtin::{ModuleEndOp, ModuleOp},
+    BlockId, InsertionPoint, Operation,
+    builtin::{ModuleEndOpBuilder, ModuleOp, ModuleOpBuilder},
     parse::tokens::Parser,
 };
 
 use crate::backend::{
-    LiteralOp, MachineInstruction, SectionOp, SymbolEndOp, SymbolOp, lex, lexer::Token,
+    LiteralOpBuilder, MachineInstruction, SectionOpBuilder, SymbolEndOpBuilder, SymbolOpBuilder,
+    lex, lexer::Token,
 };
 
 pub type AsmInstructionParser =
@@ -43,15 +44,17 @@ impl AsmParser {
 
     #[allow(clippy::result_unit_err)]
     pub fn parse_asm(&self, context: &tir::Context, src: &str) -> Result<ModuleOp, ()> {
-        let module = ModuleOp::new(context, None, Default::default(), InsertionPoint::Root);
+        let module = ModuleOpBuilder::new(context).build();
 
         let tokens = lex(src)?;
 
         let mut parser = Parser::new(&tokens);
 
         let module_body = module.body();
-        let section_op = SectionOp::new(context, None, Default::default(), module_body.end());
-        ModuleEndOp::new(context, Default::default(), module_body.end());
+        let section_op = SectionOpBuilder::new(context).at(module_body.end()).build();
+        ModuleEndOpBuilder::new(context)
+            .at(module_body.end())
+            .build();
         let section_body = section_op.body();
         let mut insertion = InsertionPoint::Block {
             block: section_body.id(),
@@ -76,21 +79,16 @@ impl AsmParser {
                     let name = parser.bump();
                     match name {
                         Some(Token::Ident(name)) => {
-                            let global_op = SymbolOp::new(
-                                context,
-                                None,
-                                NewOpParts {
-                                    attributes: vec![context.named_attribute(
-                                        "name",
-                                        AttributeValue::Str((*name).into()),
-                                    )],
-                                },
-                                InsertionPoint::Block {
+                            let global_op = SymbolOpBuilder::new(context)
+                                .attr("name", AttributeValue::Str((*name).into()))
+                                .at(InsertionPoint::Block {
                                     block: section_body.id(),
                                     position: 0,
-                                },
-                            );
-                            SymbolEndOp::new(context, Default::default(), global_op.body().end());
+                                })
+                                .build();
+                            SymbolEndOpBuilder::new(context)
+                                .at(global_op.body().end())
+                                .build();
                             insertion = InsertionPoint::Block {
                                 block: global_op.body().id(),
                                 position: 0,
@@ -147,17 +145,11 @@ impl AsmParser {
                                 Some(Token::HexNumber(n)) => parse_hex(n)?,
                                 _ => return Err(()),
                             };
-                            LiteralOp::new(
-                                context,
-                                AttributeValue::Str(kind.into()),
-                                NewOpParts {
-                                    attributes: vec![
-                                        context
-                                            .named_attribute("value", AttributeValue::Int(value)),
-                                    ],
-                                },
-                                insertion,
-                            );
+                            LiteralOpBuilder::new(context)
+                                .attr("kind", AttributeValue::Str(kind.into()))
+                                .attr("value", AttributeValue::Int(value))
+                                .at(insertion)
+                                .build();
                             if let InsertionPoint::Block { position, .. } = &mut insertion {
                                 *position += 1;
                             }
@@ -167,17 +159,11 @@ impl AsmParser {
                             let Some(Token::StringLit(value)) = parser.bump() else {
                                 return Err(());
                             };
-                            LiteralOp::new(
-                                context,
-                                AttributeValue::Str(kind.into()),
-                                NewOpParts {
-                                    attributes: vec![context.named_attribute(
-                                        "value",
-                                        AttributeValue::Str((*value).into()),
-                                    )],
-                                },
-                                insertion,
-                            );
+                            LiteralOpBuilder::new(context)
+                                .attr("kind", AttributeValue::Str(kind.into()))
+                                .attr("value", AttributeValue::Str((*value).into()))
+                                .at(insertion)
+                                .build();
                             if let InsertionPoint::Block { position, .. } = &mut insertion {
                                 *position += 1;
                             }

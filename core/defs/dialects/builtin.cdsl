@@ -1,0 +1,265 @@
+use std::core::*;
+use std::ir::{Bits, Cfg, El, Function, Ptr};
+use std::bits;
+use std::option;
+
+pub use std::ir::interfaces::*;
+
+pub enum StateResource {
+    Memory,
+}
+
+pub enum AggregateKind {
+    Struct,
+    Union,
+    Variant,
+}
+
+pub enum IntegerPredicate {
+    Eq,
+    Ne,
+    Slt,
+    Sgt,
+    Sle,
+    Sge,
+    Ult,
+    Ugt,
+    Ule,
+    Uge,
+}
+
+pub let constant<w: Nat> = op {
+    signature: () -> (result: Bits<w>),
+    attributes: { value: Int },
+    exec: |self| bits::from_int(self.value),
+    interfaces: (ConstantLike, Speculatable),
+};
+
+pub let addi<w: Nat> = op {
+    rust_name: "AddIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    attributes: { nsw: Option<Bool>, nuw: Option<Bool> },
+    exec: |lhs, rhs| bits::add_wrapping(lhs, rhs),
+    poison: |self, lhs, rhs| {
+        (option::get_or(self.nsw, false) && bits::signed_add_overflows(lhs, rhs))
+            || (option::get_or(self.nuw, false) && bits::unsigned_add_overflows(lhs, rhs))
+    },
+    interfaces: (Additive, Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable),
+};
+
+pub let subi<w: Nat> = op {
+    rust_name: "SubIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    attributes: { nsw: Option<Bool>, nuw: Option<Bool> },
+    exec: |lhs, rhs| bits::sub_wrapping(lhs, rhs),
+    poison: |self, lhs, rhs| {
+        (option::get_or(self.nsw, false) && bits::signed_sub_overflows(lhs, rhs))
+            || (option::get_or(self.nuw, false) && bits::unsigned_sub_overflows(lhs, rhs))
+    },
+    interfaces: (Subtractive, SameOperandAndResultType, IntegerArithmetic, Speculatable),
+};
+
+pub let muli<w: Nat> = op {
+    rust_name: "MulIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::mul_wrapping(lhs, rhs),
+    interfaces: (Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable, OpCost(4)),
+};
+
+pub let divsi<w: Nat> = op {
+    rust_name: "DivSIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::sdiv(lhs, rhs),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic),
+};
+
+pub let divui<w: Nat> = op {
+    rust_name: "DivUIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::udiv(lhs, rhs),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic),
+};
+
+pub let remsi<w: Nat> = op {
+    rust_name: "RemSIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::srem(lhs, rhs),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic),
+};
+
+pub let remui<w: Nat> = op {
+    rust_name: "RemUIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::urem(lhs, rhs),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic),
+};
+
+pub let andi<w: Nat> = op {
+    rust_name: "AndIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::and(lhs, rhs),
+    interfaces: (Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable),
+};
+
+pub let ori<w: Nat> = op {
+    rust_name: "OrIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::or(lhs, rhs),
+    interfaces: (Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable),
+};
+
+pub let xori<w: Nat> = op {
+    rust_name: "XOrIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::xor(lhs, rhs),
+    interfaces: (Commutative, SameOperandAndResultType, IntegerArithmetic, Speculatable),
+};
+
+pub let shli<w: Nat> = op {
+    rust_name: "ShlIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::shl(lhs, rhs),
+    poison: |lhs, rhs| bits::uge(rhs, bits::width_value()),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, Speculatable),
+};
+
+pub let shrui<w: Nat> = op {
+    rust_name: "ShrUIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::lshr(lhs, rhs),
+    poison: |lhs, rhs| bits::uge(rhs, bits::width_value()),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, Speculatable),
+};
+
+pub let shrsi<w: Nat> = op {
+    rust_name: "ShrSIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<w>),
+    exec: |lhs, rhs| bits::ashr(lhs, rhs),
+    poison: |lhs, rhs| bits::uge(rhs, bits::width_value()),
+    interfaces: (SameOperandAndResultType, IntegerArithmetic, Speculatable),
+};
+
+pub let extsi<In: Nat, Out: Nat> = op {
+    rust_name: "ExtSIOp",
+    signature: (input: Bits<In>) -> (result: Bits<Out>),
+    exec: |input| bits::sext(input),
+    interfaces: (Speculatable,),
+};
+
+pub let extui<In: Nat, Out: Nat> = op {
+    rust_name: "ExtUIOp",
+    signature: (input: Bits<In>) -> (result: Bits<Out>),
+    exec: |input| bits::zext(input),
+    interfaces: (Speculatable,),
+};
+
+pub let trunci<In: Nat, Out: Nat> = op {
+    rust_name: "TruncIOp",
+    signature: (input: Bits<In>) -> (result: Bits<Out>),
+    exec: |input| bits::trunc(input),
+    interfaces: (Speculatable,),
+};
+
+pub let bitcast<w: Nat> = op {
+    signature: (input: Bits<w>) -> (result: Bits<w>),
+    exec: |input| bits::bitcast(input),
+    interfaces: (
+        Speculatable,
+        Check(TypeConstraint::EqualWidth(
+            ConstraintPort::Input("input"), ConstraintPort::Output("result"), "bitcast width"
+        )),
+    ),
+    widened: true,
+};
+
+pub let assume = op {
+    signature: (condition: Bits<1>) -> (),
+    exec: |condition| (),
+};
+
+pub let freeze<T> = op {
+    signature: (input: T) -> (result: T),
+    interfaces: (Speculatable,),
+};
+
+pub let refine<T> = op {
+    signature: (input: T, predicate: Bits<1>) -> (result: T),
+    exec: |input, predicate| input,
+    interfaces: (Congruent,),
+};
+
+pub let module_end = op {
+    signature: () -> (),
+    interfaces: (Terminator,),
+};
+
+pub let cmpi<w: Nat> = op {
+    rust_name: "CmpIOp",
+    signature: (lhs: Bits<w>, rhs: Bits<w>) -> (result: Bits<1>),
+    attributes: { predicate: IntegerPredicate },
+    exec: |self, lhs, rhs| {
+        bits::from_bool(match self.predicate {
+            IntegerPredicate::Eq => bits::eq(lhs, rhs),
+            IntegerPredicate::Ne => bits::ne(lhs, rhs),
+            IntegerPredicate::Slt => bits::slt(lhs, rhs),
+            IntegerPredicate::Sgt => bits::sgt(lhs, rhs),
+            IntegerPredicate::Sle => bits::sle(lhs, rhs),
+            IntegerPredicate::Sge => bits::sge(lhs, rhs),
+            IntegerPredicate::Ult => bits::ult(lhs, rhs),
+            IntegerPredicate::Ugt => bits::ugt(lhs, rhs),
+            IntegerPredicate::Ule => bits::ule(lhs, rhs),
+            IntegerPredicate::Uge => bits::uge(lhs, rhs),
+        })
+    },
+    interfaces: (Speculatable,),
+};
+
+pub let module = op {
+    signature: () -> (),
+    regions: (body: Cfg),
+};
+
+pub let global<P> = op {
+    signature: () -> (result: Ptr<P>),
+    attributes: { sym_name: String },
+    interfaces: (Symbol, Global),
+    format: true,
+};
+
+pub let fn_to_ptr<A, R, P> = op {
+    signature: (callee: Function<A, R>) -> (result: Ptr<P>),
+    interfaces: (Pure, Speculatable),
+};
+
+pub let ptr_to_fn<A, R, P> = op {
+    signature: (address: Ptr<P>) -> (result: Function<A, R>),
+    interfaces: (Pure, Speculatable),
+};
+
+pub let make_tuple = op {
+    signature: (elements: ..Any) -> (result: std::ir::Tuple<Any>),
+    interfaces: (Speculatable, Check(TypeConstraint::TupleElements(
+        ConstraintPort::Input("elements"), ConstraintPort::Output("result"),
+    ))),
+    macro_def: true,
+};
+
+pub let tuple_get = op {
+    signature: (tuple: std::ir::Tuple<Any>) -> (result: Any),
+    attributes: { index: std::ir::UInt },
+    interfaces: (Speculatable, Check(TypeConstraint::TupleProjection(
+        ConstraintPort::Input("tuple"), "index", ConstraintPort::Output("result"),
+    ))),
+    macro_def: true,
+};
+
+pub let all_ops: List<OpDef> = List(
+    constant::<64>, addi::<64>, subi::<64>, muli::<64>,
+    divsi::<64>, divui::<64>, remsi::<64>, remui::<64>,
+    andi::<64>, ori::<64>, xori::<64>,
+    shli::<64>, shrui::<64>, shrsi::<64>,
+    extsi::<32, 64>, extui::<32, 64>, trunci::<64, 32>,
+    bitcast::<64>, freeze::<Bits<64>>, cmpi::<64>,
+);
+
+extract rust all_ops => "@ct";

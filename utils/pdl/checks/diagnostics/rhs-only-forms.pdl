@@ -1,6 +1,0 @@
-// `root` names a right-hand-side position.
-// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
-
-rule matched-class-on-lhs: #add(root, x) => x;
-
-// CHECK: `root` cannot appear on the left-hand side

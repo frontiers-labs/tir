@@ -17,9 +17,7 @@ use crate::{
         cfg::CfgDialect, fp::FpDialect, func::FuncDialect, scf::ScfDialect, state::StateDialect,
     },
     ir_formatter::IRFormatter,
-    operation::{
-        ImplementsOpInterface, OpHandle, OpNameId, downcast_op_interface, op_interface_converter,
-    },
+    operation::{ImplementsOpInterface, OpHandle, downcast_op_interface, op_interface_converter},
     parse::text::Parser as IRParser,
     ptr::PtrDialect,
     region::{RegionHandle, RegionId},
@@ -66,8 +64,6 @@ struct Registry {
     terms: Rc<Terms>,
     segment_sizes: Sym,
     core_types: bool,
-    op_names: Vec<(&'static str, &'static str)>,
-    constructors: Option<Arc<HashMap<String, OpId>>>,
 }
 #[derive(Clone)]
 pub struct Names(Rc<RefCell<Registry>>);
@@ -105,7 +101,6 @@ struct Inner {
     origin: Cell<Option<crate::parse::Span>>,
     queries: queries::Queries,
     constructing: Cell<Option<OpId>>,
-    defines_types: Cell<bool>,
 }
 
 impl Context {
@@ -123,6 +118,7 @@ impl Context {
         .unwrap_or_else(|error| panic!("IR type argument: {error}"));
         ir_program::bind_std_ir_fp_format(engine.database_mut(), tir_symbolic::term::fp_format)
             .unwrap_or_else(|error| panic!("IR floating-point format: {error}"));
+        op_spec::bind_native(&mut engine);
         ir_program::attach(&mut engine).unwrap_or_else(|error| panic!("IR rules: {error}"));
         keys::install(&mut engine).expect("IR entity keys");
         let queries = queries::Queries::new(engine.database());
@@ -144,8 +140,6 @@ impl Context {
                 terms: terms.clone(),
                 segment_sizes,
                 core_types: false,
-                op_names: Vec::new(),
-                constructors: None,
             })),
             engine,
             next_id,
@@ -153,7 +147,6 @@ impl Context {
             origin: Cell::new(None),
             queries,
             constructing: Cell::new(None),
-            defines_types: Cell::new(false),
         }))
     }
 
@@ -168,6 +161,14 @@ impl Context {
         self.0.engine.borrow_mut()
     }
 
+    pub(crate) fn typing_engine(&self) -> Result<RefMut<'_, EGraph>, Error> {
+        drop(self.0.engine.try_borrow_mut().map_err(|_| {
+            Error::VerificationError("IR engine already borrowed during typechecking".into())
+        })?);
+        self.0.queries.verification(&mut self.engine());
+        Ok(self.engine())
+    }
+
     /// Request a fresh evaluation of the structural queries after an external edit.
     pub fn invalidate_indexes(&self) {
         self.0.queries.invalidate();
@@ -180,57 +181,6 @@ impl Context {
     pub fn intern(&self, name: &str) -> Sym {
         self.terms().intern_symbol(name)
     }
-    pub fn intern_fp_semantics(
-        &self,
-        semantics: impl Into<crate::fp::Semantics>,
-    ) -> Arc<crate::fp::Semantics> {
-        Arc::new(semantics.into())
-    }
-    pub fn intern_evaluation_contract(
-        &self,
-        contract: impl Into<crate::fp::EvaluationContract>,
-    ) -> Arc<crate::fp::EvaluationContract> {
-        Arc::new(contract.into())
-    }
-    pub(crate) fn intern_op_name(&self, dialect: &'static str, name: &'static str) -> OpNameId {
-        self.register_op_name(dialect, name);
-        let mut registry = self.registry_mut();
-        let identity = (dialect, name);
-        if let Some(index) = registry.op_names.iter().position(|held| *held == identity) {
-            return OpNameId::new(index as u32);
-        }
-        let id = OpNameId::new(registry.op_names.len() as u32);
-        registry.op_names.push(identity);
-        id
-    }
-    pub(crate) fn defines_types(&self) -> bool {
-        self.0.defines_types.get()
-    }
-    pub(crate) fn constructors(&self) -> Option<(Context, Arc<HashMap<String, OpId>>)> {
-        if !self.registry().core_types {
-            return None;
-        }
-        if let Some(names) = self.registry().constructors.clone() {
-            return Some((self.clone(), names));
-        }
-        self.0.defines_types.set(true);
-        let module = crate::dialects::layout::types::define(self);
-        self.0.defines_types.set(false);
-        let names = Arc::new(crate::layout::definitions_in(self, module.id()));
-        self.registry_mut().constructors = Some(names.clone());
-        Some((self.clone(), names))
-    }
-    pub(crate) fn scope_layouts(
-        &self,
-        _scope: OpId,
-        build: impl FnOnce() -> crate::layout::ModuleLayouts,
-    ) -> Arc<crate::layout::ModuleLayouts> {
-        Arc::new(build())
-    }
-    pub(crate) fn module_type_definitions(&self, module: OpId) -> Arc<HashMap<String, OpId>> {
-        Arc::new(crate::layout::definitions_in(self, module))
-    }
-
     pub fn with_default_dialects() -> Self {
         let context = Context::new();
 
@@ -311,6 +261,7 @@ impl Context {
     }
 
     pub fn register_reg_classes(&self, classes: &'static [crate::backend::regalloc::RegClassInfo]) {
+        self.register_type("backend", &crate::backend::RegClassType::spelling(self));
         for class in classes {
             self.note_reg_class(crate::backend::regalloc::RegClassId::new(class));
         }
@@ -358,13 +309,14 @@ impl Context {
         Op: ImplementsOpInterface<I>,
         I: ?Sized + 'static,
     {
-        self.register_op_interface::<I>(Op::dialect(), Op::name(), op_interface_converter::<Op, I>);
+        self.register_operation::<Op>();
+        self.install_op_interface::<I>(Op::native_identity(), op_interface_converter::<Op, I>);
     }
 
     pub(crate) fn get_dyn_op(&self, op: OpHandle) -> Box<dyn Operation> {
-        let dialect_name = self.op_identity(op.id).0;
-        let dialect = self.registry().dialects.get(dialect_name).unwrap().clone();
-        dialect.get_dyn_op(op)
+        let kind = self.operation_kind(op.id).expect("live operation");
+        self.operation_factory(kind)
+            .expect("registered operation constructor")(op)
     }
 
     pub(crate) fn get_op_interface<I: ?Sized + 'static>(&self, op: OpHandle) -> Option<Box<I>> {
@@ -424,17 +376,6 @@ impl Context {
 
     pub fn state_resource(&self, ty: TypeId) -> Option<crate::builtin::StateResource> {
         crate::builtin::StateType::view(ty).map(|state| state.resource())
-    }
-
-    pub(crate) fn states_of(
-        &self,
-        values: impl IntoIterator<Item = ValueId>,
-        resource: crate::builtin::StateResource,
-    ) -> Vec<ValueId> {
-        values
-            .into_iter()
-            .filter(|value| self.state_resource(self.get_value(*value).ty()) == Some(resource))
-            .collect()
     }
 
     pub fn is_state_type(&self, ty: TypeId) -> bool {
@@ -676,6 +617,11 @@ impl Context {
             .ok()
             .map(OpId::new)
     }
+    pub(crate) fn region_entry(&self, region: RegionId) -> Option<BlockId> {
+        u32::try_from(self.record::<RegionRow>(region.raw())?.entry)
+            .ok()
+            .map(BlockId::new)
+    }
     pub(crate) fn region_is_nodes(&self, r: RegionId) -> bool {
         self.record::<RegionRow>(r.raw())
             .is_some_and(|row| row.mode == "graph")
@@ -726,6 +672,9 @@ impl Context {
     }
     pub(crate) fn block_ops(&self, block: BlockId) -> Vec<OpId> {
         self.members("block", block.raw(), 4)
+    }
+    pub(crate) fn block_tail_position(&self, block: BlockId) -> Option<i64> {
+        self.member_tail("block", block.raw()).1
     }
     // A native container ID belongs to one block or graph. Raw IR may use
     // the same number in both spaces, in which case select the placement too.
@@ -1044,10 +993,9 @@ impl Context {
     ) -> OpHandle {
         let id = OpId::new(self.mint());
         self.0.constructing.set(Some(id));
-        let (dialect, name) = self.registry().op_names[op.name.index()];
         OperationRow {
             id: id.raw(),
-            kind: format!("{dialect}.{name}"),
+            kind: op.declaration,
             placement: "root".into(),
             container: -1,
             position: -1,

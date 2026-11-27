@@ -1,5 +1,5 @@
 use std::core::*;
-use std::ir::{OperationId, ValueId};
+use std::ir::{OperationId, OperationKind, ValueId};
 
 // ── Live IR Fact Tables ──────────────────────────────────────────────────────
 
@@ -11,11 +11,11 @@ pub let Bypass: Relation<(Int, Int, Int)>;
 pub let Control: Relation<(OperationId, Bool, Int, Bool, Int, Int, String)>;
 pub let CyclePath: Relation<(Int, OperationId, OperationId)>;
 pub let DependsOn: Relation<(Int, OperationId, OperationId)>;
-pub let OpSpec: Table<(String, String, Int), Int, Merge::Unique>;
+pub let OpSpec: Table<(OperationKind, Int), Int, Merge::Unique>;
 pub let Operand: Table<(OperationId, Int), ValueId, Merge::Unique>;
 pub let Operation: Relation<{
     id: OperationId,
-    kind: String,
+    kind: OperationKind,
     placement: String,
     container: Int,
     position: Int,

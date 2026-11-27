@@ -75,19 +75,9 @@ fn asm_parse_steps(
                     }
                     Type::Integer | Type::Bits(_) => {
                         let signed = action_index > 0 && plus_before_immediate[action_index - 1];
-                        // Reject integers that do not fit the operand's
-                        // `bits<N>` width so the per-mnemonic dispatch
-                        // backtracks to a wider form instead of failing
-                        // later in the encoder. Mirrors the encoder's
-                        // union of the signed and unsigned N-bit ranges:
-                        // [-(2^(N-1)), 2^N - 1].
-                        let range = match ty {
-                            Type::Bits(n) if *n < 64 => {
-                                let min = proc_macro2::Literal::i64_suffixed(-(1i64 << (n - 1)));
-                                let max = proc_macro2::Literal::i64_suffixed(1i64 << n);
-                                quote! { Some((#min, #max)) }
-                            }
-                            _ => quote! { None },
+                        let bits = match ty {
+                            Type::Bits(bits) => *bits,
+                            _ => 0,
                         };
                         let constraint = operand_constraints
                             .get(op_name)
@@ -96,8 +86,8 @@ fn asm_parse_steps(
                         let align = proc_macro2::Literal::u32_unsuffixed(constraint.align);
                         let nonzero = constraint.nonzero;
                         parse_steps.push(quote! {
-                            ParseStep::Immediate(#op_name_lit, #signed, ImmConstraint {
-                                range: #range,
+                            ParseStep::Immediate(#op_name_lit, #signed, ImmediateConstraint {
+                                bits: #bits,
                                 align: #align,
                                 nonzero: #nonzero,
                             })
@@ -248,7 +238,7 @@ struct InstrEmitCtx<'a> {
     op_name: &'a str,
     ops: &'a [(String, Type)],
     mnemonic_name: &'a str,
-    op_ident: &'a proc_macro2::Ident,
+    builder_ident: &'a proc_macro2::Ident,
     ops_map: &'a HashMap<String, Type>,
     operand_constraints: &'a HashMap<String, OperandConstraint>,
     defined_register_operands: &'a [String],
@@ -256,65 +246,146 @@ struct InstrEmitCtx<'a> {
     implicit_reads: &'a [(String, u32)],
 }
 
-fn attrs_schema_ts(ops: &[(String, Type)]) -> proc_macro2::TokenStream {
-    let mut items = vec![];
-    for (name, ty) in ops {
-        let field_ident = format_ident!("{}", name);
-        let ty_ts = match ty {
-            Type::Struct(_) => quote! { "?Register" },
-            Type::Integer | Type::Bits(_) => quote! { Integer },
-            Type::String => quote! { String },
-            _ => unreachable!("HM type vars should not appear as operand types"),
-        };
-        items.push(quote! { #field_ident: #ty_ts });
-    }
-    quote! { #(#items,)* }
-}
-
-fn instruction_ports(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<(String, bool)> {
-    let mut ports: Vec<(String, bool)> = vec![];
+fn instruction_values(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<(String, bool)> {
+    let mut values = Vec::new();
     for (name, ty) in ctx.ops {
         if !matches!(ty, Type::Struct(_)) {
             continue;
         }
         let defines = ctx.defined_register_operands.contains(name);
-        ports.push((name.clone(), defines));
+        values.push((name.clone(), defines));
         if defines && ctx.read_register_operands.contains(name) {
-            ports.push((name.clone(), false));
+            values.push((format!("{name}_tied"), false));
         }
     }
-    for (name, _) in ctx.implicit_reads {
-        ports.push((name.clone(), false));
-    }
-    for (slot, _, is_def) in fixed_register_role_items(
-        ctx.inst,
-        ctx.ops,
-        &tables.register_index_map,
-        &tables.register_name_map,
-        &tables.effect_classes,
-        &tables.pc_classes,
-    ) {
-        ports.push((slot, is_def));
-    }
-    ports
+    values.extend(
+        ctx.implicit_reads
+            .iter()
+            .map(|(name, _)| (name.clone(), false)),
+    );
+    values.extend(
+        fixed_register_role_items(
+            ctx.inst,
+            ctx.ops,
+            &tables.register_index_map,
+            &tables.register_name_map,
+            &tables.effect_classes,
+            &tables.pc_classes,
+        )
+        .into_iter()
+        .map(|(slot, _, is_def)| (slot, is_def)),
+    );
+    values
 }
 
-fn instruction_values(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> proc_macro2::TokenStream {
-    let ports = instruction_ports(tables, ctx);
-    let fields = |def| {
-        let names: Vec<_> = ports
-            .iter()
-            .filter(|(_, d)| *d == def)
-            .map(|(name, _)| format_ident!("{name}"))
-            .collect();
-        let types = vec!["_?"; names.len()].join(", ");
-        (names, types)
-    };
-    let (uses, slots) = fields(false);
-    let (defs, results) = fields(true);
-    let scheme = format!("({slots}) -> ({results})");
-    quote! { scheme: #scheme, operands: O { #(#uses),* }, results: R { #(#defs),* }, }
+fn imm_brand_name(rust_name: &proc_macro2::Ident, field: &str) -> String {
+    let suffix: String = field
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect();
+    format!("{rust_name}{suffix}")
 }
+
+fn operation_cdsl(
+    rust_name: &proc_macro2::Ident,
+    dialect: &str,
+    ctx: &InstrEmitCtx<'_>,
+    values: &[(String, bool)],
+    fixup_operands: &BTreeSet<String>,
+    terminator: bool,
+    text_only: bool,
+) -> String {
+    let mut op_ports: Vec<String> = values
+        .iter()
+        .filter(|(_, def)| !def)
+        .map(|(name, _)| format!("{name}: Option<BackendReg>"))
+        .collect();
+    op_ports.push("state: ..State".to_owned());
+    let has_defs = values.iter().any(|(_, def)| *def);
+    let mut res_ports = Vec::new();
+    if has_defs {
+        res_ports.push("results: ..BackendReg".to_owned());
+    }
+    res_ports.push("out_state: ..State".to_owned());
+
+    let mut attrs = Vec::new();
+    let mut assembly_attrs = Vec::new();
+    let mut immediates = Vec::new();
+    for (name, ty) in ctx.ops {
+        match ty {
+            Type::Struct(_) => {
+                assembly_attrs.push(format!("{name}: Register"));
+            }
+            Type::Integer | Type::Bits(_) => {
+                let bits = match ty {
+                    Type::Bits(width) => *width,
+                    _ => 0,
+                };
+                let constraint = ctx
+                    .operand_constraints
+                    .get(name)
+                    .copied()
+                    .unwrap_or_default();
+                let allow_fixups = fixup_operands.contains(name);
+                let align = constraint.align;
+                let nonzero = constraint.nonzero;
+                let attr_kind = if allow_fixups || text_only {
+                    "Any"
+                } else {
+                    "Int"
+                };
+                attrs.push(format!("{name}: {attr_kind}"));
+                assembly_attrs.push(format!("{name}: Any"));
+                let imm_ty = imm_brand_name(rust_name, name);
+                immediates.push(format!(
+                    "ImmSpec::Imm({name:?}, {imm_ty:?}, {bits}, {align}, {nonzero}, {allow_fixups}, {text_only})"
+                ));
+            }
+            Type::String => {
+                attrs.push(format!("{name}: String"));
+                assembly_attrs.push(format!("{name}: String"));
+            }
+            _ => {}
+        }
+    }
+    let name = ctx.op_name;
+    let rname = rust_name.to_string();
+    let mut body = format!(
+        "pub let op_{rname} = op {{\n    dialect: {dialect:?},\n    name: {name:?},\n    rust_name: {rname:?},\n    signature: ({}) -> ({}),\n",
+        op_ports.join(", "),
+        res_ports.join(", "),
+    );
+    if !attrs.is_empty() {
+        body.push_str(&format!("    attributes: {{ {} }},\n", attrs.join(", ")));
+    }
+    if !assembly_attrs.is_empty() {
+        body.push_str(&format!(
+            "    assembly: {{ {} }},\n",
+            assembly_attrs.join(", ")
+        ));
+    }
+    if !immediates.is_empty() {
+        body.push_str(&format!(
+            "    immediates: List({}),\n",
+            immediates.join(", ")
+        ));
+    }
+    if terminator {
+        body.push_str("    interfaces: (ResourceEffects, Terminator),\n");
+    } else {
+        body.push_str("    interfaces: (ResourceEffects,),\n");
+    }
+    body.push_str("    custom_format: true,\n    machine: true,\n    macro_def: true,\n};\n\n");
+    body
+}
+
 fn instruction_program_ts(
     inst: &ast::Instruction,
     branch_value: Option<&ast::Expr>,
@@ -410,12 +481,7 @@ fn emit_assembly_template(
     custom_assembly: bool,
     out: &mut InstrOutputs<'_>,
 ) -> Option<proc_macro2::Ident> {
-    let op_ident = ctx.op_ident;
-    let operand_segments = instruction_ports(tables, ctx)
-        .iter()
-        .filter(|(_, is_def)| !is_def)
-        .count()
-        + 2;
+    let builder_ident = ctx.builder_ident;
     let mut desc_ident = None;
     let actions = compile_asm_template(template);
     let syntax_arity = actions
@@ -479,23 +545,12 @@ fn emit_assembly_template(
                     &#ident,
                     parser,
                     insertion,
-                    |mut attributes| {
-                        attributes.push(context.named_attribute(
-                            "operand_segment_sizes",
-                            tir::attributes::AttributeValue::Array(vec![
-                                tir::attributes::AttributeValue::UInt(0); #operand_segments
-                            ].into()),
-                        ));
-                        <#op_ident as tir::Operation>::from_op_instance(context.add_operation(
-                            tir::InsertionPoint::Root,
-                            tir::NewOp::new::<#op_ident>(
-                                context.clone(),
-                                Vec::new(),
-                                Vec::new(),
-                                Vec::new(),
-                                tir::NewOpParts { attributes },
-                            ),
-                        ))
+                    |attributes| {
+                        let mut op_builder = #builder_ident::new(context);
+                        for attribute in attributes {
+                            op_builder = op_builder.attr_sym(attribute.name, attribute.value);
+                        }
+                        op_builder.try_build()
                     },
                 )
             }
@@ -647,6 +702,7 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables {
     }
 }
 struct InstrOutputs<'a> {
+    operation_cdsl: &'a mut String,
     instruction_defs: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_parsers_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_parser_candidates:
@@ -656,7 +712,6 @@ struct InstrOutputs<'a> {
     instruction_info_idents: &'a mut Vec<proc_macro2::Ident>,
     machine_instruction_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_custom_format_impls: &'a mut Vec<proc_macro2::TokenStream>,
-    as_sem_expr_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_encoder_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_decoder_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_decoder_dispatch: &'a mut Vec<(u32, proc_macro2::Ident)>,
@@ -811,6 +866,7 @@ fn emit_instruction(
 ) -> Result<(), TMDLError> {
     let dialect = options.dialect;
     let name_ident = format_ident!("{}Op", &inst.name);
+    let builder_ident = format_ident!("{}OpBuilder", &inst.name);
     let resolved_params = resolve_params_for_instruction(inst, item_cache);
     let mnemonic = resolved_params
         .get("MNEMONIC")
@@ -845,8 +901,6 @@ fn emit_instruction(
     let operand_constraints = resolve_operand_constraints_for_instruction(inst, item_cache);
     let defined_register_operands = infer_defined_register_operands(&inst.behavior, &ops);
 
-    let attrs_schema = attrs_schema_ts(&ops);
-
     let numeric_params: HashMap<String, i64> = resolve_params_for_instruction(inst, item_cache)
         .into_iter()
         .filter_map(|(name, (_ty, value))| match value {
@@ -871,7 +925,7 @@ fn emit_instruction(
     // Unmodeled instructions still print, parse, and encode, but execution traps.
     let uses_todo = behavior_uses_todo(&inst.behavior);
 
-    // Symbolic conversion substitutes bindings. Execution preserves single evaluation.
+    // Analyze inlined bindings while preserving single evaluation in the executable program.
     let selection_behavior = inline_let_bindings(&inst.behavior);
 
     let register_reads = if !uses_todo
@@ -924,15 +978,15 @@ fn emit_instruction(
         op_name,
         ops: &ops,
         mnemonic_name,
-        op_ident: &name_ident,
+        builder_ident: &builder_ident,
         ops_map: &ops_map,
         operand_constraints: &operand_constraints,
         defined_register_operands: &defined_register_operands,
         read_register_operands: &read_register_operands,
         implicit_reads: &implicit_reads,
     };
+    let values = instruction_values(tables, &instr_ctx);
     let copy_ports = copy_ports(&inst.behavior, &ops, &tables.register_files);
-    let ports_schema = instruction_values(tables, &instr_ctx);
 
     // An instruction that writes `PC::pc` transfers control, so it is a
     // terminator: its successors are the blocks its attributes reference
@@ -941,23 +995,15 @@ fn emit_instruction(
     // needs real successors, and dominance becomes valid on machine IR.
     let (uncond_pc, cond_pc) = pc_writes(&inst.behavior);
     let is_terminator = uncond_pc || cond_pc;
-    let (interfaces_list, terminator_impl) = if is_terminator {
-        (
-            quote! { [tir::backend::MachineInstruction, tir::ResourceEffects, tir::Terminator] },
-            quote! {
-                impl tir::Terminator for #name_ident {
-                    fn successors(&self) -> Vec<tir::BlockId> {
-                        tir::backend::branch_successors(self)
-                    }
+    let terminator_impl = is_terminator.then(|| {
+        quote! {
+            impl tir::Terminator for #name_ident {
+                fn successors(&self) -> Vec<tir::BlockId> {
+                    tir::backend::branch_successors(self)
                 }
-            },
-        )
-    } else {
-        (
-            quote! { [tir::backend::MachineInstruction, tir::ResourceEffects] },
-            quote! {},
-        )
-    };
+            }
+        }
+    });
 
     let implicit_items =
         implicit_register_items(inst, &tables.register_index_map, &tables.pc_classes);
@@ -977,26 +1023,15 @@ fn emit_instruction(
     // chain of the call it finalizes whatever its own opcode says.
     let (reads_memory, writes_memory) = behavior_memory_effects(&inst.behavior);
     let touches_memory = reads_memory || writes_memory;
-    let touches_fp_environment = behavior_updates_fp_environment(&inst.behavior);
-    let state_schema = quote! { state: "in_out", };
-
+    let define = format_ident!("__cdsl_{dialect}_{name_ident}");
     out.instruction_defs.push(quote! {
-        operation! {
-            #name_ident {
-                name: #op_name_lit,
-                dialect: #dialect,
-                #ports_schema
-                #state_schema
-                attributes: A { #attrs_schema },
-                interfaces: #interfaces_list,
-                format: custom,
-            }
-        }
-
+        #define!(tir::backend::MachineInstruction);
         #terminator_impl
     });
 
-    let ir_info_ident = info_ident(&inst.name);
+    // One shared printer: what a slot is called, what class it admits and
+    // whether it is a result are fields of the opcode's `InstrInfo`.
+    let info_ident = info_ident(&inst.name);
     out.instruction_custom_format_impls.push(quote! {
         impl #name_ident {
             fn custom_print<'a, 'b: 'a>(
@@ -1010,7 +1045,7 @@ fn emit_instruction(
                 parser: &mut tir::parse::text::Parser<'src>,
                 context: &tir::Context,
             ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-                tir::backend::parse_machine_op::<Self>(parser, context, &#ir_info_ident)
+                tir::backend::parse_machine_op::<Self>(parser, context, &#info_ident)
             }
         }
     });
@@ -1031,18 +1066,6 @@ fn emit_instruction(
     } else {
         None
     };
-    let codegen_rhs: Option<&ast::Expr> = branch_value.as_ref().or(resolved_rhs);
-
-    if let Some(rhs) = codegen_rhs
-        && !uses_todo
-        && !behavior_has_atomic_ops(&inst.behavior)
-        && !behavior_has_dynamic_sized_memory_access(&inst.behavior, &const_size_params)
-        && let Some(impl_ts) =
-            emit_as_sem_expr_impl(rhs, &name_ident, &numeric_params, &isa_param_values)
-    {
-        out.as_sem_expr_impls.push(impl_ts);
-    }
-
     let behavior_ctx = RustBehaviorCtx {
         ops: &ops,
         isa_param_values: &isa_param_values,
@@ -1064,7 +1087,9 @@ fn emit_instruction(
         (false, false) => quote! { tir::backend::ControlFlow::None },
     };
 
-    let info_ident = info_ident(&inst.name);
+    // Filled in below when this instruction has an assembly syntax, a binary
+    // encoding, or a patchable immediate; each becomes a field of its
+    // `InstrInfo` rather than an entry in a string-keyed side table.
     let desc_ident = match resolve_effective_asm_for_instruction(inst, item_cache)
         .and_then(resolve_asm_templates)
     {
@@ -1079,6 +1104,7 @@ fn emit_instruction(
         None => None,
     };
     let mut encode_ident: Option<proc_macro2::Ident> = None;
+    let mut fixup_operands = BTreeSet::new();
     out.machine_instruction_impls.push(quote! {
         impl tir::backend::MachineInstruction for #name_ident {
             fn instance(&self) -> &tir::OpHandle {
@@ -1087,6 +1113,14 @@ fn emit_instruction(
 
             fn info(&self) -> &'static tir::backend::InstrInfo {
                 &#info_ident
+            }
+
+            fn assembly_layout(&self) -> Option<&'static tir::schema::OpLayout> {
+                Some(Self::assembly_layout())
+            }
+
+            fn verify_immediates(&self, context: &tir::Context) -> Result<(), tir::Error> {
+                Self::check_immediates(&self.0.attributes(), context)
             }
         }
 
@@ -1115,12 +1149,6 @@ fn emit_instruction(
                         },
                     ));
                 }
-                if #touches_fp_environment {
-                    effects.push(effect(
-                        tir::builtin::StateResource::FpEnv,
-                        tir::ResourceAccess::Change,
-                    ));
-                }
                 effects
             }
         }
@@ -1137,6 +1165,7 @@ fn emit_instruction(
                 &operand_constraints,
                 &resolved_params,
                 &encoding_ctx,
+                &mut fixup_operands,
             )
         })
         .transpose()?
@@ -1145,6 +1174,16 @@ fn emit_instruction(
         out.instruction_encoder_impls.push(encoder);
         encode_ident = Some(format_ident!("ENCODE_{}", inst.name.to_uppercase()));
     }
+
+    out.operation_cdsl.push_str(&operation_cdsl(
+        &name_ident,
+        dialect,
+        &instr_ctx,
+        &values,
+        &fixup_operands,
+        is_terminator,
+        options.text_only,
+    ));
 
     if let Some((decoder, decode_spec_ident, specificity)) = emit_instruction_decoder(
         inst,
@@ -1182,6 +1221,23 @@ fn emit_instruction(
         sched_tables,
         &inst.name,
     );
+    let register_attrs: Vec<_> = ops
+        .iter()
+        .filter(|(_, ty)| matches!(ty, Type::Struct(_)))
+        .map(|(name, _)| {
+            let role = if !defined_register_operands.contains(name) {
+                quote! { Use }
+            } else if read_register_operands.contains(name) {
+                quote! { ReadWrite }
+            } else {
+                quote! { Def }
+            };
+            quote! { (#name, tir::attributes::AttributeRole::#role) }
+        })
+        .collect();
+    if !register_attrs.is_empty() {
+        info_fields.push(quote! { register_attrs: &[#(#register_attrs),*] });
+    }
     if let Some(cases) = sched_tables.latency_cases.get(&inst.name) {
         let cases = emit_latency_cases(
             cases,
@@ -1223,8 +1279,9 @@ fn assembly_registry_section(
         }
     } else {
         quote! {
+            use tir::backend::operand::ImmediateConstraint;
             use tir::backend::asm_desc::{
-                self, AsmSymbol, ImmConstraint, InstrDesc, ParseStep, PrintPart,
+                self, AsmSymbol, InstrDesc, ParseStep, PrintPart,
             };
 
             #(#instruction_descs)*
@@ -1306,6 +1363,7 @@ pub(super) fn emit_instructions<'a>(
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     sched_tables: &SchedTables,
     options: InstructionOptions<'_>,
+    operation_cdsl: &mut String,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let InstructionOptions {
         dialect,
@@ -1341,7 +1399,6 @@ pub(super) fn emit_instructions<'a>(
     let mut instruction_info_idents: Vec<proc_macro2::Ident> = vec![];
     let mut machine_instruction_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_custom_format_impls: Vec<proc_macro2::TokenStream> = vec![];
-    let mut as_sem_expr_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_encoder_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_dispatch: Vec<(u32, proc_macro2::Ident)> = vec![];
@@ -1358,6 +1415,7 @@ pub(super) fn emit_instructions<'a>(
 
     for inst in instruction_files.iter().flat_map(|f| f.instructions()) {
         let mut out = InstrOutputs {
+            operation_cdsl,
             instruction_defs: &mut instruction_defs,
             instruction_parsers_impls: &mut instruction_parsers_impls,
             instruction_parser_candidates: &mut instruction_parser_candidates,
@@ -1366,7 +1424,6 @@ pub(super) fn emit_instructions<'a>(
             instruction_info_idents: &mut instruction_info_idents,
             machine_instruction_impls: &mut machine_instruction_impls,
             instruction_custom_format_impls: &mut instruction_custom_format_impls,
-            as_sem_expr_impls: &mut as_sem_expr_impls,
             instruction_encoder_impls: &mut instruction_encoder_impls,
             instruction_decoder_impls: &mut instruction_decoder_impls,
             instruction_decoder_dispatch: &mut instruction_decoder_dispatch,
@@ -1474,7 +1531,6 @@ pub(super) fn emit_instructions<'a>(
         #(#instruction_defs)*
         #(#instruction_custom_format_impls)*
         #(#machine_instruction_impls)*
-        #(#as_sem_expr_impls)*
 
         #assembly_registry_section
 

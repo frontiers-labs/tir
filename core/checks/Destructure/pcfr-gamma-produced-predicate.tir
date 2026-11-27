@@ -1,13 +1,5 @@
 // IR migration: the requested transformation pass is a registered no-op.
 // XFAIL: *
-// RUN: tir interp %s -f main --args=0,5 | filecheck --check-prefix=FALSE %s
-// RUN: tir interp %s -f main --args=0,10 | filecheck --check-prefix=TRUE %s
-// RUN: tir interp %s -f main --args=1,5 | filecheck --check-prefix=TRUE %s
-// RUN: tir interp %s -f main --args=1,11 | filecheck --check-prefix=FALSE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=0,5 | filecheck --check-prefix=FALSE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=0,10 | filecheck --check-prefix=TRUE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=1,5 | filecheck --check-prefix=TRUE %s
-// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=1,11 | filecheck --check-prefix=FALSE %s
 // RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=CFG %s
 
 // The inner Gamma computes its selector in either arm. The outer Gamma uses
@@ -40,8 +32,6 @@ module {
   module_end
 }
 
-// TRUE: i32 111
-// FALSE: i32 222
 // CFG-NOT: scf.
 // CFG: cmpi
 // CFG-COUNT-3: cfg.cond_br

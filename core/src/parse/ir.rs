@@ -25,8 +25,7 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
     parse_attribute_aliases(&mut parser, context)?;
     let op = parse_single_op(&mut parser, context)?;
     bind_forward_references(&mut parser, context)?;
-    // The core type definitions declare their types, `!array` among them, for
-    // every module.
+    // Core types such as `!array` are declared for every module.
     if let Some(core) = context.core_type_names() {
         parser
             .type_defs
@@ -596,20 +595,25 @@ impl<'src> TextParser<'src> {
             .as_ref()
             .expect("block labels require an active region parse scope");
 
-        // A forward branch may have already created the block from the successor's
-        // type list; bind the label's names to those existing arguments and let
-        // the block join the region here, in definition order.
+        // A forward branch may have allocated placeholders. The definition
+        // supplies their declared types.
         if let Some(id) = state.labels.get(label).copied() {
             let block = context.get_block(id);
-            if !named_args.is_empty() && block.arguments().is_empty() {
+            let arguments = block.arguments();
+            if !named_args.is_empty() && named_args.len() != arguments.len() {
                 return Err((
                     self.span(),
                     Error::VerificationError(format!(
-                        "block ^{label} was already referenced without arguments"
+                        "block ^{label} declares {} arguments after a reference with {}",
+                        named_args.len(),
+                        arguments.len(),
                     )),
                 ));
             }
-            for ((name, _), arg) in named_args.iter().zip(block.arguments()) {
+            for (index, ((name, ty), arg)) in named_args.iter().zip(arguments).enumerate() {
+                if arg.ty() != *ty {
+                    context.retype_block_argument(id, index, *ty);
+                }
                 self.define_value(name, arg.id());
             }
             let state = self.region_parse.as_mut().expect("scope checked above");

@@ -1,0 +1,109 @@
+use std::core::*;
+use std::ir::Bits;
+
+pub enum Format {
+    Binary16,
+    Binary32,
+    Binary64,
+}
+
+pub enum Rounding {
+    NearestEven,
+    NearestAway,
+    TowardZero,
+    TowardPositive,
+    TowardNegative,
+}
+
+pub enum Contraction {
+    Separate,
+    Permitted,
+}
+
+pub enum FloatPredicate {
+    Oeq,
+    Ogt,
+    Oge,
+    Olt,
+    Ole,
+    Une,
+}
+
+pub type Float<F: Format>;
+pub type Computation<F: Format, R: Rounding, C: Contraction>;
+
+pub let capture<format: Format, rounding: Rounding, contraction: Contraction> = op {
+    signature: (input: Float<format>) -> (result: Computation<format, rounding, contraction>),
+};
+
+pub let add<format: Format, rounding: Rounding, contraction: Contraction> = op {
+    signature: (
+        lhs: Computation<format, rounding, contraction>,
+        rhs: Computation<format, rounding, contraction>,
+    ) -> (result: Computation<format, rounding, contraction>),
+};
+
+pub let sub<format: Format, rounding: Rounding, contraction: Contraction> = op {
+    signature: (
+        lhs: Computation<format, rounding, contraction>,
+        rhs: Computation<format, rounding, contraction>,
+    ) -> (result: Computation<format, rounding, contraction>),
+};
+
+pub let mul<format: Format, rounding: Rounding, contraction: Contraction> = op {
+    signature: (
+        lhs: Computation<format, rounding, contraction>,
+        rhs: Computation<format, rounding, contraction>,
+    ) -> (result: Computation<format, rounding, contraction>),
+};
+
+pub let div<format: Format, rounding: Rounding, contraction: Contraction> = op {
+    signature: (
+        lhs: Computation<format, rounding, contraction>,
+        rhs: Computation<format, rounding, contraction>,
+    ) -> (result: Computation<format, rounding, contraction>),
+};
+
+pub let materialize<format: Format, rounding: Rounding, contraction: Contraction> = op {
+    signature: (input: Computation<format, rounding, contraction>) -> (result: Float<format>),
+};
+
+pub let cmp<format: Format> = op {
+    signature: (lhs: Float<format>, rhs: Float<format>) -> (result: Bits<1>),
+    attributes: { predicate: FloatPredicate },
+};
+
+pub let from_si<format: Format, width: Nat> = op {
+    rust_name: "FromSIOp",
+    signature: (input: Bits<width>) -> (result: Float<format>),
+};
+
+pub let from_ui<format: Format, width: Nat> = op {
+    rust_name: "FromUIOp",
+    signature: (input: Bits<width>) -> (result: Float<format>),
+};
+
+pub let to_si<format: Format, width: Nat> = op {
+    rust_name: "ToSIOp",
+    signature: (input: Float<format>) -> (result: Bits<width>),
+};
+
+pub let to_ui<format: Format, width: Nat> = op {
+    rust_name: "ToUIOp",
+    signature: (input: Float<format>) -> (result: Bits<width>),
+};
+
+pub let convert<from: Format, to: Format> = op {
+    signature: (input: Float<from>) -> (result: Float<to>),
+};
+
+pub let all_ops: List<OpDef> = List(
+    capture::<Format::Binary64, Rounding::NearestEven, Contraction::Separate>,
+    materialize::<Format::Binary64, Rounding::NearestEven, Contraction::Separate>,
+    add::<Format::Binary64, Rounding::NearestEven, Contraction::Separate>,
+    sub::<Format::Binary64, Rounding::NearestEven, Contraction::Separate>,
+    mul::<Format::Binary64, Rounding::NearestEven, Contraction::Separate>,
+    div::<Format::Binary64, Rounding::NearestEven, Contraction::Separate>,
+);
+
+extract rust all_ops => "@ct";

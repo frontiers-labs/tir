@@ -1,0 +1,23 @@
+use std::core::*;
+use std::ir::{Bits, TypeAttr};
+
+pub let sizeof<w: Nat> = op {
+    rust_name: "SizeOfOp",
+    signature: () -> (result: Bits<w>),
+    attributes: { ty: TypeAttr },
+    macro_def: true,
+};
+
+pub let alignof<w: Nat> = op {
+    rust_name: "AlignOfOp",
+    signature: () -> (result: Bits<w>),
+    attributes: { ty: TypeAttr },
+    macro_def: true,
+};
+
+pub let offsetof<w: Nat> = op {
+    rust_name: "OffsetOfOp",
+    signature: () -> (result: Bits<w>),
+    attributes: { ty: TypeAttr, field: String },
+    macro_def: true,
+};

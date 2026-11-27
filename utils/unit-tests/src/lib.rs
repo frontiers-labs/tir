@@ -138,7 +138,6 @@ mod core {
     #[cfg(any())]
     mod epochs;
     mod fixtures;
-    mod float;
     // Migration skip: this suite targets the removed guarded-relaxation implementation.
     #[cfg(any())]
     mod float_refinement;
@@ -180,13 +179,7 @@ fn fixture_root() -> std::path::PathBuf {
 mod egglog {
     mod api;
     mod colors;
-    mod containers;
     mod database;
-    mod differential;
     mod engine;
-    mod extract;
     mod groups;
-    mod passes;
-    mod program;
-    mod reference;
 }

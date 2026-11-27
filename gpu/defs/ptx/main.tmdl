@@ -265,6 +265,6 @@ template RegGrp for [PTX] {
 // A branch-target label definition (`$L__BB0_2:`).
 template LabelDef for [PTX] {
     param OPNAME: String;
-    operands { name: bits<64>, }
+    operands { name: String, }
     asm { "{name}:" }
 }

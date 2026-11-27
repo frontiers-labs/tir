@@ -1,7 +1,7 @@
 use std::core::*;
-use std::ir::OperationId;
+use std::ir::{OperationId, OperationKind};
 
-pub let Operation: Relation<(OperationId, String, String, Int, Int, Int, Int)>;
+pub let Operation: Relation<(OperationId, OperationKind, String, Int, Int, Int, Int)>;
 pub let Attribute: Table<(String, OperationId, String), Int, Merge::Unique>;
 pub let Marker: Relation<Int>;
 

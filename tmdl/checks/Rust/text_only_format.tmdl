@@ -37,6 +37,7 @@ instruction Sub for [TextIsa] : Binary {
     behavior { todo(); }
 }
 
-// CHECK: AddOp {
-// CHECK: scheme : "(_?, _?) -> ()"
-// CHECK: SubOp {
+// CHECK: macro_rules! __cdsl_test_AddOp
+// CHECK: operands : & [tir::FieldSchema { name : "d"
+// CHECK: tir::FieldSchema { name : "a"
+// CHECK: macro_rules! __cdsl_test_SubOp

@@ -6,45 +6,10 @@ use tir::{
     Binding, Context, Gamma, Operation, RegionId, Theta, TypeId, ValueId,
 };
 
-tir::helpers::operation! {
-    ThetaOp {
-        name: "theta",
-        dialect: "test",
-        scheme: "(_*) -> _*",
-        operands: O { inits },
-        results: R { results },
-        regions: R {
-            body: Region {
-                kind: Nodes,
-            }
-        },
-        binds: Theta {
-            carried: inits ~ body.ports ~ body.results[1..n+1] ~ body.results[n+1..] ~ results,
-            predicate: body.results[0],
-        },
-    }
-}
-
-tir::helpers::operation! {
-    GammaOp {
-        name: "gamma",
-        dialect: "test",
-        scheme: "(int<_>, _*) -> _*",
-        operands: O { predicate, inputs },
-        results: R { results },
-        regions: R {
-            arms: Region {
-                kind: Nodes,
-                variadic: true,
-            }
-        },
-        binds: Gamma {
-            predicate,
-            forwarded: inputs ~ arms.ports,
-            joined: arms.results ~ results,
-        },
-    }
-}
+use tir::scf::nodes::{
+    LoopOp as ThetaOp, LoopOpBuilder as ThetaOpBuilder, SwitchOp as GammaOp,
+    SwitchOpBuilder as GammaOpBuilder,
+};
 
 fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]) -> RegionId {
     let ports = port_types
@@ -58,9 +23,8 @@ fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]
                 context,
                 value,
                 builtin::IntegerType::new(context, u64::from(width)),
-                Default::default(),
-                tir::InsertionPoint::Root,
             )
+            .build()
         })
         .collect();
     let values: Vec<ValueId> = constants.iter().map(|c| c.result()).collect();
@@ -70,21 +34,12 @@ fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]
 
 fn build_theta(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]) -> ThetaOp {
     let i32_ty = builtin::IntegerType::new(context, 32);
-    let init = ops::constant(
-        context,
-        7,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    ThetaOp::new(
-        context,
-        vec![init.result()],
-        vec![i32_ty],
-        Some(nodes_region(context, port_types, results)),
-        Default::default(),
-        tir::InsertionPoint::Root,
-    )
+    let init = ops::constant(context, 7, i32_ty).build();
+    ThetaOpBuilder::new(context)
+        .inits(vec![init.result()])
+        .result_types(vec![i32_ty])
+        .body(nodes_region(context, port_types, results))
+        .build()
 }
 
 #[test]
@@ -105,50 +60,33 @@ fn a_theta_binding_aligns_inits_ports_continue_exit_and_results() {
     );
     let body = context.get_region(Theta::body(&op));
     assert_eq!(op.predicate(), body.value_results()[0]);
-    op.verify(&context).expect("an aligned theta verifies");
+    tir::check_types(&context).expect("an aligned theta verifies");
 }
 
 #[test]
 fn a_theta_port_must_have_its_init_type() {
     let context = Context::with_default_dialects();
     let i64_ty = builtin::IntegerType::new(&context, 64);
-    let op = build_theta(&context, &[i64_ty], &[(1, 1), (2, 32), (3, 32)]);
+    let _op = build_theta(&context, &[i64_ty], &[(1, 1), (2, 32), (3, 32)]);
 
-    let error = op
-        .verify(&context)
-        .expect_err("the port is wider than its init");
-    assert!(error.to_string().contains("port"), "{error}");
+    let error = tir::check_types(&context).expect_err("the port is wider than its init");
+    assert!(error.to_string().contains("region entry"), "{error}");
 }
 
 fn build_gamma(context: &Context, arm_results: &[&[(i64, u32)]]) -> GammaOp {
     let i32_ty = builtin::IntegerType::new(context, 32);
-    let predicate = ops::constant(
-        context,
-        0,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let input = ops::constant(
-        context,
-        5,
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let predicate = ops::constant(context, 0, i32_ty).build();
+    let input = ops::constant(context, 5, i32_ty).build();
     let arms = arm_results
         .iter()
         .map(|results| nodes_region(context, &[i32_ty], results))
         .collect();
-    GammaOp::new(
-        context,
-        predicate.result(),
-        vec![input.result()],
-        vec![i32_ty],
-        arms,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    )
+    GammaOpBuilder::new(context)
+        .predicate(predicate.result())
+        .inputs(vec![input.result()])
+        .result_types(vec![i32_ty])
+        .arms(arms)
+        .build()
 }
 
 #[test]
@@ -168,7 +106,7 @@ fn a_gamma_binding_forwards_inputs_and_joins_arm_results() {
     );
     assert_eq!(op.arms().len(), 2);
     assert_eq!(Gamma::predicate(&op), op.operands()[0]);
-    op.verify(&context).expect("an aligned gamma verifies");
+    tir::check_types(&context).expect("an aligned gamma verifies");
 }
 
 fn counted(
@@ -176,49 +114,23 @@ fn counted(
     predicate: tir::attributes::Predicate,
     shape: impl Fn(&[ValueId; 5]) -> Vec<ValueId>,
 ) -> tir::scf::ForOp {
-    use tir::builtin::{AddIOp, CmpIOp};
+    use tir::builtin::CmpIOpBuilder;
     let i32_ty = builtin::IntegerType::new(context, 32);
     let i1 = builtin::IntegerType::new(context, 1);
     let bounds: Vec<ValueId> = [0, 10, 1, 7]
         .iter()
-        .map(|&value| {
-            ops::constant(
-                context,
-                value,
-                i32_ty,
-                Default::default(),
-                tir::InsertionPoint::Root,
-            )
-            .result()
-        })
+        .map(|&value| ops::constant(context, value, i32_ty).build().result())
         .collect();
     let counter = context.create_value(i32_ty, None);
     let carried = context.create_value(i32_ty, None);
-    let compare = CmpIOp::new(
-        context,
-        counter.id(),
-        bounds[1],
-        tir::attributes::AttributeValue::Predicate(predicate),
-        i1,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let advance = AddIOp::new(
-        context,
-        counter.id(),
-        bounds[2],
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
-    let doubled = ops::addi(
-        context,
-        carried.id(),
-        carried.id(),
-        i32_ty,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let compare = CmpIOpBuilder::new(context)
+        .lhs(counter.id())
+        .rhs(bounds[1])
+        .predicate(predicate)
+        .result_type(i1)
+        .build();
+    let advance = ops::addi(context, counter.id(), bounds[2], i32_ty).build();
+    let doubled = ops::addi(context, carried.id(), carried.id(), i32_ty).build();
     let results = shape(&[
         counter.id(),
         compare.result(),
@@ -231,17 +143,14 @@ fn counted(
         vec![compare.id(), advance.id(), doubled.id()],
         results,
     );
-    tir::scf::ForOp::new(
-        context,
-        bounds[0],
-        vec![bounds[3]],
-        bounds[1],
-        bounds[2],
-        vec![i32_ty, i32_ty],
-        Some(body.id()),
-        Default::default(),
-        tir::InsertionPoint::Root,
-    )
+    tir::scf::nodes::ForOpBuilder::new(context)
+        .lb(bounds[0])
+        .inits(vec![bounds[3]])
+        .ub(bounds[1])
+        .step(bounds[2])
+        .result_types(vec![i32_ty, i32_ty])
+        .body(body.id())
+        .build()
 }
 
 #[test]
@@ -277,7 +186,7 @@ fn a_counted_loop_pins_its_comparison_increment_and_exits() {
         |[i, cmp, next, a, doubled]| vec![*cmp, *next, *doubled, *i, *a],
     );
 
-    op.verify(&context).expect("the pinned shape verifies");
+    tir::check_types(&context).expect("the pinned shape verifies");
     assert_eq!(tir::CountedLoop::induction(&op), Some(0));
 }
 
@@ -286,8 +195,8 @@ fn counted_error(
     shape: impl Fn(&[ValueId; 5]) -> Vec<ValueId>,
 ) -> String {
     let context = Context::with_default_dialects();
-    let op = counted(&context, predicate, shape);
-    op.verify(&context)
+    let _op = counted(&context, predicate, shape);
+    tir::check_types(&context)
         .expect_err("the loop is not counted")
         .to_string()
 }
@@ -315,5 +224,8 @@ fn a_counted_loop_leaves_every_port_unchanged() {
         tir::attributes::Predicate::Slt,
         |[i, cmp, next, _, doubled]| vec![*cmp, *next, *doubled, *i, *doubled],
     );
-    assert!(error.contains("exit value 1 must be port 1"), "{error}");
+    assert!(
+        error.contains("exit value must be the corresponding port"),
+        "{error}"
+    );
 }
