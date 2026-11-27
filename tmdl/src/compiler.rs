@@ -702,10 +702,10 @@ fn json_disabled() -> TMDLError {
 /// The table names every input by file and inlines it with `include_str!`.
 /// A backend `include!`s it for hardware model checking, so the sources it
 /// embeds cannot drift from the ones it was generated from.
-pub fn build_backend(
+pub fn build_backend<E: Into<Box<dyn std::error::Error>>>(
     dialect: &str,
     inputs: &[&str],
-    writer: impl Fn(&str, &str) -> Result<String, Box<dyn std::error::Error>>,
+    writer: impl Fn(&str, &str) -> Result<String, E>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = std::env::var("OUT_DIR")?;
     for input in inputs {
@@ -719,7 +719,9 @@ pub fn build_backend(
         for input in inputs {
             builder = builder.add_input(input);
         }
-        builder.build().compile_with_rust_writer(&writer)
+        builder
+            .build()
+            .compile_with_rust_writer(|source, package| writer(source, package).map_err(Into::into))
     };
 
     let mut table = String::from("const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[\n");
