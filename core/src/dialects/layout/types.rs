@@ -32,15 +32,6 @@ fn params(context: &Context) -> [Vec<Param>; 4] {
     ]
 }
 
-pub(crate) fn defaults(context: &Context) -> Vec<(&'static str, AttributeValue)> {
-    let last = |params: Vec<Param>| params.last()?.2.clone();
-    NAMES
-        .into_iter()
-        .zip(params(context))
-        .filter_map(|(name, params)| Some((name, last(params)?)))
-        .collect()
-}
-
 // A module of the definitions, in `context`.
 pub(crate) fn define(context: &Context) -> ModuleOp {
     let unit = |ctor: &'static Ctor| context.terms().intern(ctor.id(context), vec![]).unwrap();

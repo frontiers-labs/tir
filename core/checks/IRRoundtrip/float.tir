@@ -1,31 +1,53 @@
-// RUN: tir opt %s | filecheck %s
+// RUN: tir opt --verify %s | filecheck %s
 
 module {
-  %fn_float_demo = func.func @float_demo(%0: !f32, %1: !f32) -> !f32 {
-    %2 = fp.constant {bits = 1087373312} : !f32
-    %3 = fp.add %2, %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
-    %4 = fp.sub %3, %1 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
-    %5 = fp.mul %4, %2 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
-    %6 = fp.div %5, %1 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
-    func.return %6
+  %fn_float_demo = func.func @float_demo(%a: !f32, %b: !f32) -> !f32 {
+    %bits = constant {value = 1087373312} : !i32
+    %literal = bitcast %bits : !f32
+    %c = fp.capture %literal : !fp.computation<!f32, nearest_even, separate>
+    %x = fp.capture %a : !fp.computation<!f32, nearest_even, separate>
+    %y = fp.capture %b : !fp.computation<!f32, nearest_even, separate>
+    %sum_expr = fp.add %c, %x : !fp.computation<!f32, nearest_even, separate>
+    %sum = fp.materialize %sum_expr : !f32
+    %s = fp.capture %sum : !fp.computation<!f32, nearest_even, separate>
+    %difference_expr = fp.sub %s, %y : !fp.computation<!f32, nearest_even, separate>
+    %difference = fp.materialize %difference_expr : !f32
+    %d = fp.capture %difference : !fp.computation<!f32, nearest_even, separate>
+    %product_expr = fp.mul %d, %c : !fp.computation<!f32, nearest_even, separate>
+    %product = fp.materialize %product_expr : !f32
+    %p = fp.capture %product : !fp.computation<!f32, nearest_even, separate>
+    %quotient_expr = fp.div %p, %y : !fp.computation<!f32, nearest_even, separate>
+    %quotient = fp.materialize %quotient_expr : !f32
+    func.return %quotient
   }
-  %fn_small_floats = func.func @small_floats(%7: !bf16, %8: !f8e4m3, %9: !f8e5m2, %10: !f16) -> !bf16 {
-    func.return %7
+  %fn_small_floats = func.func @small_floats(%bf: !bf16, %e4m3: !f8e4m3, %e5m2: !f8e5m2, %half: !f16) -> !bf16 {
+    func.return %bf
   }
   module_end
 }
 
 // CHECK: module {
-// CHECK-NEXT: %{{[0-9]+}} = func.func @float_demo(%{{[0-9]+}}: !f32, %{{[0-9]+}}: !f32) -> !f32 {
-// CHECK-NEXT: %{{[0-9]+}} = fp.constant {bits = 1087373312} : !f32
-// CHECK-NEXT: %{{[0-9]+}} = fp.add %{{[0-9]+}}, %{{[0-9]+}} : !f32
-// CHECK-NEXT: %{{[0-9]+}} = fp.sub %{{[0-9]+}}, %{{[0-9]+}} : !f32
-// CHECK-NEXT: %{{[0-9]+}} = fp.mul %{{[0-9]+}}, %{{[0-9]+}} : !f32
-// CHECK-NEXT: %{{[0-9]+}} = fp.div %{{[0-9]+}}, %{{[0-9]+}} : !f32
-// CHECK-NEXT: func.return %{{[0-9]+}}
+// CHECK-NEXT: %{{[0-9]+}} = func.func @float_demo(%[[A:[0-9]+]]: !f32, %[[B:[0-9]+]]: !f32) -> !f32 {
+// CHECK-NEXT: %[[BITS:[0-9]+]] = constant {value = 1087373312} : !i32
+// CHECK-NEXT: %[[LITERAL:[0-9]+]] = bitcast %[[BITS]] : !f32
+// CHECK-NEXT: %[[C:[0-9]+]] = fp.capture %[[LITERAL]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[X:[0-9]+]] = fp.capture %[[A]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[Y:[0-9]+]] = fp.capture %[[B]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[SUM_EXPR:[0-9]+]] = fp.add %[[C]], %[[X]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[SUM:[0-9]+]] = fp.materialize %[[SUM_EXPR]] : !f32
+// CHECK-NEXT: %[[S:[0-9]+]] = fp.capture %[[SUM]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[DIFF_EXPR:[0-9]+]] = fp.sub %[[S]], %[[Y]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[DIFF:[0-9]+]] = fp.materialize %[[DIFF_EXPR]] : !f32
+// CHECK-NEXT: %[[D:[0-9]+]] = fp.capture %[[DIFF]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[PROD_EXPR:[0-9]+]] = fp.mul %[[D]], %[[C]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[PROD:[0-9]+]] = fp.materialize %[[PROD_EXPR]] : !f32
+// CHECK-NEXT: %[[P:[0-9]+]] = fp.capture %[[PROD]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[QUOT_EXPR:[0-9]+]] = fp.div %[[P]], %[[Y]] : !fp.computation<!f32, nearest_even, separate>
+// CHECK-NEXT: %[[QUOT:[0-9]+]] = fp.materialize %[[QUOT_EXPR]] : !f32
+// CHECK-NEXT: func.return %[[QUOT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: %{{[0-9]+}} = func.func @small_floats(%{{[0-9]+}}: !bf16, %{{[0-9]+}}: !f8e4m3, %{{[0-9]+}}: !f8e5m2, %{{[0-9]+}}: !f16) -> !bf16 {
-// CHECK-NEXT: func.return %{{[0-9]+}}
+// CHECK-NEXT: %{{[0-9]+}} = func.func @small_floats(%[[BF:[0-9]+]]: !bf16, %{{[0-9]+}}: !f8e4m3, %{{[0-9]+}}: !f8e5m2, %{{[0-9]+}}: !f16) -> !bf16 {
+// CHECK-NEXT: func.return %[[BF]]
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end
 // CHECK-NEXT: }

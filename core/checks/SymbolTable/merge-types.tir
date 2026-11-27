@@ -12,7 +12,7 @@ module {
   type.def !A = !struct<{p: !ptr.p<!B>}>
   type.def !Node
   type.def !Leaf = !struct<{v: !i8}>
-  type.def !Env = !fp.rounding
+  type.def !Env = !state<memory>
   module_end
 }
 
@@ -20,7 +20,7 @@ module {
 // CHECK-NEXT: type.def !B = !struct<{x: !i32}>
 // CHECK-NEXT: type.def !A = !struct<{p: !ptr.p<!B>}>
 // CHECK-NEXT: type.def !Leaf = !struct<{v: !i8}>
-// CHECK-NEXT: type.def !Env = !fp.rounding
+// CHECK-NEXT: type.def !Env = !state<memory>
 // CHECK-NEXT: type.def !B.1 = !struct<{x: !i64}>
 // CHECK-NEXT: type.def !A.1 = !struct<{p: !ptr.p<!B.1>}>
 // CHECK-NEXT: type.def !Node = !struct<{v: !i32}>
