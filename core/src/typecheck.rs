@@ -2,7 +2,7 @@ use crate::attributes::AttributeValue as Attr;
 use crate::{Context, Error, OpId, RegionId, Sym, TypeId};
 use crate::{OpHandle, OpSchema, ValueId};
 use signature::Argument;
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 mod control;
 mod fields;
@@ -90,12 +90,19 @@ impl fmt::Display for TypeCheckError {
 impl std::error::Error for TypeCheckError {}
 
 #[derive(Default)]
-struct Failures(Vec<&'static str>);
+struct Failures(Vec<Cow<'static, str>>);
 
 impl Failures {
     fn require(&mut self, valid: bool, label: &'static str) {
-        if !valid && !self.0.contains(&label) {
-            self.0.push(label);
+        if !valid {
+            self.report(label);
+        }
+    }
+
+    fn report(&mut self, detail: impl Into<Cow<'static, str>>) {
+        let detail = detail.into();
+        if !self.0.contains(&detail) {
+            self.0.push(detail);
         }
     }
 }
@@ -335,7 +342,7 @@ pub fn check_types(context: &Context) -> Result<(), TypeCheckError> {
             errors
                 .0
                 .into_iter()
-                .map(|label| (location, id.number(), label.to_owned())),
+                .map(|detail| (location, id.number(), detail.into_owned())),
         );
     }
     diagnostics.sort_unstable();
