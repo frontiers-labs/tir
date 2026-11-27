@@ -147,35 +147,22 @@ fn chains_over_ssa_ops() {
     let arg_id = arg.id();
     let block = context.create_block(vec![arg]);
     region.add_block(block.id());
-    let func = func_ops::lambda(
-        &context,
-        "f",
-        UnitType::new(&context),
-        &region,
-        Default::default(),
-        tir::InsertionPoint::Root,
-    );
+    let func = func_ops::lambda(&context, "f", UnitType::new(&context), &region).build();
 
     let b = block;
-    let dead = ops::constant(&context, 7, i32, Default::default(), b.end());
-    let sum = ops::addi(&context, arg_id, arg_id, i32, Default::default(), b.end());
+    let dead = ops::constant(&context, 7, i32).at(b.end()).build();
+    let sum = ops::addi(&context, arg_id, arg_id, i32).at(b.end()).build();
     let sum_val = sum.result();
-    let call = tir::func::CallOp::new(
-        &context,
-        tir::Operand::none(),
-        vec![sum_val],
-        i32,
-        vec![],
-        vec![],
-        tir::NewOpParts {
-            attributes: vec![
-                context.named_attribute("callee", tir::attributes::AttributeValue::Str("g".into()))
-            ],
-        },
-        b.end(),
-    );
+    let call = tir::func::CallOpBuilder::new(&context)
+        .args(vec![sum_val])
+        .attr("callee", tir::attributes::AttributeValue::Str("g".into()))
+        .result_type(i32)
+        .at(b.end())
+        .build();
     let call_result = call.result();
-    let ret = func_ops::r#return(&context, call_result, vec![], Default::default(), b.end());
+    let ret = func_ops::r#return(&context, call_result)
+        .at(b.end())
+        .build();
 
     let am = AnalysisManager::new();
     let du = am.get::<DefUse>(&context, func.id());

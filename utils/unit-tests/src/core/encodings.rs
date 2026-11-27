@@ -7,10 +7,10 @@ use tir::backend::binary::{
     FixupTarget, Guard, PatchField,
 };
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
-use tir::backend::RegClassType;
-use tir::{Context, NewOp, OpHandle, Operation};
+use tir::backend::{RegAssignment, RegClassType};
+use tir::{Context, InsertionPoint, NewOp, NewOpParts, OpHandle};
 
-use super::fixtures::{machine_op, r, reg_class, RD_RS_PORTS};
+use super::fixtures::{ops, r, reg_class};
 
 fn phys(index: u16) -> AttributeValue {
     AttributeValue::Register(RegisterAttr::Physical { class: r(), index })
@@ -65,10 +65,8 @@ const fn decoded(
 }
 
 fn enc(op: &OpHandle, spec: &EncodeSpec) -> Option<EncodedInst> {
-    encode_with(op, spec)
+    encode_with(op, spec, &RegAssignment::default()).ok()
 }
-
-machine_op!(TestInstOp, "test", "inst", &RD_RS_PORTS, &[]);
 
 fn op_with(attrs: Vec<(&str, AttributeValue)>) -> (Context, tir::OpHandle) {
     let context = Context::with_default_dialects();
@@ -81,20 +79,18 @@ fn build(
     attrs: Vec<(&str, AttributeValue)>,
     results: Vec<tir::ValueId>,
 ) -> tir::OpHandle {
-    TestInstOp::register_interfaces(context);
     let attributes = attrs
         .into_iter()
         .map(|(name, value)| context.named_attribute(name, value))
         .collect();
-    let instance = NewOp::new_dynamic(
-        ("test", "inst"),
+    let instance = NewOp::new::<ops::TestInstOp>(
         context.clone(),
         vec![],
         results,
         vec![],
-        attributes,
+        NewOpParts { attributes },
     );
-    context.add_operation(instance)
+    context.add_operation(InsertionPoint::Root, instance)
 }
 
 // `lui rd, imm`: 55 | rd << 7 | (imm & 0xFFFFF) << 12
@@ -313,10 +309,10 @@ fn encode_gives_a_fixup_the_widest_shape_and_its_patch() {
 #[test]
 fn encoded_width_is_the_selected_shapes_width() {
     let (_context, op) = op_with(vec![("rd", phys(1)), ("rs", phys(2))]);
-    assert_eq!(encoded_width(&op, &MOV_RR), 2);
+    assert_eq!(encoded_width(&op, &MOV_RR, &RegAssignment::default()), 2);
 
     let (_context, op) = op_with(vec![("rd", phys(9)), ("rs", phys(2))]);
-    assert_eq!(encoded_width(&op, &MOV_RR), 3);
+    assert_eq!(encoded_width(&op, &MOV_RR, &RegAssignment::default()), 3);
 }
 
 // `test rd, imm`: the shape is chosen by a test over the immediate's bit

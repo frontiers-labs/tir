@@ -1,6 +1,12 @@
 use tmdl::{Action, Compiler, OutputKind};
 
 fn main() {
+    tir_cdsl::compile([(
+        "tir-unit-tests::*",
+        tir_cdsl::OutputKind::OpDef("core_fixtures.rs"),
+    )])
+    .unwrap();
+
     let input = "tests/conditional-latency.tmdl";
     let output = std::env::var("OUT_DIR").unwrap();
     println!("cargo:rerun-if-changed={input}");

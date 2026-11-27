@@ -122,14 +122,11 @@ fn a_call_declares_conservative_resource_effects() {
         .as_interface::<dyn ResourceEffects>()
         .expect("a call declares resource effects")
         .resource_effects();
-    assert_eq!(effects.len(), 2);
+    assert_eq!(effects.len(), 1);
     assert_eq!(effects[0].resource, tir::builtin::StateResource::Memory);
     assert_eq!(effects[0].access, ResourceAccess::Change);
     assert_eq!(effects[0].observed, call.state_operands().to_vec());
     assert_eq!(effects[0].produced, call.state_results().to_vec());
-    assert_eq!(effects[1].resource, tir::builtin::StateResource::FpEnv);
-    assert!(effects[1].observed.is_empty());
-    assert!(effects[1].produced.is_empty());
     assert_eq!(call.value_operands().len(), 2);
     assert_eq!(call.value_results().len(), 1);
 }

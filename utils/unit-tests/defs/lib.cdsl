@@ -1,0 +1,74 @@
+use std::core::*;
+use std::ir::BackendReg;
+
+pub let inst = op {
+    dialect: "test",
+    rust_name: "TestInstOp",
+    signature: () -> (results: ..Any),
+    macro_def: true,
+};
+
+pub let beq = op {
+    dialect: "test",
+    rust_name: "BeqDecodeOp",
+    signature: () -> (),
+    macro_def: true,
+};
+
+pub let cmv = op {
+    dialect: "test",
+    rust_name: "CmvDecodeOp",
+    signature: () -> (),
+    macro_def: true,
+};
+
+pub let narrow = op {
+    dialect: "test",
+    rust_name: "NarrowDecodeOp",
+    signature: () -> (),
+    macro_def: true,
+};
+
+pub let def_reg = op {
+    dialect: "dep",
+    name: "def",
+    rust_name: "DefOp",
+    signature: () -> (regs: ..BackendReg),
+    macro_def: true,
+};
+
+pub let update_param = op {
+    dialect: "dep",
+    rust_name: "UpdateParamOp",
+    signature: (rs: Option<BackendReg>) -> (regs: ..BackendReg),
+    macro_def: true,
+};
+
+pub let set_flags = op {
+    dialect: "dep",
+    rust_name: "SetFlagsOp",
+    signature: (rs: Option<BackendReg>) -> (regs: ..BackendReg),
+    macro_def: true,
+};
+
+pub let read_flags = op {
+    dialect: "dep",
+    rust_name: "ReadFlagsOp",
+    signature: (rs: Option<BackendReg>) -> (regs: ..BackendReg),
+    macro_def: true,
+};
+
+pub let add = op {
+    dialect: "test",
+    rust_name: "AddTestOp",
+    signature: (rs: Option<BackendReg>) -> (rd: BackendReg),
+    macro_def: true,
+};
+
+pub let exit = op {
+    dialect: "test",
+    rust_name: "ExitOp",
+    signature: (values: ..Any) -> (),
+    interfaces: (Terminator, NonLocalExit),
+    macro_def: true,
+};

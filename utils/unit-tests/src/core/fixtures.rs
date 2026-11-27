@@ -2,7 +2,7 @@
 
 use tir::attributes::AttributeValue;
 use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterView};
-use tir::backend::SymbolOp;
+use tir::backend::{SymbolOp, SymbolOpBuilder};
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
 use tir::parse::ir::parse_ir;
@@ -16,6 +16,22 @@ use tir::{BlockHandle, Context, OpId, Operation, RegionId};
 // Migration skip: selector-only test support.
 #[cfg(any())]
 use tir_adt::APInt;
+
+#[allow(dead_code)]
+pub mod ops {
+    include!(concat!(env!("OUT_DIR"), "/core_fixtures.rs"));
+
+    __cdsl_dep_DefOp!(tir::backend::MachineInstruction);
+    __cdsl_dep_UpdateParamOp!(tir::backend::MachineInstruction);
+    __cdsl_dep_SetFlagsOp!(tir::backend::MachineInstruction);
+    __cdsl_dep_ReadFlagsOp!(tir::backend::MachineInstruction);
+    __cdsl_test_TestInstOp!();
+    __cdsl_test_AddTestOp!(tir::backend::MachineInstruction);
+    __cdsl_test_ExitOp!();
+    __cdsl_test_BeqDecodeOp!();
+    __cdsl_test_CmvDecodeOp!();
+    __cdsl_test_NarrowDecodeOp!();
+}
 
 /// Parse `source` as a module into a fresh context holding the default dialects.
 pub fn parse(source: &str) -> (Context, ModuleOp) {
@@ -99,14 +115,10 @@ pub fn asm_symbol(context: &Context, ops: &[OpId]) -> (SymbolOp, BlockHandle) {
     }
     let region = context.create_region();
     region.add_block(block.id());
-    let symbol = SymbolOp::new(
-        context,
-        Some(region.id()),
-        tir::NewOpParts {
-            attributes: vec![context.named_attribute("name", AttributeValue::Str("f".into()))],
-        },
-        tir::InsertionPoint::Root,
-    );
+    let symbol = SymbolOpBuilder::new(context)
+        .body(region.id())
+        .attr("name", AttributeValue::Str("f".into()))
+        .build();
     (symbol, block)
 }
 
@@ -154,37 +166,6 @@ pub fn atomic_pattern(kind: SymKind) -> SemGraph {
     g
 }
 
-macro_rules! machine_op {
-    ($op:ident, $dialect:tt, $name:tt, $operand:ident, $implicit:expr) => {
-        tir::helpers::operation! {
-            $op {
-                name: $name,
-                dialect: $dialect,
-                scheme: "(backend.reg<_, _>?) -> backend.reg<_, _>*",
-                operands: O { $operand },
-                results: R { rd },
-                attributes: A { rd: "?Register", $operand: "?Register" },
-                interfaces: [tir::backend::MachineInstruction],
-            }
-        }
-        $crate::core::fixtures::instr_info!($op, $name, $implicit);
-    };
-    ($op:ident, $dialect:tt, $name:tt, $implicit:expr) => {
-        tir::helpers::operation! {
-            $op {
-                name: $name,
-                dialect: $dialect,
-                scheme: "() -> backend.reg<_, _>*",
-                results: R { rd },
-                attributes: A { rd: "?Register" },
-                interfaces: [tir::backend::MachineInstruction],
-            }
-        }
-        $crate::core::fixtures::instr_info!($op, $name, $implicit);
-    };
-}
-pub(crate) use machine_op;
-
 macro_rules! instr_info {
     ($op:ident, $name:tt, $implicit:expr) => {
         impl tir::backend::MachineInstruction for $op {
@@ -200,7 +181,7 @@ macro_rules! instr_info {
             }
 
             fn instance(&self) -> &tir::OpHandle {
-                &self.0
+                tir::Operation::handle(self)
             }
         }
     };

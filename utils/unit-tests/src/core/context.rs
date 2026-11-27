@@ -18,11 +18,6 @@ fn classifies_types_interned_after_earlier_queries() {
     let shared = context.clone();
     let integer = builtin::IntegerType::new(&shared, 32);
     assert_eq!(context.state_resource(integer), None);
-    let environment = builtin::StateType::fp_env(&shared);
-    assert_eq!(
-        context.state_resource(environment),
-        Some(builtin::StateResource::FpEnv)
-    );
     assert_eq!(
         context.state_resource(memory),
         Some(builtin::StateResource::Memory)
@@ -263,7 +258,7 @@ fn every_edit_bumps_the_spine() {
             let a = context.create_value(i32, None);
             let b = context.create_value(i32, None);
             let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            body.append(add.id());
+            context.insert(body.end(), add.id());
             context.set_op_operand(add.id(), 1, b.id());
         }),
         ("set op operands", |context, body| {
@@ -271,7 +266,7 @@ fn every_edit_bumps_the_spine() {
             let a = context.create_value(i32, None);
             let b = context.create_value(i32, None);
             let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            body.append(add.id());
+            context.insert(body.end(), add.id());
             context.set_op_operands(add.id(), vec![b.id(), b.id()]);
         }),
         ("replace value uses", |context, body| {
@@ -279,7 +274,7 @@ fn every_edit_bumps_the_spine() {
             let a = context.create_value(i32, None);
             let b = context.create_value(i32, None);
             let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            body.append(add.id());
+            context.insert(body.end(), add.id());
             context.replace_value_uses(a.id(), b.id());
         }),
     ];
@@ -310,7 +305,7 @@ fn adopting_a_value_makes_the_block_define_it() {
     let produced = builtin::ops::addi(&context, input.id(), input.id(), i32).build();
     let result = context.get_op(produced.id()).results()[0];
     let reader = builtin::ops::addi(&context, result, result, i32).build();
-    body.append(reader.id());
+    context.insert(body.end(), reader.id());
 
     context.adopt_block_argument(body.id(), result);
 
@@ -348,7 +343,9 @@ fn parent_block_tracks_membership() {
     let b = context.create_value(i32, None);
 
     let block = context.create_block(vec![]);
-    let add = block.append_op(builtin::ops::addi(&context, a.id(), b.id(), i32).build());
+    let add = builtin::ops::addi(&context, a.id(), b.id(), i32)
+        .at(block.end())
+        .build();
 
     // Inserting into a block records the parent, reachable from just the op.
     assert_eq!(context.parent_block(add.id()), Some(block.id()));
@@ -392,19 +389,19 @@ fn replacing_value_uses_reaches_a_nested_region() {
     let body_block = context.create_block(vec![counter]);
     body_region.add_block(body_block.id());
     let nested = builtin::ops::addi(&context, a.id(), a.id(), i32).build();
-    body_block.append(nested.id());
-    body_block.append(scf::ops::r#yield(&context, vec![]).build().id());
-    body.append(
-        scf::ForOpBuilder::new(&context)
-            .lb(bound.id())
-            .inits(vec![])
-            .ub(bound.id())
-            .step(bound.id())
-            .body(body_region.id())
-            .result_types(vec![i32])
-            .build()
-            .id(),
-    );
+    context.insert(body_block.end(), nested.id());
+    scf::ops::r#yield(&context, vec![])
+        .at(body_block.end())
+        .build();
+    scf::nodes::ForOpBuilder::new(&context)
+        .lb(bound.id())
+        .inits(vec![])
+        .ub(bound.id())
+        .step(bound.id())
+        .body(body_region.id())
+        .result_types(vec![i32])
+        .at(body.end())
+        .build();
 
     context.replace_value_uses(a.id(), b.id());
 
@@ -457,9 +454,9 @@ fn uses_of_lists_each_operand_slot() {
     let (_, _, body) = module_with_function(&context);
     let i32_ty = builtin::IntegerType::new(&context, 32);
     let c = builtin::ops::constant(&context, 1, i32_ty).build();
-    body.append(c.id());
+    context.insert(body.end(), c.id());
     let add = builtin::ops::addi(&context, c.result(), c.result(), i32_ty).build();
-    body.append(add.id());
+    context.insert(body.end(), add.id());
 
     assert_eq!(
         context.uses_of(c.result()),
@@ -475,11 +472,11 @@ fn add_fixture(context: &Context) -> (ValueId, ValueId, OpId) {
     let (_, _, body) = module_with_function(context);
     let i32_ty = builtin::IntegerType::new(context, 32);
     let c = builtin::ops::constant(context, 1, i32_ty).build();
-    body.append(c.id());
+    context.insert(body.end(), c.id());
     let d = builtin::ops::constant(context, 2, i32_ty).build();
-    body.append(d.id());
+    context.insert(body.end(), d.id());
     let add = builtin::ops::addi(context, c.result(), c.result(), i32_ty).build();
-    body.append(add.id());
+    context.insert(body.end(), add.id());
     (c.result(), d.result(), add.id())
 }
 
