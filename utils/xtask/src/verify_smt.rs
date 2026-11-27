@@ -68,7 +68,7 @@ use tir_symbolic::smtlib::ast::{
 };
 use tir_symbolic::smtlib::parser::{parse_sort, parse_term};
 use tir_verify::TraceValue;
-use tmdl::{RegisterClassMetadata, SmtMetadata};
+use tmdl::{Action, Compiler, OutputKind, RegisterClassMetadata, SmtMetadata};
 use xshell::{cmd, Shell};
 
 /// One ISA's verification setup, read from `utils/xtask/verify/<isa>.toml`.
@@ -79,7 +79,7 @@ pub struct IsaSpec {
     name: String,
     tmdl_isa: String,
     dialect: String,
-    defs_dir: String,
+    module_root: PathBuf,
     /// Snapshot file, its GitHub repository and the pinned commit the configs
     /// were validated against (`TIR_ISLA_SNAPSHOTS_REF` overrides it).
     snapshot: String,
@@ -335,7 +335,14 @@ pub fn verify_smt(sh: &Shell, isa: &str, args: impl Iterator<Item = String>) -> 
     std::fs::create_dir_all(out_dir.join("queries"))?;
 
     let smt_path = out_dir.join(format!("{}.smt2", spec.name));
-    generate_tmdl_smt(sh, spec, &root, &smt_path)?;
+    Compiler::builder()
+        .action(Action::EmitSmtlib)
+        .dialect(Some(spec.dialect.clone()))
+        .isa(Some(spec.tmdl_isa.clone()))
+        .module_root(root.join(&spec.module_root))
+        .output(OutputKind::File(smt_path.display().to_string()))
+        .build()
+        .compile()?;
     let metadata_path = smt_path.with_extension("metadata.json");
     let inventory = parse_inventory(&std::fs::read_to_string(metadata_path)?)?;
     anyhow::ensure!(
@@ -562,22 +569,6 @@ fn ensure_snapshot(sh: &Shell, spec: &IsaSpec) -> anyhow::Result<PathBuf> {
     );
     download_file(sh, &url, &dest)?;
     Ok(dest)
-}
-
-fn generate_tmdl_smt(sh: &Shell, spec: &IsaSpec, root: &Path, out: &Path) -> anyhow::Result<()> {
-    let defs: Vec<PathBuf> = std::fs::read_dir(root.join(&spec.defs_dir))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "tmdl"))
-        .collect();
-    let out_str = out.to_string_lossy().to_string();
-    let dialect = &spec.dialect;
-    let tmdl_isa = &spec.tmdl_isa;
-    cmd!(
-        sh,
-        "cargo run -p tmdl --bin tmdlc -- --action emit-smtlib --dialect {dialect} --isa {tmdl_isa} --output {out_str} {defs...}"
-    )
-    .run()?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

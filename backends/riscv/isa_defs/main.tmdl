@@ -1,0 +1,388 @@
+//! RISC-V instruction sets, architectural registers, and calling conventions implemented by TIR.
+
+use crate::perf::WriteLoad;
+use crate::perf::WriteStore;
+use crate::zicsr::CSR;
+
+/// Base integer ISA with 32-bit integer registers. This model uses 32-bit instruction words and
+/// includes the integer operations defined below.
+///
+/// See [RISC-V Unprivileged ISA, RV32I base integer ISA](https://docs.riscv.org/reference/isa/unpriv/rv32.html).
+isa RV32I {
+    param XLEN: Integer = 32;
+    param ENCODING_UNIT: Integer = 32;
+
+    // Machine-mode trap entry (M is the only implemented privilege level):
+    // mepc/mcause/mtval record the exception, mstatus stacks MIE into MPIE
+    // (bit 3 -> bit 7) with MPP (bits 12:11) = M, and control transfers to
+    // the mtvec base (synchronous exceptions ignore vectored mode).
+    trap (cause, tval) {
+        CSR::mepc = PC::pc;
+        CSR::mcause = zext(cause, self.XLEN);
+        CSR::mtval = zext(tval, self.XLEN);
+        CSR::mstatus = (CSR::mstatus & (zext(0b1100010001000, self.XLEN) ^ sext(0b1, self.XLEN)))
+            | (((CSR::mstatus >> 3) & zext(0b1, self.XLEN)) << 7)
+            | (zext(0b11, self.XLEN) << 11);
+        PC::pc = (CSR::mtvec >> 2) << 2;
+    }
+}
+
+/// Base integer ISA with 64-bit integer registers, including word operations whose 32-bit results
+/// are sign-extended to XLEN.
+///
+/// See [RISC-V Unprivileged ISA, RV64I base integer ISA](https://docs.riscv.org/reference/isa/unpriv/rv64.html).
+isa RV64I {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 32;
+
+    // Machine-mode trap entry (M is the only implemented privilege level):
+    // mepc/mcause/mtval record the exception, mstatus stacks MIE into MPIE
+    // (bit 3 -> bit 7) with MPP (bits 12:11) = M, and control transfers to
+    // the mtvec base (synchronous exceptions ignore vectored mode).
+    trap (cause, tval) {
+        CSR::mepc = PC::pc;
+        CSR::mcause = zext(cause, self.XLEN);
+        CSR::mtval = zext(tval, self.XLEN);
+        CSR::mstatus = (CSR::mstatus & (zext(0b1100010001000, self.XLEN) ^ sext(0b1, self.XLEN)))
+            | (((CSR::mstatus >> 3) & zext(0b1, self.XLEN)) << 7)
+            | (zext(0b11, self.XLEN) << 11);
+        PC::pc = (CSR::mtvec >> 2) << 2;
+    }
+}
+
+/// Program counter holding the address of the current instruction. TIR models it separately from
+/// the 32 integer registers.
+///
+/// See [RISC-V Unprivileged ISA, RV32I base integer ISA](https://docs.riscv.org/reference/isa/unpriv/rv32.html).
+register_class PC for [RV32I, RV64I] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+/// The 32 XLEN-wide integer registers `x0` through `x31`. Reads of `x0` return zero and writes have
+/// no effect.
+///
+/// See [RISC-V Unprivileged ISA, RV32I base integer ISA](https://docs.riscv.org/reference/isa/unpriv/rv32.html).
+register_class GPR for [RV32I, RV64I] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1("ra") => {},
+        x2("sp") => {},
+        x3("gp") => {},
+        x4("tp") => {},
+        x5..x7("t{}") => {},
+        x8..x9("s{}") => {},
+        x10..x17("a{}") => {},
+        x18..x27("s{}") => {},
+        x28..x31("t{}") => {},
+    }
+}
+
+// Base R-type instruction template
+template RType for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param FUNCT7: bits<7>;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        FUNCT7,
+        rs2,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {rs2}"
+    }
+}
+
+// RV64I word-sized R-type instruction template
+template RTypeWord for [RV64I] {
+    param MNEMONIC: String;
+    param FUNCT7: bits<7>;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        FUNCT7,
+        rs2,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {rs2}"
+    }
+}
+
+// I-type instruction template
+template IType for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        imm: bits<12>,
+    }
+
+    encoding {
+        imm,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {imm}"
+    }
+}
+
+// I-type instruction template with explicit PC operand for behavior.
+template ITypePC for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        imm: bits<12>,
+        pc: PC,
+    }
+
+    encoding {
+        imm,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {imm}"
+    }
+}
+
+// RV64I word-sized I-type instruction template.
+template ITypeWord for [RV64I] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        imm: bits<12>,
+    }
+
+    encoding {
+        imm,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {imm}"
+    }
+}
+
+// Load instruction template, inherits from IType
+template LoadInst for [RV32I, RV64I] : IType {
+    param OPCODE: bits<7> = 0b0000011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}({rs1})"
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+// Store instruction template
+template SType for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        rs1: GPR,
+        rs2: GPR,
+        imm: bits<12>,
+    }
+
+    encoding {
+        imm[11..5],
+        rs2,
+        rs1,
+        FUNCT3,
+        imm[4..0],
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs2}, {imm}({rs1})"
+    }
+}
+
+// Store instruction template, inherits from SType
+template StoreInst for [RV32I, RV64I] : SType {
+    param OPCODE: bits<7> = 0b0100011;
+    schedule { units = [WriteStore]; }
+}
+
+// B-type instruction template
+template BType for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        rs1: GPR,
+        rs2: GPR,
+        #[align(2)] imm: bits<13>,
+    }
+
+    encoding {
+        imm[12],
+        imm[10..5],
+        rs2,
+        rs1,
+        FUNCT3,
+        imm[4..1],
+        imm[11],
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs1}, {rs2}, {imm}"
+    }
+}
+
+// B-type instruction template with explicit PC operand for behavior.
+template BTypePC for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        rs1: GPR,
+        rs2: GPR,
+        imm: bits<13>,
+        pc: PC,
+    }
+
+    encoding {
+        imm[12],
+        imm[10..5],
+        rs2,
+        rs1,
+        FUNCT3,
+        imm[4..1],
+        imm[11],
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs1}, {rs2}, {imm}"
+    }
+}
+
+// Branch instruction template, inherits from BType
+template BranchInst for [RV32I, RV64I] : BType {
+    param OPCODE: bits<7> = 0b1100011;
+}
+
+// U-type instruction template
+template UType for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param OPCODE: bits<7>;
+
+    operands {
+        rd: GPR,
+        imm: bits<20>,
+    }
+
+    encoding {
+        imm,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+}
+
+// U-type instruction template with explicit PC operand for behavior.
+template UTypePC for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param OPCODE: bits<7>;
+
+    operands {
+        rd: GPR,
+        imm: bits<20>,
+        pc: PC,
+    }
+
+    encoding {
+        imm,
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+}
+
+// J-type instruction template
+template JType for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param OPCODE: bits<7>;
+
+    operands {
+        rd: GPR,
+        #[align(2)] imm: bits<21>,
+    }
+
+    encoding {
+        imm[20],
+        imm[10..1],
+        imm[11],
+        imm[19..12],
+        rd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+}

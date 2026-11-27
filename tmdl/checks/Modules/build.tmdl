@@ -1,0 +1,20 @@
+// RUN: tmdl build --path %S/../Inputs/module-tree --output json --output-path %t/json
+// RUN: cat %t/json/isa.json | filecheck %s --check-prefix=JSON
+// RUN: tmdl build --path %S/../Inputs/module-tree --output docs --output-path %t/docs
+// RUN: cat %t/docs/basic.md | filecheck %s --check-prefix=ADD
+// RUN: cat %t/docs/cpu/basic.md | filecheck %s --check-prefix=NOP
+
+// JSON: "version": 3
+// JSON: "path": "basic.tmdl"
+// JSON: "module": "crate::basic"
+// JSON: "id": "crate::basic::Add"
+// JSON: "name": "Add"
+// JSON: "crate::Demo64"
+// JSON: "path": "cpu/basic.tmdl"
+// JSON: "module": "crate::cpu::basic"
+// JSON: "id": "crate::cpu::basic::Nop"
+// JSON: "name": "Nop"
+// JSON: "crate::Demo64"
+// ADD: rd = rs1 + rs2;
+// NOP: `nop`
+// NOP: crate::cpu::basic::GPR::y0 = crate::cpu::basic::GPR::y0;

@@ -4,7 +4,7 @@
 // transition, fence identity, and misaligned-atomic try/except. Do not
 // regenerate with update_checks.py.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=atom --isa=AtomIsa --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=atom --isa=AtomIsa --output=- %s | filecheck %s
 
 isa AtomIsa {
     param XLEN: Integer = 64;

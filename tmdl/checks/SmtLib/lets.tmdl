@@ -3,7 +3,7 @@
 // is committed once, at the `let` statement. Do not regenerate with
 // update_checks.py.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=lisa --isa=LIsa --output=- %S/../Inputs/lets.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=lisa --isa=LIsa --output=- %S/../Inputs/lets.tmdl | filecheck %s
 
 // CHECK: (define-fun execute_adddouble
 // CHECK-NEXT: (write_gpr st rd (bvadd (bvadd (read_gpr st rs1) (read_gpr st rs2)) (bvadd (read_gpr st rs1) (read_gpr st rs2)))))

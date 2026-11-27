@@ -1,7 +1,7 @@
 // Scoping rules for `let` bindings rejected by semantic analysis: a binding is
 // visible only after its definition.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa LIsa {
     param XLEN: Integer = 64;

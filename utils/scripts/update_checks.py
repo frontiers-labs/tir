@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate FileCheck `CHECK` lines for LIT-style tests.
 
-This is the generic successor to the old, tmdl-only ``update_tmdlc_checks.py``.
-It works for any module whose tests follow the convention used across the TIR
-repository: a test file contains one or more ``RUN:`` lines of the form::
+A test file contains one or more ``RUN:`` lines of the form::
 
     // RUN: <tool> <args...> | filecheck %s
 

@@ -1,0 +1,145 @@
+use crate::data_processing::FCmpDouble;
+use crate::data_processing::FCmpSingle;
+use crate::data_processing::FCvtDoubleSingle;
+use crate::data_processing::FCvtSingleDouble;
+use crate::data_processing::FMovImmediateDouble;
+use crate::data_processing::FMoveRegisterDouble;
+use crate::data_processing::FMoveRegisterSingle;
+use crate::data_processing::MoveWideZero32;
+use crate::data_processing::MoveWideZero;
+use crate::data_processing::SCvtfDouble;
+use crate::data_processing::SCvtfSingle;
+use crate::data_processing::UCvtfDouble;
+use crate::data_processing::UCvtfSingle;
+use crate::loads_stores::LoadFloatDouble;
+use crate::loads_stores::LoadFloatSingle;
+use crate::loads_stores::LoadVector128;
+use crate::loads_stores::StoreByte;
+use crate::loads_stores::StoreByteUnscaled;
+use crate::loads_stores::StoreByteWord;
+use crate::loads_stores::StoreDoubleword;
+use crate::loads_stores::StoreDoublewordUnscaled;
+use crate::loads_stores::StoreFloatDouble;
+use crate::loads_stores::StoreFloatSingle;
+use crate::loads_stores::StoreHalfword;
+use crate::loads_stores::StoreHalfwordUnscaled;
+use crate::loads_stores::StoreHalfwordWord;
+use crate::loads_stores::StoreVector128;
+use crate::loads_stores::StoreWord32;
+use crate::loads_stores::StoreWord;
+use crate::loads_stores::StoreWordUnscaled32;
+use crate::loads_stores::StoreWordUnscaled;
+use crate::main::ARMv8A64;
+use crate::main::GPR;
+use crate::main::VPR;
+use crate::perf::WriteControl;
+use crate::perf::WriteFPAdd;
+use crate::perf::WriteFPCompare;
+use crate::perf::WriteFPConvert;
+use crate::perf::WriteFPDivDouble;
+use crate::perf::WriteFPDivSingle;
+use crate::perf::WriteFPMove;
+use crate::perf::WriteFPMul;
+use crate::perf::WriteFPVectorLoad;
+use crate::perf::WriteIALU;
+use crate::perf::WriteIDiv;
+use crate::perf::WriteIDivWord;
+use crate::perf::WriteIMul;
+use crate::perf::WriteIMulHigh;
+use crate::perf::WriteLoad;
+use crate::perf::WriteScalarIALU;
+use crate::perf::WriteStore;
+use crate::perf::WriteVectorALU;
+use crate::perf::WriteVectorMul;
+
+// Partial Cortex-A720 model derived from instruction throughput, dependency,
+// operand-sweep, and cache-latency measurements. Classes without resource data
+// share a conservative fallback rather than claiming a hardware pipeline.
+machine CortexA720 ("cortex-a720") for [ARMv8A64] {
+    issue_width = 5;
+
+    // Effective scheduling window; this does not identify physical ROB capacity.
+    buffers { rob = 64; }
+
+    // Effective rename capacities keep the scheduling window available.
+    reg_file {
+        GPR { count = 64; }
+        VPR { count = 64; }
+    }
+
+    unit Int0 { count = 1; }
+    unit Int1 { count = 1; }
+    unit Int2 { count = 1; }
+    unit Int3 { count = 1; }
+    unit FP0 { count = 1; }
+    unit FP1 { count = 1; }
+    unit IntDivide { count = 1; }
+    unit FloatDivide { count = 1; }
+    unit Load { count = 2; }
+    // Conservative capacity for classes without direct execution-resource data.
+    unit Unmodeled { count = 1; }
+    unit Store { count = 2; }
+    unit Convert { count = 1; }
+
+    group Integer = Int0 | Int1 | Int2 | Int3;
+    group IntegerMultiply = Int0 | Int1;
+    group Float = FP0 | FP1;
+
+    bind WriteIALU { latency = 2; uop(Unmodeled); }
+    bind WriteScalarIALU { latency = 1; uop(Integer); }
+    bind WriteIMul { latency = 2; uop(IntegerMultiply); }
+    bind WriteIMulHigh { latency = 3; uop(Unmodeled); }
+    bind WriteIDiv { latency = 20; uop(Integer & IntDivide<6>); }
+    bind WriteIDivWord { latency = 12; uop(Integer & IntDivide<6>); }
+    bind WriteFPAdd { latency = 2; uop(Float); }
+    bind WriteFPMul { latency = 3; uop(Float); }
+    bind WriteFPDivSingle { latency = 8; uop(Float & FloatDivide); }
+    bind WriteFPDivDouble { latency = 13; uop(Float & FloatDivide); }
+    bind WriteFPConvert { latency = 3; uop(Float); }
+    bind WriteFPMove { latency = 2; uop(Unmodeled); }
+    bind WriteFPCompare { latency = 2; uop(Unmodeled); }
+    bind WriteControl { latency = 2; uop(Unmodeled); }
+    bind WriteVectorALU { latency = 2; uop(Float); }
+    bind WriteVectorMul { latency = 3; uop(Unmodeled); }
+    bind WriteLoad { latency = 4; uop(Load); }
+    bind WriteFPVectorLoad { latency = 4; uop(Unmodeled); }
+    bind WriteStore { latency = 2; uop(Unmodeled); }
+
+    // Constant materialization consumes front-end bandwidth without an ALU.
+    override MoveWideZero { latency = 0; eliminated = true; }
+    override MoveWideZero32 { latency = 0; eliminated = true; }
+
+    // Measured single-access forms. Other addressing modes keep their fallback.
+    override StoreByte { latency = 2; uop(Store); }
+    override StoreByteWord { latency = 2; uop(Store); }
+    override StoreHalfword { latency = 2; uop(Store); }
+    override StoreHalfwordWord { latency = 2; uop(Store); }
+    override StoreWord { latency = 2; uop(Store); }
+    override StoreWord32 { latency = 2; uop(Store); }
+    override StoreDoubleword { latency = 2; uop(Store); }
+    override StoreByteUnscaled { latency = 2; uop(Store); }
+    override StoreHalfwordUnscaled { latency = 2; uop(Store); }
+    override StoreWordUnscaled { latency = 2; uop(Store); }
+    override StoreWordUnscaled32 { latency = 2; uop(Store); }
+    override StoreDoublewordUnscaled { latency = 2; uop(Store); }
+    override StoreFloatSingle { latency = 2; uop(Store); }
+    override StoreFloatDouble { latency = 2; uop(Store); }
+    override StoreVector128 { latency = 2; uop(Store); }
+    override LoadFloatSingle { latency = 4; uop(Load); }
+    override LoadFloatDouble { latency = 4; uop(Load); }
+    override LoadVector128 { latency = 4; uop(Load); }
+
+    override FMoveRegisterSingle { latency = 2; uop(Float); }
+    override FMoveRegisterDouble { latency = 2; uop(Float); }
+    override FMovImmediateDouble { latency = 2; uop(Float); }
+    override FCmpSingle { latency = 2; uop(Float); }
+    override FCmpDouble { latency = 2; uop(Float); }
+
+    // Effective aggregate conversion throughput; this does not identify a physical pipeline.
+    override SCvtfDouble { latency = 3; uop(Float & Convert); }
+    override UCvtfDouble { latency = 3; uop(Float & Convert); }
+    override SCvtfSingle { latency = 3; uop(Float & Convert); }
+    override UCvtfSingle { latency = 3; uop(Float & Convert); }
+    override FCvtDoubleSingle { latency = 3; uop(Float & Convert); }
+    override FCvtSingleDouble { latency = 3; uop(Float & Convert); }
+}

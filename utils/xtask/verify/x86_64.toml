@@ -3,7 +3,7 @@
 
 tmdl_isa = "X86_64"
 dialect = "x86_64"
-defs_dir = "backends/x86_64/defs"
+module_root = "backends/x86_64/isa_defs"
 snapshot = "x86.ir"
 snapshot_repo = "frontiers-labs/isla-snapshots"
 snapshot_ref = "de24457e791893e34a2a959fb39aab514d6fec0c"

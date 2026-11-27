@@ -1,0 +1,2447 @@
+//! Integer and floating-point data-processing instructions.
+
+use crate::float::FP;
+use crate::main::ARMv8A64;
+use crate::main::AddSubImm;
+use crate::main::AddSubImmFlags;
+use crate::main::AddSubImmFlagsWord;
+use crate::main::AddSubImmWord;
+use crate::main::AddSubReg;
+use crate::main::AddSubRegWord;
+use crate::main::CmpImmTemplate;
+use crate::main::CmpImmTemplateWord;
+use crate::main::CmpRegTemplate;
+use crate::main::CmpRegTemplateWord;
+use crate::main::CondSelect;
+use crate::main::CondSet;
+use crate::main::DataProc3Src;
+use crate::main::DataProc3SrcWord;
+use crate::main::DataProc3SrcZr;
+use crate::main::DataProc3SrcZrWord;
+use crate::main::FPArith32;
+use crate::main::FPArith64;
+use crate::main::FPR32;
+use crate::main::FPR64;
+use crate::main::GPR32;
+use crate::main::GPR;
+use crate::main::GPRsp;
+use crate::main::LogicalReg;
+use crate::main::LogicalRegWord;
+use crate::main::LogicalShiftedReg;
+use crate::main::PC;
+use crate::main::PCRelAddr;
+use crate::main::PSTATE;
+use crate::main::ShiftReg;
+use crate::main::ShiftRegWord;
+use crate::main::ShiftRightImmTemplate;
+use crate::main::ShiftRightImmWordTemplate;
+use crate::main::SignExtendFixed;
+use crate::main::SignExtendFixedWord;
+use crate::main::TstRegTemplate;
+use crate::main::TstRegTemplateWord;
+use crate::perf::WriteFPAdd;
+use crate::perf::WriteFPCompare;
+use crate::perf::WriteFPConvert;
+use crate::perf::WriteFPDivDouble;
+use crate::perf::WriteFPDivSingle;
+use crate::perf::WriteFPMove;
+use crate::perf::WriteFPMul;
+use crate::perf::WriteIDiv;
+use crate::perf::WriteIDivWord;
+use crate::perf::WriteIMulHigh;
+use crate::perf::WriteScalarIALU;
+
+// ARMv8-A A64 data processing instructions (RV base semantic parity set)
+
+instruction Add for [ARMv8A64] : AddSubReg {
+    param MNEMONIC: String = "add";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        rd = rn + rm;
+    }
+}
+
+instruction Sub for [ARMv8A64] : AddSubReg {
+    param MNEMONIC: String = "sub";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        rd = rn - rm;
+    }
+}
+
+instruction AddWord for [ARMv8A64] : AddSubRegWord {
+    param MNEMONIC: String = "add";
+    param OPNAME: String = "add_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        rd = rn + rm;
+    }
+}
+
+instruction SubWord for [ARMv8A64] : AddSubRegWord {
+    param MNEMONIC: String = "sub";
+    param OPNAME: String = "sub_w";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        rd = rn - rm;
+    }
+}
+
+instruction AddImmediate for [ARMv8A64] : AddSubImm {
+    param MNEMONIC: String = "add";
+    param OPNAME: String = "add_imm";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        rd = rn + zext(imm, self.XLEN);
+    }
+}
+
+instruction SubImmediate for [ARMv8A64] : AddSubImm {
+    param MNEMONIC: String = "sub";
+    param OPNAME: String = "sub_imm";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        rd = rn - zext(imm, self.XLEN);
+    }
+}
+
+instruction AddImmediateWord for [ARMv8A64] : AddSubImmWord {
+    param MNEMONIC: String = "add";
+    param OPNAME: String = "add_imm_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        rd = rn + zext(imm, 32);
+    }
+}
+
+instruction SubImmediateWord for [ARMv8A64] : AddSubImmWord {
+    param MNEMONIC: String = "sub";
+    param OPNAME: String = "sub_imm_w";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        rd = rn - zext(imm, 32);
+    }
+}
+
+instruction And for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "and";
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        rd = rn & rm;
+    }
+}
+
+instruction Or for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "orr";
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rd = rn | rm;
+    }
+}
+
+instruction Xor for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "eor";
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rd = rn ^ rm;
+    }
+}
+
+instruction AndWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "and";
+    param OPNAME: String = "and_w";
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        rd = rn & rm;
+    }
+}
+
+instruction OrWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "orr";
+    param OPNAME: String = "orr_w";
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rd = rn | rm;
+    }
+}
+
+instruction XorWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "eor";
+    param OPNAME: String = "eor_w";
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rd = rn ^ rm;
+    }
+}
+
+instruction LogicalShiftLeftVariable for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "lslv";
+    param OPCODE: bits<6> = 0b001000;
+
+    behavior {
+        rd = rn << extract(rm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction LogicalShiftLeftVariableWord for [ARMv8A64] : ShiftRegWord {
+    param MNEMONIC: String = "lslv";
+    param OPNAME: String = "lslv_w";
+    param OPCODE: bits<6> = 0b001000;
+
+    behavior {
+        rd = rn << extract(rm, 4, 0);
+    }
+}
+
+instruction LogicalShiftRightVariable for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "lsrv";
+    param OPCODE: bits<6> = 0b001001;
+
+    behavior {
+        rd = rn >> extract(rm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction LogicalShiftRightVariableWord for [ARMv8A64] : ShiftRegWord {
+    param MNEMONIC: String = "lsrv";
+    param OPNAME: String = "lsrv_w";
+    param OPCODE: bits<6> = 0b001001;
+
+    behavior {
+        rd = rn >> extract(rm, 4, 0);
+    }
+}
+
+instruction ArithmeticShiftRightVariable for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "asrv";
+    param OPCODE: bits<6> = 0b001010;
+
+    behavior {
+        rd = rn >>> extract(rm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction ArithmeticShiftRightVariableWord for [ARMv8A64] : ShiftRegWord {
+    param MNEMONIC: String = "asrv";
+    param OPNAME: String = "asrv_w";
+    param OPCODE: bits<6> = 0b001010;
+
+    behavior {
+        rd = rn >>> extract(rm, 4, 0);
+    }
+}
+
+instruction Compare for [ARMv8A64] : CmpRegTemplate {
+    param MNEMONIC: String = "cmp";
+
+    behavior {
+        PSTATE::n = extract(rn - rm, self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn == rm {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= rm {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        // Signed overflow of rn - rm: operands differ in sign and the result's
+        // sign differs from rn's.
+        PSTATE::v = extract((rn ^ rm) & (rn ^ (rn - rm)), self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction CompareWord for [ARMv8A64] : CmpRegTemplateWord {
+    param MNEMONIC: String = "cmp";
+    param OPNAME: String = "cmp_w";
+
+    behavior {
+        PSTATE::n = extract(rn - rm, 31, 31);
+        PSTATE::z = if rn == rm {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= rm {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        // Signed overflow of rn - rm: operands differ in sign and the result's
+        // sign differs from rn's.
+        PSTATE::v = extract((rn ^ rm) & (rn ^ (rn - rm)), 31, 31);
+    }
+}
+
+instruction MoveWideZero for [ARMv8A64] {
+    param MNEMONIC: String = "movz";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR,
+        imm: bits<16>,
+    }
+
+    // MOVZ with hw = 0 (no shift); wider constants need movk support.
+    encoding {
+        0b1,
+        0b10,
+        0b100101,
+        0b00,
+        imm,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = zext(imm, self.XLEN);
+    }
+}
+
+instruction Bic for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "bic";
+    param OPC: bits<2> = 0b00;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn & ~rm;
+    }
+}
+
+instruction Orn for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "orn";
+    param OPC: bits<2> = 0b01;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn | ~rm;
+    }
+}
+
+instruction Eon for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "eon";
+    param OPC: bits<2> = 0b10;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn ^ ~rm;
+    }
+}
+
+instruction BicWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "bic";
+    param OPNAME: String = "bic_w";
+    param OPC: bits<2> = 0b00;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn & ~rm;
+    }
+}
+
+instruction OrnWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "orn";
+    param OPNAME: String = "orn_w";
+    param OPC: bits<2> = 0b01;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn | ~rm;
+    }
+}
+
+instruction EonWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "eon";
+    param OPNAME: String = "eon_w";
+    param OPC: bits<2> = 0b10;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn ^ ~rm;
+    }
+}
+
+instruction RotateRightVariable for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "rorv";
+    param OPCODE: bits<6> = 0b001011;
+
+    behavior {
+        rd = (rn >> extract(rm, log2Ceil(self.XLEN) - 1, 0))
+            | (rn << ((zext(0b0, self.XLEN) - zext(extract(rm, log2Ceil(self.XLEN) - 1, 0), self.XLEN))
+                & zext(0b111111, self.XLEN)));
+    }
+}
+
+// Flag-setting compare-negative: the flags of rn + rm (`adds xzr`).
+instruction CompareNegative for [ARMv8A64] : CmpRegTemplate {
+    param MNEMONIC: String = "cmn";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        PSTATE::n = extract(rn + rm, self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn + rm == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        // Carry out of the addition: the truncated sum wrapped below rn.
+        PSTATE::c = if rn + rm ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        // Signed overflow of rn + rm: operands share a sign and the result's
+        // sign differs from rn's.
+        PSTATE::v = extract(~(rn ^ rm) & (rn ^ (rn + rm)), self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction CompareNegativeWord for [ARMv8A64] : CmpRegTemplateWord {
+    param MNEMONIC: String = "cmn";
+    param OPNAME: String = "cmn_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        PSTATE::n = extract(rn + rm, 31, 31);
+        PSTATE::z = if rn + rm == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + rm ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(~(rn ^ rm) & (rn ^ (rn + rm)), 31, 31);
+    }
+}
+
+// Flag-setting logical compare: the flags of rn & rm (`ands xzr`); C and V
+// are cleared.
+instruction Test for [ARMv8A64] : TstRegTemplate {
+    param MNEMONIC: String = "tst";
+
+    behavior {
+        PSTATE::n = extract(rn & rm, self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if (rn & rm) == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = zext(0b0, 1);
+        PSTATE::v = zext(0b0, 1);
+    }
+}
+
+instruction TestWord for [ARMv8A64] : TstRegTemplateWord {
+    param MNEMONIC: String = "tst";
+    param OPNAME: String = "tst_w";
+
+    behavior {
+        PSTATE::n = extract(rn & rm, 31, 31);
+        PSTATE::z = if (rn & rm) == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = zext(0b0, 1);
+        PSTATE::v = zext(0b0, 1);
+    }
+}
+
+instruction CompareImmediate for [ARMv8A64] : CmpImmTemplate {
+    param MNEMONIC: String = "cmp";
+    param OPNAME: String = "cmp_imm";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn - zext(imm, self.XLEN), self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn == zext(imm, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= zext(imm, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            (rn ^ zext(imm, self.XLEN)) & (rn ^ (rn - zext(imm, self.XLEN))),
+            self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction CompareImmediateWord for [ARMv8A64] : CmpImmTemplateWord {
+    param MNEMONIC: String = "cmp";
+    param OPNAME: String = "cmp_imm_w";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn - zext(imm, 32), 31, 31);
+        PSTATE::z = if rn == zext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= zext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            (rn ^ zext(imm, 32)) & (rn ^ (rn - zext(imm, 32))),
+            31, 31);
+    }
+}
+
+instruction CompareNegImmediate for [ARMv8A64] : CmpImmTemplate {
+    param MNEMONIC: String = "cmn";
+    param OPNAME: String = "cmn_imm";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        PSTATE::n = extract(rn + zext(imm, self.XLEN), self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn + zext(imm, self.XLEN) == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + zext(imm, self.XLEN) ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            ~(rn ^ zext(imm, self.XLEN)) & (rn ^ (rn + zext(imm, self.XLEN))),
+            self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction CompareNegImmediateWord for [ARMv8A64] : CmpImmTemplateWord {
+    param MNEMONIC: String = "cmn";
+    param OPNAME: String = "cmn_imm_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        PSTATE::n = extract(rn + zext(imm, 32), 31, 31);
+        PSTATE::z = if rn + zext(imm, 32) == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + zext(imm, 32) ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            ~(rn ^ zext(imm, 32)) & (rn ^ (rn + zext(imm, 32))),
+            31, 31);
+    }
+}
+
+// Flag-setting subtract immediate (`subs Xd, Xn, #imm`): writes the difference
+// AND the NZCV flags of `rn - imm` (the same flag logic as `cmp`, but with a
+// real destination). Declared after CompareImmediate so `cmp` (rd = xzr) is
+// preferred when decoding a word whose rd field is 31.
+instruction SubsImmediate for [ARMv8A64] : AddSubImmFlags {
+    param MNEMONIC: String = "subs";
+    param OPNAME: String = "subs_imm";
+    param OP: bits<1> = 0b1;
+    param SETFLAGS: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn - zext(imm, self.XLEN), self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn == zext(imm, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= zext(imm, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            (rn ^ zext(imm, self.XLEN)) & (rn ^ (rn - zext(imm, self.XLEN))),
+            self.XLEN - 1, self.XLEN - 1);
+        rd = rn - zext(imm, self.XLEN);
+    }
+}
+
+instruction SubsImmediateWord for [ARMv8A64] : AddSubImmFlagsWord {
+    param MNEMONIC: String = "subs";
+    param OPNAME: String = "subs_imm_w";
+    param OP: bits<1> = 0b1;
+    param SETFLAGS: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn - zext(imm, 32), 31, 31);
+        PSTATE::z = if rn == zext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= zext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            (rn ^ zext(imm, 32)) & (rn ^ (rn - zext(imm, 32))),
+            31, 31);
+        rd = rn - zext(imm, 32);
+    }
+}
+
+// Flag-setting add immediate (`adds Xd, Xn, #imm`): writes the sum AND the NZCV
+// flags of `rn + imm` (the same flag logic as `cmn`, but with a real
+// destination). Declared after CompareNegImmediate so `cmn` (rd = xzr) is
+// preferred when decoding a word whose rd field is 31.
+instruction AddsImmediate for [ARMv8A64] : AddSubImmFlags {
+    param MNEMONIC: String = "adds";
+    param OPNAME: String = "adds_imm";
+    param OP: bits<1> = 0b0;
+    param SETFLAGS: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn + zext(imm, self.XLEN), self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn + zext(imm, self.XLEN) == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + zext(imm, self.XLEN) ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            ~(rn ^ zext(imm, self.XLEN)) & (rn ^ (rn + zext(imm, self.XLEN))),
+            self.XLEN - 1, self.XLEN - 1);
+        rd = rn + zext(imm, self.XLEN);
+    }
+}
+
+instruction AddsImmediateWord for [ARMv8A64] : AddSubImmFlagsWord {
+    param MNEMONIC: String = "adds";
+    param OPNAME: String = "adds_imm_w";
+    param OP: bits<1> = 0b0;
+    param SETFLAGS: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn + zext(imm, 32), 31, 31);
+        PSTATE::z = if rn + zext(imm, 32) == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + zext(imm, 32) ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            ~(rn ^ zext(imm, 32)) & (rn ^ (rn + zext(imm, 32))),
+            31, 31);
+        rd = rn + zext(imm, 32);
+    }
+}
+
+// MOVN with hw = 0 (no shift): rd = NOT(imm16).
+instruction MoveWideNot for [ARMv8A64] {
+    param MNEMONIC: String = "movn";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR,
+        imm: bits<16>,
+    }
+
+    encoding {
+        0b1,
+        0b00,
+        0b100101,
+        0b00,
+        imm,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = ~zext(imm, self.XLEN);
+    }
+}
+
+// MOVK with hw = 0 (no shift): insert imm16 into rd[15:0], keeping the rest.
+instruction MoveWideKeep for [ARMv8A64] {
+    param MNEMONIC: String = "movk";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR,
+        imm: bits<16>,
+    }
+
+    encoding {
+        0b1,
+        0b11,
+        0b100101,
+        0b00,
+        imm,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = (rd & ~zext(0b1111111111111111, self.XLEN)) | zext(imm, self.XLEN);
+    }
+}
+
+// MOVK with a halfword shift (`movk rd, #imm, lsl #hw*16`): insert imm16 into
+// the hw-th 16-bit lane of rd, keeping the other lanes. `hw` is an operand, so
+// this one instruction covers lsl #16/#32/#48; declared after the hw = 0
+// MoveWideKeep so plain `movk` still decodes to that simpler form.
+instruction MoveWideKeepShifted for [ARMv8A64] {
+    param MNEMONIC: String = "movk";
+    param OPNAME: String = "movk_shifted";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR,
+        imm: bits<16>,
+        hw: bits<2>,
+    }
+
+    encoding {
+        0b1,
+        0b11,
+        0b100101,
+        hw,
+        imm,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}, {hw}"
+    }
+
+    behavior {
+        rd = (rd & ~(zext(0b1111111111111111, self.XLEN) << (zext(hw, self.XLEN) << 4)))
+            | (zext(imm, self.XLEN) << (zext(hw, self.XLEN) << 4));
+    }
+}
+
+template MoveWideKeepFixed for [ARMv8A64] {
+    param MNEMONIC: String = "movk";
+    param OPNAME: String;
+    param HW: bits<2>;
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR,
+        imm: bits<16>,
+    }
+
+    encoding {
+        0b1,
+        0b11,
+        0b100101,
+        HW,
+        imm,
+        rd,
+    }
+
+}
+
+instruction MoveWideKeep16 for [ARMv8A64] : MoveWideKeepFixed {
+    param OPNAME: String = "movk_lsl16";
+    param HW: bits<2> = 0b01;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}, 1"
+    }
+
+    behavior {
+        rd = (rd & ~(zext(0b1111111111111111, self.XLEN)
+            * zext(0b10000000000000000, self.XLEN)))
+            | (zext(imm, self.XLEN)
+                * zext(0b10000000000000000, self.XLEN));
+    }
+}
+
+instruction MoveWideKeep32 for [ARMv8A64] : MoveWideKeepFixed {
+    param OPNAME: String = "movk_lsl32";
+    param HW: bits<2> = 0b10;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}, 2"
+    }
+
+    behavior {
+        rd = (rd & ~(zext(0b1111111111111111, self.XLEN)
+            * zext(0b100000000000000000000000000000000, self.XLEN)))
+            | (zext(imm, self.XLEN)
+                * zext(0b100000000000000000000000000000000, self.XLEN));
+    }
+}
+
+instruction MoveWideKeep48 for [ARMv8A64] : MoveWideKeepFixed {
+    param OPNAME: String = "movk_lsl48";
+    param HW: bits<2> = 0b11;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}, 3"
+    }
+
+    behavior {
+        rd = (rd & ~(zext(0b1111111111111111, self.XLEN)
+            * zext(0b1000000000000000000000000000000000000000000000000,
+                self.XLEN)))
+            | (zext(imm, self.XLEN)
+                * zext(0b1000000000000000000000000000000000000000000000000,
+                    self.XLEN));
+    }
+}
+
+// Logical shifted-register `eor` with a non-zero shift amount (the xorshift RNG
+// pattern `eor rd, rn, rm, lsr/lsl #s`). Declared after the plain `Xor` so a
+// zero-shift `eor` still decodes to that simpler form.
+instruction XorShiftedLsl for [ARMv8A64] : LogicalShiftedReg {
+    param MNEMONIC: String = "eor";
+    param OPNAME: String = "eor_lsl";
+    param OPC: bits<2> = 0b10;
+    param SHIFT: bits<2> = 0b00;
+
+    behavior {
+        rd = rn ^ (rm << zext(imm, self.XLEN));
+    }
+}
+
+instruction XorShiftedLsr for [ARMv8A64] : LogicalShiftedReg {
+    param MNEMONIC: String = "eor";
+    param OPNAME: String = "eor_lsr";
+    param OPC: bits<2> = 0b10;
+    param SHIFT: bits<2> = 0b01;
+
+    behavior {
+        rd = rn ^ (rm >> zext(imm, self.XLEN));
+    }
+}
+
+instruction MultiplyAdd for [ARMv8A64] : DataProc3Src {
+    param MNEMONIC: String = "madd";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = ra + extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+instruction MultiplyAddWord for [ARMv8A64] : DataProc3SrcWord {
+    param MNEMONIC: String = "madd";
+    param OPNAME: String = "madd_word";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = ra + extract(rn * rm, 31, 0);
+    }
+}
+
+instruction MultiplySub for [ARMv8A64] : DataProc3Src {
+    param MNEMONIC: String = "msub";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rd = ra - extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+instruction MultiplySubWord for [ARMv8A64] : DataProc3SrcWord {
+    param OPNAME: String = "msub_word";
+    param MNEMONIC: String = "msub";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rd = ra - extract(rn * rm, 31, 0);
+    }
+}
+
+// MUL is MADD with ra = xzr.
+instruction Multiply for [ARMv8A64] : DataProc3SrcZr {
+    param MNEMONIC: String = "mul";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+instruction MultiplyWord for [ARMv8A64] : DataProc3SrcZrWord {
+    param MNEMONIC: String = "mul";
+    param OPNAME: String = "mul_word";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = extract(rn * rm, 31, 0);
+    }
+}
+
+// MNEG is MSUB with ra = xzr.
+instruction MultiplyNeg for [ARMv8A64] : DataProc3SrcZr {
+    param MNEMONIC: String = "mneg";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rd = zext(0b0, self.XLEN) - extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+instruction MultiplyNegWord for [ARMv8A64] : DataProc3SrcZrWord {
+    param MNEMONIC: String = "mneg";
+    param OPNAME: String = "mneg_word";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rd = zext(0b0, 32) - extract(rn * rm, 31, 0);
+    }
+}
+
+// The high 64 bits of the signed 128-bit product. (`umulh` has no faithful
+// representation: the semantic language's widening multiply is signed-only.)
+instruction SignedMultiplyHigh for [ARMv8A64] : DataProc3SrcZr {
+    param MNEMONIC: String = "smulh";
+    param OP31: bits<3> = 0b010;
+    param O0: bits<1> = 0b0;
+    schedule { units = [WriteIMulHigh]; }
+
+    behavior {
+        rd = extract(rn * rm, (2 * self.XLEN) - 1, self.XLEN);
+    }
+}
+
+// A64 division: division by zero yields 0 (no trap); INT_MIN / -1 wraps.
+instruction SignedDivide for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "sdiv";
+    param OPCODE: bits<6> = 0b000011;
+    schedule { units = [WriteIDiv]; }
+
+    behavior {
+        if rm == zext(0b0, self.XLEN) {
+            rd = zext(0b0, self.XLEN);
+        } else {
+            rd = rn / rm;
+        }
+    }
+}
+
+instruction SignedDivideWord for [ARMv8A64] : ShiftRegWord {
+    param OPNAME: String = "sdiv_word";
+    param MNEMONIC: String = "sdiv";
+    param OPCODE: bits<6> = 0b000011;
+    schedule { units = [WriteIDivWord]; }
+
+    behavior {
+        if rm == zext(0b0, 32) {
+            rd = zext(0b0, 32);
+        } else {
+            rd = rn / rm;
+        }
+    }
+}
+
+instruction UnsignedDivide for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "udiv";
+    param OPCODE: bits<6> = 0b000010;
+    schedule { units = [WriteIDiv]; }
+
+    behavior {
+        if rm == zext(0b0, self.XLEN) {
+            rd = zext(0b0, self.XLEN);
+        } else {
+            rd = rn ~/ rm;
+        }
+    }
+}
+
+instruction UnsignedDivideWord for [ARMv8A64] : ShiftRegWord {
+    param OPNAME: String = "udiv_word";
+    param MNEMONIC: String = "udiv";
+    param OPCODE: bits<6> = 0b000010;
+    schedule { units = [WriteIDivWord]; }
+
+    behavior {
+        if rm == zext(0b0, 32) {
+            rd = zext(0b0, 32);
+        } else {
+            rd = rn ~/ rm;
+        }
+    }
+}
+
+// `lsr`/`asr` immediate (UBFM/SBFM with immr = shift, imms = 63).
+instruction LogicalShiftRightImm for [ARMv8A64] : ShiftRightImmTemplate {
+    param MNEMONIC: String = "lsr";
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rd = rn >> extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction ArithmeticShiftRightImm for [ARMv8A64] : ShiftRightImmTemplate {
+    param MNEMONIC: String = "asr";
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        rd = rn >>> extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction LogicalShiftRightImmWord for [ARMv8A64] : ShiftRightImmWordTemplate {
+    param MNEMONIC: String = "lsr";
+    param OPNAME: String = "lsr_w";
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rd = rn >> imm;
+    }
+}
+
+instruction LogicalShiftRightImmHalfword for [ARMv8A64] {
+    param MNEMONIC: String = "ubfm";
+    param OPNAME: String = "lsr_h";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR32,
+        rn: GPR32,
+        imm: bits<4>,
+    }
+
+    encoding {
+        0b0,
+        0b10,
+        0b100110,
+        0b0,
+        0b00,
+        imm,
+        0b001111,
+        rn,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {imm}, 15"
+    }
+
+    behavior {
+        rd = zext(extract(rn, 15, 0) >> imm, 32);
+    }
+}
+
+instruction LogicalShiftRightImmByte for [ARMv8A64] {
+    param MNEMONIC: String = "ubfm";
+    param OPNAME: String = "lsr_b";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR32,
+        rn: GPR32,
+        imm: bits<3>,
+    }
+
+    encoding {
+        0b0,
+        0b10,
+        0b100110,
+        0b0,
+        0b000,
+        imm,
+        0b000111,
+        rn,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {imm}, 7"
+    }
+
+    behavior {
+        rd = zext(extract(rn, 7, 0) >> imm, 32);
+    }
+}
+
+instruction ArithmeticShiftRightImmWord for [ARMv8A64] : ShiftRightImmWordTemplate {
+    param MNEMONIC: String = "asr";
+    param OPNAME: String = "asr_w";
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        rd = rn >>> imm;
+    }
+}
+
+// Sign-extend aliases of SBFM (immr = 0, imms = width - 1).
+instruction SignExtendByteWord for [ARMv8A64] : SignExtendFixedWord {
+    param MNEMONIC: String = "sxtb";
+    param OPNAME: String = "sxtb_w";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b000111;
+
+    behavior {
+        rd = sext(extract(rn, 7, 0), 32);
+    }
+}
+
+instruction SignExtendHalfwordWord for [ARMv8A64] : SignExtendFixedWord {
+    param MNEMONIC: String = "sxth";
+    param OPNAME: String = "sxth_w";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b001111;
+
+    behavior {
+        rd = sext(extract(rn, 15, 0), 32);
+    }
+}
+
+instruction SignExtendByte for [ARMv8A64] : SignExtendFixed {
+    param MNEMONIC: String = "sxtb";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b000111;
+
+    behavior {
+        rd = sext(extract(rn, 7, 0), self.XLEN);
+    }
+}
+
+instruction SignExtendHalfword for [ARMv8A64] : SignExtendFixed {
+    param MNEMONIC: String = "sxth";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b001111;
+
+    behavior {
+        rd = sext(extract(rn, 15, 0), self.XLEN);
+    }
+}
+
+instruction SignExtendWord for [ARMv8A64] : SignExtendFixed {
+    param MNEMONIC: String = "sxtw";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b011111;
+
+    behavior {
+        rd = sext(rn, self.XLEN);
+    }
+}
+
+// UBFM (unsigned bitfield move) with both immr and imms as operands — the
+// general form the `lsl #n` immediate alias needs (its immr/imms are derived
+// from the shift amount and so cannot be a fixed encoding). Declared after the
+// fixed-imms UBFM alias (`lsr`, imms = 63) so that still decodes to its simpler
+// op. Implements the standard bitfield move avoiding any shift >= 64:
+//   imms >= immr : zero-extended extract of bits [imms:immr]  (lsr/ubfx)
+//   imms <  immr : low (imms+1) bits placed at bit (64 - immr)  (the lsl case)
+instruction UnsignedBitfieldMove for [ARMv8A64] {
+    param MNEMONIC: String = "ubfm";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR,
+        rn: GPR,
+        immr: bits<6>,
+        imms: bits<6>,
+    }
+
+    encoding {
+        0b1,
+        0b10,
+        0b100110,
+        0b1,
+        immr,
+        imms,
+        rn,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {immr}, {imms}"
+    }
+
+    behavior {
+        rd = if zext(imms, self.XLEN) ~>= zext(immr, self.XLEN) {
+            (rn << (zext(0b111111, self.XLEN) - zext(imms, self.XLEN)))
+                >> ((zext(immr, self.XLEN) + zext(0b111111, self.XLEN)) - zext(imms, self.XLEN))
+        } else {
+            (rn & ((zext(0b1, self.XLEN) << (zext(imms, self.XLEN) + zext(0b1, self.XLEN)))
+                - zext(0b1, self.XLEN)))
+                << (zext(0b1000000, self.XLEN) - zext(immr, self.XLEN))
+        };
+    }
+}
+
+// 32-bit MOVZ (`movz Wd, #imm` / `mov Wd, #imm`): sf = 0. Writing a W register
+// zeroes the upper 32 bits, so for a hw = 0 imm16 the result is the same
+// zero-extended value as the 64-bit form.
+instruction MoveWideZero32 for [ARMv8A64] {
+    param MNEMONIC: String = "movz";
+    param OPNAME: String = "movz_w";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPR32,
+        imm: bits<16>,
+    }
+
+    encoding {
+        0b0,
+        0b10,
+        0b100101,
+        0b00,
+        imm,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = zext(imm, 32);
+    }
+}
+
+// AND (immediate). The immediate is a bitmask encoded as N:immr:imms; we model
+// the common non-replicated case where the element size equals the register
+// width, i.e. the mask is a single run of (imms+1) ones rotated right by immr.
+// (Replicated sub-word patterns — element size < datasize — are not modeled.)
+instruction AndImmediate for [ARMv8A64] {
+    param MNEMONIC: String = "and";
+    param OPNAME: String = "and_imm";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPRsp,
+        rn: GPR,
+        immr: bits<6>,
+        imms: bits<6>,
+    }
+
+    // An element with every bit set is reserved.
+    encoding {
+        if imms == 0b111111 {
+            ()
+        } else {
+            (0b1, 0b00, 0b100100, 0b1, immr, imms, rn, rd[4..0])
+        },
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {immr}, {imms}"
+    }
+
+    // mask = ROR(2^(imms+1) - 1, immr) over 64 bits; the rotate's left-shift
+    // amount is reduced mod 64 so immr = 0 shifts by 0 (never by 64).
+    behavior {
+        rd = rn & (
+            (((zext(0b1, self.XLEN) << (zext(imms, self.XLEN) + zext(0b1, self.XLEN)))
+                - zext(0b1, self.XLEN)) >> zext(immr, self.XLEN))
+            | (((zext(0b1, self.XLEN) << (zext(imms, self.XLEN) + zext(0b1, self.XLEN)))
+                - zext(0b1, self.XLEN))
+                << ((zext(0b1000000, self.XLEN) - zext(immr, self.XLEN)) & zext(0b111111, self.XLEN))));
+    }
+}
+
+// The `imms` patterns that are reserved with N = 0: the highest clear bit picks
+// the element size, and an element with every bit set is no bitmask.
+fn reserved_bitmask(imms) {
+    (imms == 0b011111) | (imms == 0b101111) | (imms == 0b110111)
+        | (imms == 0b111011) | (imms == 0b111101) | (imms[5..1] == 0b11111)
+}
+
+// 32-bit AND (immediate): sf = 0, N = 0, so the element size is 32 or a
+// replicated 16/8/4/2-bit pattern; the result zero-extends to 64.
+instruction AndImmediate32 for [ARMv8A64] {
+    param MNEMONIC: String = "and";
+    param OPNAME: String = "and_imm_w";
+    schedule { units = [WriteScalarIALU]; }
+
+    operands {
+        rd: GPRsp,
+        rn: GPR,
+        immr: bits<6>,
+        imms: bits<6>,
+    }
+
+    encoding {
+        if reserved_bitmask(imms) {
+            ()
+        } else {
+            (0b0, 0b00, 0b100100, 0b0, immr, imms, rn, rd[4..0])
+        },
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {immr}, {imms}"
+    }
+
+    // DecodeBitMasks with N = 0: the highest clear bit of imms picks the
+    // element size, whose low S+1 bits are set, rotated right by R within the
+    // element and replicated across 32 bits. Computed at XLEN so no shift
+    // reaches the operand width.
+    behavior {
+        let one = zext(0b1, self.XLEN);
+        let esize = if imms[5] {
+            if imms[4] {
+                if imms[3] {
+                    if imms[2] { zext(0b10, self.XLEN) } else { zext(0b100, self.XLEN) }
+                } else {
+                    zext(0b1000, self.XLEN)
+                }
+            } else {
+                zext(0b10000, self.XLEN)
+            }
+        } else {
+            zext(0b100000, self.XLEN)
+        };
+        let levels = esize - one;
+        let s = zext(imms, self.XLEN) & levels;
+        let r = zext(immr, self.XLEN) & levels;
+        let welem = (one << (s + one)) - one;
+        let elem = ((welem >> r) | (welem << (esize - r))) & ((one << esize) - one);
+        let m2 = elem | (elem << esize);
+        let m4 = m2 | (m2 << ((esize << one) & zext(0b111111, self.XLEN)));
+        let m8 = m4 | (m4 << ((esize << zext(0b10, self.XLEN)) & zext(0b111111, self.XLEN)));
+        let m16 = m8 | (m8 << ((esize << zext(0b11, self.XLEN)) & zext(0b111111, self.XLEN)));
+        rd = zext(extract(rn, 31, 0) & extract(m16, 31, 0), self.XLEN);
+    }
+}
+
+// Scalar double-precision floating point. The semantic engine interprets a
+// float-typed register's bits as an APFloat (exp/mant from the class width), so
+// `fadd`/`fmul` on FPR64 operands compute real binary64 results.
+
+instruction FAddDouble for [FP] : FPArith64 {
+    param MNEMONIC: String = "fadd";
+    param OPCODE: bits<4> = 0b0010;
+    schedule { units = [WriteFPAdd]; }
+
+    behavior {
+        fd = fadd(fa, fb);
+    }
+}
+
+instruction FSubDouble for [FP] : FPArith64 {
+    param MNEMONIC: String = "fsub";
+    param OPCODE: bits<4> = 0b0011;
+    schedule { units = [WriteFPAdd]; }
+
+    behavior {
+        fd = fsub(fa, fb);
+    }
+}
+
+instruction FMulDouble for [FP] : FPArith64 {
+    param MNEMONIC: String = "fmul";
+    param OPCODE: bits<4> = 0b0000;
+    schedule { units = [WriteFPMul]; }
+
+    behavior {
+        fd = fmul(fa, fb);
+    }
+}
+
+instruction FDivDouble for [FP] : FPArith64 {
+    param MNEMONIC: String = "fdiv";
+    param OPCODE: bits<4> = 0b0001;
+    schedule { units = [WriteFPDivDouble]; }
+
+    behavior {
+        fd = fdiv(fa, fb);
+    }
+}
+
+instruction FAddSingle for [FP] : FPArith32 {
+    param MNEMONIC: String = "fadd";
+    param OPNAME: String = "fadd_s";
+    param OPCODE: bits<4> = 0b0010;
+    schedule { units = [WriteFPAdd]; }
+
+    behavior {
+        fd = fadd(fa, fb);
+    }
+}
+
+instruction FSubSingle for [FP] : FPArith32 {
+    param MNEMONIC: String = "fsub";
+    param OPNAME: String = "fsub_s";
+    param OPCODE: bits<4> = 0b0011;
+    schedule { units = [WriteFPAdd]; }
+
+    behavior {
+        fd = fsub(fa, fb);
+    }
+}
+
+instruction FMulSingle for [FP] : FPArith32 {
+    param MNEMONIC: String = "fmul";
+    param OPNAME: String = "fmul_s";
+    param OPCODE: bits<4> = 0b0000;
+    schedule { units = [WriteFPMul]; }
+
+    behavior {
+        fd = fmul(fa, fb);
+    }
+}
+
+instruction FDivSingle for [FP] : FPArith32 {
+    param MNEMONIC: String = "fdiv";
+    param OPNAME: String = "fdiv_s";
+    param OPCODE: bits<4> = 0b0001;
+    schedule { units = [WriteFPDivSingle]; }
+
+    behavior {
+        fd = fdiv(fa, fb);
+    }
+}
+
+macro instr_fcmp {
+    ( $name:ident, $cls:ident, $opname:literal, ptype = $ptype:literal ) => {
+        instruction $name for [FP] {
+            param MNEMONIC: String = "fcmp";
+            param OPNAME: String = $opname;
+            schedule { units = [WriteFPCompare]; }
+
+            operands {
+                fa: $cls,
+                fb: $cls,
+            }
+
+            encoding {
+                0b000,
+                0b11110,
+                $ptype,
+                0b1,
+                fb[4..0],
+                0b001000,
+                fa[4..0],
+                0b00000,
+            }
+
+            asm {
+                "{self.MNEMONIC} {fa}, {fb}"
+            }
+
+            behavior {
+                PSTATE::n = if fa < fb {
+                    zext(0b1, 1)
+                } else {
+                    zext(0b0, 1)
+                };
+                PSTATE::z = if fa == fb {
+                    zext(0b1, 1)
+                } else {
+                    zext(0b0, 1)
+                };
+                PSTATE::c = if (fa != fa) | (fb != fb) {
+                    zext(0b1, 1)
+                } else if fa < fb {
+                    zext(0b0, 1)
+                } else {
+                    zext(0b1, 1)
+                };
+                PSTATE::v = if (fa != fa) | (fb != fb) {
+                    zext(0b1, 1)
+                } else {
+                    zext(0b0, 1)
+                };
+            }
+        }
+    };
+}
+
+instr_fcmp!(FCmpDouble, FPR64, "fcmp_d", ptype = 0b01)
+instr_fcmp!(FCmpSingle, FPR32, "fcmp_s", ptype = 0b00)
+
+// SCVTF and UCVTF (scalar, integer). OPCODE picks signed (0b010) or unsigned
+// (0b011) conversion.
+macro tmpl_int_to_fp {
+    ( $name:ident, $fcls:ident, $gcls:ident, sf = $sf:literal, ptype = $ptype:literal ) => {
+        template $name for [FP] {
+            param MNEMONIC: String;
+            param OPCODE: bits<3>;
+            schedule { units = [WriteFPConvert]; }
+
+            operands {
+                fd: $fcls,
+                rn: $gcls,
+            }
+
+            encoding {
+                $sf,
+                0b00,
+                0b11110,
+                $ptype,
+                0b1,
+                0b00,
+                OPCODE,
+                0b000000,
+                rn,
+                fd,
+            }
+
+            asm {
+                "{self.MNEMONIC} {fd}, {rn}"
+            }
+        }
+    };
+}
+
+tmpl_int_to_fp!(WordToDouble, FPR64, GPR32, sf = 0b0, ptype = 0b01)
+tmpl_int_to_fp!(WordToSingle, FPR32, GPR32, sf = 0b0, ptype = 0b00)
+tmpl_int_to_fp!(DoubleWordToDouble, FPR64, GPR, sf = 0b1, ptype = 0b01)
+tmpl_int_to_fp!(DoubleWordToSingle, FPR32, GPR, sf = 0b1, ptype = 0b00)
+
+instruction SCvtfDoubleWord for [FP] : WordToDouble {
+    param MNEMONIC: String = "scvtf";
+    param OPNAME: String = "scvtf_d_w";
+    param OPCODE: bits<3> = 0b010;
+
+    behavior {
+        fd = sitofp(rn, 11, 52);
+    }
+}
+
+instruction UCvtfDoubleWord for [FP] : WordToDouble {
+    param MNEMONIC: String = "ucvtf";
+    param OPNAME: String = "ucvtf_d_w";
+    param OPCODE: bits<3> = 0b011;
+
+    behavior {
+        fd = uitofp(rn, 11, 52);
+    }
+}
+
+instruction SCvtfSingleWord for [FP] : WordToSingle {
+    param MNEMONIC: String = "scvtf";
+    param OPNAME: String = "scvtf_s_w";
+    param OPCODE: bits<3> = 0b010;
+
+    behavior {
+        fd = sitofp(rn, 8, 23);
+    }
+}
+
+instruction UCvtfSingleWord for [FP] : WordToSingle {
+    param MNEMONIC: String = "ucvtf";
+    param OPNAME: String = "ucvtf_s_w";
+    param OPCODE: bits<3> = 0b011;
+
+    behavior {
+        fd = uitofp(rn, 8, 23);
+    }
+}
+
+instruction SCvtfDouble for [FP] : DoubleWordToDouble {
+    param MNEMONIC: String = "scvtf";
+    param OPNAME: String = "scvtf_d_x";
+    param OPCODE: bits<3> = 0b010;
+
+    behavior {
+        fd = sitofp(rn, 11, 52);
+    }
+}
+
+instruction UCvtfDouble for [FP] : DoubleWordToDouble {
+    param MNEMONIC: String = "ucvtf";
+    param OPNAME: String = "ucvtf_d_x";
+    param OPCODE: bits<3> = 0b011;
+
+    behavior {
+        fd = uitofp(rn, 11, 52);
+    }
+}
+
+instruction SCvtfSingle for [FP] : DoubleWordToSingle {
+    param MNEMONIC: String = "scvtf";
+    param OPNAME: String = "scvtf_s_x";
+    param OPCODE: bits<3> = 0b010;
+
+    behavior {
+        fd = sitofp(rn, 8, 23);
+    }
+}
+
+instruction UCvtfSingle for [FP] : DoubleWordToSingle {
+    param MNEMONIC: String = "ucvtf";
+    param OPNAME: String = "ucvtf_s_x";
+    param OPCODE: bits<3> = 0b011;
+
+    behavior {
+        fd = uitofp(rn, 8, 23);
+    }
+}
+
+// FCVT between precisions. ptype names the source format and opc the result.
+macro instr_fcvt {
+    ( $name:ident, $dcls:ident, $scls:ident, $opname:literal, ptype = $ptype:literal, opc = $opc:literal, exponent = $e:literal, mantissa = $m:literal ) => {
+        instruction $name for [FP] {
+            param MNEMONIC: String = "fcvt";
+            param OPNAME: String = $opname;
+            schedule { units = [WriteFPConvert]; }
+
+            operands {
+                fd: $dcls,
+                fa: $scls,
+            }
+
+            encoding {
+                0b000,
+                0b11110,
+                $ptype,
+                0b1,
+                0b0001,
+                $opc,
+                0b10000,
+                fa[4..0],
+                fd[4..0],
+            }
+
+            asm {
+                "{self.MNEMONIC} {fd}, {fa}"
+            }
+
+            behavior {
+                fd = fcvt(fa, $e, $m);
+            }
+        }
+    };
+}
+
+instr_fcvt!(FCvtDoubleSingle, FPR64, FPR32, "fcvt_d_s", ptype = 0b00, opc = 0b01, exponent = 11, mantissa = 52)
+instr_fcvt!(FCvtSingleDouble, FPR32, FPR64, "fcvt_s_d", ptype = 0b01, opc = 0b00, exponent = 8, mantissa = 23)
+
+// Convert binary64 to a signed 32-bit integer, truncating toward zero.
+instruction FCvtzsWordDouble for [FP] {
+    param MNEMONIC: String = "fcvtzs";
+    param OPNAME: String = "fcvtzs_w_d";
+    schedule { units = [WriteFPConvert]; }
+
+    operands {
+        rd: GPR,
+        fa: FPR64,
+    }
+
+    encoding {
+        0b000,
+        0b11110,
+        0b011,
+        0b11,
+        0b000000000,
+        fa,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = zext(fptosi(fa, 32), self.XLEN);
+    }
+}
+
+// Convert binary64 to an unsigned 32-bit integer, truncating toward zero.
+instruction FCvtzuWordDouble for [FP] {
+    param MNEMONIC: String = "fcvtzu";
+    param OPNAME: String = "fcvtzu_w_d";
+    schedule { units = [WriteFPConvert]; }
+
+    operands {
+        rd: GPR,
+        fa: FPR64,
+    }
+
+    encoding {
+        0b000,
+        0b11110,
+        0b011,
+        0b11,
+        0b001,
+        0b000000,
+        fa,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = zext(fptoui(fa, 32), self.XLEN);
+    }
+}
+
+instruction FCvtzsWordSingle for [FP] {
+    param MNEMONIC: String = "fcvtzs";
+    param OPNAME: String = "fcvtzs_w_s";
+    schedule { units = [WriteFPConvert]; }
+
+    operands {
+        rd: GPR32,
+        fa: FPR32,
+    }
+
+    encoding {
+        0b000,
+        0b11110,
+        0b00,
+        0b1,
+        0b11,
+        0b000000000,
+        fa,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = fptosi(fa, 32);
+    }
+}
+
+instruction FCvtzuWordSingle for [FP] {
+    param MNEMONIC: String = "fcvtzu";
+    param OPNAME: String = "fcvtzu_w_s";
+    schedule { units = [WriteFPConvert]; }
+
+    operands {
+        rd: GPR32,
+        fa: FPR32,
+    }
+
+    encoding {
+        0b000,
+        0b11110,
+        0b00,
+        0b1,
+        0b11,
+        0b001,
+        0b000000,
+        fa,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = fptoui(fa, 32);
+    }
+}
+
+// Convert binary64 to a signed 64-bit integer, truncating toward zero.
+instruction FCvtzsDouble for [FP] {
+    param MNEMONIC: String = "fcvtzs";
+    param OPNAME: String = "fcvtzs_x_d";
+    schedule { units = [WriteFPConvert]; }
+
+    operands {
+        rd: GPR,
+        fa: FPR64,
+    }
+
+    encoding {
+        0b1,
+        0b00,
+        0b11110,
+        0b011,
+        0b11,
+        0b000000000,
+        fa,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = fptosi(fa, self.XLEN);
+    }
+}
+
+// Convert binary64 to an unsigned 64-bit integer, truncating toward zero.
+instruction FCvtzuDouble for [FP] {
+    param MNEMONIC: String = "fcvtzu";
+    param OPNAME: String = "fcvtzu_x_d";
+    schedule { units = [WriteFPConvert]; }
+
+    operands {
+        rd: GPR,
+        fa: FPR64,
+    }
+
+    encoding {
+        0b1,
+        0b00,
+        0b11110,
+        0b011,
+        0b11,
+        0b001,
+        0b000000,
+        fa,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = fptoui(fa, self.XLEN);
+    }
+}
+
+instruction FMoveRegisterDouble for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_reg64";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        fd: FPR64,
+        fa: FPR64,
+    }
+
+    encoding {
+        0b000,
+        0b11110,
+        0b01,
+        0b1,
+        0b000000,
+        0b10000,
+        fa,
+        fd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {fa}"
+    }
+
+    behavior {
+        fd = fa;
+    }
+}
+
+instruction FMoveRegisterSingle for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_reg32";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        fd: FPR32,
+        fa: FPR32,
+    }
+
+    encoding {
+        0b000,
+        0b11110,
+        0b00,
+        0b1,
+        0b000000,
+        0b10000,
+        fa,
+        fd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {fa}"
+    }
+
+    behavior {
+        fd = fa;
+    }
+}
+
+// FMOV (scalar, immediate), double. The 8-bit imm expands to a binary64 value
+// (VFPExpandImm): sign=imm<7>, exp = NOT(imm<6>):Replicate(imm<6>,8):imm<5:4>,
+// frac = imm<3:0>:Zeros(48). We build that 64-bit pattern and move it into the
+// (float) destination as raw bits, as the hardware does.
+instruction FMovImmediateDouble for [FP] {
+    param MNEMONIC: String = "fmov";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        fd: FPR64,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0b0,
+        0b0,
+        0b0,
+        0b11110,
+        0b01,
+        0b1,
+        imm,
+        0b100,
+        0b00000,
+        fd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {imm}"
+    }
+
+    behavior {
+        fd = (zext(extract(imm, 7, 7), self.XLEN) << 63)
+            | ((zext(0b1, self.XLEN) - zext(extract(imm, 6, 6), self.XLEN)) << 62)
+            | (((zext(0b0, self.XLEN) - zext(extract(imm, 6, 6), self.XLEN)) & zext(0b11111111, self.XLEN)) << 54)
+            | (zext(extract(imm, 5, 4), self.XLEN) << 52)
+            | (zext(extract(imm, 3, 0), self.XLEN) << 48);
+    }
+}
+
+// FMOV Xd, Dn — copy the raw 64-bit pattern of a double register into a GPR
+// (used here to read an FP result back for verification / integer handoff).
+instruction FMovDoubleToGeneral for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_x_d";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        rd: GPR,
+        fa: FPR64,
+    }
+
+    encoding {
+        0b1,
+        0b0,
+        0b0,
+        0b11110,
+        0b01,
+        0b1,
+        0b00,
+        0b110,
+        0b000000,
+        fa,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = bitcast(fa);
+    }
+}
+
+instruction FMovGeneralToDouble for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_d_x";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        fd: FPR64,
+        rn: GPR,
+    }
+
+    encoding {
+        0b1,
+        0b0,
+        0b0,
+        0b11110,
+        0b01,
+        0b1,
+        0b00,
+        0b111,
+        0b000000,
+        rn,
+        fd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rn}"
+    }
+
+    behavior {
+        fd = bitcast(rn);
+    }
+}
+
+instruction FMovSingleToGeneral for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_w_s";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        rd: GPR32,
+        fa: FPR32,
+    }
+
+    encoding {
+        0b000,
+        0b11110,
+        0b00,
+        0b1,
+        0b00,
+        0b110,
+        0b000000,
+        fa,
+        rd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = bitcast(fa);
+    }
+}
+
+instruction FMovGeneralToSingle for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_s_w";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        fd: FPR32,
+        rn: GPR32,
+    }
+
+    encoding {
+        0b000,
+        0b11110,
+        0b00,
+        0b1,
+        0b00,
+        0b111,
+        0b000000,
+        rn,
+        fd,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rn}"
+    }
+
+    behavior {
+        fd = bitcast(rn);
+    }
+}
+
+// PC-relative addressing. The operand is the raw signed offset: bytes for
+// `adr`, 4KiB pages for `adrp` (which also clears the PC's page offset).
+instruction AddressPCRel for [ARMv8A64] : PCRelAddr {
+    param MNEMONIC: String = "adr";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        rd = PC::pc + sext(imm, self.XLEN);
+    }
+}
+
+instruction AddressPCRelPage for [ARMv8A64] : PCRelAddr {
+    param MNEMONIC: String = "adrp";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        rd = ((PC::pc >> 12) << 12) + (sext(imm, self.XLEN) << 12);
+    }
+}
+
+// Conditional set (`cset rd, <cond>`, alias of csinc with inverted condition)
+// and conditional select (`csel rd, rn, rm, <cond>`). The condition is spelled
+// in each instruction's asm string; COND holds the hardware-encoded code
+// (already inverted for cset).
+
+instruction ConditionalSetEq for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_eq";
+    param COND: bits<4> = 0b0001;
+
+    asm {
+        "{self.MNEMONIC} {rd}, eq"
+    }
+
+    behavior {
+        rd = if PSTATE::z == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectEq for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_eq";
+    param COND: bits<4> = 0b0000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, eq"
+    }
+
+    behavior {
+        rd = if PSTATE::z == zext(0b1, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetNe for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_ne";
+    param COND: bits<4> = 0b0000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, ne"
+    }
+
+    behavior {
+        rd = if PSTATE::z == zext(0b0, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectNe for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_ne";
+    param COND: bits<4> = 0b0001;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, ne"
+    }
+
+    behavior {
+        rd = if PSTATE::z == zext(0b0, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetLt for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_lt";
+    param COND: bits<4> = 0b1010;
+
+    asm {
+        "{self.MNEMONIC} {rd}, lt"
+    }
+
+    behavior {
+        rd = if PSTATE::n != PSTATE::v {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectLt for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_lt";
+    param COND: bits<4> = 0b1011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, lt"
+    }
+
+    behavior {
+        rd = if PSTATE::n != PSTATE::v {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetGe for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_ge";
+    param COND: bits<4> = 0b1011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, ge"
+    }
+
+    behavior {
+        rd = if PSTATE::n == PSTATE::v {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectGe for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_ge";
+    param COND: bits<4> = 0b1010;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, ge"
+    }
+
+    behavior {
+        rd = if PSTATE::n == PSTATE::v {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetGt for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_gt";
+    param COND: bits<4> = 0b1101;
+
+    asm {
+        "{self.MNEMONIC} {rd}, gt"
+    }
+
+    behavior {
+        rd = if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b0, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectGt for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_gt";
+    param COND: bits<4> = 0b1100;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, gt"
+    }
+
+    behavior {
+        rd = if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b0, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetLe for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_le";
+    param COND: bits<4> = 0b1100;
+
+    asm {
+        "{self.MNEMONIC} {rd}, le"
+    }
+
+    behavior {
+        rd = if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectLe for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_le";
+    param COND: bits<4> = 0b1101;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, le"
+    }
+
+    behavior {
+        rd = if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b1, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetLo for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_lo";
+    param COND: bits<4> = 0b0010;
+
+    asm {
+        "{self.MNEMONIC} {rd}, lo"
+    }
+
+    behavior {
+        rd = if PSTATE::c == zext(0b0, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectLo for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_lo";
+    param COND: bits<4> = 0b0011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, lo"
+    }
+
+    behavior {
+        rd = if PSTATE::c == zext(0b0, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetHs for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_hs";
+    param COND: bits<4> = 0b0011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, hs"
+    }
+
+    behavior {
+        rd = if PSTATE::c == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectHs for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_hs";
+    param COND: bits<4> = 0b0010;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, hs"
+    }
+
+    behavior {
+        rd = if PSTATE::c == zext(0b1, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetHi for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_hi";
+    param COND: bits<4> = 0b1001;
+
+    asm {
+        "{self.MNEMONIC} {rd}, hi"
+    }
+
+    behavior {
+        rd = if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b0, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectHi for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_hi";
+    param COND: bits<4> = 0b1000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, hi"
+    }
+
+    behavior {
+        rd = if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b0, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetLs for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_ls";
+    param COND: bits<4> = 0b1000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, ls"
+    }
+
+    behavior {
+        rd = if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectLs for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_ls";
+    param COND: bits<4> = 0b1001;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, ls"
+    }
+
+    behavior {
+        rd = if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b1, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}

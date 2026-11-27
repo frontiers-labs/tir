@@ -3,6 +3,9 @@ name = "tir-arm64"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.tmdl]
+dialect = "arm64"
+
 [lib]
 bench = false
 test = false

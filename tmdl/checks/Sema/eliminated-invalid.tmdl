@@ -1,7 +1,7 @@
 // Move-elimination constraints: an eliminated bind or override cannot
 // reserve resources and must have zero latency.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 sched_class W;
 

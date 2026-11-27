@@ -3,7 +3,7 @@
 // encoding units, conditions are decided from the operands, and the shapes stay
 // distinguishable from the instruction word alone.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa Arch {
     param XLEN: Integer = 64;

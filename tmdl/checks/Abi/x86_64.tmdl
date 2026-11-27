@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-ast-json --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast-json --output=- %s | filecheck %s
 
 isa X86_64 {}
 

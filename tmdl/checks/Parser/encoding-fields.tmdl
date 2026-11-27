@@ -2,7 +2,7 @@
 // first, `()` contributes no bits, and `fn` helpers with typed parameters are
 // inlined into the encoding before any later stage sees it.
 
-// RUN: tmdlc --action=emit-ast --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast --output=- %s | filecheck %s
 
 isa ByteIsa {
     param XLEN: Integer = 64;

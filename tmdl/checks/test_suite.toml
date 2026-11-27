@@ -3,4 +3,4 @@ name = "TMDL Compiler checks"
 glob = ["**/*.tmdl", "!Inputs/**/*"]
 
 [suite.tools]
-tmdlc = "tmdlc"
+tmdl = "tmdl"

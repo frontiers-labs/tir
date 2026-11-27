@@ -4,7 +4,7 @@
 // then the opcode, then ModR/M as mod, reg, rm. A field spanning whole units
 // (the 32-bit displacement) is little-endian across them.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa ByteIsa {
     param XLEN: Integer = 64;

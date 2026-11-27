@@ -9,6 +9,10 @@ mod fninline;
 mod json;
 mod lexer;
 mod markdown;
+mod module_names;
+mod module_tree;
+#[cfg(feature = "rust-cli")]
+mod package;
 mod parser;
 mod rustgen;
 mod sem_expr_state;
@@ -28,7 +32,9 @@ pub type Spanned<T> = (T, Span);
 
 #[cfg(feature = "rust-cli")]
 pub use compiler::build_backend;
-pub use compiler::{Action, Compiler, OutputKind, compiler_main};
+pub use compiler::{Action, Compiler, OutputKind};
+#[cfg(feature = "rust-cli")]
+pub use package::{build_backend_package, package_main};
 pub use smtlibgen::{
     EncodingFieldMetadata, EncodingShapeMetadata, FlatStateFieldMetadata, InstructionMetadata,
     MemoryAccessMetadata, OperandMetadata, RegisterClassMetadata, SmtMetadata,

@@ -1,7 +1,7 @@
 // An empty behavior block lowers to an empty state root instead of failing
 // code generation.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 isa Test { param XLEN: Integer = 32; }
 

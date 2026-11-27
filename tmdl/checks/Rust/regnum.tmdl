@@ -3,7 +3,7 @@
 // identity), distinct from the value read used elsewhere, so a guard like
 // `regnum(rs1) != 0` can suppress a write for x0 without suppressing the read.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa RegIsa {
     param XLEN: Integer = 64;

@@ -3,7 +3,7 @@
 // it and its width. A truth assignment no operand value produces — `base` both
 // 0b100 and 0b101 — yields no shape.
 
-// RUN: tmdlc --action=emit-ast-json --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-ast-json --output=- %s | filecheck %s
 
 isa ByteIsa {
     param XLEN: Integer = 64;

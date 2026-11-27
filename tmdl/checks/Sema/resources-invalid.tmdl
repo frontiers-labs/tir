@@ -2,7 +2,7 @@
 // groups and micro-ops, non-positive counts and occupancies, and cyclic
 // groups.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 sched_class W;
 

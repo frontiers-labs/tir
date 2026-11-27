@@ -1,9 +1,9 @@
 # Checked AST JSON
 
-`tmdlc` exposes its checked abstract syntax tree as a versioned JSON contract:
+`tmdl compile` exposes its checked abstract syntax tree as a versioned JSON contract:
 
 ```console
-tmdlc --action=emit-ast-json --output=ast.json input.tmdl
+tmdl compile --action=emit-ast-json --output=ast.json input.tmdl
 ```
 
 The output contains the input files in command-line order and their declarations
@@ -27,14 +27,14 @@ The complete field and variant reference is the generated
 compiler with:
 
 ```console
-tmdlc --action=emit-ast-json-schema --output=-
+tmdl compile --action=emit-ast-json-schema --output=-
 ```
 
 The schema action accepts no TMDL inputs. To update the committed schema after an
 intentional contract change, run:
 
 ```console
-tmdlc --action=emit-ast-json-schema --output=docs/tmdl/ast-v2.schema.json
+tmdl compile --action=emit-ast-json-schema --output=docs/tmdl/ast-v2.schema.json
 ```
 
 The schema is generated from the same Rust export types as the JSON output and a

@@ -1,7 +1,7 @@
 // An invalid source fails compilation with a parse error and a non-zero
 // exit code.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa Test { found }
 

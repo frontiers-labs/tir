@@ -1,4 +1,4 @@
-// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 // CHECK-DAG: fadd requires 2 or 3 arguments
 // CHECK-DAG: fmin requires 2 arguments
 // CHECK-DAG: fp_flags requires 1 argument

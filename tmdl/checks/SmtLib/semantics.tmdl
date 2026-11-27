@@ -3,7 +3,7 @@
 // try/except trap modeling, and the UNSUPPORTED-BEHAVIOR marker. Do not
 // regenerate with update_checks.py.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=TestIsa --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=test --isa=TestIsa --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
 
 // State: register-file arrays, byte-addressable memory, the program counter.
 // CHECK: (declare-datatypes () ((TMDLState (mk-TMDLState (csr (Array (_ BitVec 12) (_ BitVec 64))) (gpr (Array (_ BitVec 5) (_ BitVec 64))) (mem (Array (_ BitVec 64) (_ BitVec 8))) (resv Bool) (resa (_ BitVec 64)) (pc (_ BitVec 64))))))

@@ -4,7 +4,7 @@
 // the CSR write is guarded by an `ite` — a plain register write inside `if`,
 // no PC involved.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=RegIsa --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=test --isa=RegIsa --output=- %s | filecheck %s
 
 isa RegIsa {
     param XLEN: Integer = 64;

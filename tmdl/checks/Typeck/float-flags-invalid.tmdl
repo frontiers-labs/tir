@@ -1,4 +1,4 @@
-// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 // CHECK-COUNT-3: fp_flags requires an explicit-rounding operation
 
 isa Test { param XLEN: Integer = 32; }

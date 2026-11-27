@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa TestIsa {}
 

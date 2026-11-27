@@ -484,8 +484,8 @@ the encoder-decoder agreement per shape is also an SMT obligation.
 
 `emit-rust` lowers a guarded encoding to one `EncodeShape` per bit map, and the
 AST and JSON actions export the shapes. The symbolic emitters still describe one
-bit map per instruction: an instruction with more than one shape is a `tmdlc`
-error for `emit-smtlib`, `emit-btor2` and `emit-markdown`.
+bit map per instruction. For `emit-smtlib`, `emit-btor2` and `emit-markdown`,
+`tmdl compile` rejects instructions with more than one shape.
 
 ## ASM Templates
 
@@ -517,7 +517,7 @@ Every spelling parses to the same instruction. Printing uses the first string.
 
 ## Putting It Together (RISC‑V Excerpts)
 
-From `backends/riscv/defs/main.tmdl`:
+From `backends/riscv/isa_defs/main.tmdl`:
 
 ```
 isa RV64I { param XLEN: Integer = 64; }

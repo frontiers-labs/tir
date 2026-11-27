@@ -2,7 +2,7 @@
 // symbols after a destination write, while shared lowering substitutes the
 // updated named binding into their semantic expressions.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
 
 // CHECK-LABEL: impl tir::backend::MachineInstruction for TStoreWritebackOp
 // CHECK: sources: &[

@@ -199,17 +199,14 @@ fn verify_btor2(
     let out_dir = Path::new("target/model-check").join(target);
     std::fs::create_dir_all(&out_dir)?;
     let checker_path = out_dir.join("checker.btor2");
-    let mut compiler = Compiler::builder()
+    Compiler::builder()
         .action(Action::EmitBtor2)
         .isa(Some(tmdl_isa.to_string()))
         .btor2_isas(enabled_isas.to_vec())
         .output(OutputKind::File(
             checker_path.to_string_lossy().into_owned(),
-        ));
-    for (name, source) in sources {
-        compiler = compiler.add_source(name, source);
-    }
-    compiler
+        ))
+        .module_sources(sources)
         .build()
         .compile()
         .context("failed to emit the TMDL checker")?;

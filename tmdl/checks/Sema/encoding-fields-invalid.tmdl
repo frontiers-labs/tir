@@ -2,7 +2,7 @@
 // a name that is neither operand nor parameter has none, and an operand whose
 // width is an ISA-parameter expression has no single one.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa WordIsa {
     param XLEN: Integer = 32;

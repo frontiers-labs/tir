@@ -3,7 +3,7 @@
 // inside an except handler binds the exception payload to the handler's
 // parameters. Do not regenerate with update_checks.py.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=trap --isa=TrapIsa --output=- %S/../Inputs/trap.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-smtlib --dialect=trap --isa=TrapIsa --output=- %S/../Inputs/trap.tmdl | filecheck %s
 
 // `trap(11)` with no tval argument: the missing payload reads as zero, and
 // the bare trap counts as a PC write.

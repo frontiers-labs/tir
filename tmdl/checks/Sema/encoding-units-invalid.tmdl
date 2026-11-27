@@ -1,7 +1,7 @@
 // The fields of an encoding must fill a whole number of encoding units, and a
 // field may only cross a unit boundary by spanning whole units.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa ByteIsa {
     param XLEN: Integer = 64;

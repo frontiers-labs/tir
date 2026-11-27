@@ -1,0 +1,42 @@
+//! Scalar memory-ordering and spin-wait instructions.
+
+use crate::main::SSE2;
+use crate::main::SSE;
+
+macro fence_instruction {
+    ( $name:ident, $feature:ident, $mnemonic:literal, $modrm:literal, $pred:literal, $succ:literal ) => {
+        instruction $name for [$feature] {
+            param MNEMONIC: String = $mnemonic;
+
+            encoding {
+                0x0F,
+                0xAE,
+                $modrm,
+            }
+
+            asm { "{self.MNEMONIC}" }
+
+            behavior {
+                fence($pred, $succ);
+            }
+        }
+    };
+}
+
+fence_instruction!(StoreFence, SSE, "sfence", 0xF8, 0b0001, 0b0001)
+fence_instruction!(LoadFence, SSE2, "lfence", 0xE8, 0b0010, 0b0010)
+fence_instruction!(MemoryFence, SSE2, "mfence", 0xF0, 0b0011, 0b0011)
+
+instruction Pause for [SSE2] {
+    param MNEMONIC: String = "pause";
+
+    encoding {
+        0xF3,
+        0x90,
+    }
+
+    asm { "{self.MNEMONIC}" }
+    // Architecturally a nop: a spin-wait hint with no state effect. The empty
+    // behavior is exact, not unmodeled.
+    behavior { }
+}

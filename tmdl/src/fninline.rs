@@ -126,19 +126,7 @@ fn inline_expr(
     let ast::Expr::Ident(callee) = &*call.callee else {
         return expr;
     };
-    if fusion_guard
-        && matches!(
-            callee.name.as_str(),
-            "same_register"
-                | "overlap_register"
-                | "same_block"
-                | "aligned"
-                | "pc"
-                | "width"
-                | "operand_width"
-                | "encoded_byte"
-        )
-    {
+    if fusion_guard && is_fusion_builtin(&callee.name) {
         return expr;
     }
     let Some((def, _)) = fns.get(&callee.name) else {
@@ -206,4 +194,18 @@ fn substitute(expr: &ast::Expr, bindings: &HashMap<&str, &ast::Expr>) -> ast::Ex
         }
         other => substitute(other, bindings),
     })
+}
+
+pub(crate) fn is_fusion_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "same_register"
+            | "overlap_register"
+            | "same_block"
+            | "aligned"
+            | "pc"
+            | "width"
+            | "operand_width"
+            | "encoded_byte"
+    )
 }

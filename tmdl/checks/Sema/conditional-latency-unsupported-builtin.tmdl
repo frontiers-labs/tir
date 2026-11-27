@@ -1,4 +1,4 @@
-// RUN: not tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-ast-json --text-only --output=- %s | filecheck %s
 instruction I {
     param MNEMONIC: String = "i";
     operands { imm: bits<32> }

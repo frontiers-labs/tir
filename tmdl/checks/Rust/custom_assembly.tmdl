@@ -2,7 +2,7 @@
 // generated Rust exposes the assembly syntax and parser registry but omits
 // the flat per-instruction parse/print functions.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --text-only --custom-assembly --output=- %s | filecheck %s --implicit-check-not=parse_add_inst --implicit-check-not=print_add_inst
+// RUN: tmdl compile --action=emit-rust --dialect=test --text-only --custom-assembly --output=- %s | filecheck %s --implicit-check-not=parse_add_inst --implicit-check-not=print_add_inst
 
 isa TestIsa {}
 

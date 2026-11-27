@@ -1,0 +1,13 @@
+mod main;
+mod encoding_helpers;
+mod base;
+mod arith_ext;
+mod conditional;
+mod memory_ext;
+mod atomics;
+mod bmi;
+mod bmi2;
+mod ordering;
+mod float;
+mod perf;
+mod cpu;

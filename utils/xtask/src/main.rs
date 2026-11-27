@@ -107,111 +107,43 @@ fn build_isa_reference(root: &std::path::Path) -> anyhow::Result<()> {
          - [PTX](./ptx/index.md)\n",
     )?;
 
-    let targets: &[(&str, &str, bool, &[&str])] = &[
-        (
-            "riscv",
-            "riscv",
-            false,
-            &[
-                "backends/riscv/defs/main.tmdl",
-                "backends/riscv/defs/base.tmdl",
-                "backends/riscv/defs/multiplication.tmdl",
-                "backends/riscv/defs/zba.tmdl",
-                "backends/riscv/defs/zbb.tmdl",
-                "backends/riscv/defs/zbc.tmdl",
-                "backends/riscv/defs/zbs.tmdl",
-                "backends/riscv/defs/float.tmdl",
-                "backends/riscv/defs/float_extra.tmdl",
-                "backends/riscv/defs/float_round.tmdl",
-                "backends/riscv/defs/compressed.tmdl",
-                "backends/riscv/defs/atomics.tmdl",
-                "backends/riscv/defs/zifencei.tmdl",
-                "backends/riscv/defs/zicsr.tmdl",
-                "backends/riscv/defs/perf.tmdl",
-                "backends/riscv/defs/cpu/spacemit/x100_integer.tmdl",
-                "backends/riscv/defs/cpu/spacemit/x100.tmdl",
-                "backends/riscv/defs/vector.tmdl",
-                "backends/riscv/defs/vector_int.tmdl",
-                "backends/riscv/defs/vector_mask.tmdl",
-                "backends/riscv/defs/vector_red.tmdl",
-                "backends/riscv/defs/vector_perm.tmdl",
-                "backends/riscv/defs/vector_widen.tmdl",
-                "backends/riscv/defs/vector_fixed.tmdl",
-                "backends/riscv/defs/vector_mem.tmdl",
-                "backends/riscv/defs/vector_float.tmdl",
-                "backends/riscv/defs/syntacore_scr1.tmdl",
-            ],
-        ),
-        (
-            "arm64",
-            "aarch64",
-            false,
-            &[
-                "backends/arm64/defs/main.tmdl",
-                "backends/arm64/defs/versions.tmdl",
-                "backends/arm64/defs/float.tmdl",
-                "backends/arm64/defs/advsimd.tmdl",
-                "backends/arm64/defs/data_processing.tmdl",
-                "backends/arm64/defs/loads_stores.tmdl",
-                "backends/arm64/defs/atomics.tmdl",
-                "backends/arm64/defs/branches.tmdl",
-                "backends/arm64/defs/perf.tmdl",
-                "backends/arm64/defs/cpu/arm/cortex_a720.tmdl",
-            ],
-        ),
-        (
-            "x86_64",
-            "x86-64",
-            false,
-            &[
-                "backends/x86_64/defs/main.tmdl",
-                "backends/x86_64/defs/encoding.tmdl",
-                "backends/x86_64/defs/base.tmdl",
-                "backends/x86_64/defs/arith_ext.tmdl",
-                "backends/x86_64/defs/conditional.tmdl",
-                "backends/x86_64/defs/memory_ext.tmdl",
-                "backends/x86_64/defs/atomics.tmdl",
-                "backends/x86_64/defs/bmi.tmdl",
-                "backends/x86_64/defs/bmi2.tmdl",
-                "backends/x86_64/defs/ordering.tmdl",
-                "backends/x86_64/defs/float.tmdl",
-                "backends/x86_64/defs/perf.tmdl",
-                "backends/x86_64/defs/cpu/intel/tiger_lake.tmdl",
-            ],
-        ),
-        (
-            "ptx",
-            "ptx",
-            true,
-            &[
-                "gpu/defs/ptx/main.tmdl",
-                "gpu/defs/ptx/versions.tmdl",
-                "gpu/defs/ptx/integer.tmdl",
-                "gpu/defs/ptx/logic.tmdl",
-                "gpu/defs/ptx/float.tmdl",
-                "gpu/defs/ptx/compare.tmdl",
-                "gpu/defs/ptx/movement.tmdl",
-                "gpu/defs/ptx/memory.tmdl",
-                "gpu/defs/ptx/control.tmdl",
-                "gpu/defs/ptx/sync.tmdl",
-                "gpu/defs/ptx/video.tmdl",
-                "gpu/defs/ptx/async.tmdl",
-                "gpu/defs/ptx/tensor.tmdl",
-                "gpu/defs/ptx/texture.tmdl",
-            ],
-        ),
+    let targets = [
+        ("riscv", "riscv", Some("backends/riscv/isa_defs")),
+        ("arm64", "aarch64", Some("backends/arm64/isa_defs")),
+        ("x86_64", "x86-64", Some("backends/x86_64/isa_defs")),
+        ("ptx", "ptx", None),
     ];
 
-    for (dialect, directory, text_only, inputs) in targets {
+    for (dialect, directory, module_root) in targets {
         let mut compiler = Compiler::builder()
             .action(Action::EmitMarkdown)
-            .dialect(Some((*dialect).to_string()))
-            .text_only(*text_only)
+            .dialect(Some(dialect.to_string()))
             .output(OutputKind::Batch(
                 output.join(directory).display().to_string(),
             ));
-        for input in *inputs {
-            compiler = compiler.add_input(&root.join(input).display().to_string());
+        if let Some(module_root) = module_root {
+            compiler = compiler.module_root(root.join(module_root));
+        } else {
+            compiler = compiler.text_only(true);
+            let defs = root.join("gpu/defs/ptx");
+            for input in [
+                "main.tmdl",
+                "versions.tmdl",
+                "integer.tmdl",
+                "logic.tmdl",
+                "float.tmdl",
+                "compare.tmdl",
+                "movement.tmdl",
+                "memory.tmdl",
+                "control.tmdl",
+                "sync.tmdl",
+                "video.tmdl",
+                "async.tmdl",
+                "tensor.tmdl",
+                "texture.tmdl",
+            ] {
+                compiler = compiler.add_input(&defs.join(input).display().to_string());
+            }
         }
         compiler.build().compile()?;
     }

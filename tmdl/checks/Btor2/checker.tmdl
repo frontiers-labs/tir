@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-btor2 --isa=TestIsa --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-btor2 --isa=TestIsa --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
 
 // CHECK: ; TMDL retirement checker
 // CHECK: {{[0-9]+}} input {{[0-9]+}} insn

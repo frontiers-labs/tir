@@ -1,6 +1,6 @@
 // This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
 
-// RUN: tmdlc --action=emit-tokens --output=- %S/../Inputs/simple.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-tokens --output=- %S/../Inputs/simple.tmdl | filecheck %s
 
 // CHECK: [
 // CHECK-NEXT:     (

@@ -1,0 +1,1401 @@
+//! Vector floating-point instructions from the RISC-V Vector extension: the
+//! OPFVV/OPFVF forms — single-width arithmetic, sign injection,
+//! multiply-accumulate, square root, class, compares, merge and moves,
+//! scalar slides, conversions, widening arithmetic, and reductions.
+//!
+//! Lane semantics follow the same functional idiom as the integer file:
+//! sources split into `vl` lanes of `sew` bits, combined with `map`/`zip`,
+//! and concatenated back, with masked forms keeping the old destination lane
+//! (mask-undisturbed) and tails reading as zero (tail-agnostic). The element
+//! format is the IEEE binary16/binary32/binary64 interchange format of the
+//! configured SEW.
+//!
+//! Vector arithmetic and frm-governed conversions currently round to
+//! nearest-even, while the .rtz conversion forms truncate.
+//! The scalar operand of a .vf form is
+//! taken from the f register file with the standard scalar-in-wider-register
+//! convention: the low SEW bits when NaN-boxed, the canonical NaN otherwise.
+//!
+//! vfrsqrt7.v and vfrec7.v are not modeled: their significands are defined by
+//! 128-entry lookup tables, which the behavior language cannot hold as data
+//! (lane values cap at 64 bits) and could only inline as a 128-arm select in
+//! every lane of the semantics and the derived selection axioms; the
+//! encodings and assembly are specified, the semantics are `todo()`.
+
+use crate::float::D;
+use crate::float::FPR64;
+use crate::perf::WriteIALU;
+use crate::vector::RVV;
+use crate::vector::VCFG;
+use crate::vector::VCSR;
+use crate::vector::VR;
+use crate::vector::vector_pair;
+use crate::vector_fixed::bit_at;
+use crate::vector_perm::elem_at;
+
+// The vector floating-point instructions need both the vector unit and the f
+// register file; the standard V extension mandates the D scalar extension.
+// Like D64, this internal conjunction is enabled automatically whenever both
+// RVV and D are.
+/// TIR feature for the modeled vector floating-point operations, requiring both RVV and scalar
+/// double-precision support.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
+isa VF requires [RVV, D] {}
+
+// OPFVV (funct3 = 001): both sources from vector registers.
+template OpFVV for [VF] {
+    param MNEMONIC: String;
+    param FUNCT6: bits<6>;
+    param FUNCT3: bits<3> = 0b001;
+    param VM: bits<1> = 0b1;
+    param OPCODE: bits<7> = 0b1010111;
+
+    operands {
+        vd: VR,
+        vs2: VR,
+        vs1: VR,
+    }
+
+    encoding {
+        FUNCT6,
+        VM,
+        vs2,
+        vs1,
+        FUNCT3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs2}, {vs1}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template OpFVVM for [VF] : OpFVV {
+    param VM: bits<1> = 0b0;
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs2}, {vs1}, v0.t"
+    }
+}
+
+// OPFVF (funct3 = 101): the second source is a scalar f register.
+template OpFVF for [VF] {
+    param MNEMONIC: String;
+    param FUNCT6: bits<6>;
+    param FUNCT3: bits<3> = 0b101;
+    param VM: bits<1> = 0b1;
+    param OPCODE: bits<7> = 0b1010111;
+
+    operands {
+        vd: VR,
+        vs2: VR,
+        rs1: FPR64,
+    }
+
+    encoding {
+        FUNCT6,
+        VM,
+        vs2,
+        rs1,
+        FUNCT3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs2}, {rs1}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template OpFVFM for [VF] : OpFVF {
+    param VM: bits<1> = 0b0;
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs2}, {rs1}, v0.t"
+    }
+}
+
+// Multiply-accumulates print the vs1/scalar source first.
+template OpFMAccVV for [VF] : OpFVV {
+    asm {
+        "{self.MNEMONIC} {vd}, {vs1}, {vs2}"
+    }
+}
+
+template OpFMAccVVM for [VF] : OpFVV {
+    param VM: bits<1> = 0b0;
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs1}, {vs2}, v0.t"
+    }
+}
+
+template OpFMAccVF for [VF] : OpFVF {
+    asm {
+        "{self.MNEMONIC} {vd}, {rs1}, {vs2}"
+    }
+}
+
+template OpFMAccVFM for [VF] : OpFVF {
+    param VM: bits<1> = 0b0;
+
+    asm {
+        "{self.MNEMONIC} {vd}, {rs1}, {vs2}, v0.t"
+    }
+}
+
+// Unary forms (VFUNARY0/VFUNARY1): the vs1 field selects the operation.
+template OpFUnary for [VF] {
+    param MNEMONIC: String;
+    param FUNCT6: bits<6>;
+    param VS1: bits<5>;
+    param FUNCT3: bits<3> = 0b001;
+    param VM: bits<1> = 0b1;
+    param OPCODE: bits<7> = 0b1010111;
+
+    operands {
+        vd: VR,
+        vs2: VR,
+    }
+
+    encoding {
+        FUNCT6,
+        VM,
+        vs2,
+        VS1,
+        FUNCT3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs2}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template OpFUnaryM for [VF] : OpFUnary {
+    param VM: bits<1> = 0b0;
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs2}, v0.t"
+    }
+}
+
+// A format constant for the configured element format, given as the binary16,
+// binary32, and binary64 bit patterns. Every arm evaluates at any SEW (dead
+// `if` arms are evaluated eagerly), so the selected 64-bit value is truncated
+// to the lane width only after the choice.
+fn fp_const(h, s, d) {
+    k = if VCFG::sew == zext(0x10, self.XLEN) {
+        zext(h, 64)
+    } else if VCFG::sew == zext(0x20, self.XLEN) {
+        zext(s, 64)
+    } else {
+        zext(d, 64)
+    };
+    extract(k, VCFG::sew - zext(0b1, self.XLEN), 0)
+}
+
+// The sign bit of a lane.
+fn fp_sign_mask() {
+    zext(0b1, VCFG::sew) << (VCFG::sew - zext(0b1, self.XLEN))
+}
+
+// The magnitude (all bits below the sign).
+fn fp_mag(a) {
+    a & (fp_sign_mask() - zext(0b1, VCFG::sew))
+}
+
+// Positive infinity: any greater magnitude is a NaN.
+fn fp_inf() {
+    fp_const(0x7C00, 0x7F800000, 0x7FF0000000000000)
+}
+
+fn fp_is_nan(a) {
+    fp_mag(a) ~> fp_inf()
+}
+
+// The canonical (quiet, positive) NaN every NaN-producing op returns.
+fn fp_canonical_nan() {
+    fp_const(0x7E00, 0x7FC00000, 0x7FF8000000000000)
+}
+
+fn fp_neg(a) {
+    a ^ fp_sign_mask()
+}
+
+// The scalar source of a .vf form: the low SEW bits of the f register when
+// the bits above them are all ones (NaN-boxed), the canonical NaN otherwise.
+// At SEW = 64 both shifts saturate to zero and the whole register is taken.
+fn fp_scalar(rs1) {
+    hi = extract(rs1, 63, 0) >> zext(VCFG::sew, 64);
+    ones = (zext(0b0, 64) - zext(0b1, 64)) >> zext(VCFG::sew, 64);
+    if hi == ones {
+        extract(rs1, VCFG::sew - zext(0b1, self.XLEN), 0)
+    } else {
+        fp_canonical_nan()
+    }
+}
+
+// Single-width add, subtract, and reverse subtract.
+
+vector_pair!(VFAddVV, VFAddVVM, VF, OpFVV, OpFVVM, "vfadd.vv", 0b000000,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fadd(a, b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fadd(a, b) } else { old })); })
+
+vector_pair!(VFAddVF, VFAddVFM, VF, OpFVF, OpFVFM, "vfadd.vf", 0b000000,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fadd(a, fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fadd(a, fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VFSubVV, VFSubVVM, VF, OpFVV, OpFVVM, "vfsub.vv", 0b000010,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fsub(a, b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fsub(a, b) } else { old })); })
+
+vector_pair!(VFSubVF, VFSubVFM, VF, OpFVF, OpFVFM, "vfsub.vf", 0b000010,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fsub(a, fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fsub(a, fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VFRsubVF, VFRsubVFM, VF, OpFVF, OpFVFM, "vfrsub.vf", 0b100111,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fsub(fp_scalar(rs1), a))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fsub(fp_scalar(rs1), a) } else { old })); })
+
+// Multiply, divide, and reverse divide.
+
+vector_pair!(VFMulVV, VFMulVVM, VF, OpFVV, OpFVVM, "vfmul.vv", 0b100100,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fmul(a, b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fmul(a, b) } else { old })); })
+
+vector_pair!(VFMulVF, VFMulVFM, VF, OpFVF, OpFVFM, "vfmul.vf", 0b100100,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fmul(a, fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fmul(a, fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VFDivVV, VFDivVVM, VF, OpFVV, OpFVVM, "vfdiv.vv", 0b100000,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fdiv(a, b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fdiv(a, b) } else { old })); })
+
+vector_pair!(VFDivVF, VFDivVFM, VF, OpFVF, OpFVFM, "vfdiv.vf", 0b100000,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fdiv(a, fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fdiv(a, fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VFRdivVF, VFRdivVFM, VF, OpFVF, OpFVFM, "vfrdiv.vf", 0b100001,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fdiv(fp_scalar(rs1), a))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fdiv(fp_scalar(rs1), a) } else { old })); })
+
+// Lane-wise minimum and maximum (IEEE 754-2019 minimumNumber/maximumNumber).
+
+vector_pair!(VFMinVV, VFMinVVM, VF, OpFVV, OpFVVM, "vfmin.vv", 0b000100,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fmin(a, b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fmin(a, b) } else { old })); })
+
+vector_pair!(VFMinVF, VFMinVFM, VF, OpFVF, OpFVFM, "vfmin.vf", 0b000100,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fmin(a, fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fmin(a, fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VFMaxVV, VFMaxVVM, VF, OpFVV, OpFVVM, "vfmax.vv", 0b000110,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fmax(a, b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fmax(a, b) } else { old })); })
+
+vector_pair!(VFMaxVF, VFMaxVFM, VF, OpFVF, OpFVFM, "vfmax.vf", 0b000110,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fmax(a, fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fmax(a, fp_scalar(rs1)) } else { old })); })
+
+// Sign injection: the vs2 magnitude with a sign taken from vs1 (vfsgnj),
+// its negation (vfsgnjn), or the xor of both signs (vfsgnjx).
+
+vector_pair!(VFSgnjVV, VFSgnjVVM, VF, OpFVV, OpFVVM, "vfsgnj.vv", 0b001000,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fp_mag(a) | (b & fp_sign_mask()))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fp_mag(a) | (b & fp_sign_mask()) } else { old })); })
+
+vector_pair!(VFSgnjVF, VFSgnjVFM, VF, OpFVF, OpFVFM, "vfsgnj.vf", 0b001000,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_mag(a) | (fp_scalar(rs1) & fp_sign_mask()))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_mag(a) | (fp_scalar(rs1) & fp_sign_mask()) } else { old })); })
+
+vector_pair!(VFSgnjnVV, VFSgnjnVVM, VF, OpFVV, OpFVVM, "vfsgnjn.vv", 0b001001,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fp_mag(a) | (fp_neg(b) & fp_sign_mask()))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fp_mag(a) | (fp_neg(b) & fp_sign_mask()) } else { old })); })
+
+vector_pair!(VFSgnjnVF, VFSgnjnVFM, VF, OpFVF, OpFVFM, "vfsgnjn.vf", 0b001001,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_mag(a) | (fp_neg(fp_scalar(rs1)) & fp_sign_mask()))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_mag(a) | (fp_neg(fp_scalar(rs1)) & fp_sign_mask()) } else { old })); })
+
+vector_pair!(VFSgnjxVV, VFSgnjxVVM, VF, OpFVV, OpFVVM, "vfsgnjx.vv", 0b001010,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fp_mag(a) | ((a ^ b) & fp_sign_mask()))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { fp_mag(a) | ((a ^ b) & fp_sign_mask()) } else { old })); })
+
+vector_pair!(VFSgnjxVF, VFSgnjxVFM, VF, OpFVF, OpFVFM, "vfsgnjx.vf", 0b001010,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_mag(a) | ((a ^ fp_scalar(rs1)) & fp_sign_mask()))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_mag(a) | ((a ^ fp_scalar(rs1)) & fp_sign_mask()) } else { old })); })
+
+// Fused multiply-accumulates: one rounding, all four sign combinations, in
+// both the accumulator (vd += vs1*vs2) and multiplier (vd = vd*vs1 + vs2)
+// orientations.
+
+vector_pair!(VFMaccVV, VFMaccVVM, VF, OpFMAccVV, OpFMAccVVM, "vfmacc.vv", 0b101100,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, b, d| fma(asfloat(b), asfloat(a), asfloat(d)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, d| if m { fma(asfloat(b), asfloat(a), asfloat(d)) } else { d })); })
+
+vector_pair!(VFMaccVF, VFMaccVFM, VF, OpFMAccVF, OpFMAccVFM, "vfmacc.vf", 0b101100,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, d| fma(asfloat(fp_scalar(rs1)), asfloat(a), asfloat(d)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, d| if m { fma(asfloat(fp_scalar(rs1)), asfloat(a), asfloat(d)) } else { d })); })
+
+vector_pair!(VFNmaccVV, VFNmaccVVM, VF, OpFMAccVV, OpFMAccVVM, "vfnmacc.vv", 0b101101,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, b, d| fma(asfloat(fp_neg(b)), asfloat(a), asfloat(fp_neg(d))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, d| if m { fma(asfloat(fp_neg(b)), asfloat(a), asfloat(fp_neg(d))) } else { d })); })
+
+vector_pair!(VFNmaccVF, VFNmaccVFM, VF, OpFMAccVF, OpFMAccVFM, "vfnmacc.vf", 0b101101,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, d| fma(asfloat(fp_neg(fp_scalar(rs1))), asfloat(a), asfloat(fp_neg(d))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, d| if m { fma(asfloat(fp_neg(fp_scalar(rs1))), asfloat(a), asfloat(fp_neg(d))) } else { d })); })
+
+vector_pair!(VFMsacVV, VFMsacVVM, VF, OpFMAccVV, OpFMAccVVM, "vfmsac.vv", 0b101110,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, b, d| fma(asfloat(b), asfloat(a), asfloat(fp_neg(d))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, d| if m { fma(asfloat(b), asfloat(a), asfloat(fp_neg(d))) } else { d })); })
+
+vector_pair!(VFMsacVF, VFMsacVFM, VF, OpFMAccVF, OpFMAccVFM, "vfmsac.vf", 0b101110,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, d| fma(asfloat(fp_scalar(rs1)), asfloat(a), asfloat(fp_neg(d))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, d| if m { fma(asfloat(fp_scalar(rs1)), asfloat(a), asfloat(fp_neg(d))) } else { d })); })
+
+vector_pair!(VFNmsacVV, VFNmsacVVM, VF, OpFMAccVV, OpFMAccVVM, "vfnmsac.vv", 0b101111,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, b, d| fma(asfloat(fp_neg(b)), asfloat(a), asfloat(d)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, d| if m { fma(asfloat(fp_neg(b)), asfloat(a), asfloat(d)) } else { d })); })
+
+vector_pair!(VFNmsacVF, VFNmsacVFM, VF, OpFMAccVF, OpFMAccVFM, "vfnmsac.vf", 0b101111,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, d| fma(asfloat(fp_neg(fp_scalar(rs1))), asfloat(a), asfloat(d)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, d| if m { fma(asfloat(fp_neg(fp_scalar(rs1))), asfloat(a), asfloat(d)) } else { d })); })
+
+vector_pair!(VFMaddVV, VFMaddVVM, VF, OpFMAccVV, OpFMAccVVM, "vfmadd.vv", 0b101000,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, b, d| fma(asfloat(b), asfloat(d), asfloat(a)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, d| if m { fma(asfloat(b), asfloat(d), asfloat(a)) } else { d })); })
+
+vector_pair!(VFMaddVF, VFMaddVFM, VF, OpFMAccVF, OpFMAccVFM, "vfmadd.vf", 0b101000,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, d| fma(asfloat(fp_scalar(rs1)), asfloat(d), asfloat(a)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, d| if m { fma(asfloat(fp_scalar(rs1)), asfloat(d), asfloat(a)) } else { d })); })
+
+vector_pair!(VFNmaddVV, VFNmaddVVM, VF, OpFMAccVV, OpFMAccVVM, "vfnmadd.vv", 0b101001,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, b, d| fma(asfloat(fp_neg(b)), asfloat(d), asfloat(fp_neg(a))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, d| if m { fma(asfloat(fp_neg(b)), asfloat(d), asfloat(fp_neg(a))) } else { d })); })
+
+vector_pair!(VFNmaddVF, VFNmaddVFM, VF, OpFMAccVF, OpFMAccVFM, "vfnmadd.vf", 0b101001,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, d| fma(asfloat(fp_neg(fp_scalar(rs1))), asfloat(d), asfloat(fp_neg(a))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, d| if m { fma(asfloat(fp_neg(fp_scalar(rs1))), asfloat(d), asfloat(fp_neg(a))) } else { d })); })
+
+vector_pair!(VFMsubVV, VFMsubVVM, VF, OpFMAccVV, OpFMAccVVM, "vfmsub.vv", 0b101010,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, b, d| fma(asfloat(b), asfloat(d), asfloat(fp_neg(a))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, d| if m { fma(asfloat(b), asfloat(d), asfloat(fp_neg(a))) } else { d })); })
+
+vector_pair!(VFMsubVF, VFMsubVFM, VF, OpFMAccVF, OpFMAccVFM, "vfmsub.vf", 0b101010,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, d| fma(asfloat(fp_scalar(rs1)), asfloat(d), asfloat(fp_neg(a))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, d| if m { fma(asfloat(fp_scalar(rs1)), asfloat(d), asfloat(fp_neg(a))) } else { d })); })
+
+vector_pair!(VFNmsubVV, VFNmsubVVM, VF, OpFMAccVV, OpFMAccVVM, "vfnmsub.vv", 0b101011,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, b, d| fma(asfloat(fp_neg(b)), asfloat(d), asfloat(a)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, d| if m { fma(asfloat(fp_neg(b)), asfloat(d), asfloat(a)) } else { d })); })
+
+vector_pair!(VFNmsubVF, VFNmsubVFM, VF, OpFMAccVF, OpFMAccVFM, "vfnmsub.vf", 0b101011,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |a, d| fma(asfloat(fp_neg(fp_scalar(rs1))), asfloat(d), asfloat(a)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, d| if m { fma(asfloat(fp_neg(fp_scalar(rs1))), asfloat(d), asfloat(a)) } else { d })); })
+
+// Square root and the unary estimates.
+
+instruction VFSqrtV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfsqrt.v";
+    param FUNCT6: bits<6> = 0b010011;
+    param VS1: bits<5> = 0b00000;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sqrt(asfloat(a))));
+    }
+}
+
+instruction VFSqrtVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfsqrt.v.m";
+    param MNEMONIC: String = "vfsqrt.v";
+    param FUNCT6: bits<6> = 0b010011;
+    param VS1: bits<5> = 0b00000;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sqrt(asfloat(a)) } else { old }));
+    }
+}
+
+instruction VFRsqrt7V for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfrsqrt7.v";
+    param FUNCT6: bits<6> = 0b010011;
+    param VS1: bits<5> = 0b00100;
+
+    behavior {
+        todo()
+    }
+}
+
+instruction VFRsqrt7VM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfrsqrt7.v.m";
+    param MNEMONIC: String = "vfrsqrt7.v";
+    param FUNCT6: bits<6> = 0b010011;
+    param VS1: bits<5> = 0b00100;
+
+    behavior {
+        todo()
+    }
+}
+
+instruction VFRec7V for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfrec7.v";
+    param FUNCT6: bits<6> = 0b010011;
+    param VS1: bits<5> = 0b00101;
+
+    behavior {
+        todo()
+    }
+}
+
+instruction VFRec7VM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfrec7.v.m";
+    param MNEMONIC: String = "vfrec7.v";
+    param FUNCT6: bits<6> = 0b010011;
+    param VS1: bits<5> = 0b00101;
+
+    behavior {
+        todo()
+    }
+}
+
+// The float class helpers. `fp_class` computes the 10-bit fclass category
+// mask of a lane, zero-extended to the lane width.
+
+// The smallest positive normal: any smaller nonzero magnitude is subnormal.
+fn fp_min_normal() {
+    fp_const(0x0400, 0x00800000, 0x0010000000000000)
+}
+
+// The mantissa MSB, set in quiet NaNs.
+fn fp_quiet_bit() {
+    fp_const(0x0200, 0x00400000, 0x0008000000000000)
+}
+
+fn fp_class(a) {
+    mag = fp_mag(a);
+    neg = (a & fp_sign_mask()) != zext(0b0, VCFG::sew);
+    pos = (a & fp_sign_mask()) == zext(0b0, VCFG::sew);
+    is_zero = mag == zext(0b0, VCFG::sew);
+    is_sub = (mag != zext(0b0, VCFG::sew)) & (mag ~< fp_min_normal());
+    is_norm = (mag ~< fp_inf()) & (fp_min_normal() ~<= mag);
+    is_inf = mag == fp_inf();
+    is_nan = mag ~> fp_inf();
+    quiet = (a & fp_quiet_bit()) != zext(0b0, VCFG::sew);
+    snan = is_nan & ((a & fp_quiet_bit()) == zext(0b0, VCFG::sew));
+    (zext(neg & is_inf, VCFG::sew) << 0)
+        | (zext(neg & is_norm, VCFG::sew) << 1)
+        | (zext(neg & is_sub, VCFG::sew) << 2)
+        | (zext(neg & is_zero, VCFG::sew) << 3)
+        | (zext(pos & is_zero, VCFG::sew) << 4)
+        | (zext(pos & is_sub, VCFG::sew) << 5)
+        | (zext(pos & is_norm, VCFG::sew) << 6)
+        | (zext(pos & is_inf, VCFG::sew) << 7)
+        | (zext(snan, VCFG::sew) << 8)
+        | (zext(is_nan & quiet, VCFG::sew) << 9)
+}
+
+instruction VFClassV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfclass.v";
+    param FUNCT6: bits<6> = 0b010011;
+    param VS1: bits<5> = 0b10000;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_class(a)));
+    }
+}
+
+instruction VFClassVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfclass.v.m";
+    param MNEMONIC: String = "vfclass.v";
+    param FUNCT6: bits<6> = 0b010011;
+    param VS1: bits<5> = 0b10000;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_class(a) } else { old }));
+    }
+}
+
+// Compares write one mask bit per lane (IEEE quiet compares: any NaN operand
+// makes the ordered predicates false and only vmfne true).
+
+vector_pair!(VMFeqVV, VMFeqVVM, VF, OpFVV, OpFVVM, "vmfeq.vv", 0b011000,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| asfloat(a) == asfloat(b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, b, old| if m { asfloat(a) == asfloat(b) } else { old })); })
+
+vector_pair!(VMFeqVF, VMFeqVFM, VF, OpFVF, OpFVFM, "vmfeq.vf", 0b011000,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| asfloat(a) == asfloat(fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, old| if m { asfloat(a) == asfloat(fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VMFneVV, VMFneVVM, VF, OpFVV, OpFVVM, "vmfne.vv", 0b011100,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| asfloat(a) != asfloat(b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, b, old| if m { asfloat(a) != asfloat(b) } else { old })); })
+
+vector_pair!(VMFneVF, VMFneVFM, VF, OpFVF, OpFVFM, "vmfne.vf", 0b011100,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| asfloat(a) != asfloat(fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, old| if m { asfloat(a) != asfloat(fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VMFltVV, VMFltVVM, VF, OpFVV, OpFVVM, "vmflt.vv", 0b011011,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| asfloat(a) < asfloat(b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, b, old| if m { asfloat(a) < asfloat(b) } else { old })); })
+
+vector_pair!(VMFltVF, VMFltVFM, VF, OpFVF, OpFVFM, "vmflt.vf", 0b011011,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| asfloat(a) < asfloat(fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, old| if m { asfloat(a) < asfloat(fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VMFleVV, VMFleVVM, VF, OpFVV, OpFVVM, "vmfle.vv", 0b011001,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| asfloat(a) <= asfloat(b))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, b, old| if m { asfloat(a) <= asfloat(b) } else { old })); })
+
+vector_pair!(VMFleVF, VMFleVFM, VF, OpFVF, OpFVFM, "vmfle.vf", 0b011001,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| asfloat(a) <= asfloat(fp_scalar(rs1)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, old| if m { asfloat(a) <= asfloat(fp_scalar(rs1)) } else { old })); })
+
+vector_pair!(VMFgtVF, VMFgtVFM, VF, OpFVF, OpFVFM, "vmfgt.vf", 0b011101,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| asfloat(fp_scalar(rs1)) < asfloat(a))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, old| if m { asfloat(fp_scalar(rs1)) < asfloat(a) } else { old })); })
+
+vector_pair!(VMFgeVF, VMFgeVFM, VF, OpFVF, OpFVFM, "vmfge.vf", 0b011111,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| asfloat(fp_scalar(rs1)) <= asfloat(a))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, 1)), |m, a, old| if m { asfloat(fp_scalar(rs1)) <= asfloat(a) } else { old })); })
+
+// Merge and splat: vfmerge.vfm picks the scalar where the mask is set;
+// vfmv.v.f is its vm = 1 encoding with vs2 tied to zero, splatting the
+// scalar to every active lane.
+
+instruction VFMergeVFM for [VF] : OpFVFM {
+    param MNEMONIC: String = "vfmerge.vfm";
+    param FUNCT6: bits<6> = 0b010111;
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs2}, {rs1}, v0"
+    }
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew)), |m, a| if m { fp_scalar(rs1) } else { a }));
+    }
+}
+
+instruction VFMvVF for [VF] {
+    param MNEMONIC: String = "vfmv.v.f";
+    param FUNCT6: bits<6> = 0b010111;
+    param FUNCT3: bits<3> = 0b101;
+    param OPCODE: bits<7> = 0b1010111;
+
+    operands {
+        vd: VR,
+        rs1: FPR64,
+    }
+
+    encoding {
+        FUNCT6,
+        0b1,
+        0b00000,
+        rs1,
+        FUNCT3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, {rs1}"
+    }
+
+    behavior {
+        vd = concat(map(iota(VCSR::vl, VCFG::sew), |i| fp_scalar(rs1)));
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+// Float scalar moves. vfmv.f.s reads element 0 of vs2 regardless of vl,
+// NaN-boxing it into the f register; vfmv.s.f writes element 0 of vd only
+// when vl > 0, leaving the rest to the tail policy (zero here, a legal
+// tail-agnostic choice).
+
+instruction VFMvFS for [VF] {
+    param MNEMONIC: String = "vfmv.f.s";
+    param FUNCT6: bits<6> = 0b010000;
+    param FUNCT3: bits<3> = 0b001;
+    param OPCODE: bits<7> = 0b1010111;
+
+    operands {
+        fd: FPR64,
+        vs2: VR,
+    }
+
+    encoding {
+        FUNCT6,
+        0b1,
+        vs2,
+        0b00000,
+        FUNCT3,
+        fd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {vs2}"
+    }
+
+    behavior {
+        fd = ((zext(0b0, 64) - zext(0b1, 64)) << zext(VCFG::sew, 64)) | zext(extract(vs2, VCFG::sew - zext(0b1, self.XLEN), 0), 64);
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction VFMvSF for [VF] {
+    param MNEMONIC: String = "vfmv.s.f";
+    param FUNCT6: bits<6> = 0b010000;
+    param FUNCT3: bits<3> = 0b101;
+    param OPCODE: bits<7> = 0b1010111;
+
+    operands {
+        vd: VR,
+        rs1: FPR64,
+    }
+
+    encoding {
+        FUNCT6,
+        0b1,
+        0b00000,
+        rs1,
+        FUNCT3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, {rs1}"
+    }
+
+    behavior {
+        vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { fp_scalar(rs1) };
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+// Scalar slides: the float twins of vslide1up/vslide1down.vx, inserting the
+// f-register scalar at the vacated lane.
+
+vector_pair!(VFSlide1upVF, VFSlide1upVFM, VF, OpFVF, OpFVFM, "vfslide1up.vf", 0b001110,
+    { vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if i == zext(0b0, self.XLEN) { fp_scalar(rs1) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) })); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if i == zext(0b0, self.XLEN) { fp_scalar(rs1) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) } } else { old })); })
+
+vector_pair!(VFSlide1downVF, VFSlide1downVFM, VF, OpFVF, OpFVFM, "vfslide1down.vf", 0b001111,
+    { vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if (i + zext(0b1, self.XLEN)) ~< VCSR::vl { elem_at(vs2, i + zext(0b1, self.XLEN)) } else { fp_scalar(rs1) })); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if (i + zext(0b1, self.XLEN)) ~< VCSR::vl { elem_at(vs2, i + zext(0b1, self.XLEN)) } else { fp_scalar(rs1) } } else { old })); })
+
+// Conversion helpers. The frm-governed conversions round to nearest-even
+// (the modeled frm default) by first rounding the float to an integral value
+// with the 2^mant magic-add trick, then truncating exactly; the .rtz forms
+// truncate directly. Out-of-range values and NaNs saturate per the scalar
+// conversion rules (NaN converts as the largest positive value).
+
+// 2^mant: adding and subtracting it rounds the magnitude to an integer in
+// one RNE rounding. Any magnitude at or above it is already integral.
+fn fp_magic() {
+    fp_const(0x6400, 0x4B000000, 0x4330000000000000)
+}
+
+fn fp_rne_int(a) {
+    mag = fp_mag(a);
+    if mag ~< fp_magic() { (a & fp_sign_mask()) | fsub(fadd(mag, fp_magic()), fp_magic()) } else { a }
+}
+
+// Saturate a 64-bit-converted integral value into `w` bits. `t` comes from
+// the float-to-int primitive, which already saturates into the 64-bit range
+// but folds NaN to zero, so the NaN test rides along explicitly.
+fn fp_sat_signed(t, nan, w) {
+    maxpos = (zext(0b1, w) << (w - zext(0b1, self.XLEN))) - zext(0b1, w);
+    minneg = zext(0b1, w) << (w - zext(0b1, self.XLEN));
+    if nan {
+        maxpos
+    } else if zext(maxpos, 64) < t {
+        maxpos
+    } else if t < sext(minneg, 64) {
+        minneg
+    } else {
+        extract(t, w - zext(0b1, self.XLEN), 0)
+    }
+}
+
+fn fp_sat_unsigned(t, nan, w) {
+    ones = zext(0b0, w) - zext(0b1, w);
+    if nan {
+        ones
+    } else if zext(ones, 64) ~< t {
+        ones
+    } else {
+        extract(t, w - zext(0b1, self.XLEN), 0)
+    }
+}
+
+// The widened (2*SEW) element format, keyed off SEW like `fp_const`:
+// binary16 patterns at SEW = 8 (the int8 <-> binary16 conversions), binary32
+// at SEW = 16, binary64 at SEW = 32. 2*SEW float lanes at SEW = 64 are
+// reserved, as in the integer widening file.
+fn fp_wconst(h, s, d) {
+    k = if VCFG::sew == zext(0x8, self.XLEN) {
+        zext(h, 64)
+    } else if VCFG::sew == zext(0x10, self.XLEN) {
+        zext(s, 64)
+    } else {
+        zext(d, 64)
+    };
+    extract(k, (VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN), 0)
+}
+
+fn fp_wsign_mask() {
+    zext(0b1, VCFG::sew * zext(0b10, self.XLEN)) << ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN))
+}
+
+fn fp_wmag(x) {
+    x & (fp_wsign_mask() - zext(0b1, VCFG::sew * zext(0b10, self.XLEN)))
+}
+
+fn fp_winf() {
+    fp_wconst(0x7C00, 0x7F800000, 0x7FF0000000000000)
+}
+
+fn fp_wis_nan(x) {
+    fp_wmag(x) ~> fp_winf()
+}
+
+fn fp_wmagic() {
+    fp_wconst(0x6400, 0x4B000000, 0x4330000000000000)
+}
+
+fn fp_wrne_int(x) {
+    mag = fp_wmag(x);
+    if mag ~< fp_wmagic() { (x & fp_wsign_mask()) | fsub(fadd(mag, fp_wmagic()), fp_wmagic()) } else { x }
+}
+
+// Exponent and mantissa widths of the SEW and 2*SEW formats, for `fcvt`,
+// `sitofp`, and `uitofp`.
+fn fp_exp() {
+    if VCFG::sew == zext(0x10, self.XLEN) {
+        zext(0b101, self.XLEN)
+    } else if VCFG::sew == zext(0x20, self.XLEN) {
+        zext(0b1000, self.XLEN)
+    } else {
+        zext(0b1011, self.XLEN)
+    }
+}
+
+fn fp_mant() {
+    VCFG::sew - fp_exp() - zext(0b1, self.XLEN)
+}
+
+fn fp_wexp() {
+    if VCFG::sew == zext(0x8, self.XLEN) {
+        zext(0b101, self.XLEN)
+    } else if VCFG::sew == zext(0x10, self.XLEN) {
+        zext(0b1000, self.XLEN)
+    } else {
+        zext(0b1011, self.XLEN)
+    }
+}
+
+fn fp_wmant() {
+    (VCFG::sew * zext(0b10, self.XLEN)) - fp_wexp() - zext(0b1, self.XLEN)
+}
+
+// Round a 2*SEW float to the SEW format toward odd: take the truncated
+// narrowing (the nearest-even result, stepped back one ulp when it rounded
+// away from zero) and force the mantissa LSB on any inexact conversion.
+// Round-to-odd never overflows to infinity and never flushes a nonzero
+// value to zero.
+fn fp_round_odd(x) {
+    r = fcvt(x, fp_exp(), fp_mant());
+    back = fcvt(r, fp_wexp(), fp_wmant());
+    away = fp_wmag(back) ~> fp_wmag(x);
+    t = if away { (r & fp_sign_mask()) | (fp_mag(r) - zext(0b1, VCFG::sew)) } else { r };
+    if fp_wis_nan(x) {
+        fp_canonical_nan()
+    } else if back == x {
+        r
+    } else {
+        t | zext(0b1, VCFG::sew)
+    }
+}
+
+// Single-width conversions between the SEW float and integer formats.
+
+instruction VFCvtXuFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfcvt.xu.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00000;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_sat_unsigned(fptoui(asfloat(fp_rne_int(a)), 64), fp_is_nan(a), VCFG::sew)));
+    }
+}
+
+instruction VFCvtXuFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfcvt.xu.f.v.m";
+    param MNEMONIC: String = "vfcvt.xu.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00000;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_sat_unsigned(fptoui(asfloat(fp_rne_int(a)), 64), fp_is_nan(a), VCFG::sew) } else { old }));
+    }
+}
+
+instruction VFCvtXFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfcvt.x.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00001;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_sat_signed(fptosi(asfloat(fp_rne_int(a)), 64), fp_is_nan(a), VCFG::sew)));
+    }
+}
+
+instruction VFCvtXFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfcvt.x.f.v.m";
+    param MNEMONIC: String = "vfcvt.x.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00001;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_sat_signed(fptosi(asfloat(fp_rne_int(a)), 64), fp_is_nan(a), VCFG::sew) } else { old }));
+    }
+}
+
+instruction VFCvtFXuV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfcvt.f.xu.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00010;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| uitofp(zext(a, 64), fp_exp(), fp_mant())));
+    }
+}
+
+instruction VFCvtFXuVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfcvt.f.xu.v.m";
+    param MNEMONIC: String = "vfcvt.f.xu.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00010;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { uitofp(zext(a, 64), fp_exp(), fp_mant()) } else { old }));
+    }
+}
+
+instruction VFCvtFXV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfcvt.f.x.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00011;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sitofp(sext(a, 64), fp_exp(), fp_mant())));
+    }
+}
+
+instruction VFCvtFXVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfcvt.f.x.v.m";
+    param MNEMONIC: String = "vfcvt.f.x.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00011;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sitofp(sext(a, 64), fp_exp(), fp_mant()) } else { old }));
+    }
+}
+
+instruction VFCvtRtzXuFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfcvt.rtz.xu.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00110;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_sat_unsigned(fptoui(asfloat(a), 64), fp_is_nan(a), VCFG::sew)));
+    }
+}
+
+instruction VFCvtRtzXuFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfcvt.rtz.xu.f.v.m";
+    param MNEMONIC: String = "vfcvt.rtz.xu.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00110;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_sat_unsigned(fptoui(asfloat(a), 64), fp_is_nan(a), VCFG::sew) } else { old }));
+    }
+}
+
+instruction VFCvtRtzXFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfcvt.rtz.x.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00111;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_sat_signed(fptosi(asfloat(a), 64), fp_is_nan(a), VCFG::sew)));
+    }
+}
+
+instruction VFCvtRtzXFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfcvt.rtz.x.f.v.m";
+    param MNEMONIC: String = "vfcvt.rtz.x.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b00111;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_sat_signed(fptosi(asfloat(a), 64), fp_is_nan(a), VCFG::sew) } else { old }));
+    }
+}
+
+// Widening conversions: SEW sources, 2*SEW destinations.
+
+instruction VFWCvtXuFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfwcvt.xu.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01000;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_sat_unsigned(fptoui(asfloat(fp_rne_int(a)), 64), fp_is_nan(a), VCFG::sew * zext(0b10, self.XLEN))));
+    }
+}
+
+instruction VFWCvtXuFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfwcvt.xu.f.v.m";
+    param MNEMONIC: String = "vfwcvt.xu.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01000;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fp_sat_unsigned(fptoui(asfloat(fp_rne_int(a)), 64), fp_is_nan(a), VCFG::sew * zext(0b10, self.XLEN)) } else { old }));
+    }
+}
+
+instruction VFWCvtXFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfwcvt.x.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01001;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_sat_signed(fptosi(asfloat(fp_rne_int(a)), 64), fp_is_nan(a), VCFG::sew * zext(0b10, self.XLEN))));
+    }
+}
+
+instruction VFWCvtXFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfwcvt.x.f.v.m";
+    param MNEMONIC: String = "vfwcvt.x.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01001;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fp_sat_signed(fptosi(asfloat(fp_rne_int(a)), 64), fp_is_nan(a), VCFG::sew * zext(0b10, self.XLEN)) } else { old }));
+    }
+}
+
+instruction VFWCvtFXuV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfwcvt.f.xu.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01010;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| uitofp(zext(a, 64), fp_wexp(), fp_wmant())));
+    }
+}
+
+instruction VFWCvtFXuVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfwcvt.f.xu.v.m";
+    param MNEMONIC: String = "vfwcvt.f.xu.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01010;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { uitofp(zext(a, 64), fp_wexp(), fp_wmant()) } else { old }));
+    }
+}
+
+instruction VFWCvtFXV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfwcvt.f.x.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01011;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sitofp(sext(a, 64), fp_wexp(), fp_wmant())));
+    }
+}
+
+instruction VFWCvtFXVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfwcvt.f.x.v.m";
+    param MNEMONIC: String = "vfwcvt.f.x.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01011;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { sitofp(sext(a, 64), fp_wexp(), fp_wmant()) } else { old }));
+    }
+}
+
+instruction VFWCvtFFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfwcvt.f.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01100;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fcvt(a, fp_wexp(), fp_wmant())));
+    }
+}
+
+instruction VFWCvtFFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfwcvt.f.f.v.m";
+    param MNEMONIC: String = "vfwcvt.f.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01100;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fcvt(a, fp_wexp(), fp_wmant()) } else { old }));
+    }
+}
+
+instruction VFWCvtRtzXuFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfwcvt.rtz.xu.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01110;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_sat_unsigned(fptoui(asfloat(a), 64), fp_is_nan(a), VCFG::sew * zext(0b10, self.XLEN))));
+    }
+}
+
+instruction VFWCvtRtzXuFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfwcvt.rtz.xu.f.v.m";
+    param MNEMONIC: String = "vfwcvt.rtz.xu.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01110;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fp_sat_unsigned(fptoui(asfloat(a), 64), fp_is_nan(a), VCFG::sew * zext(0b10, self.XLEN)) } else { old }));
+    }
+}
+
+instruction VFWCvtRtzXFV for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfwcvt.rtz.x.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01111;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fp_sat_signed(fptosi(asfloat(a), 64), fp_is_nan(a), VCFG::sew * zext(0b10, self.XLEN))));
+    }
+}
+
+instruction VFWCvtRtzXFVM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfwcvt.rtz.x.f.v.m";
+    param MNEMONIC: String = "vfwcvt.rtz.x.f.v";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b01111;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fp_sat_signed(fptosi(asfloat(a), 64), fp_is_nan(a), VCFG::sew * zext(0b10, self.XLEN)) } else { old }));
+    }
+}
+
+// Narrowing conversions: 2*SEW sources, SEW destinations.
+
+instruction VFNCvtXuFW for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfncvt.xu.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10000;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| fp_sat_unsigned(fptoui(asfloat(fp_wrne_int(a)), 64), fp_wis_nan(a), VCFG::sew)));
+    }
+}
+
+instruction VFNCvtXuFWM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfncvt.xu.f.w.m";
+    param MNEMONIC: String = "vfncvt.xu.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10000;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_sat_unsigned(fptoui(asfloat(fp_wrne_int(a)), 64), fp_wis_nan(a), VCFG::sew) } else { old }));
+    }
+}
+
+instruction VFNCvtXFW for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfncvt.x.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10001;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| fp_sat_signed(fptosi(asfloat(fp_wrne_int(a)), 64), fp_wis_nan(a), VCFG::sew)));
+    }
+}
+
+instruction VFNCvtXFWM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfncvt.x.f.w.m";
+    param MNEMONIC: String = "vfncvt.x.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10001;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_sat_signed(fptosi(asfloat(fp_wrne_int(a)), 64), fp_wis_nan(a), VCFG::sew) } else { old }));
+    }
+}
+
+instruction VFNCvtFXuW for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfncvt.f.xu.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10010;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| uitofp(zext(a, 64), fp_exp(), fp_mant())));
+    }
+}
+
+instruction VFNCvtFXuWM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfncvt.f.xu.w.m";
+    param MNEMONIC: String = "vfncvt.f.xu.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10010;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { uitofp(zext(a, 64), fp_exp(), fp_mant()) } else { old }));
+    }
+}
+
+instruction VFNCvtFXW for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfncvt.f.x.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10011;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| sitofp(sext(a, 64), fp_exp(), fp_mant())));
+    }
+}
+
+instruction VFNCvtFXWM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfncvt.f.x.w.m";
+    param MNEMONIC: String = "vfncvt.f.x.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10011;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sitofp(sext(a, 64), fp_exp(), fp_mant()) } else { old }));
+    }
+}
+
+instruction VFNCvtFFW for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfncvt.f.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10100;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| fcvt(a, fp_exp(), fp_mant())));
+    }
+}
+
+instruction VFNCvtFFWM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfncvt.f.f.w.m";
+    param MNEMONIC: String = "vfncvt.f.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10100;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fcvt(a, fp_exp(), fp_mant()) } else { old }));
+    }
+}
+
+instruction VFNCvtRodFFW for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfncvt.rod.f.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10101;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| fp_round_odd(a)));
+    }
+}
+
+instruction VFNCvtRodFFWM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfncvt.rod.f.f.w.m";
+    param MNEMONIC: String = "vfncvt.rod.f.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10101;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_round_odd(a) } else { old }));
+    }
+}
+
+instruction VFNCvtRtzXuFW for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfncvt.rtz.xu.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10110;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| fp_sat_unsigned(fptoui(asfloat(a), 64), fp_wis_nan(a), VCFG::sew)));
+    }
+}
+
+instruction VFNCvtRtzXuFWM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfncvt.rtz.xu.f.w.m";
+    param MNEMONIC: String = "vfncvt.rtz.xu.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10110;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_sat_unsigned(fptoui(asfloat(a), 64), fp_wis_nan(a), VCFG::sew) } else { old }));
+    }
+}
+
+instruction VFNCvtRtzXFW for [VF] : OpFUnary {
+    param MNEMONIC: String = "vfncvt.rtz.x.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10111;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| fp_sat_signed(fptosi(asfloat(a), 64), fp_wis_nan(a), VCFG::sew)));
+    }
+}
+
+instruction VFNCvtRtzXFWM for [VF] : OpFUnaryM {
+    param OPNAME: String = "vfncvt.rtz.x.f.w.m";
+    param MNEMONIC: String = "vfncvt.rtz.x.f.w";
+    param FUNCT6: bits<6> = 0b010010;
+    param VS1: bits<5> = 0b10111;
+
+    behavior {
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { fp_sat_signed(fptosi(asfloat(a), 64), fp_wis_nan(a), VCFG::sew) } else { old }));
+    }
+}
+
+// Widening arithmetic: SEW sources are converted (exactly) to the 2*SEW
+// format and combined there, so the single rounding the spec requires is the
+// wide op's own. The .wv/.wf forms take vs2 already at 2*SEW.
+
+fn fp_wneg(x) {
+    x ^ fp_wsign_mask()
+}
+
+fn fp_widen(a) {
+    fcvt(a, fp_wexp(), fp_wmant())
+}
+
+vector_pair!(VFWAddVV, VFWAddVVM, VF, OpFVV, OpFVVM, "vfwadd.vv", 0b110000,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fadd(fp_widen(a), fp_widen(b)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, old| if m { fadd(fp_widen(a), fp_widen(b)) } else { old })); })
+
+vector_pair!(VFWAddVF, VFWAddVFM, VF, OpFVF, OpFVFM, "vfwadd.vf", 0b110000,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fadd(fp_widen(a), fp_widen(fp_scalar(rs1))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fadd(fp_widen(a), fp_widen(fp_scalar(rs1))) } else { old })); })
+
+vector_pair!(VFWSubVV, VFWSubVVM, VF, OpFVV, OpFVVM, "vfwsub.vv", 0b110010,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fsub(fp_widen(a), fp_widen(b)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, old| if m { fsub(fp_widen(a), fp_widen(b)) } else { old })); })
+
+vector_pair!(VFWSubVF, VFWSubVFM, VF, OpFVF, OpFVFM, "vfwsub.vf", 0b110010,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fsub(fp_widen(a), fp_widen(fp_scalar(rs1))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fsub(fp_widen(a), fp_widen(fp_scalar(rs1))) } else { old })); })
+
+vector_pair!(VFWAddWV, VFWAddWVM, VF, OpFVV, OpFVVM, "vfwadd.wv", 0b110100,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fadd(a, fp_widen(b)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, old| if m { fadd(a, fp_widen(b)) } else { old })); })
+
+vector_pair!(VFWAddWF, VFWAddWFM, VF, OpFVF, OpFVFM, "vfwadd.wf", 0b110100,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| fadd(a, fp_widen(fp_scalar(rs1))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fadd(a, fp_widen(fp_scalar(rs1))) } else { old })); })
+
+vector_pair!(VFWSubWV, VFWSubWVM, VF, OpFVV, OpFVVM, "vfwsub.wv", 0b110110,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fsub(a, fp_widen(b)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, old| if m { fsub(a, fp_widen(b)) } else { old })); })
+
+vector_pair!(VFWSubWF, VFWSubWFM, VF, OpFVF, OpFVFM, "vfwsub.wf", 0b110110,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), |a| fsub(a, fp_widen(fp_scalar(rs1))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN)), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fsub(a, fp_widen(fp_scalar(rs1))) } else { old })); })
+
+vector_pair!(VFWMulVV, VFWMulVVM, VF, OpFVV, OpFVVM, "vfwmul.vv", 0b111000,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| fmul(fp_widen(a), fp_widen(b)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, old| if m { fmul(fp_widen(a), fp_widen(b)) } else { old })); })
+
+vector_pair!(VFWMulVF, VFWMulVFM, VF, OpFVF, OpFVFM, "vfwmul.vf", 0b111000,
+    { vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| fmul(fp_widen(a), fp_widen(fp_scalar(rs1))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, old| if m { fmul(fp_widen(a), fp_widen(fp_scalar(rs1))) } else { old })); })
+
+// Widening fused multiply-accumulates: the product of two SEW sources fused
+// into the 2*SEW accumulator.
+
+vector_pair!(VFWMaccVV, VFWMaccVVM, VF, OpFMAccVV, OpFMAccVVM, "vfwmacc.vv", 0b111100,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |a, b, d| fma(asfloat(fp_widen(b)), asfloat(fp_widen(a)), asfloat(d)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, d| if m { fma(asfloat(fp_widen(b)), asfloat(fp_widen(a)), asfloat(d)) } else { d })); })
+
+vector_pair!(VFWMaccVF, VFWMaccVFM, VF, OpFMAccVF, OpFMAccVFM, "vfwmacc.vf", 0b111100,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |a, d| fma(asfloat(fp_widen(fp_scalar(rs1))), asfloat(fp_widen(a)), asfloat(d)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, d| if m { fma(asfloat(fp_widen(fp_scalar(rs1))), asfloat(fp_widen(a)), asfloat(d)) } else { d })); })
+
+vector_pair!(VFWNmaccVV, VFWNmaccVVM, VF, OpFMAccVV, OpFMAccVVM, "vfwnmacc.vv", 0b111101,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |a, b, d| fma(asfloat(fp_widen(fp_neg(b))), asfloat(fp_widen(a)), asfloat(fp_wneg(d))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, d| if m { fma(asfloat(fp_widen(fp_neg(b))), asfloat(fp_widen(a)), asfloat(fp_wneg(d))) } else { d })); })
+
+vector_pair!(VFWNmaccVF, VFWNmaccVFM, VF, OpFMAccVF, OpFMAccVFM, "vfwnmacc.vf", 0b111101,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |a, d| fma(asfloat(fp_widen(fp_neg(fp_scalar(rs1)))), asfloat(fp_widen(a)), asfloat(fp_wneg(d))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, d| if m { fma(asfloat(fp_widen(fp_neg(fp_scalar(rs1)))), asfloat(fp_widen(a)), asfloat(fp_wneg(d))) } else { d })); })
+
+vector_pair!(VFWMsacVV, VFWMsacVVM, VF, OpFMAccVV, OpFMAccVVM, "vfwmsac.vv", 0b111110,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |a, b, d| fma(asfloat(fp_widen(b)), asfloat(fp_widen(a)), asfloat(fp_wneg(d))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, d| if m { fma(asfloat(fp_widen(b)), asfloat(fp_widen(a)), asfloat(fp_wneg(d))) } else { d })); })
+
+vector_pair!(VFWMsacVF, VFWMsacVFM, VF, OpFMAccVF, OpFMAccVFM, "vfwmsac.vf", 0b111110,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |a, d| fma(asfloat(fp_widen(fp_scalar(rs1))), asfloat(fp_widen(a)), asfloat(fp_wneg(d))))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, d| if m { fma(asfloat(fp_widen(fp_scalar(rs1))), asfloat(fp_widen(a)), asfloat(fp_wneg(d))) } else { d })); })
+
+vector_pair!(VFWNmsacVV, VFWNmsacVVM, VF, OpFMAccVV, OpFMAccVVM, "vfwnmsac.vv", 0b111111,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |a, b, d| fma(asfloat(fp_widen(fp_neg(b))), asfloat(fp_widen(a)), asfloat(d)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, b, d| if m { fma(asfloat(fp_widen(fp_neg(b))), asfloat(fp_widen(a)), asfloat(d)) } else { d })); })
+
+vector_pair!(VFWNmsacVF, VFWNmsacVFM, VF, OpFMAccVF, OpFMAccVFM, "vfwnmsac.vf", 0b111111,
+    { vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |a, d| fma(asfloat(fp_widen(fp_neg(fp_scalar(rs1)))), asfloat(fp_widen(a)), asfloat(d)))); },
+    { vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew * zext(0b10, self.XLEN))), |m, a, d| if m { fma(asfloat(fp_widen(fp_neg(fp_scalar(rs1)))), asfloat(fp_widen(a)), asfloat(d)) } else { d })); })
+
+// Reductions: fold the active lanes of vs2 into element 0 of vs1 and write
+// the total to element 0 of vd (the remaining lanes read as zero, a legal
+// tail-agnostic choice; vl = 0 leaves the destination unchanged). Both sum
+// orderings are modeled as the in-order left fold starting from the vs1
+// element — the required order for vfredosum and a legal choice for the
+// unordered vfredusum. In the masked forms the inactive lanes contribute the
+// operation's identity (-0.0 for sums, +inf/-inf for min/max), so they drop
+// out of the fold.
+
+vector_pair!(VFRedusumVS, VFRedusumVSM, VF, OpFVV, OpFVVM, "vfredusum.vs", 0b000001,
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, VCFG::sew - zext(0b1, self.XLEN), 0) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) }), |acc, x| fadd(acc, x)) }; },
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, VCFG::sew - zext(0b1, self.XLEN), 0) } else if bit_at(VR::v0, i - zext(0b1, self.XLEN)) { elem_at(vs2, i - zext(0b1, self.XLEN)) } else { fp_sign_mask() }), |acc, x| fadd(acc, x)) }; })
+
+vector_pair!(VFRedosumVS, VFRedosumVSM, VF, OpFVV, OpFVVM, "vfredosum.vs", 0b000011,
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, VCFG::sew - zext(0b1, self.XLEN), 0) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) }), |acc, x| fadd(acc, x)) }; },
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, VCFG::sew - zext(0b1, self.XLEN), 0) } else if bit_at(VR::v0, i - zext(0b1, self.XLEN)) { elem_at(vs2, i - zext(0b1, self.XLEN)) } else { fp_sign_mask() }), |acc, x| fadd(acc, x)) }; })
+
+vector_pair!(VFRedminVS, VFRedminVSM, VF, OpFVV, OpFVVM, "vfredmin.vs", 0b000101,
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, VCFG::sew - zext(0b1, self.XLEN), 0) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) }), |acc, x| fmin(acc, x)) }; },
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, VCFG::sew - zext(0b1, self.XLEN), 0) } else if bit_at(VR::v0, i - zext(0b1, self.XLEN)) { elem_at(vs2, i - zext(0b1, self.XLEN)) } else { fp_inf() }), |acc, x| fmin(acc, x)) }; })
+
+vector_pair!(VFRedmaxVS, VFRedmaxVSM, VF, OpFVV, OpFVVM, "vfredmax.vs", 0b000111,
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, VCFG::sew - zext(0b1, self.XLEN), 0) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) }), |acc, x| fmax(acc, x)) }; },
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, VCFG::sew - zext(0b1, self.XLEN), 0) } else if bit_at(VR::v0, i - zext(0b1, self.XLEN)) { elem_at(vs2, i - zext(0b1, self.XLEN)) } else { fp_neg(fp_inf()) }), |acc, x| fmax(acc, x)) }; })
+
+// Widening reductions: the SEW lanes are widened exactly and folded at
+// 2*SEW into element 0 of vs1 (itself a 2*SEW element).
+
+vector_pair!(VFWRedusumVS, VFWRedusumVSM, VF, OpFVV, OpFVVM, "vfwredusum.vs", 0b110001,
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, (VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN), 0) } else { fp_widen(elem_at(vs2, i - zext(0b1, self.XLEN))) }), |acc, x| fadd(acc, x)) }; },
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, (VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN), 0) } else if bit_at(VR::v0, i - zext(0b1, self.XLEN)) { fp_widen(elem_at(vs2, i - zext(0b1, self.XLEN))) } else { fp_wsign_mask() }), |acc, x| fadd(acc, x)) }; })
+
+vector_pair!(VFWRedosumVS, VFWRedosumVSM, VF, OpFVV, OpFVVM, "vfwredosum.vs", 0b110011,
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, (VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN), 0) } else { fp_widen(elem_at(vs2, i - zext(0b1, self.XLEN))) }), |acc, x| fadd(acc, x)) }; },
+    { vd = if VCSR::vl == zext(0b0, self.XLEN) { vd } else { reduce(map(iota(VCSR::vl + zext(0b1, self.XLEN), self.XLEN), |i| if i == zext(0b0, self.XLEN) { extract(vs1, (VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN), 0) } else if bit_at(VR::v0, i - zext(0b1, self.XLEN)) { fp_widen(elem_at(vs2, i - zext(0b1, self.XLEN))) } else { fp_wsign_mask() }), |acc, x| fadd(acc, x)) }; })

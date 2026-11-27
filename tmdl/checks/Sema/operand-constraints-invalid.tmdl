@@ -5,7 +5,7 @@
 // width is an ISA-parameter expression, and holds for a drop no alignment can
 // justify.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa WordIsa {
     param XLEN: Integer = 32;

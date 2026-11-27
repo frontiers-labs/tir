@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn ignores_run_lines() {
-        let text = "// RUN: tmdlc --action=emit-tokens %s | filecheck %s\n// CHECK: x\n";
+        let text = "// RUN: tmdl compile --action=emit-tokens %s | filecheck %s\n// CHECK: x\n";
         let dirs = scan(text, &prefixes(), &comments()).unwrap();
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].pattern.raw, "x");

@@ -3,6 +3,9 @@ name = "tir-x86_64"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.tmdl]
+dialect = "x86_64"
+
 [lib]
 bench = false
 test = false

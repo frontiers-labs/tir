@@ -3,7 +3,7 @@
 // suffix is assembly syntax only: the declared names keep deriving the encoding
 // index, so `v3.4s` still encodes as 3.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa SuffixIsa {
     param XLEN: Integer = 64;

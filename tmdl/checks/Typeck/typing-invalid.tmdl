@@ -3,7 +3,7 @@
 // width that is not a literal, an annotation the value overflows, and a
 // projection on something that is not a register.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
 isa Test { param XLEN: Integer = 32; }
 

@@ -5,7 +5,7 @@
 // value rule. The exact conditional flag semantics still reach `execute()`,
 // and a complete definer still fuses with the flag-guarded branch.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/flag-value-rules.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %S/../Inputs/flag-value-rules.tmdl | filecheck %s
 
 // The conditionally-preserving definer executes its flag read.
 // CHECK: "cmppreserve",

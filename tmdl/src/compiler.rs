@@ -1,18 +1,20 @@
 use core::fmt;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::error::{Cheap, Rich};
-use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
 
 use crate::btor2gen::generate_btor2;
 use crate::error::TMDLError;
-use crate::expander::{Diag, MacroTable, StringArena, collect_macros, expand};
+use crate::expander::{Diag, MacroTable, ScopedMacros, StringArena, collect_macros, expand};
 use crate::lexer::{Token, lex};
 use crate::markdown::{generate_markdown, generate_markdown_book};
+use crate::module_names::{self, Names};
+use crate::module_tree::{ModuleSource, ModuleTree};
 use crate::parser::parse;
 use crate::rustgen::{SEM_BLOB_FILE, generate_operation_list, generate_rust_modules};
 use crate::sema_analyze;
@@ -26,6 +28,7 @@ pub struct Compiler {
     action: Action,
     inputs: Vec<String>,
     input_sources: Vec<Option<String>>,
+    module_source: Option<ModuleSource>,
     output: OutputKind,
     dialect: Option<String>,
     isa: Option<String>,
@@ -39,6 +42,7 @@ pub struct CompilerBuilder {
     action: Option<Action>,
     inputs: Vec<String>,
     input_sources: Vec<Option<String>>,
+    module_source: Option<ModuleSource>,
     output: Option<OutputKind>,
     dialect: Option<String>,
     isa: Option<String>,
@@ -100,6 +104,7 @@ impl Compiler {
             action: None,
             inputs: vec![],
             input_sources: vec![],
+            module_source: None,
             output: None,
             dialect: None,
             isa: None,
@@ -123,6 +128,30 @@ impl Compiler {
     }
 
     fn compile_with_writer(&self, writer: Option<&RustWriter<'_>>) -> Result<(), TMDLError> {
+        if self.custom_assembly && !self.text_only {
+            return Err(TMDLError::Codegen(
+                "custom assembly requires text-only Rust generation".to_string(),
+            ));
+        }
+        if let Some(source) = &self.module_source {
+            if !self.inputs.is_empty() || !self.split_inputs.is_empty() {
+                return Err(TMDLError::Codegen(
+                    "module sources cannot be combined with flat or split inputs".into(),
+                ));
+            }
+            let names = match self.action {
+                Action::EmitBtor2
+                | Action::EmitSmtlib
+                | Action::EmitRust
+                | Action::EmitOperationList => Names::Backend,
+                Action::EmitMarkdown => Names::Documentation,
+                _ => return Err(TMDLError::Codegen("this action expects flat inputs".into())),
+            };
+            self.validate_emit_options();
+            let tree = ModuleTree::load(source)?;
+            let files = check_modules(&tree, names, self.text_only)?;
+            return self.emit_program(writer, &files, Some(&tree));
+        }
         if matches!(self.action, Action::EmitAstJsonSchema) {
             if !self.inputs.is_empty() || !self.split_inputs.is_empty() {
                 return Err(TMDLError::Codegen(
@@ -140,11 +169,6 @@ impl Compiler {
         if !self.split_inputs.is_empty() && matches!(self.output, OutputKind::Stdout) {
             return Err(TMDLError::Codegen(
                 "split Rust output cannot be written to stdout".to_string(),
-            ));
-        }
-        if self.custom_assembly && !self.text_only {
-            return Err(TMDLError::Codegen(
-                "custom assembly requires text-only Rust generation".to_string(),
             ));
         }
         match self.action {
@@ -215,34 +239,11 @@ impl Compiler {
             parsed_files.push(file.unwrap());
         }
 
-        crate::ast::resolve_register_class_inheritance(&mut parsed_files);
-        crate::ast::resolve_abi_inheritance(&mut parsed_files);
-
-        let inline_diags = crate::fninline::inline_functions(&mut parsed_files);
-        if !inline_diags.is_empty() {
-            print_diags(inline_diags, &self.inputs, &sources);
-            return Ok(None);
+        if check_program(&mut parsed_files, &self.inputs, &sources, self.text_only) {
+            Ok(Some(parsed_files))
+        } else {
+            Ok(None)
         }
-
-        let width_diags = crate::widths::resolve_width_calls(&mut parsed_files);
-        if !width_diags.is_empty() {
-            print_diags(width_diags, &self.inputs, &sources);
-            return Ok(None);
-        }
-
-        let sema_diags = sema_analyze(&parsed_files, self.text_only);
-        if !sema_diags.is_empty() {
-            print_diags(sema_diags, &self.inputs, &sources);
-            return Ok(None);
-        }
-
-        let (_cache, tc_diags) = crate::type_check(&parsed_files);
-        if !tc_diags.is_empty() {
-            print_diags(tc_diags, &self.inputs, &sources);
-            return Ok(None);
-        }
-
-        Ok(Some(parsed_files))
     }
 
     fn compile_expanded_tokens(&self) -> Result<(), TMDLError> {
@@ -307,7 +308,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_whole_program(&self, writer: Option<&RustWriter<'_>>) -> Result<(), TMDLError> {
+    fn validate_emit_options(&self) {
         if matches!(self.action, Action::EmitRust) && self.dialect.is_none() {
             let mut cmd = Cli::command();
             cmd.error(
@@ -332,11 +333,20 @@ impl Compiler {
             )
             .exit();
         }
+    }
 
-        let Some(parsed_files) = self.parse_and_check()? else {
-            return Err(TMDLError::Codegen("compilation failed".to_string()));
-        };
+    fn compile_whole_program(&self, writer: Option<&RustWriter<'_>>) -> Result<(), TMDLError> {
+        self.validate_emit_options();
+        let parsed_files = self.parse_and_check()?.ok_or_else(compilation_failed)?;
+        self.emit_program(writer, &parsed_files, None)
+    }
 
+    pub(crate) fn emit_program(
+        &self,
+        writer: Option<&RustWriter<'_>>,
+        parsed_files: &[crate::ast::File],
+        tree: Option<&ModuleTree>,
+    ) -> Result<(), TMDLError> {
         let item_cache: HashMap<&str, _> = parsed_files
             .iter()
             .flat_map(|f| f.items.iter().map(|i| (i.name(), i)))
@@ -349,7 +359,7 @@ impl Compiler {
                 })?;
                 let generated = generate_rust_modules(
                     self.dialect.as_ref().unwrap(),
-                    &parsed_files,
+                    parsed_files,
                     &item_cache,
                     self.text_only,
                     self.custom_assembly,
@@ -384,7 +394,7 @@ impl Compiler {
             }
             Action::EmitOperationList => {
                 let output: Box<dyn Write> = self.create_output_writer()?;
-                generate_operation_list(&parsed_files, output)?;
+                generate_operation_list(parsed_files, output)?;
             }
             Action::EmitSmtlib => {
                 let metadata_path = match &self.output {
@@ -397,7 +407,7 @@ impl Compiler {
                 let metadata = generate_smtlib(
                     self.dialect.as_ref().unwrap(),
                     self.isa.as_ref().unwrap(),
-                    &parsed_files,
+                    parsed_files,
                     &item_cache,
                     writer,
                 )?;
@@ -410,7 +420,7 @@ impl Compiler {
                 generate_btor2(
                     self.isa.as_ref().unwrap(),
                     self.btor2_isas.as_deref(),
-                    &parsed_files,
+                    parsed_files,
                     &item_cache,
                     writer,
                 )?;
@@ -418,12 +428,13 @@ impl Compiler {
             Action::EmitMarkdown => match &self.output {
                 OutputKind::Batch(path) => generate_markdown_book(
                     self.dialect.as_ref().unwrap(),
-                    &parsed_files,
-                    std::path::Path::new(path),
+                    parsed_files,
+                    Path::new(path),
+                    tree,
                 )?,
                 _ => {
                     let output: Box<dyn Write> = self.create_output_writer()?;
-                    generate_markdown(self.dialect.as_ref().unwrap(), &parsed_files, output)?;
+                    generate_markdown(self.dialect.as_ref().unwrap(), parsed_files, output)?;
                 }
             },
             _ => unreachable!("Only complex actions should use this path"),
@@ -498,6 +509,27 @@ impl CompilerBuilder {
         }
     }
 
+    /// Load a package of TMDL modules rooted at `mod.tmdl` in this directory.
+    pub fn module_root(self, directory: impl AsRef<Path>) -> Self {
+        Self {
+            module_source: Some(ModuleSource::Directory(directory.as_ref().into())),
+            ..self
+        }
+    }
+
+    /// Load an embedded package with names relative to `mod.tmdl`.
+    pub fn module_sources(self, sources: &[(&str, &str)]) -> Self {
+        Self {
+            module_source: Some(ModuleSource::Embedded(
+                sources
+                    .iter()
+                    .map(|(name, source)| (PathBuf::from(name), (*source).into()))
+                    .collect(),
+            )),
+            ..self
+        }
+    }
+
     pub fn output(self, output: OutputKind) -> Self {
         Self {
             output: Some(output),
@@ -546,6 +578,7 @@ impl CompilerBuilder {
             action: self.action.unwrap(),
             inputs: self.inputs,
             input_sources: self.input_sources,
+            module_source: self.module_source,
             output: self.output.unwrap(),
             dialect: self.dialect,
             isa: self.isa,
@@ -557,15 +590,11 @@ impl CompilerBuilder {
     }
 }
 
-pub fn compiler_main(
-    args: Option<&ArgMatches>,
+#[cfg(feature = "rust-cli")]
+pub(crate) fn compile_command(
+    args: Cli,
     writer: impl Fn(&str, &str) -> Result<String, Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let args = match args {
-        Some(args) => Cli::from_arg_matches(args),
-        None => Ok(Cli::parse()),
-    }?;
-
     let output = match args.output.as_str() {
         "-" => OutputKind::Stdout,
         _ => OutputKind::File(args.output.clone()),
@@ -590,6 +619,108 @@ pub fn compiler_main(
     compiler
         .compile_with_rust_writer(writer)
         .map_err(|err| Box::new(err).into())
+}
+
+fn compilation_failed() -> TMDLError {
+    TMDLError::Codegen("compilation failed".into())
+}
+
+pub(crate) fn check_modules(
+    tree: &ModuleTree,
+    names: Names,
+    text_only: bool,
+) -> Result<Vec<crate::ast::File>, TMDLError> {
+    let inputs: Vec<_> = tree
+        .modules()
+        .map(|module| module.source_path.to_string_lossy().into_owned())
+        .collect();
+    let sources: Vec<_> = tree
+        .modules()
+        .map(|module| module.source.as_str())
+        .collect();
+    let arena = StringArena::new();
+    let mut tables = Vec::new();
+    let mut stripped = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (input, module) in inputs.iter().zip(tree.modules()) {
+        let mut table = MacroTable::new();
+        stripped.push(collect_macros(
+            input,
+            module.tokens(),
+            &mut table,
+            &mut diagnostics,
+        ));
+        tables.push(table);
+    }
+    if !diagnostics.is_empty() {
+        print_diags(diagnostics, &inputs, &sources);
+        return Err(compilation_failed());
+    }
+
+    let macros = ScopedMacros::new(tree, tables);
+    let mut files = Vec::new();
+    for (index, ((input, source), tokens)) in inputs.iter().zip(&sources).zip(stripped).enumerate()
+    {
+        let (tokens, diagnostics) = macros.expand(index, input, tokens, &arena);
+        if !diagnostics.is_empty() {
+            print_diags(diagnostics, &inputs, &sources);
+            return Err(compilation_failed());
+        }
+        let (file, errors) = parse(source, &tokens, input);
+        if !errors.is_empty() {
+            print_errors(input, source, errors);
+            return Err(compilation_failed());
+        }
+        files.push(file.ok_or_else(compilation_failed)?);
+    }
+
+    let output_names = match module_names::resolve(tree, &mut files, macros.names(), names) {
+        Ok(names) => names,
+        Err(diagnostics) => {
+            print_diags(diagnostics, &inputs, &sources);
+            return Err(compilation_failed());
+        }
+    };
+    if !check_program(&mut files, &inputs, &sources, text_only) {
+        return Err(compilation_failed());
+    }
+    output_names.lower(&mut files);
+    Ok(files)
+}
+
+fn check_program(
+    files: &mut [crate::ast::File],
+    inputs: &[String],
+    sources: &[impl AsRef<str>],
+    text_only: bool,
+) -> bool {
+    crate::ast::resolve_register_class_inheritance(files);
+    crate::ast::resolve_abi_inheritance(files);
+
+    let diagnostics = crate::fninline::inline_functions(files);
+    if !diagnostics.is_empty() {
+        print_diags(diagnostics, inputs, sources);
+        return false;
+    }
+
+    let diagnostics = crate::widths::resolve_width_calls(files);
+    if !diagnostics.is_empty() {
+        print_diags(diagnostics, inputs, sources);
+        return false;
+    }
+
+    let diagnostics = sema_analyze(files, text_only);
+    if !diagnostics.is_empty() {
+        print_diags(diagnostics, inputs, sources);
+        return false;
+    }
+
+    let (_, diagnostics) = crate::type_check(files);
+    if !diagnostics.is_empty() {
+        print_diags(diagnostics, inputs, sources);
+        return false;
+    }
+    true
 }
 
 fn print_errors<'src, T>(file_name: &str, source: &'src str, errors: Vec<Rich<'src, T, Span>>)
@@ -638,7 +769,7 @@ fn print_report(
         .unwrap()
 }
 
-fn print_diags(diags: Vec<Diag>, inputs: &[String], sources: &[String]) {
+fn print_diags(diags: Vec<Diag>, inputs: &[String], sources: &[impl AsRef<str>]) {
     use std::collections::BTreeMap;
     let mut by_file: BTreeMap<String, Vec<Rich<'static, String, Span>>> = BTreeMap::new();
     for (fname, d) in diags {
@@ -646,7 +777,7 @@ fn print_diags(diags: Vec<Diag>, inputs: &[String], sources: &[String]) {
     }
     for (fname, errors) in by_file {
         if let Some(source) = inputs.iter().position(|i| *i == fname).map(|i| &sources[i]) {
-            print_errors(&fname, source, errors);
+            print_errors(&fname, source.as_ref(), errors);
         }
     }
 }

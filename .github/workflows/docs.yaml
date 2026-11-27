@@ -36,7 +36,7 @@ jobs:
         with:
           sources: docs/generated/isa
           book: book/generated/isa
-          targets: '{"riscv":"backends/riscv/defs","aarch64":"backends/arm64/defs","x86-64":"backends/x86_64/defs","ptx":"gpu/defs/ptx"}'
+          targets: '{"riscv":"backends/riscv/isa_defs","aarch64":"backends/arm64/isa_defs","x86-64":"backends/x86_64/isa_defs","ptx":"gpu/defs/ptx"}'
           without-encodings: ptx
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'

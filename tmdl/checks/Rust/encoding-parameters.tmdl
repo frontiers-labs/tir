@@ -4,7 +4,7 @@
 // dead branch with it, and only the part reading the operands survives as a
 // guard.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa ByteIsa {
     param XLEN: Integer = 64;

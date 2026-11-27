@@ -1,0 +1,10 @@
+use crate::Demo64;
+use crate::GPR;
+
+instruction Add for [Demo64] {
+    param MNEMONIC: String = "add";
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0b0_0000_0000_0000_0000, rs2, rs1, rd }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+    behavior { rd = rs1 + rs2; }
+}

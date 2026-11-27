@@ -351,3 +351,5 @@ mod behavior;
 use behavior::*;
 mod encoding;
 use encoding::*;
+
+pub(crate) use scheduling::to_snake_case as machine_symbol;

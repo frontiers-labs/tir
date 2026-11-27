@@ -1,6 +1,6 @@
 // A `let` statement parses into a dedicated AST node holding the bound name.
 
-// RUN: tmdlc --action=emit-ast --output=- %S/../Inputs/lets.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-ast --output=- %S/../Inputs/lets.tmdl | filecheck %s
 
 // CHECK: Let(
 // CHECK-NEXT: Let {

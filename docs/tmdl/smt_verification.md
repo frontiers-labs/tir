@@ -131,7 +131,7 @@ used, so stubs are sufficient.
 
 ## Generated metadata
 
-`tmdlc --action=emit-smtlib --output=<name>.smt2` also writes
+`tmdl compile --action=emit-smtlib --output=<name>.smt2` also writes
 `<name>.metadata.json`. The versioned sidecar describes each instruction's
 operands and the `#[align]`/`#[nonzero]` constraints they declare (the concrete
 boundary cases stay inside them), encoding width, support status, flattened state expressions, PC and register-file writes,

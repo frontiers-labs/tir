@@ -1,34 +1,3 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tmdl::build_backend(
-        "riscv",
-        &[
-            "./defs/main.tmdl",
-            "./defs/base.tmdl",
-            "./defs/multiplication.tmdl",
-            "./defs/zba.tmdl",
-            "./defs/zbb.tmdl",
-            "./defs/zbc.tmdl",
-            "./defs/zbs.tmdl",
-            "./defs/float.tmdl",
-            "./defs/float_extra.tmdl",
-            "./defs/float_round.tmdl",
-            "./defs/compressed.tmdl",
-            "./defs/atomics.tmdl",
-            "./defs/zifencei.tmdl",
-            "./defs/zicsr.tmdl",
-            "./defs/perf.tmdl",
-            "./defs/cpu/spacemit/x100_integer.tmdl",
-            "./defs/cpu/spacemit/x100.tmdl",
-            "./defs/vector.tmdl",
-            "./defs/vector_int.tmdl",
-            "./defs/vector_mask.tmdl",
-            "./defs/vector_red.tmdl",
-            "./defs/vector_perm.tmdl",
-            "./defs/vector_widen.tmdl",
-            "./defs/vector_fixed.tmdl",
-            "./defs/vector_mem.tmdl",
-            "./defs/vector_float.tmdl",
-            "./defs/syntacore_scr1.tmdl",
-        ],
-    )
+    tmdl::build_backend_package()
 }

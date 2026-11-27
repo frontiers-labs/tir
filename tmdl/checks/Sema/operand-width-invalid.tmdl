@@ -1,6 +1,6 @@
 // An operand width that does not evaluate to a constant is rejected.
 
-// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdl compile --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa TestIsa { param XLEN: Integer = 32; }
 

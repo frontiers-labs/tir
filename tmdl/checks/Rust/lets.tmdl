@@ -3,7 +3,7 @@
 // programs themselves live in the sem blob, so their shape is checked by
 // tmdl/tests/sem_blob.rs; here only the emitted Rust around them is checked.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/lets.tmdl | filecheck %s
+// RUN: tmdl compile --action=emit-rust --dialect=test --output=- %S/../Inputs/lets.tmdl | filecheck %s
 
 // CHECK: static INFO_ADDDOUBLE: tir::backend::InstrInfo
 // CHECK: tir::backend::exec::Effect::Bind
