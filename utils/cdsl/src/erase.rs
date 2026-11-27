@@ -181,6 +181,19 @@ pub struct MlImm {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) enum MlConstraintArg {
+    Input(usize),
+    Output(usize),
+    Text(String),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MlTypeConstraint {
+    pub(crate) constructor: String,
+    pub(crate) arguments: Vec<MlConstraintArg>,
+}
+
+#[derive(Clone, Debug)]
 pub struct MlOpDef {
     pub op_qname: Sym,
     pub op_dialect: String,
@@ -195,6 +208,7 @@ pub struct MlOpDef {
     pub regions: Vec<MlRegion>,
     pub successors: Vec<MlPort>,
     pub interfaces: Vec<MlInterface>,
+    pub(crate) type_constraints: Vec<MlTypeConstraint>,
     pub binds: Option<MlBind>,
     pub counted: Option<MlCounted>,
     pub immediates: Vec<MlImm>,
@@ -1223,6 +1237,55 @@ fn decode_interface(sig: &Signature, t: &Term) -> Result<(MlInterface, String), 
     }
 }
 
+fn decode_type_constraint(
+    sig: &Signature,
+    term: &Term,
+    operands: &[MlPort],
+    results: &[MlPort],
+) -> Result<Option<MlTypeConstraint>, Error> {
+    let Term::Ctor(_, name, fields) = term else {
+        return Ok(None);
+    };
+    if sig.interner.resolve(*name) != "Check" {
+        return Ok(None);
+    }
+    let [Term::Ctor(_, constructor, arguments)] = fields.as_slice() else {
+        return Err(Error("expected a type constraint after Check".into()));
+    };
+    let arguments = arguments
+        .iter()
+        .map(|term| match term {
+            Term::Lit(Lit::Str(text)) => Ok(MlConstraintArg::Text(text.to_string())),
+            Term::Ctor(_, name, fields) => {
+                let [field] = fields.as_slice() else {
+                    return Err(Error("expected one port name in type constraint".into()));
+                };
+                let port = decode_str(sig, field)?;
+                let (ports, select): (_, fn(usize) -> MlConstraintArg) = match sig
+                    .interner
+                    .resolve(*name)
+                {
+                    "Input" => (operands, MlConstraintArg::Input),
+                    "Output" => (results, MlConstraintArg::Output),
+                    _ => return Err(Error("expected Input or Output in type constraint".into())),
+                };
+                let index = ports
+                    .iter()
+                    .position(|field| field.name == port)
+                    .ok_or_else(|| {
+                        Error(format!("type constraint references unknown port {port:?}"))
+                    })?;
+                Ok(select(index))
+            }
+            _ => Err(Error("expected a port or string in type constraint".into())),
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(Some(MlTypeConstraint {
+        constructor: sig.interner.resolve(*constructor).to_owned(),
+        arguments,
+    }))
+}
+
 fn find_operand_group(operands: &[MlPort], spec: &str) -> (usize, usize) {
     let parts: Vec<&str> = spec
         .trim_matches(|c| c == '(' || c == ')')
@@ -1404,7 +1467,12 @@ fn decode_op_def(sig: &mut Signature, name: Sym, body: &Term) -> Result<Option<M
             let iface_terms = decode_list(sig, &args[8])?;
             let mut interfaces = Vec::with_capacity(iface_terms.len());
             let mut op_interfaces = Vec::with_capacity(iface_terms.len());
+            let mut type_constraints = Vec::new();
             for it in iface_terms {
+                if let Some(check) = decode_type_constraint(sig, it, &operands, &results)? {
+                    type_constraints.push(check);
+                    continue;
+                }
                 let (ifv, nm) = decode_interface(sig, it)?;
                 interfaces.push(ifv);
                 op_interfaces.push(nm);
@@ -1450,6 +1518,7 @@ fn decode_op_def(sig: &mut Signature, name: Sym, body: &Term) -> Result<Option<M
                 regions,
                 successors,
                 interfaces,
+                type_constraints,
                 binds,
                 counted,
                 immediates,
@@ -1488,6 +1557,7 @@ fn decode_op_def(sig: &mut Signature, name: Sym, body: &Term) -> Result<Option<M
                 regions: Vec::new(),
                 successors: Vec::new(),
                 interfaces,
+                type_constraints: Vec::new(),
                 binds: None,
                 counted: None,
                 immediates: Vec::new(),

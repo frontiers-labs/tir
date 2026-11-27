@@ -13,8 +13,8 @@ use crate::{
     check::Signature,
     core::{Lit, Sym, Term},
     erase::{
-        MlAttr, MlBind, MlCounted, MlDecl, MlImm, MlInterface, MlOpDef, MlParamKind, MlPort,
-        MlProgram, MlRegion, PortArity,
+        MlAttr, MlBind, MlConstraintArg, MlCounted, MlDecl, MlImm, MlInterface, MlOpDef,
+        MlParamKind, MlPort, MlProgram, MlRegion, PortArity,
     },
 };
 
@@ -625,7 +625,25 @@ fn emit_op_body(sig: &Signature, op: &MlOpDef, in_macro: bool, out: &mut String)
     let _ = writeln!(out, "    scheme: {scheme:?},");
     out.push_str("    signature: ");
     emit_signature_const(sig, op, out);
-    out.push_str(",\n    assembly: ");
+    out.push_str(",\n    type_constraints: &[");
+    for check in &op.type_constraints {
+        let _ = write!(out, "tir::schema::TypeConstraint::{}(", check.constructor);
+        for arg in &check.arguments {
+            match arg {
+                MlConstraintArg::Input(index) => {
+                    let _ = write!(out, "tir::schema::ConstraintPort::Input({index}), ");
+                }
+                MlConstraintArg::Output(index) => {
+                    let _ = write!(out, "tir::schema::ConstraintPort::Output({index}), ");
+                }
+                MlConstraintArg::Text(text) => {
+                    let _ = write!(out, "{text:?}, ");
+                }
+            }
+        }
+        out.push_str("), ");
+    }
+    out.push_str("],\n    assembly: ");
     if op.machine {
         out.push_str("Some(tir::schema::OpLayout { operands: &[], results: &[], attributes: ");
         emit_attr_schemas(sig, &op.assembly_attrs, out);
