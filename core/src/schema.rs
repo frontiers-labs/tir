@@ -37,6 +37,29 @@ pub struct OpLayout {
     pub attributes: &'static [AttrSchema],
 }
 
+/// The input or output group named by a CDSL type constraint.
+#[derive(Clone, Copy)]
+pub enum ConstraintPort {
+    Input(usize),
+    Output(usize),
+}
+
+/// Additional type obligations that depend on scoped or cross-port facts.
+#[derive(Clone, Copy)]
+pub enum TypeConstraint {
+    EqualWidth(ConstraintPort, ConstraintPort, &'static str),
+    PointerWidth(ConstraintPort, &'static str),
+    EqualType(ConstraintPort, ConstraintPort, &'static str),
+    TupleElements(ConstraintPort, ConstraintPort),
+    TupleProjection(ConstraintPort, &'static str, ConstraintPort),
+    StateFan(ConstraintPort, ConstraintPort, &'static str),
+    NonFunction(ConstraintPort, &'static str),
+    FunctionDefinition(ConstraintPort, &'static str),
+    FunctionReturn(ConstraintPort),
+    FunctionCall(ConstraintPort, ConstraintPort, ConstraintPort),
+    ModuleScope(&'static str),
+}
+
 /// The declarative shape of one operation.
 pub struct OpSchema {
     pub declaration: fn() -> tir_egglog::NativeIdentity,
@@ -56,6 +79,7 @@ pub struct OpSchema {
     pub scheme: &'static str,
     /// Type patterns and quantified binders from the CDSL signature.
     pub signature: &'static Signature,
+    pub type_constraints: &'static [TypeConstraint],
     /// The assembly form, when the fields above describe the pre-allocation form.
     pub assembly: Option<OpLayout>,
 }

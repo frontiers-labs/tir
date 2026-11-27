@@ -163,7 +163,12 @@ pub let trunci<In: Nat, Out: Nat> = op {
 pub let bitcast<w: Nat> = op {
     signature: (input: Bits<w>) -> (result: Bits<w>),
     exec: |input| bits::bitcast(input),
-    interfaces: (Speculatable,),
+    interfaces: (
+        Speculatable,
+        Check(TypeConstraint::EqualWidth(
+            ConstraintPort::Input("input"), ConstraintPort::Output("result"), "bitcast width"
+        )),
+    ),
     widened: true,
 };
 
@@ -233,14 +238,18 @@ pub let ptr_to_fn<A, R, P> = op {
 
 pub let make_tuple = op {
     signature: (elements: ..Any) -> (result: std::ir::Tuple<Any>),
-    interfaces: (Speculatable,),
+    interfaces: (Speculatable, Check(TypeConstraint::TupleElements(
+        ConstraintPort::Input("elements"), ConstraintPort::Output("result"),
+    ))),
     macro_def: true,
 };
 
 pub let tuple_get = op {
     signature: (tuple: std::ir::Tuple<Any>) -> (result: Any),
     attributes: { index: std::ir::UInt },
-    interfaces: (Speculatable,),
+    interfaces: (Speculatable, Check(TypeConstraint::TupleProjection(
+        ConstraintPort::Input("tuple"), "index", ConstraintPort::Output("result"),
+    ))),
     macro_def: true,
 };
 

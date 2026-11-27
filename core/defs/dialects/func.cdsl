@@ -3,7 +3,9 @@ use std::ir::{AnyRegion, Function, State, TypeAttr};
 
 pub let call = op {
     signature: (callee: Function<Any, Any>, args: ..Any, state: ..State) -> (result: Any, out_state: ..State),
-    interfaces: (Apply, ResourceEffects),
+    interfaces: (Apply, ResourceEffects, Check(TypeConstraint::FunctionCall(
+        ConstraintPort::Input("callee"), ConstraintPort::Input("args"), ConstraintPort::Output("result"),
+    ))),
     custom_format: true,
     macro_def: true,
 };
@@ -20,13 +22,15 @@ pub let func = op {
     signature: () -> (result: Function<Any, Any>),
     attributes: { sym_name: String, ret_type: TypeAttr },
     regions: (body: AnyRegion),
-    interfaces: (Symbol, Callable),
+    interfaces: (Symbol, Callable, Check(TypeConstraint::FunctionDefinition(
+        ConstraintPort::Output("result"), "ret_type",
+    ))),
     custom_format: true,
     macro_def: true,
 };
 
 pub let r#return = op {
     signature: (value: Option<Any>, state: ..State) -> (),
-    interfaces: (Terminator,),
+    interfaces: (Terminator, Check(TypeConstraint::FunctionReturn(ConstraintPort::Input("value")))),
     macro_def: true,
 };
