@@ -2247,13 +2247,98 @@ fn decode_cols_from_value(
     }
 }
 
-fn decode_merge_value(sig: &Signature, v: &Value) -> MergeKind {
+fn merge_prim_name(sig: &Signature, sym: Sym) -> String {
+    egg_tag(sig, sym)
+        .map(|(t, _)| t.to_owned())
+        .unwrap_or_else(|| leaf_name(sig.interner.resolve(sym)).to_owned())
+}
+
+fn is_merge_var(v: &Value, lvl: u32) -> bool {
+    matches!(v, Value::Neutral(Neutral::Var(_, l)) if *l == lvl)
+}
+
+fn decode_merge_fn(sig: &Signature, f: &Value) -> Result<MergeKind, Error> {
+    match f {
+        Value::Neutral(Neutral::Global(sym)) => Ok(MergeKind::Prim(merge_prim_name(sig, *sym))),
+        Value::Lam(p0, c0) => {
+            let v0 = Rc::new(Value::Neutral(Neutral::Var(*p0, 0)));
+            let step = nbe::apply_closure(&sig.values, &sig.interner, c0, v0)?;
+            let Value::Lam(p1, c1) = step.as_ref() else {
+                return Err(Error(
+                    "Merge::With expects a binary merge function (V, V) -> V".into(),
+                ));
+            };
+            let v1 = Rc::new(Value::Neutral(Neutral::Var(*p1, 1)));
+            let body = nbe::apply_closure(&sig.values, &sig.interner, c1, v1)?;
+            match body.as_ref() {
+                Value::Neutral(Neutral::Var(_, 0)) => Ok(MergeKind::Old),
+                Value::Neutral(Neutral::Var(_, 1)) => Ok(MergeKind::New),
+                Value::Neutral(Neutral::App(inner, a1))
+                    if is_merge_var(a1, 1)
+                        && matches!(
+                            inner.as_ref(),
+                            Neutral::App(head, a0)
+                                if is_merge_var(a0, 0)
+                                    && matches!(head.as_ref(), Neutral::Global(_))
+                        ) =>
+                {
+                    let Neutral::App(head, _) = inner.as_ref() else {
+                        unreachable!();
+                    };
+                    let Neutral::Global(sym) = head.as_ref() else {
+                        unreachable!();
+                    };
+                    Ok(MergeKind::Prim(merge_prim_name(sig, *sym)))
+                }
+                Value::Neutral(Neutral::Prim(op, args))
+                    if args.len() == 2
+                        && is_merge_var(&args[0], 0)
+                        && is_merge_var(&args[1], 1) =>
+                {
+                    let prim = match op {
+                        PrimOp::Add => "+",
+                        PrimOp::Sub => "-",
+                        PrimOp::Mul => "*",
+                        PrimOp::Div => "/",
+                        PrimOp::Rem => "%",
+                        PrimOp::And => "and",
+                        PrimOp::Or => "or",
+                        _ => {
+                            return Err(Error(format!(
+                                "Merge::With primitive {op:?} is not a binary egglog merge op"
+                            )));
+                        }
+                    };
+                    Ok(MergeKind::Prim(prim.to_owned()))
+                }
+                _ => Err(Error(
+                    "Merge::With expects a binary extern/primitive function or `|a, b| op(a, b)`"
+                        .into(),
+                )),
+            }
+        }
+        _ => Err(Error(
+            "Merge::With expects a binary extern/primitive function or lambda".into(),
+        )),
+    }
+}
+
+fn decode_merge_value(sig: &Signature, v: &Value) -> Result<MergeKind, Error> {
     match v {
-        Value::Ctor(tname, cname, _) => match ctor_tag(sig, *tname, *cname) {
-            Some(s) => decode_merge_str(s),
-            None => decode_merge_str(&sig.interner.resolve(*cname).to_ascii_lowercase()),
-        },
-        _ => MergeKind::AssertEq,
+        Value::Ctor(tname, cname, args) => {
+            let tag = ctor_tag(sig, *tname, *cname)
+                .map(str::to_owned)
+                .unwrap_or_else(|| sig.interner.resolve(*cname).to_ascii_lowercase());
+            if tag == "custom" {
+                let func = args
+                    .last()
+                    .ok_or_else(|| Error("Merge::With missing merge function argument".into()))?;
+                decode_merge_fn(sig, func)
+            } else {
+                Ok(decode_merge_str(&tag))
+            }
+        }
+        _ => Ok(MergeKind::AssertEq),
     }
 }
 
@@ -2291,7 +2376,7 @@ fn try_decode_table_axiom(
                 codec: val_codec,
                 egg_sort: val_sort,
             });
-            let merge = decode_merge_value(sig, &args[2]);
+            let merge = decode_merge_value(sig, &args[2])?;
             Ok(Some(MlTable {
                 qname: name,
                 rust_name,
@@ -2317,8 +2402,8 @@ fn try_decode_extern_axiom(
         return Ok(None);
     }
     let full = sig.interner.resolve(name);
-    // Skip std::core::memo and polymorphic axioms
-    if rust_tag(sig, name).is_some() {
+    // Skip std::core::memo, built-in egglog primitives, and Rust-mapped axioms
+    if rust_tag(sig, name).is_some() || egg_tag(sig, name).is_some() {
         return Ok(None);
     }
     let mut inputs = Vec::new();
@@ -2816,12 +2901,18 @@ fn build_program_bundle(
                     enums_needed.insert(egg_sort.clone());
                 }
             }
+            if let MergeKind::Prim(p) = &tbl.merge {
+                calls_used.insert(p.clone());
+            }
             tables.push(tbl.clone());
         } else if memo_local_tables.contains(eng) && rule_tables_used.contains(eng) {
             for c in &tbl.cols {
                 if let MlCodec::Enum { egg_sort, .. } = &c.codec {
                     enums_needed.insert(egg_sort.clone());
                 }
+            }
+            if let MergeKind::Prim(p) = &tbl.merge {
+                calls_used.insert(p.clone());
             }
             code_only_tables.push(tbl.clone());
         }
