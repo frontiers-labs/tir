@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,control-simplify,dce) --verify %s | filecheck %s
 
 // The constant a loop is entered on need not be spelled as one: here the init is
 // a term the base fixpoint proves equal to a literal. A port is only

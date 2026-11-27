@@ -1,0 +1,79 @@
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
+
+// Flat Color::BASE saturation jointly combines SSI Pi branch-condition equality
+// (`%i == %j`), pointer-offset congruence (`ptradd`), and McCarthy state-threaded
+// memory forwarding inside RVSDG switch arms in a single pass, while keeping the
+// false arm untouched and preventing contradictory nested scopes from collapsing
+// global constants.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  func.func @cond_mem_forward(%base: !ptr.p<!i32>, %i: !i64, %j: !i64, %v: !i32) -> !i32 {
+    %s0 = state.entry_state : !state<memory>
+    %eq = cmpi %i, %j {predicate = "eq"} : !i1
+    %res, %s1 = scf.switch %eq args(%s0) (%s_false) {
+      %p0 = ptr.ptradd %base, %i : !ptr.p<!i32>
+      %q0 = ptr.ptradd %base, %j : !ptr.p<!i32>
+      %w0 = ptr.store %v, %p0 state(%s_false)
+      %r0, %l0 = ptr.load %q0 state(%w0) : !i32
+      -> %r0, %l0
+    } (%s_true) {
+      %p1 = ptr.ptradd %base, %i : !ptr.p<!i32>
+      %q1 = ptr.ptradd %base, %j : !ptr.p<!i32>
+      %w1 = ptr.store %v, %p1 state(%s_true)
+      %r1, %l1 = ptr.load %q1 state(%w1) : !i32
+      -> %r1, %l1
+    }
+    -> %res, %s1
+  }
+
+  func.func @contradictory_nested_arm(%raw_x: !i1) -> !i32 {
+    %x = freeze %raw_x : !i1
+    %c2 = constant {value = 2} : !i32
+    %c3 = constant {value = 3} : !i32
+    %five = addi %c2, %c3 : !i32
+    %outer = scf.switch %x {
+      %inner = scf.switch %x {
+        %a = constant {value = 10} : !i32
+        -> %a
+      } {
+        %b = addi %five, %c2 : !i32
+        -> %b
+      }
+      -> %inner
+    } {
+      %d = constant {value = 20} : !i32
+      -> %d
+    }
+    %out = addi %outer, %five : !i32
+    -> %out
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @cond_mem_forward(%[[BASE:[0-9]+]]: !ptr.p<!i32>, %[[I:[0-9]+]]: !i64, %[[J:[0-9]+]]: !i64, %[[V:[0-9]+]]: !i32)
+// CHECK: scf.switch %{{[0-9]+}} args(%{{[0-9]+}}) (%[[SF:[0-9]+]]) {
+// CHECK: %[[W0:[0-9]+]] = ptr.store %[[V]], %{{[0-9]+}} state(%[[SF]])
+// CHECK: %[[R0:[0-9]+]], %[[L0:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[W0]]) : !i32
+// CHECK-NEXT: -> %[[R0]], %[[L0]]
+// CHECK-NEXT: }
+// CHECK-NEXT: (%[[ST:[0-9]+]]) {
+// CHECK-NOT: ptr.load
+// CHECK: %[[W1:[0-9]+]] = ptr.store %[[V]], %{{[0-9]+}} state(%[[ST]])
+// CHECK-NEXT: -> %[[V]], %[[W1]]
+// CHECK-NEXT: }
+
+// CHECK-LABEL: func.func @contradictory_nested_arm(%[[RAW:[0-9]+]]: !i1)
+// CHECK: %[[X:[0-9]+]] = freeze %[[RAW]] : !i1
+// CHECK: %[[OUTER:[0-9]+]] = scf.switch %[[X]] {
+// CHECK-NOT: scf.switch
+// CHECK: %[[TEN:[0-9]+]] = constant {value = 10} : !i32
+// CHECK-NEXT: -> %[[TEN]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK: %[[TWENTY:[0-9]+]] = constant {value = 20} : !i32
+// CHECK-NEXT: -> %[[TWENTY]]
+// CHECK-NEXT: }
+// CHECK: %[[FIVE:[0-9]+]] = constant {value = 5} : !i32
+// CHECK: addi %[[OUTER]], %[[FIVE]] : !i32

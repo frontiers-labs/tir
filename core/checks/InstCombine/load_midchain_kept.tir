@@ -1,4 +1,4 @@
-// RUN: tir opt --pass eqsat %s | filecheck %s
+// RUN: tir opt --pass eqsat,dce %s | filecheck %s
 
 // No write reached this address before the load, so nothing stands in for its
 // value and the read stays — with the state edge the store after it observes.

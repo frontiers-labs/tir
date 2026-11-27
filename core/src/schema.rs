@@ -48,6 +48,7 @@ pub struct OpSchema {
     pub results: &'static [FieldSchema],
     pub attributes: &'static [AttrSchema],
     pub interfaces: &'static [&'static str],
+    pub cost: u32,
     pub regions: &'static [(crate::RegionKind, bool)],
     pub binding_inputs: Option<(usize, usize)>,
     pub counted_groups: Option<(usize, usize, usize)>,

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,memopt,control-simplify,dce) --verify %s | filecheck %s
 
 // A loop whose values nothing reads but whose body writes memory: the read
 // after it observes the state it leaves, so the loop is demanded and stays

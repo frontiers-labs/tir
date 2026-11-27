@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(memopt,dce) --verify %s | filecheck %s
 
 // A one-bit write covers part of a byte, and the pass counts bytes: it cannot
 // say what of the byte before it survives, so it neither dies nor kills.

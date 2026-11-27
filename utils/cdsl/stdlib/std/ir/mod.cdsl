@@ -52,20 +52,16 @@ extract rust RuleSlice      => "&[::tir_egglog::RuleCollection]";
 pub let seed_root: (Session, OperationId) -> ();
 pub let run_stage: (Session, Schedule) -> ();
 pub let resolve_layouts: Session -> ();
-pub let saturate_with_masks: (Session, Schedule, String, RuleSlice, Schedule) -> ();
+pub let saturate: (Session, Schedule, String, RuleSlice) -> ();
 pub let run_collection: (Session, RuleCollection, Int) -> ();
-pub let propagate_scoped: (Session, Schedule) -> ();
 pub let publish_rewrites: Session -> EditSummary;
-pub let sweep_dead: (Session, OperationId, Schedule, Schedule) -> EditSummary;
 
-extract rust seed_root           => "super::session::seed_root";
-extract rust run_stage           => "super::session::run_stage";
-extract rust resolve_layouts     => "super::session::resolve_layouts";
-extract rust saturate_with_masks => "super::session::saturate_with_masks";
-extract rust run_collection      => "super::session::run_collection";
-extract rust propagate_scoped    => "super::session::propagate_scoped";
-extract rust publish_rewrites    => "super::session::publish_rewrites";
-extract rust sweep_dead          => "super::session::sweep_dead";
+extract rust seed_root        => "super::session::seed_root";
+extract rust run_stage        => "super::session::run_stage";
+extract rust resolve_layouts  => "super::session::resolve_layouts";
+extract rust saturate         => "super::session::saturate";
+extract rust run_collection   => "super::session::run_collection";
+extract rust publish_rewrites => "super::session::publish_rewrites";
 
 // ── TIR Dependent Value, Attribute, and Region Types ─────────────────────────
 
@@ -228,43 +224,19 @@ pub let op_is_pure_binary_int = |op: OpDef| -> Bool {
         && !op_has_attr(op, "nuw")
 };
 
-// ── Schema-Driven OpDef -> EqSat Fact Derivation ─────────────────────────────
-// Every op classification (binary integer, commutative, pure binary, droppable
-// speculatable, flag attributes, constant-like, unary/binary FP) is derived
-// directly from `OpDef` declarations — zero duplicated op tables!
-
-pub let dialect_flag_rules = |ops: List<OpDef>| -> List<Rule> {
-    let bin_rules = flat_map(|op: OpDef| -> List<Rule> {
-        if op_is_binary_int(op) {
-            List(Rule::Clause(
-                "op_bin::" ++ op_name(op),
-                List(),
-                List(Action::Insert("EqSatBinaryKind", List(op_decl(op)))),
-            ))
-        } else {
-            List()
-        }
-    }, ops);
-    let nsw_rules = flat_map(|op: OpDef| -> List<Rule> {
-        if op_has_attr(op, "nsw") && op_is_additive(op) {
-            List(
-                Rule::Clause("op_flag::nsw", List(), List(Action::Insert("EqSatFlagField", List(str_lit("nsw"), bool_lit(false))))),
-                Rule::Clause("op_flag::nuw", List(), List(Action::Insert("EqSatFlagField", List(str_lit("nuw"), bool_lit(false))))),
-            )
-        } else {
-            List()
-        }
-    }, ops);
-    append(bin_rules, nsw_rules)
-};
+// ── Schema-Driven OpDef -> EqSat Expr Lift & Commutativity Rules ─────────────
 
 pub let dialect_commute_rules = |ops: List<OpDef>| -> List<Rule> {
+    let e = Atom::Var("e");
+    let ty = Atom::Var("ty");
+    let x = Atom::Var("x");
+    let y = Atom::Var("y");
     flat_map(|op: OpDef| -> List<Rule> {
         if op_is_commutative(op) && op_is_binary_int(op) {
             List(Rule::Clause(
-                "op_comm::" ++ op_name(op),
-                List(),
-                List(Action::Insert("EqSatCommutative", List(op_decl(op)))),
+                "commute::" ++ op_name(op),
+                List(Fact::Eq(e, Atom::Call("Expr::Bin", List(op_decl(op), ty, x, y)))),
+                List(Action::Union(e, Atom::Call("Expr::Bin", List(op_decl(op), ty, y, x)))),
             ))
         } else {
             List()
@@ -272,13 +244,42 @@ pub let dialect_commute_rules = |ops: List<OpDef>| -> List<Rule> {
     }, ops)
 };
 
-pub let dialect_pure_binary_rules = |ops: List<OpDef>| -> List<Rule> {
+pub let dialect_lift_bin_int_rules = |ops: List<OpDef>| -> List<Rule> {
+    let op_v = Atom::Var("op");
+    let res = Atom::Var("res");
+    let ty = Atom::Var("ty");
+    let x = Atom::Var("x");
+    let y = Atom::Var("y");
+    let ex = Atom::Var("ex");
+    let ey = Atom::Var("ey");
     flat_map(|op: OpDef| -> List<Rule> {
-        if op_is_pure_binary_int(op) {
+        if op_is_binary_int(op) {
+            let wrap_guards = if op_has_attr(op, "nsw") {
+                List(
+                    Fact::NotRow("EqSatNoSignedWrap", List(op_v)),
+                    Fact::NotRow("EqSatNoUnsignedWrap", List(op_v)),
+                )
+            } else {
+                List()
+            };
+            let facts = append(
+                List(
+                    Fact::Row("EqSatLive", List(op_v)),
+                    Fact::NotRow("EqSatPinnedOp", List(op_v)),
+                    Fact::Row("Operation", List(op_v, op_decl(op), Atom::Var("pl"), Atom::Var("hm"), Atom::Var("ps"), Atom::Var("dp"), Atom::Var("lc"))),
+                    Fact::Row("Operand", List(op_v, int_lit(0), x)),
+                    Fact::Row("Operand", List(op_v, int_lit(1), y)),
+                    Fact::Row("Value", List(res, ty, str_lit("result"), op_v, int_lit(0), Atom::Var("rd"))),
+                    Fact::Row("EqSatInteger", List(ty)),
+                    Fact::Row("Value", List(x, ty, Atom::Var("xk"), Atom::Var("xo"), Atom::Var("xs"), Atom::Var("xd"))),
+                    Fact::Row("Value", List(y, ty, Atom::Var("yk"), Atom::Var("yo"), Atom::Var("ys"), Atom::Var("yd"))),
+                ),
+                wrap_guards,
+            );
             List(Rule::Clause(
-                "op_pure_bin::" ++ op_name(op),
-                List(),
-                List(Action::Insert("EqSatPureBinary", List(op_decl(op)))),
+                "lift_bin::" ++ op_name(op),
+                append(facts, List(Fact::Row("OpExpr", List(op_v, int_lit(0), ex)), Fact::Row("OpExpr", List(op_v, int_lit(1), ey)))),
+                List(Action::Insert("ValExpr", List(res, Atom::Call("Expr::Bin", List(op_decl(op), ty, ex, ey))))),
             ))
         } else {
             List()
@@ -286,13 +287,57 @@ pub let dialect_pure_binary_rules = |ops: List<OpDef>| -> List<Rule> {
     }, ops)
 };
 
-pub let dialect_drop_rules = |ops: List<OpDef>| -> List<Rule> {
+pub let dialect_mark_bin_int_rules = |ops: List<OpDef>| -> List<Rule> {
+    let op_v = Atom::Var("op");
+    let res = Atom::Var("res");
+    let ty = Atom::Var("ty");
+    let x = Atom::Var("x");
+    let y = Atom::Var("y");
+    flat_map(|op: OpDef| -> List<Rule> {
+        if op_is_binary_int(op) {
+            let wrap_guards = if op_has_attr(op, "nsw") {
+                List(
+                    Fact::NotRow("EqSatNoSignedWrap", List(op_v)),
+                    Fact::NotRow("EqSatNoUnsignedWrap", List(op_v)),
+                )
+            } else {
+                List()
+            };
+            let facts = append(
+                List(
+                    Fact::Row("EqSatLive", List(op_v)),
+                    Fact::NotRow("EqSatPinnedOp", List(op_v)),
+                    Fact::Row("Operation", List(op_v, op_decl(op), Atom::Var("pl"), Atom::Var("hm"), Atom::Var("ps"), Atom::Var("dp"), Atom::Var("lc"))),
+                    Fact::Row("Operand", List(op_v, int_lit(0), x)),
+                    Fact::Row("Operand", List(op_v, int_lit(1), y)),
+                    Fact::Row("Value", List(res, ty, str_lit("result"), op_v, int_lit(0), Atom::Var("rd"))),
+                    Fact::Row("EqSatInteger", List(ty)),
+                    Fact::Row("Value", List(x, ty, Atom::Var("xk"), Atom::Var("xo"), Atom::Var("xs"), Atom::Var("xd"))),
+                    Fact::Row("Value", List(y, ty, Atom::Var("yk"), Atom::Var("yo"), Atom::Var("ys"), Atom::Var("yd"))),
+                ),
+                wrap_guards,
+            );
+            List(Rule::Clause(
+                "mark_bin::" ++ op_name(op),
+                facts,
+                List(
+                    Action::Insert("ExprLifted", List(res)),
+                    Action::Insert("EqSatLiftedOp", List(op_v)),
+                ),
+            ))
+        } else {
+            List()
+        }
+    }, ops)
+};
+
+pub let dialect_drop_rules = |table: String, ops: List<OpDef>| -> List<Rule> {
     flat_map(|op: OpDef| -> List<Rule> {
         if op_is_speculatable(op) && length(op_results(op)) == 1 && op_name(op) != "freeze" && op_name(op) != "bitcast" {
             List(Rule::Clause(
                 "op_drop::" ++ op_name(op),
                 List(),
-                List(Action::Insert("EqSatDropKind", List(op_decl(op)))),
+                List(Action::Insert(table, List(op_decl(op)))),
             ))
         } else {
             List()
@@ -300,21 +345,124 @@ pub let dialect_drop_rules = |ops: List<OpDef>| -> List<Rule> {
     }, ops)
 };
 
-pub let fp_op_rules = |ops: List<OpDef>| -> List<Rule> {
+pub let fp_dce_rules = |ops: List<OpDef>| -> List<Rule> {
+    let op_v = Atom::Var("node");
+    let res = Atom::Var("res");
+    let ty = Atom::Var("ty");
+    flat_map(|op: OpDef| -> List<Rule> {
+        if length(op_results(op)) == 1 {
+            List(Rule::Clause(
+                "dce_fp::" ++ op_name(op),
+                List(
+                    Fact::Row("ValLive", List(op_v)),
+                    Fact::Row("Operation", List(op_v, op_decl(op), Atom::Var("pl"), Atom::Var("hm"), Atom::Var("pos"), Atom::Var("dp"), Atom::Var("lc"))),
+                    Fact::NotRow("ValHasAttr", List(op_v, str_lit("semantics"))),
+                    Fact::NotRow("ValExtraResult", List(op_v)),
+                    Fact::Row("Value", List(res, ty, str_lit("result"), op_v, int_lit(0), Atom::Var("decl"))),
+                    Fact::NotRow("ValPinnedOp", List(op_v)),
+                    Fact::NotRow("ValPinned", List(res)),
+                ),
+                List(
+                    Action::Insert("DceRemovable", List(op_v, res)),
+                    Action::Insert("DceRemovableNode", List(op_v)),
+                ),
+            ))
+        } else {
+            List()
+        }
+    }, ops)
+};
+
+pub let fp_mark_rules = |ops: List<OpDef>| -> List<Rule> {
+    let op_v = Atom::Var("op");
+    let res = Atom::Var("res");
+    let ty = Atom::Var("ty");
     flat_map(|op: OpDef| -> List<Rule> {
         let n_in = length(op_operands(op));
         let n_out = length(op_results(op));
         if n_in == 1 && n_out == 1 {
             List(Rule::Clause(
-                "fp_unary::" ++ op_name(op),
-                List(),
-                List(Action::Insert("EqSatFpUnary", List(op_decl(op)))),
+                "mark_fp1::" ++ op_name(op),
+                List(
+                    Fact::Row("EqSatLive", List(op_v)),
+                    Fact::NotRow("EqSatPinnedOp", List(op_v)),
+                    Fact::Row("Operation", List(op_v, op_decl(op), Atom::Var("pl"), Atom::Var("hm"), Atom::Var("ps"), Atom::Var("dp"), Atom::Var("lc"))),
+                    Fact::Row("Operand", List(op_v, int_lit(0), Atom::Var("x"))),
+                    Fact::Row("Value", List(res, ty, str_lit("result"), op_v, int_lit(0), Atom::Var("rd"))),
+                    Fact::NotRow("EqSatHasAttr", List(op_v, str_lit("semantics"))),
+                    Fact::NotRow("EqSatOperandSlot", List(op_v, int_lit(1))),
+                    Fact::NotRow("EqSatExtraResult", List(op_v)),
+                ),
+                List(
+                    Action::Insert("ExprLifted", List(res)),
+                    Action::Insert("EqSatLiftedOp", List(op_v)),
+                ),
             ))
         } else if n_in == 2 && n_out == 1 {
             List(Rule::Clause(
-                "fp_binary::" ++ op_name(op),
-                List(),
-                List(Action::Insert("EqSatFpBinary", List(op_decl(op)))),
+                "mark_fp2::" ++ op_name(op),
+                List(
+                    Fact::Row("EqSatLive", List(op_v)),
+                    Fact::NotRow("EqSatPinnedOp", List(op_v)),
+                    Fact::Row("Operation", List(op_v, op_decl(op), Atom::Var("pl"), Atom::Var("hm"), Atom::Var("ps"), Atom::Var("dp"), Atom::Var("lc"))),
+                    Fact::Row("Operand", List(op_v, int_lit(0), Atom::Var("x"))),
+                    Fact::Row("Operand", List(op_v, int_lit(1), Atom::Var("y"))),
+                    Fact::Row("Value", List(res, ty, str_lit("result"), op_v, int_lit(0), Atom::Var("rd"))),
+                    Fact::NotRow("EqSatHasAttr", List(op_v, str_lit("semantics"))),
+                    Fact::NotRow("EqSatOperandSlot", List(op_v, int_lit(2))),
+                    Fact::NotRow("EqSatExtraResult", List(op_v)),
+                ),
+                List(
+                    Action::Insert("ExprLifted", List(res)),
+                    Action::Insert("EqSatLiftedOp", List(op_v)),
+                ),
+            ))
+        } else {
+            List()
+        }
+    }, ops)
+};
+
+pub let fp_lift_rules = |ops: List<OpDef>| -> List<Rule> {
+    let op_v = Atom::Var("op");
+    let res = Atom::Var("res");
+    let ty = Atom::Var("ty");
+    let x = Atom::Var("x");
+    let y = Atom::Var("y");
+    let ex = Atom::Var("ex");
+    let ey = Atom::Var("ey");
+    flat_map(|op: OpDef| -> List<Rule> {
+        let n_in = length(op_operands(op));
+        let n_out = length(op_results(op));
+        if n_in == 1 && n_out == 1 {
+            List(Rule::Clause(
+                "lift_fp1::" ++ op_name(op),
+                List(
+                    Fact::Row("EqSatLive", List(op_v)),
+                    Fact::NotRow("EqSatPinnedOp", List(op_v)),
+                    Fact::Row("Operation", List(op_v, op_decl(op), Atom::Var("pl"), Atom::Var("hm"), Atom::Var("ps"), Atom::Var("dp"), Atom::Var("lc"))),
+                    Fact::Row("Operand", List(op_v, int_lit(0), x)),
+                    Fact::Row("Value", List(res, ty, str_lit("result"), op_v, int_lit(0), Atom::Var("rd"))),
+                    Fact::Row("ExprLifted", List(res)),
+                    Fact::Row("OpExpr", List(op_v, int_lit(0), ex)),
+                ),
+                List(Action::Insert("ValExpr", List(res, Atom::Call("Expr::Unary", List(op_decl(op), ty, ex))))),
+            ))
+        } else if n_in == 2 && n_out == 1 {
+            List(Rule::Clause(
+                "lift_fp2::" ++ op_name(op),
+                List(
+                    Fact::Row("EqSatLive", List(op_v)),
+                    Fact::NotRow("EqSatPinnedOp", List(op_v)),
+                    Fact::Row("Operation", List(op_v, op_decl(op), Atom::Var("pl"), Atom::Var("hm"), Atom::Var("ps"), Atom::Var("dp"), Atom::Var("lc"))),
+                    Fact::Row("Operand", List(op_v, int_lit(0), x)),
+                    Fact::Row("Operand", List(op_v, int_lit(1), y)),
+                    Fact::Row("Value", List(res, ty, str_lit("result"), op_v, int_lit(0), Atom::Var("rd"))),
+                    Fact::Row("ExprLifted", List(res)),
+                    Fact::Row("OpExpr", List(op_v, int_lit(0), ex)),
+                    Fact::Row("OpExpr", List(op_v, int_lit(1), ey)),
+                ),
+                List(Action::Insert("ValExpr", List(res, Atom::Call("Expr::Bin", List(op_decl(op), ty, ex, ey))))),
             ))
         } else {
             List()
@@ -356,11 +504,13 @@ extract rust op_is_additive           => "@ct";
 extract rust op_is_subtractive        => "@ct";
 extract rust op_is_binary_int         => "@ct";
 extract rust op_is_pure_binary_int    => "@ct";
-extract rust dialect_flag_rules       => "@ct";
 extract rust dialect_commute_rules    => "@ct";
-extract rust dialect_pure_binary_rules => "@ct";
+extract rust dialect_lift_bin_int_rules => "@ct";
+extract rust dialect_mark_bin_int_rules => "@ct";
 extract rust dialect_drop_rules       => "@ct";
-extract rust fp_op_rules              => "@ct";
+extract rust fp_dce_rules             => "@ct";
+extract rust fp_mark_rules            => "@ct";
+extract rust fp_lift_rules            => "@ct";
 extract rust operand                  => "@ct";
 extract rust attribute                => "@ct";
 

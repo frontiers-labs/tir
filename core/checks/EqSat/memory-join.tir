@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,memopt,dce) --verify %s | filecheck %s
 
 module {
   func.func @branch(%c: !i1, %p: !ptr.p<!i32>, %x: !i32) -> !i32 {

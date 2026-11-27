@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(control-simplify) --verify %s | filecheck %s
 
 // A port every edge carries round unchanged is the value the loop was entered
 // with, at every read of it inside the loop and after it. A port the body

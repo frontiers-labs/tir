@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck %s
 
 // The gate's decision is a literal, so the gate publishes what the arm that
 // literal selects yields, however overdefined the other arm is.
