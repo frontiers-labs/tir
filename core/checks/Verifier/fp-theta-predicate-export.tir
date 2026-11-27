@@ -1,13 +1,18 @@
 // RUN: not tir opt --verify --pass verify-deps %s 2>&1 | filecheck %s
 
+// The predicate depends on the write in both paths. The exit cannot export
+// the incoming state without accounting for that write.
+
 module {
-  %f = func.func @main(%a: !f64, %b: !f64) {
-    %env0 = state.entry_state : !state<fp.env>
-    %env1 = scf.loop (%env = %env0) {
-      %again, %next = fp.cmp %a, %b state(%env) {predicate = "olt", semantics = {kind = "comparison", behavior = "signaling", exceptions = "flags", subnormals = "gradual"}} : !i1
-      -> %again, %next, %env
+  %f = func.func @main(%p: !ptr.p<!i32>, %value: !i32) {
+    %initial = state.entry_state : !state<memory>
+    %exit = scf.loop (%memory = %initial) {
+      %next = ptr.store %value, %p state(%memory)
+      %observed, %read = ptr.load %p state(%next) : !i32
+      %again = cmpi %observed, %value {predicate = "slt"} : !i1
+      -> %again, %read, %memory
     }
-    -> %env1
+    -> %exit
   }
   module_end
 }

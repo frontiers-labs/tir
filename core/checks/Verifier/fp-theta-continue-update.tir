@@ -1,17 +1,24 @@
 // RUN: tir opt --verify --pass verify-deps %s | filecheck %s
 
+// The write belongs only to the continue path. The exit can export the
+// incoming state because the predicate does not depend on the write.
+
 module {
-  %f = func.func @main() {
-    %env0 = state.entry_state : !state<fp.env>
-    %nearest = fp.rounding_constant {mode = "nearest_even"} : !fp.rounding
-    %env1 = scf.loop (%env = %env0) {
-      %next = fp.set_round %nearest state(%env)
+  %f = func.func @main(%p: !ptr.p<!i32>, %value: !i32) {
+    %initial = state.entry_state : !state<memory>
+    %exit = scf.loop (%memory = %initial) {
+      %next = ptr.store %value, %p state(%memory)
       %stop = constant {value = 0} : !i1
-      -> %stop, %next, %env
+      -> %stop, %next, %memory
     }
-    -> %env1
+    -> %exit
   }
   module_end
 }
 
-// CHECK: scf.loop
+// CHECK: %[[INITIAL:[0-9]+]] = state.entry_state : !state<memory>
+// CHECK: %[[EXIT:[0-9]+]] = scf.loop (%[[MEMORY:[0-9]+]] = %[[INITIAL]]) {
+// CHECK: %[[NEXT:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[MEMORY]])
+// CHECK: %[[STOP:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT: -> %[[STOP]], %[[NEXT]], %[[MEMORY]]
+// CHECK: -> %[[EXIT]]

@@ -115,10 +115,11 @@ impl Check<'_> {
         let block = ctx.parent_block(id);
         let position = block.and_then(|_| self.block_position(id));
         for value in operands.iter().chain(results.iter()).copied() {
-            let producer = ctx
-                .has_value(value)
-                .then(|| ctx.get_value(value).defining_op())
-                .flatten();
+            if !ctx.has_value(value) {
+                errors.report(format!("references unknown value %{}", value.number()));
+                continue;
+            }
+            let producer = ctx.get_value(value).defining_op();
             errors.require(
                 producer.is_some_and(|p| ctx.has_operation(p))
                     || ctx.is_block_argument(value)
