@@ -404,6 +404,7 @@ pub(crate) fn operand_fields(
             .iter()
             .map(|v| match v {
                 crate::attributes::AttributeValue::UInt(n) => *n as usize,
+                crate::attributes::AttributeValue::Int(n) if *n >= 0 => *n as usize,
                 _ => 0usize,
             })
             .collect(),

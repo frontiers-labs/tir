@@ -1,24 +1,4 @@
 //! Verification of machine IR.
-//!
-//! Machine IR is not SSA — block-parameter destruction leaves a parameter
-//! defined once per predecessor — so the generic op-tree verifier does not
-//! describe it. What it does have is one register notation, and these are its
-//! rules:
-//!
-//! - an instruction names only values that still exist;
-//! - every register slot of an instruction holds a value or a register, never
-//!   neither: slots are read off in port order;
-//! - a register slot holding a value must hold one whose class views the same
-//!   register file at the same bit offset: a narrower class of that view is an
-//!   allocation constraint, a different view is a type error;
-//! - a register assignment must place a value in a register of a class sharing
-//!   its own view;
-//! - once a function carries an assignment, it is total: every register-typed
-//!   value some instruction names has an entry;
-//! - a symbol's own blocks are ordered by their dependences. Only those: a
-//!   module or a section lists definitions, and a definition is reachable from
-//!   the whole module however the list is spelled, so a caller may stand ahead
-//!   of the λ it names.
 
 use std::collections::HashSet;
 
@@ -26,7 +6,7 @@ use tir::{Context, Error, OpHandle, OpId, ValueId};
 
 use crate::backend::regalloc::RegClassId;
 use crate::backend::registers::{PINS_ATTR, slot_pin};
-use crate::backend::registers::{RegAssignment, RegSlot, reg_slots, value_class};
+use crate::backend::registers::{RegAssignment, register_attr, value_class};
 use crate::backend::{ASSIGNMENT_ATTR, SymbolOp};
 
 /// Verify the machine IR under `root`.
@@ -41,7 +21,7 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
             continue;
         }
         let op = context.get_op(op_id);
-        verify_reg_slots(context, &op)?;
+        verify_instruction_ports(context, &op)?;
         verify_state_operands(context, &op)?;
         verify_slot_pins(context, &op)?;
         let symbol = op.is::<SymbolOp>();
@@ -80,7 +60,7 @@ fn verify_state_operands(context: &Context, op: &OpHandle) -> Result<(), Error> 
     Ok(())
 }
 
-fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
+fn verify_instruction_ports(context: &Context, op: &OpHandle) -> Result<(), Error> {
     // An operand or result the rest of the IR has retired names nothing: the op
     // that produced it went, and this one was not rewritten with it.
     for value in op.operands().iter().chain(op.results().iter()) {
@@ -92,66 +72,47 @@ fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
             )));
         }
     }
-    let slots = reg_slots(op);
-    // A slot is an SSA position or an attribute, and every port has one:
-    // positions are read off in port order, so a port with neither would be
-    // read as the next port's.
-    for port in crate::backend::reg_ports(op) {
-        if op.attr(port.name).is_some() || slots.iter().any(|slot| slot.port.name == port.name) {
-            continue;
-        }
-        return Err(Error::VerificationError(format!(
-            "{} register slot '{}' holds neither a value nor a register",
-            op.name().as_str(),
-            port.name,
-        )));
+    let Some(instruction) = op
+        .clone()
+        .as_interface::<dyn crate::backend::MachineInstruction>()
+    else {
+        return Ok(());
+    };
+    let schema = crate::schema::OP_SCHEMAS
+        .iter()
+        .find(|s| s.dialect == op.dialect().as_str() && s.name == op.name().as_str());
+    if let Some(schema) = schema {
+        crate::operation::operand_fields(op, schema.name, schema.operands)?;
+        crate::operation::result_fields(op, schema.name, schema.results)?;
     }
-    // Every SSA position is some port's: a surplus operand or result would be
-    // read by nothing, and a missing one shifts every later port. The
-    // dependency ports are memory order, not registers, and are not counted.
-    let (values_read, values_written) = slots.iter().fold((0, 0), |(read, written), slot| {
-        match (slot.slot, slot.port.def) {
-            (RegSlot::Value(_), false) => (read + 1, written),
-            (RegSlot::Value(_), true) => (read, written + 1),
-            _ => (read, written),
+    if op.value_operands().is_empty() && op.value_results().is_empty() {
+        if let Some(schema) = schema {
+            for field in schema
+                .attributes
+                .iter()
+                .filter(|a| a.ty.trim_start_matches('?') == "Register")
+            {
+                if register_attr(op, field.name).is_none() {
+                    return Err(Error::VerificationError(format!(
+                        "{} is missing register attribute '{}'",
+                        op.name(),
+                        field.name
+                    )));
+                }
+            }
         }
-    });
-    let (operands, results) = (op.value_operands().len(), op.value_results().len());
-    if !crate::backend::reg_ports(op).is_empty()
-        && (values_read != operands || values_written != results)
-    {
-        return Err(Error::VerificationError(format!(
-            "{} has {} operands and {} results for {} use and {} def register slots",
-            op.name().as_str(),
-            operands,
-            results,
-            values_read,
-            values_written,
-        )));
-    }
-    for slot in &slots {
-        let (RegSlot::Value(value), Some(port_class)) = (slot.slot, slot.port.class) else {
-            continue;
-        };
-        let Some(class) = value_class(context, value) else {
-            return Err(Error::VerificationError(format!(
-                "{} operand '{}' reads %{}, which is not a register",
-                op.name().as_str(),
-                slot.port.name,
-                value.number(),
-            )));
-        };
-        if !same_view(class, port_class) {
-            return Err(Error::VerificationError(format!(
-                "{} operand '{}' reads %{} of class {} through {}, a different register view",
-                op.name().as_str(),
-                slot.port.name,
-                value.number(),
-                class.name(),
-                port_class.name(),
-            )));
+        if let Some(syntax) = instruction.info().asm {
+            for step in syntax.parse {
+                if let crate::backend::asm_desc::ParseStep::Register(name, expected, _) = step {
+                    let (class, index) = register_attr(op, name).ok_or(Error::ExpectedType)?;
+                    if !same_view(class, *expected) || !expected.contains(index) {
+                        return Err(Error::ExpectedType);
+                    }
+                }
+            }
         }
     }
+
     Ok(())
 }
 
@@ -180,25 +141,30 @@ fn verify_slot_pins(context: &Context, op: &OpHandle) -> Result<(), Error> {
     if op.attr(PINS_ATTR).is_none() {
         return Ok(());
     }
-    for slot in reg_slots(op) {
-        let (RegSlot::Value(value), Some((class, index))) =
-            (slot.slot, slot_pin(op, slot.port.name))
-        else {
-            continue;
-        };
-        let Some(value_class) = value_class(context, value) else {
-            continue;
-        };
-        if !same_view(class, value_class) {
-            return Err(Error::VerificationError(format!(
-                "{} slot '{}' holds %{} of class {} but is pinned to {}[{}]",
-                op.name().as_str(),
-                slot.port.name,
-                value.number(),
-                value_class.name(),
-                class.name(),
-                index,
-            )));
+    let Some(schema) = crate::schema::OP_SCHEMAS
+        .iter()
+        .find(|s| s.dialect == op.dialect().as_str() && s.name == op.name().as_str())
+    else {
+        return Ok(());
+    };
+    let inputs = crate::operation::operand_fields(op, schema.name, schema.operands)?;
+    let outputs = crate::operation::result_fields(op, schema.name, schema.results)?;
+    for (values, fields, mapping) in [
+        (op.operands(), schema.operands, inputs),
+        (op.results(), schema.results, outputs),
+    ] {
+        for (value, field) in values.iter().zip(mapping) {
+            if let (Some((class, index)), Some(actual)) = (
+                slot_pin(op, fields[field].name),
+                value_class(context, *value),
+            ) && !same_view(class, actual)
+            {
+                return Err(Error::VerificationError(format!(
+                    "value %{} is pinned to {}[{index}], a different register view",
+                    value.number(),
+                    class.name()
+                )));
+            }
         }
     }
     Ok(())

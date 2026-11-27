@@ -48,45 +48,26 @@ pub struct OpRegs {
 /// physical registers its register slots name directly, and the registers a
 /// call destroys. Dependencies live in no register and are not among them.
 pub fn op_regs(op: &OpHandle) -> OpRegs {
-    op_regs_from(op, &crate::backend::reg_slots(op))
-}
-
-/// [`op_regs`] over slots the caller has already resolved, for a scan that
-/// wants both them and the registers — liveness reads every instruction once.
-pub fn op_regs_from(op: &OpHandle, slots: &[crate::backend::SlotRef]) -> OpRegs {
     let mut regs = OpRegs {
         defs: op.value_results().to_vec(),
         uses: op.value_operands().to_vec(),
         phys_defs: Vec::new(),
         phys_uses: Vec::new(),
     };
-    for slot in slots {
-        if let crate::backend::RegSlot::Phys(register) = slot.slot {
-            if slot.port.def {
-                regs.phys_defs.push(register);
-            } else {
-                regs.phys_uses.push(register);
+    if let Some(schema) = crate::schema::OP_SCHEMAS
+        .iter()
+        .find(|s| s.dialect == op.dialect().as_str() && s.name == op.name().as_str())
+    {
+        for (fields, is_write) in [(schema.results, true), (schema.operands, false)] {
+            for field in fields {
+                if let Some(register) = crate::backend::register_attr(op, field.name) {
+                    if is_write {
+                        regs.phys_defs.push(register);
+                    } else {
+                        regs.phys_uses.push(register);
+                    }
+                }
             }
-        }
-    }
-    // A two-address destination whose tied source slot is absent — an
-    // assembled instruction, whose tie no lowering has turned into a copy —
-    // is read as well as written.
-    for port in crate::backend::reg_ports(op) {
-        let Some(destination) = port.tied_to else {
-            continue;
-        };
-        if slots.iter().any(|slot| slot.port.name == port.name) {
-            continue;
-        }
-        match slots
-            .iter()
-            .find(|slot| slot.port.name == destination)
-            .map(|slot| slot.slot)
-        {
-            Some(crate::backend::RegSlot::Phys(register)) => regs.phys_uses.push(register),
-            Some(crate::backend::RegSlot::Value(value)) => regs.uses.push(value),
-            None => {}
         }
     }
     let context = op.context.clone();
