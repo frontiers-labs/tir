@@ -2,7 +2,7 @@ use crate::BlockHandle;
 
 use linkme::distributed_slice;
 
-use crate::{Context, OpHandle, OpId, Operation, RegionKind, analysis::AnalysisManager};
+use crate::{Context, OpHandle, OpId, Operation, RegionKind};
 
 /// A pass made available to the pipeline parser by name.
 ///
@@ -326,12 +326,7 @@ pub trait Pass: Send {
 
     /// Run on `op`, selecting relevant operation IDs through egglog queries on
     /// [`Context::egraph`] rather than traversing the operation graph.
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        analyses: &AnalysisManager,
-    ) -> Result<(), PassError>;
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError>;
 }
 
 impl Context {
@@ -520,16 +515,11 @@ impl PassManager {
     }
 
     pub fn run(&mut self, context: &Context, op: OpId) -> Result<(), PassError> {
-        self.run_on_op_id(context, op, &AnalysisManager::new())?;
+        self.run_on_op_id(context, op)?;
         Ok(())
     }
 
-    pub fn run_on_op_id(
-        &mut self,
-        context: &Context,
-        root: OpId,
-        analyses: &AnalysisManager,
-    ) -> Result<OpId, PassError> {
+    pub fn run_on_op_id(&mut self, context: &Context, root: OpId) -> Result<OpId, PassError> {
         for step in &mut self.steps {
             if !context.has_operation(root) {
                 break;
@@ -556,7 +546,7 @@ impl PassManager {
                             });
                         }
                     }
-                    pass.run(root, context, analyses)?;
+                    pass.run(root, context)?;
                 }
                 PipelineStep::Nest(name, pipeline) => {
                     for id in context.subtree_ops(&[root]) {
@@ -570,20 +560,15 @@ impl PassManager {
                         if op.name().as_str() == operation
                             && dialect.is_none_or(|d| op.dialect().as_str() == d)
                         {
-                            pipeline.run_on_op_id(context, id, analyses)?;
+                            pipeline.run_on_op_id(context, id)?;
                         }
                     }
                 }
                 PipelineStep::Repeat(cap, pipeline) => {
-                    let version = || {
-                        let engine = context.egraph();
-                        let db = engine.database();
-                        (db.table_count(), db.writes_to_first(db.table_count()))
-                    };
                     for _ in 0..*cap {
-                        let previous = version();
-                        pipeline.run_on_op_id(context, root, analyses)?;
-                        if version() == previous || !context.has_operation(root) {
+                        let previous = context.ir_revision();
+                        pipeline.run_on_op_id(context, root)?;
+                        if context.ir_revision() == previous || !context.has_operation(root) {
                             break;
                         }
                     }

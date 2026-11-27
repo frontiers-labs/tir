@@ -2,7 +2,7 @@ use tir::{
     builtin::{ops, ModuleOp},
     func::FuncOp,
     passes::{eqsat::add_zero_rewrites, EqSatPass},
-    AnalysisManager, Context, OpId, Operation, OperationRef, Pass, PassError, PassManager, Symbol,
+    Context, OpId, Operation, OperationRef, Pass, PassError, PassManager, Symbol,
 };
 
 use super::fixtures::{module_ops, parse_in};
@@ -34,7 +34,7 @@ impl Pass for LowerTestArithmetic {
         "lower-test-arithmetic"
     }
 
-    fn run(&mut self, root: OpId, context: &Context, _: &AnalysisManager) -> Result<(), PassError> {
+    fn run(&mut self, root: OpId, context: &Context) -> Result<(), PassError> {
         let function = context.get_op(root).as_op::<FuncOp>().unwrap();
         for id in function.body_region().op_ids() {
             let op = context.get_op(id);

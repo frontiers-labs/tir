@@ -34,7 +34,7 @@ impl<T> From<generated::ValueRef<T>> for ValueId {
 
 use tir_egglog::RuleCollection;
 
-use crate::{AnalysisManager, Context, OpId, Pass, PassError, ValueId};
+use crate::{Context, OpId, Pass, PassError, ValueId};
 
 /// Saturate equalities in a private snapshot of the current IR.
 ///
@@ -83,12 +83,7 @@ impl Pass for EqSatPass {
         "eqsat"
     }
 
-    fn run(
-        &mut self,
-        root_id: OpId,
-        context: &Context,
-        _: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, root_id: OpId, context: &Context) -> Result<(), PassError> {
         let mut session = session::Session::new(context)?;
         match &self.rules {
             Rules::Builtin(extras) => {

@@ -37,12 +37,7 @@ impl Pass for ControlSimplifyPass {
         "control-simplify"
     }
 
-    fn run(
-        &mut self,
-        op: OpId,
-        context: &Context,
-        _: &crate::AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, op: OpId, context: &Context) -> Result<(), PassError> {
         if !context.has_operation(op) {
             return Ok(());
         }

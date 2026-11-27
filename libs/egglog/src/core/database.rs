@@ -585,16 +585,6 @@ impl Database {
         self.tables[table.index()].live_len()
     }
 
-    /// A count that grows with every write to the first `tables` named tables, so
-    /// equal counts mean none of them changed in between.
-    pub fn writes_to_first(&self, tables: usize) -> u64 {
-        self.schema()
-            .tables()
-            .take(tables)
-            .map(|(id, _)| self.table_version(id))
-            .sum()
-    }
-
     /// The timestamp writes get now. Each rebuild starts a new one.
     pub fn timestamp(&self) -> u32 {
         self.now

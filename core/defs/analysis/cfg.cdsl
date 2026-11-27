@@ -1,0 +1,678 @@
+// Reusable CFG, dominance, post-dominance, loop nesting, and memory-chain analyses.
+
+use std::core::*;
+use std::int::less;
+use std::ir::{OperationId, OperationKind};
+
+pub let ScopeOp: Relation<Int>;
+pub let ModuleOp: Relation<Int>;
+pub let CfgRegion: Relation<(Int, Int, Int)>;
+pub let FuncOfRegion: Relation<(Int, Int)>;
+pub let OrderedForInRegion: Relation<(Int, Int, Int)>;
+
+pub let CfgEdge: Relation<(Int, Int, Int, Int)>;
+pub let CfgEdgeTarget: Relation<(Int, Int, Int)>;
+pub let CfgExitKind: Relation<OperationKind>;
+pub let CfgExitBlock: Relation<(Int, Int, Int, OperationKind)>;
+pub let CfgReachable: Relation<(Int, Int)>;
+pub let CfgPath: Relation<(Int, Int, Int)>;
+pub let CfgReachableExit: Relation<(Int, Int, Int, OperationKind)>;
+pub let CfgBranchBlock: Relation<(Int, Int)>;
+
+pub let CfgNotDom: Relation<(Int, Int, Int)>;
+pub let CfgDom: Relation<(Int, Int, Int)>;
+pub let CfgStrictDom: Relation<(Int, Int, Int)>;
+pub let CfgNonIdom: Relation<(Int, Int, Int)>;
+pub let CfgIdom: Relation<(Int, Int, Int)>;
+pub let CfgNotPostDom: Relation<(Int, Int, Int)>;
+pub let CfgPostDom: Relation<(Int, Int, Int)>;
+pub let CfgStrictPostDom: Relation<(Int, Int, Int)>;
+pub let CfgNonIpdom: Relation<(Int, Int, Int)>;
+pub let CfgIpdom: Relation<(Int, Int, Int)>;
+
+pub let NatLoop: Relation<(Int, Int, Int)>;
+pub let NatLoopHeader: Relation<(Int, Int)>;
+pub let NatLoopContains: Relation<(Int, Int, Int)>;
+pub let NatLoopNonParent: Relation<(Int, Int, Int)>;
+pub let NatLoopParent: Relation<(Int, Int, Int)>;
+pub let NatLoopTop: Relation<(Int, Int)>;
+pub let BlockHasNatLoop: Relation<(Int, Int)>;
+pub let BlockNonInnerLoop: Relation<(Int, Int, Int)>;
+pub let BlockNatLoop: Relation<(Int, Int, Int)>;
+
+pub let ScopeNode: Relation<(Int, Int, Int)>;
+pub let ScopeOwner: Relation<(Int, Int, Int)>;
+pub let ScopeRawEdge: Relation<(Int, Int, Int, Int)>;
+pub let ScopePath: Relation<(Int, Int, Int, Int)>;
+pub let ScopeInCycle: Relation<(Int, Int, Int)>;
+pub let IrredScc: Table<(Int, Int, Int), Int, Merge::Min>;
+pub let IrredLoop: Relation<(Int, Int, Int)>;
+
+pub let StateTypeId: Relation<Int>;
+pub let MemOpKind: Relation<OperationKind>;
+pub let DirectMemSlot: Relation<(OperationKind, Int)>;
+pub let LocalAlloc: Relation<Int>;
+pub let AllocOp: Relation<(Int, Int)>;
+pub let HasStateOperand: Relation<Int>;
+pub let AllocEscapes: Relation<Int>;
+pub let PrivateAlloc: Relation<(Int, Int)>;
+pub let UnthreadedMemOp: Relation<(Int, Int, Int, Int)>;
+pub let RegionChain: Relation<(Int, Int)>;
+
+pub let DagMap: Relation<(Int, Int, Int, Int)>;
+pub let DagNode: Relation<(Int, Int, Int)>;
+pub let DagEntry: Relation<(Int, Int, Int)>;
+pub let DagEdge: Relation<(Int, Int, Int, Int)>;
+pub let DagHasExit: Relation<(Int, Int, Int)>;
+pub let DagDepthStep: Relation<(Int, Int, Int, Int)>;
+pub let DagTopoRank: Table<(Int, Int, Int), Int, Merge::Max>;
+pub let DagNotDom: Relation<(Int, Int, Int, Int)>;
+pub let DagDom: Relation<(Int, Int, Int, Int)>;
+pub let DagStrictDom: Relation<(Int, Int, Int, Int)>;
+pub let DagNotPostDom: Relation<(Int, Int, Int, Int)>;
+pub let DagPostDom: Relation<(Int, Int, Int, Int)>;
+pub let DagStrictPostDom: Relation<(Int, Int, Int, Int)>;
+pub let DagNonIpdom: Relation<(Int, Int, Int, Int)>;
+pub let DagIpdom: Relation<(Int, Int, Int, Int)>;
+pub let DagHasIpdom: Relation<(Int, Int, Int)>;
+
+pub let LoopMember: Relation<(Int, Int, Int)>;
+pub let LoopExit: Relation<(Int, Int, Int)>;
+pub let LoopMultiExit: Relation<(Int, Int)>;
+pub let NatBackedge: Relation<(Int, Int, Int, Int)>;
+pub let NatExitEdge: Relation<(Int, Int, Int, Int, Int)>;
+pub let NatMultiBack: Relation<(Int, Int)>;
+pub let NatMultiExitEdge: Relation<(Int, Int)>;
+pub let TailLoop: Relation<(Int, Int, Int, Int, Int, Int)>;
+
+pub let DagOutEdge: Relation<(Int, Int, Int, Int, Int)>;
+pub let DagBranch: Relation<(Int, Int, Int)>;
+pub let ArmReach: Relation<(Int, Int, Int, Int, Int)>;
+pub let ArmNotDom: Relation<(Int, Int, Int, Int, Int)>;
+pub let ArmBlock: Relation<(Int, Int, Int, Int, Int)>;
+pub let BranchUnstructured: Relation<(Int, Int, Int)>;
+pub let SeseBranch: Relation<(Int, Int, Int)>;
+pub let TopoHammock: Relation<(Int, Int, Int)>;
+pub let HammockMember: Relation<(Int, Int, Int, Int)>;
+pub let HammockNested: Relation<(Int, Int, Int)>;
+pub let TopHammock: Relation<(Int, Int, Int)>;
+
+pub let ValueDefBlock: Relation<(Int, Int, Int)>;
+pub let OpUseInBlock: Relation<(Int, Int, Int)>;
+pub let NestedUse: Relation<(Int, Int, Int)>;
+pub let ValueUsed: Relation<(Int, Int)>;
+pub let DeadBlockArg: Relation<(Int, Int, Int, Int)>;
+pub let DeadEdgeUse: Relation<(Int, Int, Int)>;
+pub let EdgeAssign: Relation<(Int, Int, Int, Int, Int)>;
+
+pub let BlockVarWrite: Relation<(Int, Int, Int)>;
+pub let BlockVarRead: Relation<(Int, Int, Int)>;
+pub let BlockLiveIn: Relation<(Int, Int, Int)>;
+pub let BlockLiveOut: Relation<(Int, Int, Int)>;
+pub let LoopWrites: Relation<(Int, Int, Int)>;
+pub let LoopReads: Relation<(Int, Int, Int)>;
+pub let LoopDemandOut: Relation<(Int, Int, Int)>;
+pub let LoopCarried: Relation<(Int, Int, Int)>;
+pub let LoopExitOnly: Relation<(Int, Int, Int)>;
+pub let BranchWrites: Relation<(Int, Int, Int, Int)>;
+pub let BranchReadsMem: Relation<(Int, Int, Int, Int)>;
+pub let BranchDemandOut: Relation<(Int, Int, Int, Int)>;
+pub let BranchOutput: Relation<(Int, Int, Int, Int)>;
+
+pub let scope: List<Rule> = {
+    let seed: Rule(() -> ScopeOp(arg(0)));
+    let nested<region, mode, slot, entry, node, rep>: Rule((Region(region, mode, arg(0), slot, entry),
+         ReaderAt(node, region, rep)) -> ScopeOp(node));
+    let module_op<node, place, home, pos, disp, loc>: Rule((ScopeOp(node),
+         Operation(node, dialects::builtin::module.kind, place, home, pos, disp, loc)) -> ModuleOp(node));
+    List(seed, nested, module_op)
+};
+
+pub let cfg_regions: List<Rule> = {
+    let region<owner, r, slot, entry>: Rule((ScopeOp(owner), !ModuleOp(owner), Region(r, "cfg", owner, slot, entry), less(entry, int_lit(0)) == false) -> CfgRegion(r, owner, entry));
+    let ordered_for<outer, block, layout, node, pos, disp, loc, body, entry>: Rule((ScopeOp(node), Operation(node, dialects::scf::ordered_for.kind, "block", block, pos, disp, loc),
+         Block(block, outer, layout), Region(body, "cfg", node, 0, entry), less(entry, int_lit(0)) == false) -> OrderedForInRegion(outer, node, body));
+    List(region, ordered_for)
+};
+
+pub let cfg_func_owner: List<Rule> = {
+    let direct<r, owner, entry, place, home, pos, disp, loc>: Rule((CfgRegion(r, owner, entry), Operation(owner, dialects::func::func.kind, place, home, pos, disp, loc)) -> FuncOfRegion(r, owner));
+    let nested_for<outer, for_op, body, func_op>: Rule((OrderedForInRegion(outer, for_op, body), FuncOfRegion(outer, func_op)) -> FuncOfRegion(body, func_op));
+    List(direct, nested_for)
+};
+
+pub let cfg_graph: List<Rule> = {
+    let ret_exit: Rule(() -> CfgExitKind(dialects::func::r#return.kind));
+    let yield_exit: Rule(() -> CfgExitKind(dialects::scf::r#yield.kind));
+    let edge<r, owner, entry, src, l1, term, kind, pos, disp, loc, slot, dst, l2>: Rule((CfgRegion(r, owner, entry), Block(src, r, l1), Operation(term, kind, "block", src, pos, disp, loc),
+         Successor(term, slot, dst), Block(dst, r, l2)) -> (CfgEdge(r, src, slot, dst), CfgEdgeTarget(r, src, dst)));
+    let exit_block<r, owner, entry, block, layout, term, kind, pos, disp, loc>: Rule((CfgRegion(r, owner, entry), Block(block, r, layout), Operation(term, kind, "block", block, pos, disp, loc), CfgExitKind(kind)) -> CfgExitBlock(r, block, term, kind));
+    List(ret_exit, yield_exit, edge, exit_block)
+};
+
+pub let cfg_reach: List<Rule> = {
+    let start<r, owner, entry>: Rule(CfgRegion(r, owner, entry) -> CfgReachable(r, entry));
+    let step<r, u, v>: Rule((CfgReachable(r, u), CfgEdgeTarget(r, u, v)) -> CfgReachable(r, v));
+    let path_base<r, u, v>: Rule((CfgReachable(r, u), CfgEdgeTarget(r, u, v)) -> CfgPath(r, u, v));
+    let path_step<r, u, m, v>: Rule((CfgPath(r, u, m), CfgEdgeTarget(r, m, v)) -> CfgPath(r, u, v));
+    List(start, step, path_base, path_step)
+};
+
+pub let cfg_derived: List<Rule> = {
+    let live_exit<r, b, term, kind>: Rule((CfgExitBlock(r, b, term, kind), CfgReachable(r, b)) -> CfgReachableExit(r, b, term, kind));
+    let branch<r, b, e1, d1, e2, d2>: Rule((CfgReachable(r, b), CfgEdge(r, b, e1, d1), CfgEdge(r, b, e2, d2), e1 != e2) -> CfgBranchBlock(r, b));
+    List(live_exit, branch)
+};
+
+pub let cfg_not_dom_producer: List<Rule> = {
+    let entry_other<r, owner, entry, z>: Rule((CfgRegion(r, owner, entry), CfgReachable(r, z), z != entry) -> CfgNotDom(r, entry, z));
+    let prop<r, prev, here, z>: Rule((CfgNotDom(r, prev, z), CfgEdgeTarget(r, prev, here), z != here) -> CfgNotDom(r, here, z));
+    let exit_other<r, ex, term, kind, z>: Rule((CfgReachableExit(r, ex, term, kind), CfgReachable(r, z), z != ex) -> CfgNotPostDom(r, ex, z));
+    let post_prop<r, here, next, z>: Rule((CfgNotPostDom(r, next, z), CfgEdgeTarget(r, here, next), z != here) -> CfgNotPostDom(r, here, z));
+    List(entry_other, prop, exit_other, post_prop)
+};
+
+pub let cfg_dom_producer: List<Rule> = {
+    let dom<r, d, b>: Rule((CfgReachable(r, d), CfgReachable(r, b), !CfgNotDom(r, b, d)) -> CfgDom(r, d, b));
+    let sdom<r, d, b>: Rule((CfgReachable(r, d), CfgReachable(r, b), !CfgNotDom(r, b, d), d != b) -> CfgStrictDom(r, d, b));
+    let pdom<r, p, b>: Rule((CfgReachable(r, p), CfgReachable(r, b), !CfgNotPostDom(r, b, p)) -> CfgPostDom(r, p, b));
+    let spdom<r, p, b>: Rule((CfgReachable(r, p), CfgReachable(r, b), !CfgNotPostDom(r, b, p), p != b) -> CfgStrictPostDom(r, p, b));
+    List(dom, sdom, pdom, spdom)
+};
+
+pub let cfg_non_idom_producer: List<Rule> = {
+    let dom<r, d, m, b>: Rule((CfgStrictDom(r, d, m), CfgStrictDom(r, m, b)) -> CfgNonIdom(r, d, b));
+    let pdom<r, p, m, b>: Rule((CfgStrictPostDom(r, p, m), CfgStrictPostDom(r, m, b)) -> CfgNonIpdom(r, p, b));
+    List(dom, pdom)
+};
+
+pub let cfg_idom_producer: List<Rule> = {
+    let idom<r, d, b>: Rule((CfgStrictDom(r, d, b), !CfgNonIdom(r, d, b)) -> CfgIdom(r, b, d));
+    let ipdom<r, p, b>: Rule((CfgStrictPostDom(r, p, b), !CfgNonIpdom(r, p, b)) -> CfgIpdom(r, b, p));
+    List(idom, ipdom)
+};
+
+pub let cfg_nat_loops: List<Rule> = {
+    let header<r, h, t>: Rule((CfgDom(r, h, t), CfgEdgeTarget(r, t, h)) -> (NatLoop(r, h, h), NatLoop(r, h, t), NatLoopHeader(r, h)));
+    let step<r, h, p, b>: Rule((NatLoop(r, h, b), CfgEdgeTarget(r, p, b), b != h, CfgDom(r, h, p)) -> NatLoop(r, h, p));
+    List(header, step)
+};
+
+pub let cfg_nat_nesting: List<Rule> = {
+    let contains<r, outer, inner>: Rule((NatLoop(r, outer, inner), NatLoopHeader(r, inner), outer != inner) -> NatLoopContains(r, outer, inner));
+    let has_loop<r, h, b>: Rule(NatLoop(r, h, b) -> BlockHasNatLoop(r, b));
+    let non_inner<r, b, outer, inner>: Rule((NatLoop(r, outer, b), NatLoop(r, inner, b), NatLoop(r, outer, inner), outer != inner) -> BlockNonInnerLoop(r, b, outer));
+    List(contains, has_loop, non_inner)
+};
+
+pub let cfg_nat_non_parent: List<Rule> = {
+    let skip<r, outer, mid, inner>: Rule((NatLoopContains(r, outer, mid), NatLoopContains(r, mid, inner)) -> NatLoopNonParent(r, outer, inner));
+    List(skip)
+};
+
+pub let cfg_nat_tree: List<Rule> = {
+    let parent<r, outer, inner>: Rule((NatLoopContains(r, outer, inner), !NatLoopNonParent(r, outer, inner)) -> NatLoopParent(r, inner, outer));
+    let inner_block<r, b, h>: Rule((NatLoop(r, h, b), !BlockNonInnerLoop(r, b, h)) -> BlockNatLoop(r, b, h));
+    List(parent, inner_block)
+};
+
+pub let cfg_nat_top: List<Rule> = {
+    let has_parent<r, inner, outer>: Rule(NatLoopParent(r, inner, outer) -> NatLoopTop(r, inner));
+    List(has_parent)
+};
+
+pub let cfg_scope_nodes: List<Rule> = {
+    let top_block<r, b>: Rule((CfgReachable(r, b), !BlockHasNatLoop(r, b)) -> (ScopeNode(r, r, b), ScopeOwner(r, b, b)));
+    let top_loop<r, h>: Rule((NatLoopHeader(r, h), !NatLoopTop(r, h)) -> ScopeNode(r, r, h));
+    let loop_block<r, b, h>: Rule((BlockNatLoop(r, b, h), !NatLoopHeader(r, b)) -> (ScopeNode(r, h, b), ScopeOwner(r, b, b)));
+    let loop_header_self<r, h>: Rule(NatLoopHeader(r, h) -> (ScopeNode(r, h, h), ScopeOwner(r, h, h)));
+    let child_loop<r, child, parent>: Rule(NatLoopParent(r, child, parent) -> ScopeNode(r, parent, child));
+    List(top_block, top_loop, loop_block, loop_header_self, child_loop)
+};
+
+pub let cfg_scope_edges: List<Rule> = {
+    let direct<r, s, u, v>: Rule((ScopeNode(r, s, u), ScopeNode(r, s, v), CfgEdgeTarget(r, u, v), v != s, u != v) -> ScopeRawEdge(r, s, u, v));
+    let from_child_loop<r, s, child, u, v>: Rule((ScopeNode(r, s, child), NatLoopHeader(r, child), child != s, NatLoop(r, child, u),
+         CfgEdgeTarget(r, u, v), !NatLoop(r, child, v), ScopeNode(r, s, v), v != s) -> ScopeRawEdge(r, s, child, v));
+    let child_to_child<r, s, c1, u, c2>: Rule((ScopeNode(r, s, c1), NatLoopHeader(r, c1), c1 != s, NatLoop(r, c1, u),
+         CfgEdgeTarget(r, u, c2), !NatLoop(r, c1, c2), ScopeNode(r, s, c2), NatLoopHeader(r, c2), c2 != s) -> ScopeRawEdge(r, s, c1, c2));
+    List(direct, from_child_loop, child_to_child)
+};
+
+pub let cfg_irred_paths: List<Rule> = {
+    let base<r, s, u, v>: Rule(ScopeRawEdge(r, s, u, v) -> ScopePath(r, s, u, v));
+    let step<r, s, u, m, v>: Rule((ScopePath(r, s, u, m), ScopeRawEdge(r, s, m, v)) -> ScopePath(r, s, u, v));
+    List(base, step)
+};
+
+pub let cfg_irred_scc: List<Rule> = {
+    let cyclic<r, s, u>: Rule(ScopePath(r, s, u, u) -> ScopeInCycle(r, s, u));
+    let scc<r, s, u, v>: Rule((ScopePath(r, s, u, v), ScopePath(r, s, v, u)) -> IrredScc(r, s, u, v));
+    List(cyclic, scc)
+};
+
+pub let cfg_irred_loops: List<Rule> = {
+    let rep<r, s, rep>: Rule(IrredScc(r, s, rep, rep) -> IrredLoop(r, s, rep));
+    List(rep)
+};
+
+pub let state_types: List<Rule> = {
+    let state_ty<ctor, decl, def, ty, args>: Rule((TypeCtor(ctor, "builtin", "state", decl, def), TypeTerm(ty, ctor, args)) -> StateTypeId(ty));
+    List(state_ty)
+};
+
+pub let cfg_mem_types: List<Rule> = {
+    let k_memcpy: Rule(() -> MemOpKind(dialects::ptr::memcpy.kind));
+    let k_memset: Rule(() -> MemOpKind(dialects::ptr::memset.kind));
+    let k_copy: Rule(() -> MemOpKind(dialects::ptr::copy.kind));
+    let k_call: Rule(() -> MemOpKind(dialects::func::call.kind));
+    let slot_load: Rule(() -> DirectMemSlot(dialects::ptr::load.kind, 0));
+    let slot_store: Rule(() -> DirectMemSlot(dialects::ptr::store.kind, 1));
+    let alloc<node, place, home, pos, disp, loc, addr, ty, decl>: Rule((ScopeOp(node), Operation(node, dialects::ptr::alloca.kind, place, home, pos, disp, loc), Value(addr, ty, "result", node, 0, decl)) -> (LocalAlloc(addr), AllocOp(addr, node)));
+    List(k_memcpy, k_memset, k_copy, k_call, slot_load, slot_store, alloc)
+};
+
+pub let cfg_mem_state: List<Rule> = {
+    let threaded<node, slot, v, ty, dk, owner, vslot, decl>: Rule((ScopeOp(node), Operand(node, slot, v), Value(v, ty, dk, owner, vslot, decl), StateTypeId(ty)) -> HasStateOperand(node));
+    let escape_op<addr, user, slot, kind, place, home, pos, disp, loc>: Rule((LocalAlloc(addr), Operand(user, slot, addr), Operation(user, kind, place, home, pos, disp, loc), !DirectMemSlot(kind, slot)) -> AllocEscapes(addr));
+    let escape_yield<addr, reg, slot>: Rule((LocalAlloc(addr), Yield(reg, slot, addr)) -> AllocEscapes(addr));
+    List(threaded, escape_op, escape_yield)
+};
+
+pub let cfg_mem_private: List<Rule> = {
+    let private<addr, op_id>: Rule((AllocOp(addr, op_id), !AllocEscapes(addr)) -> PrivateAlloc(addr, op_id));
+    List(private)
+};
+
+pub let cfg_mem_ops: List<Rule> = {
+    let load_priv<r, b, node, pos, disp, loc, addr, chain>: Rule((CfgReachable(r, b), Operation(node, dialects::ptr::load.kind, "block", b, pos, disp, loc), !HasStateOperand(node), Operand(node, 0, addr), PrivateAlloc(addr, chain)) -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain)));
+    let load_world<fn_id, r, b, node, pos, disp, loc, addr>: Rule((FuncOfRegion(r, fn_id), CfgReachable(r, b), Operation(node, dialects::ptr::load.kind, "block", b, pos, disp, loc), !HasStateOperand(node), Operand(node, 0, addr), !LocalAlloc(addr)) -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id)));
+    let load_escaped<fn_id, r, b, node, pos, disp, loc, addr>: Rule((FuncOfRegion(r, fn_id), CfgReachable(r, b), Operation(node, dialects::ptr::load.kind, "block", b, pos, disp, loc), !HasStateOperand(node), Operand(node, 0, addr), AllocEscapes(addr)) -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id)));
+    let store_priv<r, b, node, pos, disp, loc, addr, chain>: Rule((CfgReachable(r, b), Operation(node, dialects::ptr::store.kind, "block", b, pos, disp, loc), !HasStateOperand(node), Operand(node, 1, addr), PrivateAlloc(addr, chain)) -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain)));
+    let store_world<fn_id, r, b, node, pos, disp, loc, addr>: Rule((FuncOfRegion(r, fn_id), CfgReachable(r, b), Operation(node, dialects::ptr::store.kind, "block", b, pos, disp, loc), !HasStateOperand(node), Operand(node, 1, addr), !LocalAlloc(addr)) -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id)));
+    let store_escaped<fn_id, r, b, node, pos, disp, loc, addr>: Rule((FuncOfRegion(r, fn_id), CfgReachable(r, b), Operation(node, dialects::ptr::store.kind, "block", b, pos, disp, loc), !HasStateOperand(node), Operand(node, 1, addr), AllocEscapes(addr)) -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id)));
+    let world_op<fn_id, r, b, node, kind, pos, disp, loc>: Rule((FuncOfRegion(r, fn_id), CfgReachable(r, b), Operation(node, kind, "block", b, pos, disp, loc), MemOpKind(kind), !HasStateOperand(node)) -> (UnthreadedMemOp(r, b, node, fn_id), RegionChain(r, fn_id)));
+    let ordered_for_chain<r, b, node, pos, disp, loc, sub, entry, sb, sop, chain>: Rule((CfgReachable(r, b), Operation(node, dialects::scf::ordered_for.kind, "block", b, pos, disp, loc), Region(sub, "cfg", node, 0, entry), UnthreadedMemOp(sub, sb, sop, chain)) -> (UnthreadedMemOp(r, b, node, chain), RegionChain(r, chain)));
+    List(load_priv, load_world, load_escaped, store_priv, store_world, store_escaped, world_op, ordered_for_chain)
+};
+
+pub let dag_contract: List<Rule> = {
+    let plain<r, s, m>: Rule((ScopeNode(r, s, m), !ScopeInCycle(r, s, m)) -> (DagMap(r, s, m, m), DagNode(r, s, m)));
+    let irred<r, s, m, rep>: Rule(IrredScc(r, s, m, rep) -> (DagMap(r, s, m, rep), DagNode(r, s, rep)));
+    List(plain, irred)
+};
+
+pub let dag_edges: List<Rule> = {
+    let root_entry<r, owner, entry, dn>: Rule((CfgRegion(r, owner, entry), DagMap(r, r, entry, dn)) -> DagEntry(r, r, dn));
+    let loop_entry<r, h, dn>: Rule((NatLoopHeader(r, h), DagMap(r, h, h, dn)) -> DagEntry(r, h, dn));
+    let edge<r, s, u_raw, v_raw, u, v>: Rule((ScopeRawEdge(r, s, u_raw, v_raw), DagMap(r, s, u_raw, u), DagMap(r, s, v_raw, v), u != v) -> DagEdge(r, s, u, v));
+    let exit_ret<r, s, b, term, kind, u>: Rule((CfgReachableExit(r, b, term, kind), DagMap(r, s, b, u)) -> DagHasExit(r, s, u));
+    let exit_back<r, h, b, u>: Rule((NatLoop(r, h, b), CfgEdgeTarget(r, b, h), DagMap(r, h, b, u)) -> DagHasExit(r, h, u));
+    let exit_loop_out<r, h, b, w, u>: Rule((NatLoop(r, h, b), CfgEdgeTarget(r, b, w), !NatLoop(r, h, w), DagMap(r, h, b, u)) -> DagHasExit(r, h, u));
+    let exit_child_out<r, h, child, b, w, u>: Rule((NatLoopParent(r, child, h), NatLoop(r, child, b), CfgEdgeTarget(r, b, w), !NatLoop(r, h, w), DagMap(r, h, child, u)) -> DagHasExit(r, h, u));
+    let exit_child_back<r, h, child, b, u>: Rule((NatLoopParent(r, child, h), NatLoop(r, child, b), CfgEdgeTarget(r, b, h), DagMap(r, h, child, u)) -> DagHasExit(r, h, u));
+    let exit_child_ret<r, s, child, b, term, kind, u>: Rule((ScopeNode(r, s, child), NatLoopHeader(r, child), child != s, NatLoop(r, child, b), CfgReachableExit(r, b, term, kind), DagMap(r, s, child, u)) -> DagHasExit(r, s, u));
+    let exit_irred_ret<r, s, m, rep, b, term, kind>: Rule((IrredScc(r, s, m, rep), CfgReachableExit(r, b, term, kind), m == b) -> DagHasExit(r, s, rep));
+    let exit_irred_out<r, h, m, rep, w>: Rule((IrredScc(r, h, m, rep), CfgEdgeTarget(r, m, w), !NatLoop(r, h, w)) -> DagHasExit(r, h, rep));
+    let exit_irred_back<r, h, m, rep>: Rule((IrredScc(r, h, m, rep), CfgEdgeTarget(r, m, h)) -> DagHasExit(r, h, rep));
+    List(root_entry, loop_entry, edge, exit_ret, exit_back, exit_loop_out, exit_child_out, exit_child_back, exit_child_ret, exit_irred_ret, exit_irred_out, exit_irred_back)
+};
+
+pub let dag_topo_steps: List<Rule> = {
+    let start<r, s, e>: Rule(DagEntry(r, s, e) -> DagDepthStep(r, s, e, 0));
+    let step<r, s, u, v, d>: Rule((DagDepthStep(r, s, u, d), DagEdge(r, s, u, v)) -> DagDepthStep(r, s, v, d + 1));
+    List(start, step)
+};
+
+pub let dag_topo_rank_producer: List<Rule> = {
+    let max_rank<r, s, b, d>: Rule(DagDepthStep(r, s, b, d) -> DagTopoRank(r, s, b, d));
+    List(max_rank)
+};
+
+pub let dag_not_dom_producer: List<Rule> = {
+    let dom_start<r, s, e, z>: Rule((DagEntry(r, s, e), DagNode(r, s, z), z != e) -> DagNotDom(r, s, e, z));
+    let dom_prop<r, s, p, h, z>: Rule((DagNotDom(r, s, p, z), DagEdge(r, s, p, h), z != h) -> DagNotDom(r, s, h, z));
+    let pdom_start<r, s, ex, z>: Rule((DagHasExit(r, s, ex), DagNode(r, s, z), z != ex) -> DagNotPostDom(r, s, ex, z));
+    let pdom_prop<r, s, h, n, z>: Rule((DagNotPostDom(r, s, n, z), DagEdge(r, s, h, n), z != h) -> DagNotPostDom(r, s, h, z));
+    List(dom_start, dom_prop, pdom_start, pdom_prop)
+};
+
+pub let dag_dom_producer: List<Rule> = {
+    let dom<r, s, d, b>: Rule((DagNode(r, s, d), DagNode(r, s, b), !DagNotDom(r, s, b, d)) -> DagDom(r, s, d, b));
+    let sdom<r, s, d, b>: Rule((DagNode(r, s, d), DagNode(r, s, b), !DagNotDom(r, s, b, d), d != b) -> DagStrictDom(r, s, d, b));
+    let pdom<r, s, p, b>: Rule((DagNode(r, s, p), DagNode(r, s, b), !DagNotPostDom(r, s, b, p)) -> DagPostDom(r, s, p, b));
+    let spdom<r, s, p, b>: Rule((DagNode(r, s, p), DagNode(r, s, b), !DagNotPostDom(r, s, b, p), p != b) -> DagStrictPostDom(r, s, p, b));
+    List(dom, sdom, pdom, spdom)
+};
+
+pub let dag_non_ipdom_producer: List<Rule> = {
+    let skip<r, s, p, m, b>: Rule((DagStrictPostDom(r, s, p, m), DagStrictPostDom(r, s, m, b)) -> DagNonIpdom(r, s, p, b));
+    List(skip)
+};
+
+pub let dag_ipdom_producer: List<Rule> = {
+    let ipdom<r, s, p, b>: Rule((DagStrictPostDom(r, s, p, b), !DagNonIpdom(r, s, p, b)) -> (DagIpdom(r, s, b, p), DagHasIpdom(r, s, b)));
+    List(ipdom)
+};
+
+pub let loop_info: List<Rule> = {
+    let nat_member<r, h, b>: Rule(NatLoop(r, h, b) -> LoopMember(r, h, b));
+    let irred_block<r, s, m, rep>: Rule((IrredScc(r, s, m, rep), !NatLoopHeader(r, m)) -> LoopMember(r, rep, m));
+    let irred_child_nat<r, s, m, rep, b>: Rule((IrredScc(r, s, m, rep), NatLoop(r, m, b)) -> LoopMember(r, rep, b));
+    let nat_back<r, h, latch, slot>: Rule((NatLoop(r, h, latch), CfgEdge(r, latch, slot, h)) -> NatBackedge(r, h, latch, slot));
+    let nat_exit<r, h, src, slot, dst>: Rule((NatLoop(r, h, src), CfgEdge(r, src, slot, dst), !NatLoop(r, h, dst)) -> NatExitEdge(r, h, src, slot, dst));
+    List(nat_member, irred_block, irred_child_nat, nat_back, nat_exit)
+};
+
+pub let loop_exits: List<Rule> = {
+    let nat_exit<r, h, src, slot, dst>: Rule(NatExitEdge(r, h, src, slot, dst) -> LoopExit(r, h, dst));
+    let irred_exit<r, s, rep, src, dst>: Rule((IrredLoop(r, s, rep), LoopMember(r, rep, src), CfgEdgeTarget(r, src, dst), !LoopMember(r, rep, dst)) -> LoopExit(r, rep, dst));
+    List(nat_exit, irred_exit)
+};
+
+pub let loop_shape: List<Rule> = {
+    let multi_exit<r, l, a, b>: Rule((LoopExit(r, l, a), LoopExit(r, l, b), a != b) -> LoopMultiExit(r, l));
+    let multi_back_src<r, h, s1, e1, s2, e2>: Rule((NatBackedge(r, h, s1, e1), NatBackedge(r, h, s2, e2), s1 != s2) -> NatMultiBack(r, h));
+    let multi_back_slot<r, h, s, e1, e2>: Rule((NatBackedge(r, h, s, e1), NatBackedge(r, h, s, e2), e1 != e2) -> NatMultiBack(r, h));
+    let multi_exit_src<r, h, s1, e1, d1, s2, e2, d2>: Rule((NatExitEdge(r, h, s1, e1, d1), NatExitEdge(r, h, s2, e2, d2), s1 != s2) -> NatMultiExitEdge(r, h));
+    let multi_exit_slot<r, h, s, e1, d1, e2, d2>: Rule((NatExitEdge(r, h, s, e1, d1), NatExitEdge(r, h, s, e2, d2), e1 != e2) -> NatMultiExitEdge(r, h));
+    List(multi_exit, multi_back_src, multi_back_slot, multi_exit_src, multi_exit_slot)
+};
+
+pub let loop_tail: List<Rule> = {
+    let tail<r, h, latch, exit, be, ee, term, pos, disp, loc>: Rule((NatLoopHeader(r, h), !LoopMultiExit(r, h), !NatMultiBack(r, h), !NatMultiExitEdge(r, h),
+         NatBackedge(r, h, latch, be), NatExitEdge(r, h, latch, ee, exit),
+         Operation(term, dialects::cfg::cond_br.kind, "block", latch, pos, disp, loc)) -> TailLoop(r, h, latch, exit, be, ee));
+    List(tail)
+};
+
+pub let dag_out_edges: List<Rule> = {
+    let block_internal<r, s, b, slot, dst_raw, dst>: Rule((DagNode(r, s, b), !NatLoopHeader(r, b), !IrredLoop(r, s, b), CfgEdge(r, b, slot, dst_raw), DagMap(r, s, dst_raw, dst), dst_raw != s) -> DagOutEdge(r, s, b, slot, dst));
+    let header_internal<r, h, slot, dst_raw, dst>: Rule((NatLoopHeader(r, h), DagNode(r, h, h), CfgEdge(r, h, slot, dst_raw), DagMap(r, h, dst_raw, dst), dst_raw != h) -> DagOutEdge(r, h, h, slot, dst));
+    let block_exit_back<r, h, b, slot>: Rule((DagNode(r, h, b), CfgEdge(r, b, slot, h)) -> DagOutEdge(r, h, b, slot, h));
+    let block_exit_out<r, h, b, slot, w>: Rule((DagNode(r, h, b), CfgEdge(r, b, slot, w), !NatLoop(r, h, w)) -> DagOutEdge(r, h, b, slot, h));
+    let loop_exit_internal<r, s, l, w, dst>: Rule((DagNode(r, s, l), LoopMultiExit(r, l), LoopExit(r, l, w), DagMap(r, s, w, dst), w != s) -> DagOutEdge(r, s, l, w, dst));
+    List(block_internal, header_internal, block_exit_back, block_exit_out, loop_exit_internal)
+};
+
+pub let dag_branches: List<Rule> = {
+    let plain<r, s, b>: Rule((DagNode(r, s, b), CfgBranchBlock(r, b), !NatLoopHeader(r, b), !IrredLoop(r, s, b)) -> DagBranch(r, s, b));
+    let header<r, h>: Rule((NatLoopHeader(r, h), CfgBranchBlock(r, h)) -> DagBranch(r, h, h));
+    let multi_exit_loop<r, s, l>: Rule((DagNode(r, s, l), LoopMultiExit(r, l), l != s) -> DagBranch(r, s, l));
+    List(plain, header, multi_exit_loop)
+};
+
+pub let branch_reach: List<Rule> = {
+    let base<r, s, h, slot, dst>: Rule((DagBranch(r, s, h), DagOutEdge(r, s, h, slot, dst), dst != s, !DagIpdom(r, s, h, dst)) -> ArmReach(r, s, h, slot, dst));
+    let step<r, s, h, slot, u, v>: Rule((ArmReach(r, s, h, slot, u), DagEdge(r, s, u, v), !DagIpdom(r, s, h, v)) -> ArmReach(r, s, h, slot, v));
+    let other_base<r, s, h, slot, d1, slot2, d2>: Rule((DagBranch(r, s, h), DagOutEdge(r, s, h, slot, d1), DagOutEdge(r, s, h, slot2, d2), slot != slot2, d2 != s, !DagIpdom(r, s, h, d2)) -> ArmNotDom(r, s, h, slot, d2));
+    let other_step<r, s, h, slot, u, v>: Rule((ArmNotDom(r, s, h, slot, u), DagEdge(r, s, u, v), !DagIpdom(r, s, h, v)) -> ArmNotDom(r, s, h, slot, v));
+    List(base, step, other_base, other_step)
+};
+
+pub let branch_arms: List<Rule> = {
+    let exclusive<r, s, h, slot, b>: Rule((DagDom(r, s, h, b), ArmReach(r, s, h, slot, b), !ArmNotDom(r, s, h, slot, b)) -> ArmBlock(r, s, h, slot, b));
+    List(exclusive)
+};
+
+pub let branch_classify: List<Rule> = {
+    let unstruct_direct<r, s, h, slot, w>: Rule((DagBranch(r, s, h), DagOutEdge(r, s, h, slot, w), w != s, !DagIpdom(r, s, h, w), !ArmBlock(r, s, h, slot, w)) -> BranchUnstructured(r, s, h));
+    let unstruct_arm<r, s, h, slot, u, w>: Rule((ArmBlock(r, s, h, slot, u), DagEdge(r, s, u, w), !DagIpdom(r, s, h, w), !ArmBlock(r, s, h, slot, w)) -> BranchUnstructured(r, s, h));
+    List(unstruct_direct, unstruct_arm)
+};
+
+pub let control_tree: List<Rule> = {
+    let sese<r, s, h>: Rule((DagBranch(r, s, h), !BranchUnstructured(r, s, h)) -> SeseBranch(r, s, h));
+    let hammock<r, s, h>: Rule((DagBranch(r, s, h), BranchUnstructured(r, s, h)) -> TopoHammock(r, s, h));
+    let member_joined<r, s, h, j, b>: Rule((DagBranch(r, s, h), BranchUnstructured(r, s, h), DagIpdom(r, s, h, j), DagStrictDom(r, s, h, b), DagStrictPostDom(r, s, j, b)) -> HammockMember(r, s, h, b));
+    let member_open<r, s, h, b>: Rule((DagBranch(r, s, h), BranchUnstructured(r, s, h), !DagHasIpdom(r, s, h), DagStrictDom(r, s, h, b)) -> HammockMember(r, s, h, b));
+    List(sese, hammock, member_joined, member_open)
+};
+
+pub let hammock_outer: List<Rule> = {
+    let nested<r, s, h1, h2>: Rule((TopoHammock(r, s, h1), TopoHammock(r, s, h2), HammockMember(r, s, h1, h2)) -> HammockNested(r, s, h2));
+    List(nested)
+};
+
+pub let hammock_top: List<Rule> = {
+    let top<r, s, h>: Rule((TopoHammock(r, s, h), !HammockNested(r, s, h)) -> TopHammock(r, s, h));
+    List(top)
+};
+
+pub let ssa_defs: List<Rule> = {
+    let block_arg<r, owner, entry, b, l, v, ty, slot, decl>: Rule((CfgRegion(r, owner, entry), Block(b, r, l), Value(v, ty, "block", b, slot, decl)) -> ValueDefBlock(r, b, v));
+    let op_res<r, owner, entry, b, l, node, k, p, d, loc, v, ty, slot, decl>: Rule((CfgRegion(r, owner, entry), Block(b, r, l), Operation(node, k, "block", b, p, d, loc), Value(v, ty, "result", node, slot, decl)) -> ValueDefBlock(r, b, v));
+    let use_direct<r, b, node, k, p, d, loc, slot, v>: Rule((CfgReachable(r, b), Operation(node, k, "block", b, p, d, loc), Operand(node, slot, v)) -> OpUseInBlock(r, b, v));
+    let use_nested<r, b, outer, k, p, d, loc, sub, m, rs, en, inner, rep, slot, v>: Rule((CfgReachable(r, b), Operation(outer, k, "block", b, p, d, loc), Region(sub, m, outer, rs, en), ReaderAt(inner, sub, rep), Operand(inner, slot, v)) -> (OpUseInBlock(r, b, v), NestedUse(r, b, v)));
+    let use_yield<r, b, outer, k, p, d, loc, sub, m, rs, en, slot, v>: Rule((CfgReachable(r, b), Operation(outer, k, "block", b, p, d, loc), Region(sub, m, outer, rs, en), Yield(sub, slot, v)) -> (OpUseInBlock(r, b, v), NestedUse(r, b, v)));
+    let edge_assign<r, src, term, k, p, d, loc, edge, dst, pslot, oslot, arg, param, ty, decl>: Rule((CfgReachable(r, src), Operation(term, k, "block", src, p, d, loc), Successor(term, edge, dst),
+         SuccessorArgument(term, edge, pslot, oslot), Operand(term, oslot, arg), Value(param, ty, "block", dst, pslot, decl)) -> EdgeAssign(r, src, edge, param, arg));
+    List(block_arg, op_res, use_direct, use_nested, use_yield, edge_assign)
+};
+
+pub let ssa_used: List<Rule> = {
+    let used<r, b, v>: Rule(OpUseInBlock(r, b, v) -> ValueUsed(r, v));
+    List(used)
+};
+
+pub let ssa_dead_args: List<Rule> = {
+    let dead<r, owner, entry, b, v, ty, slot, decl>: Rule((CfgRegion(r, owner, entry), CfgReachable(r, b), b != entry, Value(v, ty, "block", b, slot, decl), !ValueUsed(r, v)) -> DeadBlockArg(r, b, slot, v));
+    List(dead)
+};
+
+pub let ssa_dead_edge_uses: List<Rule> = {
+    let dead_use<r, term, edge, dst, pslot, oslot, v>: Rule((DeadBlockArg(r, dst, pslot, v), Successor(term, edge, dst), SuccessorArgument(term, edge, pslot, oslot)) -> DeadEdgeUse(r, term, oslot));
+    List(dead_use)
+};
+
+pub let demand_block: List<Rule> = {
+    let cross_res_direct<r, def_b, v, use_b, node, k, p, d, loc, slot>: Rule((ValueDefBlock(r, def_b, v), CfgReachable(r, use_b), def_b != use_b,
+         Operation(node, k, "block", use_b, p, d, loc), Operand(node, slot, v), !DeadEdgeUse(r, node, slot)) -> (BlockVarWrite(r, def_b, v), BlockVarRead(r, use_b, v)));
+    let cross_res_nested<r, def_b, v, use_b>: Rule((ValueDefBlock(r, def_b, v), NestedUse(r, use_b, v), def_b != use_b) -> (BlockVarWrite(r, def_b, v), BlockVarRead(r, use_b, v)));
+    let edge_param<r, src, edge, param, arg, dst, ty, slot, decl>: Rule((EdgeAssign(r, src, edge, param, arg), Value(param, ty, "block", dst, slot, decl), !DeadBlockArg(r, dst, slot, param)) -> (BlockVarWrite(r, src, param), BlockVarRead(r, dst, param)));
+    let mem_op<r, b, node, chain>: Rule(UnthreadedMemOp(r, b, node, chain) -> (BlockVarWrite(r, b, chain), BlockVarRead(r, b, chain)));
+    let mem_exit<r, b, term, kind, chain>: Rule((CfgReachableExit(r, b, term, kind), RegionChain(r, chain)) -> BlockVarRead(r, b, chain));
+    let ret_val<r, owner, entry, b, term, val>: Rule((CfgRegion(r, owner, entry), CfgReachableExit(r, b, term, dialects::func::r#return.kind), Operand(term, 0, val)) -> BlockVarWrite(r, b, r));
+    List(cross_res_direct, cross_res_nested, edge_param, mem_op, mem_exit, ret_val)
+};
+
+pub let demand_liveness: List<Rule> = {
+    let read<r, b, v>: Rule(BlockVarRead(r, b, v) -> BlockLiveIn(r, b, v));
+    let edge<r, src, dst, v>: Rule((CfgEdgeTarget(r, src, dst), BlockLiveIn(r, dst, v)) -> BlockLiveOut(r, src, v));
+    let pass<r, b, v>: Rule((BlockLiveOut(r, b, v), !BlockVarWrite(r, b, v)) -> BlockLiveIn(r, b, v));
+    List(read, edge, pass)
+};
+
+pub let demand_loops: List<Rule> = {
+    let write<r, l, b, v>: Rule((LoopMember(r, l, b), BlockVarWrite(r, b, v)) -> LoopWrites(r, l, v));
+    let read<r, l, b, v>: Rule((LoopMember(r, l, b), BlockVarRead(r, b, v)) -> LoopReads(r, l, v));
+    let demand_out<r, l, x, v>: Rule((LoopExit(r, l, x), BlockLiveIn(r, x, v)) -> LoopDemandOut(r, l, v));
+    let demand_ret<r, owner, entry, l, b, term, val>: Rule((CfgRegion(r, owner, entry), LoopMember(r, l, b), CfgReachableExit(r, b, term, dialects::func::r#return.kind), Operand(term, 0, val)) -> LoopDemandOut(r, l, r));
+    let demand_mem_ret<r, l, b, term, kind, c>: Rule((LoopMember(r, l, b), CfgReachableExit(r, b, term, kind), RegionChain(r, c)) -> LoopDemandOut(r, l, c));
+    List(write, read, demand_out, demand_ret, demand_mem_ret)
+};
+
+pub let demand_loop_ports: List<Rule> = {
+    let carried_read<r, l, v>: Rule((LoopWrites(r, l, v), LoopReads(r, l, v)) -> LoopCarried(r, l, v));
+    let carried_out<r, l, v>: Rule((LoopWrites(r, l, v), LoopDemandOut(r, l, v)) -> LoopCarried(r, l, v));
+    let exit_only<r, l, v>: Rule((LoopWrites(r, l, v), LoopDemandOut(r, l, v), !LoopReads(r, l, v)) -> LoopExitOnly(r, l, v));
+    List(carried_read, carried_out, exit_only)
+};
+
+pub let demand_branches: List<Rule> = {
+    let write_arm_block<r, s, h, slot, b, v>: Rule((ArmBlock(r, s, h, slot, b), BlockVarWrite(r, b, v)) -> BranchWrites(r, s, h, v));
+    let write_arm_loop<r, s, h, slot, l, v>: Rule((ArmBlock(r, s, h, slot, l), LoopWrites(r, l, v)) -> BranchWrites(r, s, h, v));
+    let write_direct_edge<r, s, h, slot, param, arg, dst, ty, pslot, decl>: Rule((SeseBranch(r, s, h), EdgeAssign(r, h, slot, param, arg), Value(param, ty, "block", dst, pslot, decl), !DeadBlockArg(r, dst, pslot, param)) -> BranchWrites(r, s, h, param));
+    let write_hammock_block<r, s, h, b, v>: Rule((TopHammock(r, s, h), HammockMember(r, s, h, b), BlockVarWrite(r, b, v)) -> BranchWrites(r, s, h, v));
+    let write_hammock_loop<r, s, h, l, v>: Rule((TopHammock(r, s, h), HammockMember(r, s, h, l), LoopWrites(r, l, v)) -> BranchWrites(r, s, h, v));
+    let mem_arm_block<r, s, h, slot, b, c>: Rule((ArmBlock(r, s, h, slot, b), RegionChain(r, c), BlockVarRead(r, b, c)) -> BranchReadsMem(r, s, h, c));
+    let mem_arm_loop<r, s, h, slot, l, c>: Rule((ArmBlock(r, s, h, slot, l), RegionChain(r, c), LoopReads(r, l, c)) -> BranchReadsMem(r, s, h, c));
+    let mem_hammock_block<r, s, h, b, c>: Rule((TopHammock(r, s, h), HammockMember(r, s, h, b), RegionChain(r, c), BlockVarRead(r, b, c)) -> BranchReadsMem(r, s, h, c));
+    let mem_hammock_loop<r, s, h, l, c>: Rule((TopHammock(r, s, h), HammockMember(r, s, h, l), RegionChain(r, c), LoopReads(r, l, c)) -> BranchReadsMem(r, s, h, c));
+    let demand_join<r, s, h, j, v>: Rule((DagBranch(r, s, h), DagIpdom(r, s, h, j), BlockLiveIn(r, j, v)) -> BranchDemandOut(r, s, h, v));
+    let demand_join_loop<r, s, h, j, v>: Rule((DagBranch(r, s, h), DagIpdom(r, s, h, j), LoopReads(r, j, v)) -> BranchDemandOut(r, s, h, v));
+    let demand_root_ret<r, owner, entry, h>: Rule((CfgRegion(r, owner, entry), DagBranch(r, r, h), !DagHasIpdom(r, r, h)) -> BranchDemandOut(r, r, h, r));
+    let demand_root_mem<r, h, c>: Rule((DagBranch(r, r, h), !DagHasIpdom(r, r, h), RegionChain(r, c)) -> BranchDemandOut(r, r, h, c));
+    let demand_loop_body<r, lh, h, v>: Rule((DagBranch(r, lh, h), !DagHasIpdom(r, lh, h), NatLoopHeader(r, lh), LoopCarried(r, lh, v)) -> BranchDemandOut(r, lh, h, v));
+    List(write_arm_block, write_arm_loop, write_direct_edge, write_hammock_block, write_hammock_loop, mem_arm_block, mem_arm_loop, mem_hammock_block, mem_hammock_loop, demand_join, demand_join_loop, demand_root_ret, demand_root_mem, demand_loop_body)
+};
+
+pub let demand_branch_outputs: List<Rule> = {
+    let output<r, s, h, v>: Rule((BranchWrites(r, s, h, v), BranchDemandOut(r, s, h, v)) -> BranchOutput(r, s, h, v));
+    List(output)
+};
+
+extract rust scope => "@ct";
+extract rust cfg_regions => "@ct";
+extract rust cfg_func_owner => "@ct";
+extract rust cfg_graph => "@ct";
+extract rust cfg_reach => "@ct";
+extract rust cfg_derived => "@ct";
+extract rust cfg_not_dom_producer => "@ct";
+extract rust cfg_dom_producer => "@ct";
+extract rust cfg_non_idom_producer => "@ct";
+extract rust cfg_idom_producer => "@ct";
+extract rust cfg_nat_loops => "@ct";
+extract rust cfg_nat_nesting => "@ct";
+extract rust cfg_nat_non_parent => "@ct";
+extract rust cfg_nat_tree => "@ct";
+extract rust cfg_nat_top => "@ct";
+extract rust cfg_scope_nodes => "@ct";
+extract rust cfg_scope_edges => "@ct";
+extract rust cfg_irred_paths => "@ct";
+extract rust cfg_irred_scc => "@ct";
+extract rust cfg_irred_loops => "@ct";
+extract rust state_types => "@ct";
+extract rust cfg_mem_types => "@ct";
+extract rust cfg_mem_state => "@ct";
+extract rust cfg_mem_private => "@ct";
+extract rust cfg_mem_ops => "@ct";
+extract rust dag_contract => "@ct";
+extract rust dag_edges => "@ct";
+extract rust dag_topo_steps => "@ct";
+extract rust dag_topo_rank_producer => "@ct";
+extract rust dag_not_dom_producer => "@ct";
+extract rust dag_dom_producer => "@ct";
+extract rust dag_non_ipdom_producer => "@ct";
+extract rust dag_ipdom_producer => "@ct";
+extract rust loop_info => "@ct";
+extract rust loop_exits => "@ct";
+extract rust loop_shape => "@ct";
+extract rust loop_tail => "@ct";
+extract rust dag_out_edges => "@ct";
+extract rust dag_branches => "@ct";
+extract rust branch_reach => "@ct";
+extract rust branch_arms => "@ct";
+extract rust branch_classify => "@ct";
+extract rust control_tree => "@ct";
+extract rust hammock_outer => "@ct";
+extract rust hammock_top => "@ct";
+extract rust ssa_defs => "@ct";
+extract rust ssa_used => "@ct";
+extract rust ssa_dead_args => "@ct";
+extract rust ssa_dead_edge_uses => "@ct";
+extract rust demand_block => "@ct";
+extract rust demand_liveness => "@ct";
+extract rust demand_loops => "@ct";
+extract rust demand_loop_ports => "@ct";
+extract rust demand_branches => "@ct";
+extract rust demand_branch_outputs => "@ct";
+
+pub let analyze = memo |root: OperationId| {
+    (
+        Schedule::Seq(List(
+            Schedule::Saturate(scope),
+            Schedule::Saturate(cfg_regions),
+            Schedule::Saturate(cfg_func_owner),
+            Schedule::Saturate(cfg_graph),
+            Schedule::Saturate(cfg_reach),
+            Schedule::Saturate(cfg_derived),
+            Schedule::Saturate(cfg_not_dom_producer),
+            Schedule::Saturate(cfg_dom_producer),
+            Schedule::Saturate(cfg_non_idom_producer),
+            Schedule::Saturate(cfg_idom_producer),
+            Schedule::Saturate(cfg_nat_loops),
+            Schedule::Saturate(cfg_nat_nesting),
+            Schedule::Saturate(cfg_nat_non_parent),
+            Schedule::Saturate(cfg_nat_tree),
+            Schedule::Saturate(cfg_nat_top),
+            Schedule::Saturate(cfg_scope_nodes),
+            Schedule::Saturate(cfg_scope_edges),
+            Schedule::Saturate(cfg_irred_paths),
+            Schedule::Saturate(cfg_irred_scc),
+            Schedule::Saturate(cfg_irred_loops),
+            Schedule::Saturate(state_types),
+            Schedule::Saturate(cfg_mem_types),
+            Schedule::Saturate(cfg_mem_state),
+            Schedule::Saturate(cfg_mem_private),
+            Schedule::Saturate(cfg_mem_ops),
+            Schedule::Saturate(dag_contract),
+            Schedule::Saturate(dag_edges),
+            Schedule::Saturate(dag_topo_steps),
+            Schedule::Saturate(dag_topo_rank_producer),
+            Schedule::Saturate(dag_not_dom_producer),
+            Schedule::Saturate(dag_dom_producer),
+            Schedule::Saturate(dag_non_ipdom_producer),
+            Schedule::Saturate(dag_ipdom_producer),
+            Schedule::Saturate(loop_info),
+            Schedule::Saturate(loop_exits),
+            Schedule::Saturate(loop_shape),
+            Schedule::Saturate(loop_tail),
+            Schedule::Saturate(dag_out_edges),
+            Schedule::Saturate(dag_branches),
+            Schedule::Saturate(branch_reach),
+            Schedule::Saturate(branch_arms),
+            Schedule::Saturate(branch_classify),
+            Schedule::Saturate(control_tree),
+            Schedule::Saturate(hammock_outer),
+            Schedule::Saturate(hammock_top),
+            Schedule::Saturate(ssa_defs),
+            Schedule::Saturate(ssa_used),
+            Schedule::Saturate(ssa_dead_args),
+            Schedule::Saturate(ssa_dead_edge_uses),
+            Schedule::Saturate(demand_block),
+            Schedule::Saturate(demand_liveness),
+            Schedule::Saturate(demand_loops),
+            Schedule::Saturate(demand_loop_ports),
+            Schedule::Saturate(demand_branches),
+            Schedule::Saturate(demand_branch_outputs),
+        )),
+        {
+            ops: "ScopeOp",
+            modules: "ModuleOp",
+            ArmBlock: "ArmBlock",
+            BlockLiveIn: "BlockLiveIn",
+            BlockVarWrite: "BlockVarWrite",
+            BranchOutput: "BranchOutput",
+            BranchReadsMem: "BranchReadsMem",
+            CfgEdge: "CfgEdge",
+            CfgReachable: "CfgReachable",
+            CfgReachableExit: "CfgReachableExit",
+            CfgRegion: "CfgRegion",
+            DagEdge: "DagEdge",
+            DagEntry: "DagEntry",
+            DagHasIpdom: "DagHasIpdom",
+            DagIpdom: "DagIpdom",
+            DagNode: "DagNode",
+            DagStrictDom: "DagStrictDom",
+            DagTopoRank: "DagTopoRank",
+            DeadBlockArg: "DeadBlockArg",
+            EdgeAssign: "EdgeAssign",
+            HammockMember: "HammockMember",
+            IrredLoop: "IrredLoop",
+            IrredScc: "IrredScc",
+            LoopCarried: "LoopCarried",
+            LoopExit: "LoopExit",
+            LoopExitOnly: "LoopExitOnly",
+            LoopMultiExit: "LoopMultiExit",
+            NatLoopHeader: "NatLoopHeader",
+            OrderedForInRegion: "OrderedForInRegion",
+            RegionChain: "RegionChain",
+            SeseBranch: "SeseBranch",
+            TailLoop: "TailLoop",
+            TopHammock: "TopHammock",
+            UnthreadedMemOp: "UnthreadedMemOp",
+            ValueDefBlock: "ValueDefBlock",
+        },
+    )
+};

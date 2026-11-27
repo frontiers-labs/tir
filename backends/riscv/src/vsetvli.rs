@@ -1,4 +1,4 @@
-use tir::{AnalysisManager, Context, OpId, Pass, PassError};
+use tir::{Context, OpId, Pass, PassError};
 
 #[derive(Clone, Default)]
 pub struct InsertVsetvliPass;
@@ -12,12 +12,7 @@ impl Pass for InsertVsetvliPass {
     fn name(&self) -> &'static str {
         "riscv-insert-vsetvli"
     }
-    fn run(
-        &mut self,
-        _op: OpId,
-        _context: &Context,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
+    fn run(&mut self, _op: OpId, _context: &Context) -> Result<(), PassError> {
         Ok(())
     }
 }

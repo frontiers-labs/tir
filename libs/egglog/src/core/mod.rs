@@ -8,6 +8,7 @@ mod keymap;
 mod local;
 mod native;
 mod rebuild;
+mod row_change;
 mod schema;
 mod table;
 mod uf;

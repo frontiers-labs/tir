@@ -3,6 +3,7 @@ mod keys;
 mod op_spec;
 mod queries;
 mod records;
+mod revisions;
 
 #[allow(dead_code)]
 mod ir_program {
@@ -100,6 +101,7 @@ struct Inner {
     next_id: Arc<AtomicU32>,
     origin: Cell<Option<crate::parse::Span>>,
     queries: queries::Queries,
+    revisions: revisions::Revisions,
     constructing: Cell<Option<OpId>>,
 }
 
@@ -125,6 +127,7 @@ impl Context {
         keys::install(&mut engine).expect("IR entity keys");
         let queries = queries::Queries::new(engine.database());
         op_spec::install(&mut engine);
+        let revisions = revisions::Revisions::new(engine.database());
         let engine = Rc::new(RefCell::new(engine));
         let next_id = Arc::new(AtomicU32::new(0));
         let terms = Rc::new(Terms::with_engine(engine.clone(), next_id.clone()));
@@ -148,6 +151,7 @@ impl Context {
             terms,
             origin: Cell::new(None),
             queries,
+            revisions,
             constructing: Cell::new(None),
         }))
     }
@@ -189,6 +193,16 @@ impl Context {
     /// Request a fresh evaluation of the structural queries after an external edit.
     pub fn invalidate_indexes(&self) {
         self.0.queries.invalidate();
+    }
+
+    /// Revision of the IR rooted at `root`. Moving an operation or a container
+    /// changes the revisions of both its previous and current enclosing IR.
+    pub fn subtree_revision(&self, root: OpId) -> u64 {
+        self.0.revisions.subtree(self, root)
+    }
+
+    pub(crate) fn ir_revision(&self) -> (tir_egglog::DatabaseId, u64) {
+        self.0.revisions.all(self.0.engine.borrow().database())
     }
 
     fn mint(&self) -> u32 {
