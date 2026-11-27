@@ -33,49 +33,19 @@ pub fn lambda(
     name: &str,
     ret_type: tir::TypeId,
     body: &tir::RegionHandle,
-) -> FuncOpBuilder {
+    parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> FuncOp {
     let parameters: Vec<_> = body.ports().iter().map(tir::Value::ty).collect();
-    FuncOpBuilder::new(context)
-        .sym_name(name)
-        .ret_type(ret_type)
-        .result_type(tir::builtin::FnType::new(context, &parameters, ret_type))
-        .body(body.id())
-}
-
-impl FuncOpBuilder {
-    pub fn result_address(self) -> Self {
-        self.attr(
-            "result_address",
-            tir::attributes::AttributeValue::Bool(true),
-        )
-    }
-
-    pub fn noalias(self, arguments: &[usize]) -> Self {
-        self.attr(
-            "noalias",
-            tir::attributes::AttributeValue::Array(
-                arguments
-                    .iter()
-                    .map(|&argument| tir::attributes::AttributeValue::UInt(argument as u64))
-                    .collect::<Vec<_>>()
-                    .into(),
-            ),
-        )
-    }
-
-    pub fn argument_alignments(self, alignments: &[u64]) -> Self {
-        self.attr(
-            "argument_alignments",
-            tir::attributes::AttributeValue::Array(
-                alignments
-                    .iter()
-                    .copied()
-                    .map(tir::attributes::AttributeValue::UInt)
-                    .collect::<Vec<_>>()
-                    .into(),
-            ),
-        )
-    }
+    FuncOp::new(
+        context,
+        name,
+        ret_type,
+        tir::builtin::FnType::new(context, &parameters, ret_type),
+        Some(body.id()),
+        parts,
+        insertion,
+    )
 }
 
 impl Callable for FuncOp {
@@ -249,28 +219,39 @@ impl FuncOp {
         let parameters: Vec<tir::TypeId> = block_args.iter().map(tir::Value::ty).collect();
         let body_region = parser.parse_region_with_entry_args(context, block_args)?;
 
-        let mut builder = FuncOpBuilder::new(context)
-            .sym_name(sym_name.as_str())
-            .ret_type(ret_type)
-            .result_type(tir::builtin::FnType::new(context, &parameters, ret_type))
-            .body(body_region.id());
+        let mut parts = tir::NewOpParts::default();
         if result_address {
-            builder = builder.result_address();
+            parts.attributes.push(context.named_attribute(
+                "result_address",
+                tir::attributes::AttributeValue::Bool(true),
+            ));
         }
         if let Some(argument_alignments) = argument_alignments {
-            builder = builder.attr("argument_alignments", argument_alignments);
+            parts
+                .attributes
+                .push(context.named_attribute("argument_alignments", argument_alignments));
         }
         if let Some(noalias) = noalias {
-            builder = builder.attr("noalias", noalias);
+            parts
+                .attributes
+                .push(context.named_attribute("noalias", noalias));
         }
         if is_private {
-            builder = builder.attr(
+            parts.attributes.push(context.named_attribute(
                 "sym_visibility",
                 tir::attributes::AttributeValue::Str("private".to_string().into()),
-            );
+            ));
         }
 
-        Ok(Box::new(builder.build()))
+        Ok(Box::new(FuncOp::new(
+            context,
+            sym_name.as_str(),
+            ret_type,
+            tir::builtin::FnType::new(context, &parameters, ret_type),
+            Some(body_region.id()),
+            parts,
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 

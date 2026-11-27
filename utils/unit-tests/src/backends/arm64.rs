@@ -2,6 +2,7 @@
 
 use tir::backend::abi::ValueKind;
 use tir::Context;
+use tir::Operation;
 use tir_arm64::{Feature, RegClass, TargetConfig};
 
 use super::support::{numbers, pass_seq};
@@ -114,7 +115,12 @@ fn decoder_round_trips_golden_words() {
         (0x6F00F407, "fmov v7.2d, #2.0"),
     ];
 
-    let module = tir::builtin::ops::module(&context, None).build();
+    let module = tir::builtin::ops::module(
+        &context,
+        None,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let region = context.create_region();
     let block = context.create_block(vec![]);
     region.add_block(block.id());
@@ -122,20 +128,26 @@ fn decoder_round_trips_golden_words() {
     for &(w, asm) in cases {
         let id = tir_arm64::decode_instruction(&context, w)
             .unwrap_or_else(|| panic!("failed to decode {asm} ({w:#010x})"));
-        bb.append(id);
+        bb.context.insert(bb.end(), id);
     }
-    bb.append_op(tir::backend::SymbolEndOpBuilder::new(&context).build());
-    let symbol = tir::backend::SymbolOpBuilder::new(&context)
-        .body(region.id())
-        .attr(
-            "name",
-            tir::attributes::AttributeValue::Str("decoded".to_string().into()),
-        )
-        .build();
-    module.body().append_op(symbol);
-    module
-        .body()
-        .append_op(tir::builtin::ops::module_end(&context).build());
+    tir::backend::SymbolEndOp::new(&context, Default::default(), bb.end());
+    let symbol = tir::backend::SymbolOp::new(
+        &context,
+        Some(region.id()),
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute(
+                "name",
+                tir::attributes::AttributeValue::Str("decoded".to_string().into()),
+            )],
+        },
+        tir::InsertionPoint::Root,
+    );
+    {
+        let op = symbol;
+        (module.body()).context.insert(module.body().end(), op.id());
+        op
+    };
+    tir::builtin::ops::module_end(&context, Default::default(), module.body().end());
 
     let writer = tir::backend::binary::BinaryWriter::new();
     let format = target.object_format().unwrap();

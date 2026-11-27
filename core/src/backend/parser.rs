@@ -4,39 +4,17 @@ use tir::RegionHandle;
 
 use tir::attributes::AttributeValue;
 use tir::{
-    BlockId, Operation,
-    builtin::{ModuleEndOpBuilder, ModuleOp, ModuleOpBuilder},
+    BlockId, InsertionPoint, NewOpParts, Operation,
+    builtin::{ModuleEndOp, ModuleOp},
     parse::tokens::Parser,
 };
 
 use crate::backend::{
-    LiteralOpBuilder, MachineInstruction, SectionOpBuilder, SymbolEndOpBuilder, SymbolOpBuilder,
-    lex, lexer::Token,
+    LiteralOp, MachineInstruction, SectionOp, SymbolEndOp, SymbolOp, lex, lexer::Token,
 };
 
 pub type AsmInstructionParser =
-    for<'src> fn(&tir::Context, &mut AsmCursor, &mut Parser<'src, Token<'src>>) -> Result<(), ()>;
-
-/// Where the assembly parser writes: a block and the position the next operation
-/// takes in it. A symbol body already holds its terminator when parsing starts,
-/// so its instructions land ahead of everything the block holds rather than at
-/// its end.
-pub struct AsmCursor {
-    block: BlockHandle,
-    position: usize,
-}
-
-impl AsmCursor {
-    pub fn at_start(block: BlockHandle) -> Self {
-        Self { block, position: 0 }
-    }
-
-    pub fn insert<T: Operation>(&mut self, op: T) -> T {
-        self.block.insert(self.position, op.id());
-        self.position += 1;
-        op
-    }
-}
+    for<'src> fn(&tir::Context, InsertionPoint, &mut Parser<'src, Token<'src>>) -> Result<(), ()>;
 
 pub struct AsmParser {
     /// Candidate parsers per mnemonic. A single mnemonic (e.g. AArch64 `add`)
@@ -65,17 +43,20 @@ impl AsmParser {
 
     #[allow(clippy::result_unit_err)]
     pub fn parse_asm(&self, context: &tir::Context, src: &str) -> Result<ModuleOp, ()> {
-        let module = ModuleOpBuilder::new(context).build();
+        let module = ModuleOp::new(context, None, Default::default(), InsertionPoint::Root);
 
         let tokens = lex(src)?;
 
         let mut parser = Parser::new(&tokens);
 
         let module_body = module.body();
-        let section_op = module_body.append_op(SectionOpBuilder::new(context).build());
-        module_body.append_op(ModuleEndOpBuilder::new(context).build());
+        let section_op = SectionOp::new(context, None, Default::default(), module_body.end());
+        ModuleEndOp::new(context, Default::default(), module_body.end());
         let section_body = section_op.body();
-        let mut builder = AsmCursor::at_start(section_body.clone());
+        let mut insertion = InsertionPoint::Block {
+            block: section_body.id(),
+            position: 0,
+        };
 
         // Local labels seen so far, mapped to the block they name. After parsing
         // we rewrite branch immediates that reference one of these.
@@ -95,20 +76,25 @@ impl AsmParser {
                     let name = parser.bump();
                     match name {
                         Some(Token::Ident(name)) => {
-                            builder = AsmCursor::at_start(section_body.clone());
-                            let global_op = builder.insert(
-                                SymbolOpBuilder::new(context)
-                                    .attr(
+                            let global_op = SymbolOp::new(
+                                context,
+                                None,
+                                NewOpParts {
+                                    attributes: vec![context.named_attribute(
                                         "name",
-                                        tir::attributes::AttributeValue::Str(
-                                            (*name).to_string().into(),
-                                        ),
-                                    )
-                                    .build(),
+                                        AttributeValue::Str((*name).into()),
+                                    )],
+                                },
+                                InsertionPoint::Block {
+                                    block: section_body.id(),
+                                    position: 0,
+                                },
                             );
-                            builder = AsmCursor::at_start(global_op.body());
-                            builder.insert(SymbolEndOpBuilder::new(context).build());
-                            builder = AsmCursor::at_start(global_op.body());
+                            SymbolEndOp::new(context, Default::default(), global_op.body().end());
+                            insertion = InsertionPoint::Block {
+                                block: global_op.body().id(),
+                                position: 0,
+                            };
 
                             cur_region = global_op.regions().next();
                             cur_entry = Some(global_op.body());
@@ -137,7 +123,10 @@ impl AsmParser {
                             region.add_block(block.id());
                             block.set_attr("name", AttributeValue::Str(name.clone().into()));
                             labels.insert(name, block.id());
-                            builder = AsmCursor::at_start(block.clone());
+                            insertion = InsertionPoint::Block {
+                                block: block.id(),
+                                position: 0,
+                            };
                             at_entry = false;
                             block_has_content = false;
                         }
@@ -158,39 +147,40 @@ impl AsmParser {
                                 Some(Token::HexNumber(n)) => parse_hex(n)?,
                                 _ => return Err(()),
                             };
-                            builder.insert(
-                                LiteralOpBuilder::new(context)
-                                    .attr(
-                                        "kind",
-                                        tir::attributes::AttributeValue::Str(
-                                            kind.to_string().into(),
-                                        ),
-                                    )
-                                    .attr("value", tir::attributes::AttributeValue::Int(value))
-                                    .build(),
+                            LiteralOp::new(
+                                context,
+                                AttributeValue::Str(kind.into()),
+                                NewOpParts {
+                                    attributes: vec![
+                                        context
+                                            .named_attribute("value", AttributeValue::Int(value)),
+                                    ],
+                                },
+                                insertion,
                             );
+                            if let InsertionPoint::Block { position, .. } = &mut insertion {
+                                *position += 1;
+                            }
                             block_has_content = true;
                         }
                         "string" | "ascii" | "asciz" => {
                             let Some(Token::StringLit(value)) = parser.bump() else {
                                 return Err(());
                             };
-                            builder.insert(
-                                LiteralOpBuilder::new(context)
-                                    .attr(
-                                        "kind",
-                                        tir::attributes::AttributeValue::Str(
-                                            kind.to_string().into(),
-                                        ),
-                                    )
-                                    .attr(
+                            LiteralOp::new(
+                                context,
+                                AttributeValue::Str(kind.into()),
+                                NewOpParts {
+                                    attributes: vec![context.named_attribute(
                                         "value",
-                                        tir::attributes::AttributeValue::Str(
-                                            (*value).to_string().into(),
-                                        ),
-                                    )
-                                    .build(),
+                                        AttributeValue::Str((*value).into()),
+                                    )],
+                                },
+                                insertion,
                             );
+                            if let InsertionPoint::Block { position, .. } = &mut insertion {
+                                *position += 1;
+                            }
                             block_has_content = true;
                         }
                         // Layout/section directives (`.rodata`, `.align`, ...)
@@ -213,7 +203,7 @@ impl AsmParser {
                         let mut parsed = false;
                         for handler in handlers {
                             parser.reset(start);
-                            if handler(context, &mut builder, &mut parser).is_ok() {
+                            if handler(context, insertion, &mut parser).is_ok() {
                                 parsed = true;
                                 break;
                             }
@@ -221,6 +211,9 @@ impl AsmParser {
                         if !parsed {
                             eprintln!("invalid operands for instruction '{key}'");
                             return Err(());
+                        }
+                        if let InsertionPoint::Block { position, .. } = &mut insertion {
+                            *position += 1;
                         }
                         block_has_content = true;
                     } else if self.disabled_mnemonics.contains(&key) {

@@ -22,9 +22,9 @@ use crate as tir;
 
 pub mod ops {
     pub use super::{
-        AllocaOp, CmpOp, CmpOpBuilder, CopyOp, DisjointOp, FieldOp, LoadOp, MemcpyOp, MemsetOp,
-        NullOp, PtrAddOp, PtrDiffOp, StoreOp, alloca, cmp, copy, disjoint, field, load, memcpy,
-        memset, null, ptradd, ptrdiff, store,
+        AllocaOp, CmpOp, CopyOp, DisjointOp, FieldOp, LoadOp, MemcpyOp, MemsetOp, NullOp, PtrAddOp,
+        PtrDiffOp, StoreOp, alloca, cmp, copy, disjoint, field, load, memcpy, memset, null, ptradd,
+        ptrdiff, store,
     };
 }
 

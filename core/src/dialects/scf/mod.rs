@@ -4,8 +4,8 @@ use crate as tir;
 
 pub mod nodes;
 pub mod ordered;
-pub use nodes::{ForOp, ForOpBuilder, LoopOp, LoopOpBuilder, SwitchOp, SwitchOpBuilder};
-pub use ordered::{OrderedForOp, OrderedForOpBuilder};
+pub use nodes::{ForOp, LoopOp, SwitchOp};
+pub use ordered::OrderedForOp;
 
 pub mod ops {
     pub use super::nodes::{r#for, r#loop, switch};

@@ -75,7 +75,7 @@ fn clone_region_into(context: &Context, region: RegionId, mapping: &mut Mapping)
         let target = mapping.blocks[&block.id()];
         for op in block.op_ids() {
             let copy = clone_op_into(context, op, mapping);
-            context.get_block(target).append(copy);
+            context.insert(context.get_block(target).end(), copy);
         }
     }
 
@@ -147,7 +147,9 @@ fn clone_op_into(context: &Context, op: OpId, mapping: &mut Mapping) -> OpId {
     // A copy is located where its source is.
     let origin = context.op_location(op);
     let outer = origin.map(|origin| context.set_origin(Some(origin)));
-    let copy = context.add_operation(instance).id;
+    let copy = context
+        .add_operation(crate::InsertionPoint::Root, instance)
+        .id;
     if let Some(outer) = outer {
         context.set_origin(outer);
     }

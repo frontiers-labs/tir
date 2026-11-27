@@ -241,9 +241,14 @@ fn arm64_branch_link_writes_the_link_register_and_pc() {
 
     let mut ex = Executor::new(64);
     MachineContext::write_pc(&mut ex, 0x2000);
-    let bl = tir_arm64::BranchLinkOpBuilder::new(&context)
-        .attr("imm", AttributeValue::Int(3))
-        .build();
+    let bl = tir_arm64::BranchLinkOp::new(
+        &context,
+        AttributeValue::Int(3),
+        vec![],
+        vec![],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let mi = context
         .get_op(bl.id())
         .as_interface::<dyn MachineInstruction>()

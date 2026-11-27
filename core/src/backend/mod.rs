@@ -49,7 +49,7 @@ pub use verify::verify_machine_ir;
 
 pub use lexer::Token;
 pub use lexer::lex;
-pub use parser::{AsmCursor, AsmInstructionParser, AsmParser};
+pub use parser::{AsmInstructionParser, AsmParser};
 pub use printer::{AsmPrintError, AsmPrinter};
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
 use tir::sem::{AtomicRmwOp, MemOrdering};
@@ -625,6 +625,7 @@ pub fn parse_machine_op<T: tir::Operation>(
         }
     }
     Ok(T::from_op_instance_dyn(context.add_operation(
+        tir::InsertionPoint::Root,
         tir::NewOp::new::<T>(
             context.clone(),
             operands,
@@ -863,10 +864,11 @@ pub fn emit_uncond_branch(
     dest: tir::BlockId,
     args: &[tir::ValueId],
 ) -> Box<dyn tir::Operation> {
-    Box::new(
-        VirtualBranchOpBuilder::new(context)
-            .dest_args(args.to_vec())
-            .dest(dest)
-            .build(),
-    )
+    Box::new(VirtualBranchOp::new(
+        context,
+        args.to_vec(),
+        tir::attributes::AttributeValue::Block(dest),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    ))
 }

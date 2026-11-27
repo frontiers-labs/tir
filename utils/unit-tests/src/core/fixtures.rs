@@ -2,7 +2,7 @@
 
 use tir::attributes::AttributeValue;
 use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterView};
-use tir::backend::{SymbolOp, SymbolOpBuilder};
+use tir::backend::SymbolOp;
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
 use tir::parse::ir::parse_ir;
@@ -95,14 +95,18 @@ pub const fn r_high() -> RegClassId {
 pub fn asm_symbol(context: &Context, ops: &[OpId]) -> (SymbolOp, BlockHandle) {
     let block = context.create_block(vec![]);
     for &op in ops {
-        block.append(op);
+        block.context.insert(block.end(), op);
     }
     let region = context.create_region();
     region.add_block(block.id());
-    let symbol = SymbolOpBuilder::new(context)
-        .body(region.id())
-        .attr("name", AttributeValue::Str("f".into()))
-        .build();
+    let symbol = SymbolOp::new(
+        context,
+        Some(region.id()),
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute("name", AttributeValue::Str("f".into()))],
+        },
+        tir::InsertionPoint::Root,
+    );
     (symbol, block)
 }
 

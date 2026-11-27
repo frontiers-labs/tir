@@ -33,7 +33,14 @@ impl Pass for AddToSubPass {
         let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
         let operands = add.operands();
         let result_ty = context.get_value(add.result()).ty();
-        let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
+        let new_op = ops::subi(
+            context,
+            operands[0],
+            operands[1],
+            result_ty,
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
         context.replace_op(&op, &new_op)
     }
 }
@@ -87,7 +94,14 @@ impl Pass for ReplaceThenErasePass {
         let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
         let operands = add.operands();
         let result_ty = context.get_value(add.result()).ty();
-        let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
+        let new_op = ops::subi(
+            context,
+            operands[0],
+            operands[1],
+            result_ty,
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
         context.replace_op(&op, &new_op)?;
         context.erase_op(&OperationRef::new(context.get_op(new_op.id())))
     }
@@ -178,8 +192,22 @@ fn splitting_a_block_moves_its_tail_into_a_new_block() {
     let i32 = IntegerType::new(&context, 32);
     let value = context.create_value(i32, None);
     let block = context.create_block(vec![]);
-    let head = block.append_op(ops::addi(&context, value.id(), value.id(), i32).build());
-    let tail = block.append_op(ops::subi(&context, value.id(), value.id(), i32).build());
+    let head = ops::addi(
+        &context,
+        value.id(),
+        value.id(),
+        i32,
+        Default::default(),
+        block.end(),
+    );
+    let tail = ops::subi(
+        &context,
+        value.id(),
+        value.id(),
+        i32,
+        Default::default(),
+        block.end(),
+    );
 
     let split = context.split_block(block.id(), 1);
 
@@ -425,20 +453,21 @@ fn cloning_a_region_with_a_mapping_binds_arguments_and_outside_values() {
     let context = Context::with_default_dialects();
     let i32 = IntegerType::new(&context, 32);
     let outside = context.create_block(Vec::new());
-    let x = outside
-        .append_op(ops::constant(&context, 1, i32).build())
-        .result();
-    let y = outside
-        .append_op(ops::constant(&context, 2, i32).build())
-        .result();
-    let z = outside
-        .append_op(ops::constant(&context, 3, i32).build())
-        .result();
+    let x = ops::constant(&context, 1, i32, Default::default(), outside.end()).result();
+    let y = ops::constant(&context, 2, i32, Default::default(), outside.end()).result();
+    let z = ops::constant(&context, 3, i32, Default::default(), outside.end()).result();
     let region = context.create_region();
     let argument = context.create_value(i32, None);
     let block = context.create_block(vec![argument.clone()]);
     region.add_block(block.id());
-    block.append_op(ops::addi(&context, argument.id(), x, i32).build());
+    ops::addi(
+        &context,
+        argument.id(),
+        x,
+        i32,
+        Default::default(),
+        block.end(),
+    );
 
     let bindings = HashMap::from([(argument.id(), y), (x, z)]);
     let copy = tir::clone_region_with_mapping(&context, region.id(), &bindings);
@@ -554,8 +583,20 @@ impl Pass for PeerCountPass {
         context.set_op_attributes(id, attributes);
         let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
         let i32_ty = IntegerType::new(context, 32);
-        func.body()
-            .insert(0, ops::constant(context, 7, i32_ty).build().id());
+        context.insert(
+            tir::InsertionPoint::Block {
+                block: func.body().id(),
+                position: 0,
+            },
+            ops::constant(
+                context,
+                7,
+                i32_ty,
+                Default::default(),
+                tir::InsertionPoint::Root,
+            )
+            .id(),
+        );
         Ok(())
     }
 }
@@ -635,8 +676,20 @@ impl Pass for SlowFirstPass {
         let delay = if func.symbol_name() == "a" { 30 } else { 0 };
         std::thread::sleep(std::time::Duration::from_millis(delay));
         let i32_ty = IntegerType::new(context, 32);
-        func.body()
-            .insert(0, ops::constant(context, 7, i32_ty).build().id());
+        context.insert(
+            tir::InsertionPoint::Block {
+                block: func.body().id(),
+                position: 0,
+            },
+            ops::constant(
+                context,
+                7,
+                i32_ty,
+                Default::default(),
+                tir::InsertionPoint::Root,
+            )
+            .id(),
+        );
         Ok(())
     }
 }

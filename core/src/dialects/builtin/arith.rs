@@ -35,10 +35,20 @@ impl crate::ConstantLike for ConstantOp {
 }
 
 /// A `builtin.constant` of `ty` holding `value`, wider than 64 bits or not.
-pub fn literal(context: &Context, value: &tir::utils::APInt, ty: tir::TypeId) -> ConstantOpBuilder {
-    ConstantOpBuilder::new(context)
-        .attr("value", tir::attributes::AttributeValue::from_int(value))
-        .result_type(ty)
+pub fn literal(
+    context: &Context,
+    value: &tir::utils::APInt,
+    ty: tir::TypeId,
+    parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> ConstantOp {
+    ConstantOp::new(
+        context,
+        tir::attributes::AttributeValue::from_int(value),
+        ty,
+        parts,
+        insertion,
+    )
 }
 
 // The rest of an invocation is more fields of the op: its flags, and where

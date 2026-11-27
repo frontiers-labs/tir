@@ -31,7 +31,7 @@ impl Context {
             regions.iter().all(|region| chain.contains(region)),
             "operands of sibling regions are visible from no region"
         );
-        self.add(chosen, op);
+        self.insert(crate::InsertionPoint::Region(chosen), op);
         chosen
     }
 

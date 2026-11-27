@@ -65,10 +65,13 @@ impl BranchOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let (dest, dest_args) = parse_successor(parser, context)?;
-        let op = BranchOpBuilder::new(context)
-            .dest_args(dest_args)
-            .dest(dest)
-            .build();
+        let op = BranchOp::new(
+            context,
+            dest_args,
+            tir::attributes::AttributeValue::Block(dest),
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
         Ok(Box::new(op))
     }
 }
@@ -160,13 +163,16 @@ impl CondBranchOp {
         parser.expect_token(",")?;
         let (false_dest, false_args) = parse_successor(parser, context)?;
 
-        let op = CondBranchOpBuilder::new(context)
-            .condition(condition)
-            .true_args(true_args)
-            .false_args(false_args)
-            .true_dest(true_dest)
-            .false_dest(false_dest)
-            .build();
+        let op = CondBranchOp::new(
+            context,
+            condition,
+            true_args,
+            false_args,
+            tir::attributes::AttributeValue::Block(true_dest),
+            tir::attributes::AttributeValue::Block(false_dest),
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
         Ok(Box::new(op))
     }
 }
@@ -200,22 +206,34 @@ fn unsigned_list(values: impl IntoIterator<Item = u64>) -> AttributeValue {
     )
 }
 
-impl SwitchOpBuilder {
+impl SwitchOp {
     /// Take `cases[i].1` where the selector's bits are `cases[i].0`, and
     /// `default` where they are none of them, each entered on its values.
-    pub fn successors(self, cases: Vec<(u64, Successor)>, default: Successor) -> Self {
+    pub fn with_successors(
+        context: &Context,
+        selector: ValueId,
+        cases: Vec<(u64, Successor)>,
+        default: Successor,
+        mut parts: tir::NewOpParts,
+        insertion: tir::InsertionPoint,
+    ) -> Self {
         let (values, edges): (Vec<u64>, Vec<Successor>) = cases.into_iter().unzip();
         let edges = edges.into_iter().chain([default]).collect::<Vec<_>>();
         let dests = edges.iter().map(|(dest, _)| AttributeValue::Block(*dest));
         let counts = edges.iter().map(|(_, args)| args.len() as u64);
         let args = edges.iter().flat_map(|(_, args)| args.clone()).collect();
-        self.args(args)
-            .attr(
-                DESTS,
-                AttributeValue::Array(dests.collect::<Vec<_>>().into()),
-            )
-            .attr(CASES, unsigned_list(values))
-            .attr(ARG_COUNTS, unsigned_list(counts))
+        parts.attributes.splice(
+            ..0,
+            [
+                context.named_attribute(
+                    DESTS,
+                    AttributeValue::Array(dests.collect::<Vec<_>>().into()),
+                ),
+                context.named_attribute(CASES, unsigned_list(values)),
+                context.named_attribute(ARG_COUNTS, unsigned_list(counts)),
+            ],
+        );
+        Self::new(context, selector, args, parts, insertion)
     }
 }
 
@@ -317,10 +335,14 @@ impl SwitchOp {
             cases.push((crate::binding::truncate_bits(case, width), successor));
         }
         parser.expect_token("]")?;
-        let op = SwitchOpBuilder::new(context)
-            .selector(selector)
-            .successors(cases, default)
-            .build();
+        let op = SwitchOp::with_successors(
+            context,
+            selector,
+            cases,
+            default,
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
         Ok(Box::new(op))
     }
 }
