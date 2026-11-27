@@ -288,6 +288,10 @@ pub enum ConstraintPort {
     Output(String),
 }
 
+pub enum ConstraintRegion {
+    Region(String),
+}
+
 pub enum TypeConstraint {
     EqualWidth(ConstraintPort, ConstraintPort, String),
     PointerWidth(ConstraintPort, String),
@@ -300,6 +304,10 @@ pub enum TypeConstraint {
     FunctionReturn(ConstraintPort),
     FunctionCall(ConstraintPort, ConstraintPort, ConstraintPort),
     ModuleScope(String),
+    RegionExits(ConstraintRegion, List<String>, String, String),
+    ExitRole(String),
+    OrderedLoop(ConstraintPort, String),
+    SwitchCases(ConstraintPort),
 }
 
 pub enum Interface {
