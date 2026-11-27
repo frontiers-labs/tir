@@ -2,8 +2,11 @@
 
 module {
   %f = func.func @directed(%a: !f64, %b: !f64) -> !f64 {
-    %sum = fp.add %a, %b {semantics = {rounding = "toward_positive", nan = "canonical"}} : !f64
-    -> %sum
+    %x = fp.capture %a : !fp.computation<!f64, toward_positive, separate>
+    %y = fp.capture %b : !fp.computation<!f64, toward_positive, separate>
+    %sum = fp.add %x, %y : !fp.computation<!f64, toward_positive, separate>
+    %result = fp.materialize %sum : !f64
+    -> %result
   }
   %c = func.func @compare(%a: !f64, %b: !f64) -> !i1 {
     %less = fp.cmp %a, %b {predicate = "olt"} : !i1
@@ -16,6 +19,15 @@ module {
   module_end
 }
 
-// CHECK: fp.add %{{[0-9]+}}, %{{[0-9]+}} {semantics = {nan = "canonical", rounding = "toward_positive"}} : !f64
-// CHECK: fp.cmp %{{[0-9]+}}, %{{[0-9]+}} {predicate = "olt"} : !i1
-// CHECK: fp.to_si %{{[0-9]+}} : !i64
+// CHECK-LABEL: func.func @directed(%[[A:[0-9]+]]: !f64, %[[B:[0-9]+]]: !f64) -> !f64
+// CHECK: %[[X:[0-9]+]] = fp.capture %[[A]] : !fp.computation<!f64, toward_positive, separate>
+// CHECK-NEXT: %[[Y:[0-9]+]] = fp.capture %[[B]] : !fp.computation<!f64, toward_positive, separate>
+// CHECK-NEXT: %[[SUM:[0-9]+]] = fp.add %[[X]], %[[Y]] : !fp.computation<!f64, toward_positive, separate>
+// CHECK-NEXT: %[[RESULT:[0-9]+]] = fp.materialize %[[SUM]] : !f64
+// CHECK-NEXT: -> %[[RESULT]]
+// CHECK-LABEL: func.func @compare(%[[LEFT:[0-9]+]]: !f64, %[[RIGHT:[0-9]+]]: !f64) -> !i1
+// CHECK: %[[LESS:[0-9]+]] = fp.cmp %[[LEFT]], %[[RIGHT]] {predicate = "olt"} : !i1
+// CHECK-NEXT: -> %[[LESS]]
+// CHECK-LABEL: func.func @convert(%[[INPUT:[0-9]+]]: !f64) -> !i64
+// CHECK: %[[INTEGER:[0-9]+]] = fp.to_si %[[INPUT]] : !i64
+// CHECK-NEXT: -> %[[INTEGER]]
