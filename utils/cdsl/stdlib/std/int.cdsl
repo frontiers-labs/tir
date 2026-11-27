@@ -1,0 +1,25 @@
+// Egglog integer & boolean primitive combinators (pure CDSL -> Atom).
+
+use std::core::{Atom, List};
+
+pub let less = |a: Atom, b: Atom| -> Atom { Atom::Call("less", List(a, b)) };
+pub let le = |a: Atom, b: Atom| -> Atom { Atom::Call("bool-<=", List(a, b)) };
+pub let gt = |a: Atom, b: Atom| -> Atom { Atom::Call("bool->", List(a, b)) };
+pub let ge = |a: Atom, b: Atom| -> Atom { Atom::Call("ge", List(a, b)) };
+pub let bool_lt = |a: Atom, b: Atom| -> Atom { Atom::Call("bool-<", List(a, b)) };
+pub let equal = |a: Atom, b: Atom| -> Atom { Atom::Call("equal", List(a, b)) };
+pub let log_and = |a: Atom, b: Atom| -> Atom { Atom::Call("and", List(a, b)) };
+pub let log_or = |a: Atom, b: Atom| -> Atom { Atom::Call("or", List(a, b)) };
+pub let log_not = |a: Atom| -> Atom { Atom::Call("not", List(a)) };
+pub let to_string = |a: Atom| -> Atom { Atom::Call("to-string", List(a)) };
+
+extract rust less      => "@ct";
+extract rust le        => "@ct";
+extract rust gt        => "@ct";
+extract rust ge        => "@ct";
+extract rust bool_lt   => "@ct";
+extract rust equal     => "@ct";
+extract rust log_and   => "@ct";
+extract rust log_or    => "@ct";
+extract rust log_not   => "@ct";
+extract rust to_string => "@ct";

@@ -1,0 +1,37 @@
+[package]
+name = "tir-cdsl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chumsky.workspace = true
+logos.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tir-cdsl-core.workspace = true
+tir-cst.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "cdslc"
+path = "bin/main.rs"
+
+[dev-dependencies]
+criterion.workspace = true
+tir-bench.workspace = true
+tir-egglog.workspace = true
+
+[[bench]]
+name = "baseline"
+harness = false
+
+[[bin]]
+name = "cdsl-format"
+path = "bin/format.rs"
+test = false

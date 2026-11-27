@@ -1,0 +1,10 @@
+// RUN: cdslc --input %S/Inputs/local.cdsl --emit typed --output - | filecheck %s --check-prefix=LOCAL
+// RUN: not cdslc --input %S/Inputs/unknown.cdsl --emit typed --output - 2>&1 | filecheck %s --check-prefix=UNKNOWN
+// RUN: not cdslc --input %S/Inputs/external.cdsl --emit typed --output - 2>&1 | filecheck %s --check-prefix=EXTERNAL
+// RUN: not cdslc --input %S/Inputs/removed-function.cdsl --emit typed --output /dev/null 2>&1 | filecheck %s --check-prefix=REMOVED
+// LOCAL: Typechecked
+// LOCAL: inductive Choice
+// LOCAL: def selected : Choice
+// UNKNOWN: cdslc: in `bad`: unbound global: missing
+// EXTERNAL: cdslc: cannot find module file for `mod outside;`
+// REMOVED: cdslc: {{.*}}removed-function.cdsl: unexpected

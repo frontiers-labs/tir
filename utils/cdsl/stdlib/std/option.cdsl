@@ -1,0 +1,12 @@
+// Option utility functions.
+
+use std::core::Option;
+
+pub let get_or<A> = |opt: Option<A>, default: A| -> A {
+    match opt {
+        Option::Some(v) => v,
+        Option::None => default,
+    }
+};
+
+extract rust get_or => "@ct";

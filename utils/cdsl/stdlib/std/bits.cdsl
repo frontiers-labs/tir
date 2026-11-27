@@ -1,0 +1,55 @@
+// Bit-vector denotational primitives (for `op { exec: ..., poison: ... }` and Lean 4 proofs).
+
+use std::core::Nat;
+use std::ir::Bits;
+
+pub let from_int<w: Nat>: Int -> Bits<w>;
+pub let from_bool: Bool -> Bits<1>;
+pub let zero<w: Nat>: () -> Bits<w>;
+pub let width_value<w: Nat>: () -> Bits<w>;
+pub let add_wrap<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let add_wrapping<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let sub_wrap<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let sub_wrapping<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let mul_wrap<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let mul_wrapping<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let sdiv<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let udiv<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let srem<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let urem<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let and<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let or<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let xor<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let shl<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let lshr<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let ashr<w: Nat>: (Bits<w>, Bits<w>) -> Bits<w>;
+pub let sext<In: Nat, Out: Nat>: Bits<In> -> Bits<Out>;
+pub let zext<In: Nat, Out: Nat>: Bits<In> -> Bits<Out>;
+pub let trunc<In: Nat, Out: Nat>: Bits<In> -> Bits<Out>;
+pub let bitcast<In: Nat, Out: Nat>: Bits<In> -> Bits<Out>;
+pub let eq<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let ne<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let slt<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let sgt<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let sle<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let sge<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let ult<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let ugt<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let ule<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let uge<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let signed_add_overflows<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let unsigned_add_overflows<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let signed_sub_overflows<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let unsigned_sub_overflows<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+pub let signed_div_defined<w: Nat>: (Bits<w>, Bits<w>) -> Bool;
+
+extract lean from_int => "BitVec.ofInt";
+extract lean add_wrap => "BitVec.add";
+extract lean add_wrapping => "BitVec.add";
+extract lean sub_wrap => "BitVec.sub";
+extract lean sub_wrapping => "BitVec.sub";
+extract lean mul_wrap => "BitVec.mul";
+extract lean and => "BitVec.and";
+extract lean or  => "BitVec.or";
+extract lean xor => "BitVec.xor";
+extract lean udiv => "BitVec.udiv";

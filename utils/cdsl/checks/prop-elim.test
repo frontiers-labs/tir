@@ -1,0 +1,5 @@
+// RUN: cdslc --input %S/Inputs/prop-elim-ok.cdsl --emit lean --output - | filecheck %s --check-prefix=OK
+// RUN: not cdslc --input %S/Inputs/prop-elim-bad.cdsl --emit typed --output /dev/null 2>&1 | filecheck %s --check-prefix=BAD
+// OK: inductive TrueP : Prop
+// OK: inductive OrP : Prop
+// BAD: cannot eliminate Prop scrutinee (OrP) into Type result (Int)

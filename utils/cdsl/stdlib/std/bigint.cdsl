@@ -1,0 +1,56 @@
+// Egglog BigInt expression combinators (pure CDSL -> Atom).
+
+use std::core::{Atom, BigInt, List};
+
+pub let bigint = |n: Int| -> Atom { Atom::Call("bigint", List(Atom::IntLit(n))) };
+pub let bigint_of = |a: Atom| -> Atom { Atom::Call("bigint", List(a)) };
+pub let bit_and = |a: Atom, b: Atom| -> Atom { Atom::Call("bit_and", List(a, b)) };
+pub let bit_or = |a: Atom, b: Atom| -> Atom { Atom::Call("bit_or", List(a, b)) };
+pub let bit_xor = |a: Atom, b: Atom| -> Atom { Atom::Call("^", List(a, b)) };
+pub let bit_not = |a: Atom| -> Atom { Atom::Call("bit_not", List(a)) };
+pub let shl = |a: Atom, b: Atom| -> Atom { Atom::Call("shl", List(a, b)) };
+pub let shr = |a: Atom, b: Atom| -> Atom { Atom::Call(">>", List(a, b)) };
+pub let add = |a: Atom, b: Atom| -> Atom { Atom::Call("+", List(a, b)) };
+pub let sub = |a: Atom, b: Atom| -> Atom { Atom::Call("-", List(a, b)) };
+pub let mul = |a: Atom, b: Atom| -> Atom { Atom::Call("*", List(a, b)) };
+pub let div = |a: Atom, b: Atom| -> Atom { Atom::Call("/", List(a, b)) };
+pub let rem = |a: Atom, b: Atom| -> Atom { Atom::Call("%", List(a, b)) };
+pub let neg = |a: Atom| -> Atom { Atom::Call("-", List(a)) };
+pub let bits = |a: Atom| -> Atom { Atom::Call("bits", List(a)) };
+pub let le = |a: Atom, b: Atom| -> Atom { Atom::Call("le", List(a, b)) };
+pub let lt = |a: Atom, b: Atom| -> Atom { Atom::Call("bool-<", List(a, b)) };
+pub let to_string = |a: Atom| -> Atom { Atom::Call("to_string", List(a)) };
+pub let from_string = |a: Atom| -> Atom { Atom::Call("from_string", List(a)) };
+
+pub let big_add = add;
+pub let big_sub = sub;
+pub let big_mul = mul;
+pub let big_le = le;
+pub let big_lt = lt;
+pub let big_bits = bits;
+
+extract rust bigint      => "@ct";
+extract rust bigint_of   => "@ct";
+extract rust bit_and     => "@ct";
+extract rust bit_or      => "@ct";
+extract rust bit_xor     => "@ct";
+extract rust bit_not     => "@ct";
+extract rust shl         => "@ct";
+extract rust shr         => "@ct";
+extract rust add         => "@ct";
+extract rust sub         => "@ct";
+extract rust mul         => "@ct";
+extract rust div         => "@ct";
+extract rust rem         => "@ct";
+extract rust neg         => "@ct";
+extract rust bits        => "@ct";
+extract rust le          => "@ct";
+extract rust lt          => "@ct";
+extract rust to_string   => "@ct";
+extract rust from_string => "@ct";
+extract rust big_add     => "@ct";
+extract rust big_sub     => "@ct";
+extract rust big_mul     => "@ct";
+extract rust big_le      => "@ct";
+extract rust big_lt      => "@ct";
+extract rust big_bits    => "@ct";
