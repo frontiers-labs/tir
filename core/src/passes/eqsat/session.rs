@@ -1,8 +1,6 @@
 //! Thin runtime shim bridging CDSL v3's flat `Color::BASE` EqSat pass drivers
 //! to `tir_egglog` and TIR's `Context` mutation/publishing layer.
 
-use std::collections::HashMap;
-
 use tir_egglog::{Database, RuleCollection, RunReport, Schedule};
 
 use super::generated::{OperationId, Program, UseOwner};
@@ -201,16 +199,9 @@ pub(super) fn publish_rewrites(session: &mut Session<'_>) -> EditSummary {
             .expr_lifted()
             .map(|row| row.map(|(v,)| ValueId::from(v)).map_err(rule_error))
             .collect::<Result<Vec<_>, _>>()?;
-        let load_ops = program
-            .eq_sat_load_op()
-            .map(|row| {
-                let (op, state_in, val_res) = row.map_err(rule_error)?;
-                Ok((
-                    OpId::from(op),
-                    (ValueId::from(state_in), ValueId::from(val_res)),
-                ))
-            })
-            .collect::<Result<HashMap<_, _>, PassError>>()?;
+        for row in program.eq_sat_load_op() {
+            row.map_err(rule_error)?;
+        }
         drop(program);
 
         redirected.sort_unstable();
@@ -229,9 +220,8 @@ pub(super) fn publish_rewrites(session: &mut Session<'_>) -> EditSummary {
             &erase,
             &pinned_vals,
             &pinned_ops,
-            &live_ops,
+            live_ops,
             &lifted,
-            &load_ops,
         )
     });
     EditSummary
