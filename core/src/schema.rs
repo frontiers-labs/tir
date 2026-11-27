@@ -58,6 +58,10 @@ pub enum TypeConstraint {
     FunctionReturn(ConstraintPort),
     FunctionCall(ConstraintPort, ConstraintPort, ConstraintPort),
     ModuleScope(&'static str),
+    RegionExits(usize, &'static [&'static str], &'static str, &'static str),
+    ExitRole(&'static str),
+    OrderedLoop(ConstraintPort, &'static str),
+    SwitchCases(ConstraintPort),
 }
 
 /// The declarative shape of one operation.

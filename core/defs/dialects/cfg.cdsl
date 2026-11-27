@@ -21,7 +21,10 @@ pub let cond_br = op {
 
 pub let r#switch<w: Nat> = op {
     signature: (selector: Bits<w>, args: ..Any) -> (),
-    interfaces: (Terminator, BranchTerminator, CaseGuard),
+    interfaces: (
+        Terminator, BranchTerminator, CaseGuard,
+        Check(TypeConstraint::SwitchCases(ConstraintPort::Input("selector"))),
+    ),
     custom_format: true,
     macro_def: true,
 };
