@@ -8,4 +8,4 @@ module {
   module_end
 }
 
-// CHECK: fp arithmetic supports gradual subnormals and tininess after rounding
+// CHECK: floating-point policies belong in the computation type
