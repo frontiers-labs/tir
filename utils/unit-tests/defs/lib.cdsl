@@ -61,7 +61,7 @@ pub let read_flags = op {
 pub let add = op {
     dialect: "test",
     rust_name: "AddTestOp",
-    signature: (rs: Option<BackendReg>) -> (rd: BackendReg),
+    signature: (rs: BackendReg) -> (rd: BackendReg),
     macro_def: true,
 };
 

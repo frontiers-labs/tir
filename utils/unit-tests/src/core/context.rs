@@ -51,13 +51,13 @@ fn state_errors_follow_operand_walk_order() {
     for _ in 0..16 {
         let (context, module, _, body) = fixtures::parse_function(
             r#"module {
-%f = func.func @main() {
-  %s0 = state.entry_state : !state<fp.env>
-  %s1 = state.entry_state : !state<fp.env>
-  %r0, %s2 = fp.get_round state(%s0) : !fp.rounding
-  %r1, %s3 = fp.get_round state(%s0) : !fp.rounding
-  %r2, %s4 = fp.get_round state(%s1) : !fp.rounding
-  %r3, %s5 = fp.get_round state(%s1) : !fp.rounding
+%f = func.func @main(%p: !ptr.p<!i32>, %v: !i32) {
+  %s0 = state.entry_state : !state<memory>
+  %s1 = state.entry_state : !state<memory>
+  %s2 = ptr.store %v, %p state(%s0)
+  %s3 = ptr.store %v, %p state(%s0)
+  %s4 = ptr.store %v, %p state(%s1)
+  %s5 = ptr.store %v, %p state(%s1)
   func.return
 }
 module_end

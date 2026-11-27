@@ -94,7 +94,10 @@ fn def_use_reads_ports_and_leaves_physical_registers_out() {
             tir::Operand::none(),
             vec![RegClassType::new(context, r())],
             tir::NewOpParts {
-                attributes: vec![context.named_attribute("rs", phys_attr((r(), 3)))],
+                attributes: vec![context.named_attribute(
+                    tir::analysis::defuse::USES_ATTR,
+                    AttributeValue::Array(vec![phys_attr((r(), 3))].into()),
+                )],
             },
             tir::InsertionPoint::Root,
         )
@@ -232,14 +235,14 @@ fn a_slot_holding_nothing_is_rejected() {
         add(
             context,
             tir::Operand::none(),
-            vec![],
+            vec![RegClassType::new(context, r())],
             Default::default(),
             tir::InsertionPoint::Root,
         )
     });
     let error = verify_machine_ir(&f.context, f.symbol.id()).expect_err("empty slot");
     assert!(
-        format!("{error:?}").contains("missing register attribute"),
+        format!("{error:?}").contains("missing required operand 'rs'"),
         "{error:?}",
     );
 }
