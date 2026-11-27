@@ -244,6 +244,10 @@ let prog: EgglogProgram = EgglogProgram::ProgramFull(
 
 #[test]
 fn cdslc_cli_emits_typed_egg_tegg_rust_and_lean() {
+    let cdslc = env::var_os("TIR_TEST_BIN_DIR").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_cdslc")),
+        |directory| PathBuf::from(directory).join(format!("cdslc{}", env::consts::EXE_SUFFIX)),
+    );
     let sources = Sources::new();
     let input = sources.write(
         "prog.cdsl",
@@ -282,7 +286,7 @@ pub let prog: EgglogProgram = EgglogProgram::ProgramFull(
         ("rust", "pub const"),
         ("lean", "def prog"),
     ] {
-        let out = Command::new(env!("CARGO_BIN_EXE_cdslc"))
+        let out = Command::new(&cdslc)
             .args([
                 "--input",
                 input.to_str().unwrap(),
@@ -306,7 +310,7 @@ pub let prog: EgglogProgram = EgglogProgram::ProgramFull(
     }
 
     let tegg_file = sources.0.join("prog.tegg");
-    let out = Command::new(env!("CARGO_BIN_EXE_cdslc"))
+    let out = Command::new(&cdslc)
         .args([
             "--input",
             input.to_str().unwrap(),
