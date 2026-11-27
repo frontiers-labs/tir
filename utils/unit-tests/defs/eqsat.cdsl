@@ -5,8 +5,8 @@ use std::ir::{OperationId, OperationKind, ValueId};
 use dialects::test::keep_left;
 
 // Link live IR and EqSat tables by engine name (dev-dependency test crate).
-pub enum Form {
-    Constant(OperationKind, String, BigInt),
+pub enum Expr {
+    CustomConst(OperationKind, String, BigInt),
 }
 
 let Operation: Relation<{
@@ -28,7 +28,7 @@ let EqSatPinnedOp: Relation<(OperationId,)>;
 let EqSatPinned: Relation<(ValueId,)>;
 let EqSatReplace: Relation<(OperationId, ValueId, ValueId)>;
 let EqSatErase: Relation<(OperationId,)>;
-let EqSatDefinition: Relation<(OperationId, ValueId, Form)>;
+let EqSatDefinition: Relation<(OperationId, ValueId, Expr)>;
 pub let eqsat_attr_int: Int -> BigInt;
 
 let same<x>: Rewrite(keep_left(x, x) -> x);

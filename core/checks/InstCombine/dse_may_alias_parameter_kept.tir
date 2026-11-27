@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(memopt,dce) --verify %s | filecheck %s
 
 // A parameter pointer is an object the analysis cannot tell apart from another
 // parameter's, and nothing here ever names one without the other, so the two

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck --strict-whitespace %s
+// RUN: tir opt --pass func.func(eqsat,dce) --verify %s | filecheck --strict-whitespace %s
 
 // A loop is left with what its test forwards, which is the carried value itself
 // only where the test forwards it unchanged. The hypothesis proves what the port

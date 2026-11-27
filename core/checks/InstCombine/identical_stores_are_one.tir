@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(memopt) --verify %s | filecheck %s
 
 // Two writes of one value to one address. Law S2 equates the memory the second
 // leaves with the memory writing it over the state the first was handed, and

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(eqsat) --verify %s | filecheck %s --implicit-check-not "constant {value = 3}"
+// RUN: tir opt --pass func.func(eqsat,control-simplify,dce) --verify %s | filecheck %s --implicit-check-not "constant {value = 3}"
 
 // Both edges can reach the same block with different literals.
 

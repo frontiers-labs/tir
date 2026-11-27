@@ -1,5 +1,5 @@
-// RUN: tir opt --pass fixpoint<3>(eqsat) --verify %s | filecheck %s
-// RUN: tir opt --pass fixpoint<3>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(eqsat,dce) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<3>(func.func(eqsat,dce)) --verify %s | filecheck %s
 
 module {
   %fn_f = func.func @f(%a: !i32, %b: !i32) -> !i1 {

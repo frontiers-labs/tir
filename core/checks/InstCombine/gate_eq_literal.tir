@@ -1,4 +1,4 @@
-// RUN: tir opt --pass fixpoint<4>(func.func(eqsat)) --verify %s | filecheck %s
+// RUN: tir opt --pass fixpoint<4>(func.func(eqsat,dce)) --verify %s | filecheck %s
 
 // Inside `x == 7` the two classes are one, and extraction prefers the literal:
 // every term over %x in that arm is a term over 7 and folds.

@@ -1,14 +1,13 @@
-// EqSat stage builders — parameterized over `List<Rewrite>` and driven
-// directly by `dialects::builtin::all_ops` via NbE.
+// EqSat stage builders — single flat `Color::BASE` saturation (zero `Color` overlays!)
+// covering algebraic/bitwise/FP/pointer rewrites, `KnownZeros` lattice, SSI `Pi`
+// branch refinement, RVSDG state-threaded memory, and RVSDG `Gamma2`/`Theta`.
 
 use std::core::*;
-use std::ir::dialect_flag_rules;
 use std::ir::integers::integer_fold_rules;
 use std::ir::rewrites::lower_eqsat_rewrites;
 use dialects::builtin;
-use eqsat::{bits, context, fp, integer, layout, loops, memory};
+use eqsat::{bits, context, integer, layout, rvsdg};
 
-let int_flags: List<Rule> = dialect_flag_rules(builtin::all_ops);
 let int_fold: List<Rule> = integer_fold_rules(builtin::all_ops);
 
 let constant_defined_rules: List<Rule> = {
@@ -29,26 +28,21 @@ let cat = |lists: List<List<Rule>>| -> List<Rule> {
 };
 
 let frame_rules: List<Rule> = cat(List(
-    context::attributes, integer::arguments, loops::counted_pins,
-    loops::ports, memory::allocation, memory::allocation_shape,
-    constant_defined_rules, integer::defined_frozen,
-));
-let site_rules: List<Rule> = cat(List(memory::escape, memory::memory_sites));
-let custom_frame_rules: List<Rule> = cat(List(
-    context::attributes, integer::arguments, loops::counted_pins,
-    constant_defined_rules, integer::defined_frozen,
+    context::attributes, bits::wrap_flags, integer::arguments,
+    context::counted_pins, constant_defined_rules, integer::defined_frozen,
+    context::scope_prep,
 ));
 
 let base_global_rules: List<Rule> = cat(List(
-    bits::commute, bits::congruence, bits::integer_inputs, bits::scalars,
-    fp::fp_congruence, fp::fp_keys,
-    integer::cast_cse, integer::defined_integer, integer::integer_facts, integer::strength,
-    layout::address_keys, layout::layout_values,
-    loops::invariant_ports, loops::loop_facts, loops::switch_inputs,
-    memory::memory_facts, memory::memory_join, memory::memory_siblings,
-    memory::pointer_cells, memory::read_state,
+    bits::commute, bits::known_bits,
+    integer::defined_bridge, integer::strength,
+    layout::layout_values,
+    rvsdg::axioms,
     int_fold,
 ));
+
+let all_mark_rules: List<Rule> = append(bits::mark_lifted, rvsdg::mark_rvsdg);
+let all_lift_rules: List<Rule> = append(bits::lift_ops, rvsdg::lift_rvsdg);
 
 pub let publish_aliases_stage: Schedule = Schedule::Seq(List(
     Schedule::Repeat(64, context::paths),
@@ -57,120 +51,52 @@ pub let publish_aliases_stage: Schedule = Schedule::Seq(List(
 ));
 
 pub let build_analyze = |rules: List<Rewrite>| -> Schedule {
-    let global_rules = append(base_global_rules, lower_eqsat_rewrites("eqsat::rw", rules));
-    let global = Schedule::RepeatNamed("eqsat::global", 64, global_rules);
+    let base_rules = append(base_global_rules, lower_eqsat_rewrites("eqsat::rw", rules));
+    let scoped_rules = append(base_rules, context::pi_equalities);
+    let base_sat = Schedule::Repeat(64, base_rules);
+    let scoped_sat = Schedule::RepeatNamed("eqsat::global", 64, scoped_rules);
     Schedule::Seq(List(
-        Schedule::Once(bits::flag_values),
-        Schedule::Repeat(4, memory::memory_barriers),
-        Schedule::Once(loops::gamma_witness),
-        Schedule::Once(loops::gamma_missing),
-        Schedule::Once(loops::gamma_agrees),
-        global,
-        Schedule::Repeat(4, context::incoming),
-        Schedule::Once(context::phi_candidates),
-        Schedule::Once(context::phi_disagreement),
-        Schedule::Once(context::phi_literals),
-        Schedule::Once(memory::memory_cfg),
-        Schedule::Once(memory::memory_cfg_missing),
-        Schedule::Once(memory::memory_cfg_apply),
-        Schedule::Once(memory::memory_join_missing),
-        Schedule::Once(memory::memory_join_apply),
-        global,
-        Schedule::Repeat(4, context::removable),
-        Schedule::Repeat(8, memory::plain_access),
-        Schedule::Once(memory::plain_disjoint),
-        Schedule::Once(memory::private_call),
-        Schedule::Once(memory::plain_clobber),
-        Schedule::Once(loops::safe_control_inputs),
-        Schedule::Once(loops::control_effects),
-        Schedule::Repeat(2, loops::finite_loops),
-        Schedule::Repeat(4, loops::switch_cases),
-        Schedule::Once(loops::switch_default),
-        Schedule::Once(loops::pure_switch),
-        Schedule::Once(loops::switch_values),
-        Schedule::Once(loops::switch_agreement),
-        Schedule::Once(loops::switch_aliases),
-        Schedule::Once(memory::plain_forward),
-        Schedule::Once(memory::dead_store_proof),
-        Schedule::Once(memory::dead_store_uses),
-        Schedule::Once(memory::dead_store),
-        Schedule::Repeat(64, context::paths),
-        Schedule::Repeat(4, loops::counted_exits),
-        Schedule::Once(loops::counted_missing),
-        Schedule::Once(loops::counted_agrees),
-        Schedule::Once(loops::counted_reads),
+        Schedule::Once(rvsdg::prep_seed),
+        Schedule::Once(rvsdg::prep_guards),
+        Schedule::Once(rvsdg::prep_barriers),
+        Schedule::Saturate(rvsdg::mem_ordering),
+        Schedule::Repeat(16, context::scope_constraints),
+        Schedule::Once(all_mark_rules),
+        Schedule::Once(bits::seed_opaque),
+        Schedule::Saturate(all_lift_rules),
+        base_sat,
+        Schedule::Once(context::detect_dead_scope),
+        scoped_sat,
+        Schedule::Once(rvsdg::post_default_arm),
+        scoped_sat,
+        Schedule::Once(rvsdg::state_dse_uses),
+        Schedule::Once(rvsdg::state_dse_apply),
+        Schedule::Once(context::scoped_edits),
         publish_aliases_stage,
-        Schedule::Once(context::phi_uses),
-        Schedule::Once(integer::definition_constants),
-        Schedule::Once(integer::definition_expressions),
     ))
 };
 
 pub let prepare_custom_stage: Schedule = Schedule::Seq(List(
     Schedule::Saturate(context::select),
-    Schedule::Once(bits::scalars_integer),
-    Schedule::Repeat(8, custom_frame_rules),
+    Schedule::Saturate(bits::int_types),
+    Schedule::Repeat(8, frame_rules),
 ));
 
 pub let prepare_stage: Schedule = Schedule::Seq(List(
     Schedule::Saturate(context::select),
-    Schedule::Once(bits::scalars_integer),
-    Schedule::OnceFlag(int_flags),
+    Schedule::Saturate(bits::int_types),
     Schedule::Repeat(8, frame_rules),
-    Schedule::Once(site_rules),
     Schedule::Repeat(4, layout::layout_queries),
 ));
 
-pub let apply_masks_stage: Schedule = Schedule::Once(bits::redundant_masks);
-
-pub let sweep_stage: Schedule = Schedule::Seq(List(
-    Schedule::Once(bits::congruence),
-    Schedule::Repeat(4, bits::scalars),
-    Schedule::Repeat(4, integer::cast_cse),
-    Schedule::Repeat(8, context::removable),
-    Schedule::Repeat(2, bits::integer_inputs),
-    Schedule::Once(int_fold),
-    Schedule::Saturate(layout::address_keys),
-    Schedule::Repeat(8, memory::plain_access),
-    Schedule::Saturate(memory::storage_defined),
-    Schedule::Once(memory::private_layout),
-    Schedule::Once(memory::private_extent),
-    Schedule::Repeat(8, memory::private_store),
-    Schedule::Once(memory::private_other),
-    Schedule::Once(memory::private_drop),
-    Schedule::Once(memory::plain_overwrites),
-    Schedule::Once(memory::overwrite_barriers),
-    Schedule::Once(memory::overwrite_plain),
-    Schedule::Once(loops::safe_control_inputs),
-    Schedule::Once(loops::control_effects),
-    Schedule::Once(loops::pure_switch),
-    Schedule::Saturate(context::demand),
-    Schedule::Once(context::dead),
-));
-
-pub let seed_assumptions_stage: Schedule = Schedule::Seq(List(
-    Schedule::Once(context::incoming),
-    Schedule::Repeat(64, context::assumptions),
-));
-
-pub let propagate_scoped_stage: Schedule = Schedule::RepeatSched(
-    8,
-    Schedule::Colored(context::branch_local),
-);
-
-extract rust int_flags              => "@ct";
 extract rust int_fold               => "@ct";
 extract rust constant_defined_rules => "@ct";
 extract rust cat                    => "@ct";
 extract rust frame_rules            => "@ct";
-extract rust site_rules             => "@ct";
-extract rust custom_frame_rules     => "@ct";
 extract rust base_global_rules      => "@ct";
+extract rust all_mark_rules         => "@ct";
+extract rust all_lift_rules         => "@ct";
 extract rust publish_aliases_stage  => "@ct";
 extract rust build_analyze          => "@ct";
 extract rust prepare_custom_stage   => "@ct";
 extract rust prepare_stage          => "@ct";
-extract rust apply_masks_stage      => "@ct";
-extract rust sweep_stage            => "@ct";
-extract rust seed_assumptions_stage => "@ct";
-extract rust propagate_scoped_stage => "@ct";

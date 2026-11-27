@@ -1,0 +1,109 @@
+// Declarative Dead Code Elimination pass.
+// Consumes cached `analysis::value_info` tables and sweeps undemanded pure operations,
+// unused stack allocations, and unused pure `scf.switch` operations.
+
+use std::core::*;
+use std::ir::{OperationId, ValueId, fp_dce_rules};
+use dialects::{fp, layout, ptr};
+
+pub let DceRemovable: Relation<(OperationId, ValueId)>;
+pub let DceRemovableNode: Relation<OperationId>;
+pub let DceDemand: Relation<ValueId>;
+pub let DceDead: Relation<OperationId>;
+
+let removable_rules: List<Rule> = {
+    let builtin_pure<node, k, pl, hm, pos, dp, lc, res, ty, decl>: Rule(
+        (
+            ValLive(node), Operation(node, k, pl, hm, pos, dp, lc), ValDropKind(k),
+            Value(res, ty, "result", node, 0, decl),
+            !ValPinnedOp(node), !ValPinned(res),
+        ) -> (DceRemovable(node, res), DceRemovableNode(node))
+    );
+    let frozen_arg<node, res>: Rule(
+        (ValArgFreeze(node, res), !ValPinnedOp(node), !ValPinned(res))
+        -> (DceRemovable(node, res), DceRemovableNode(node))
+    );
+    let pure_sw<node, res, ty>: Rule(
+        ValPureSwitch(node, res, ty)
+        -> (DceRemovable(node, res), DceRemovableNode(node))
+    );
+    let pure_ptradd<node, pl, hm, pos, dp, lc, res, ty, decl>: Rule(
+        (
+            ValLive(node), Operation(node, ptr::ptradd.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl),
+            !ValExtraResult(node), !ValPinnedOp(node), !ValPinned(res),
+        ) -> (DceRemovable(node, res), DceRemovableNode(node))
+    );
+    let unused_alloca<node, pl, hm, pos, dp, lc, res, ty, decl>: Rule(
+        (
+            ValLive(node), Operation(node, ptr::alloca.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl),
+            !ValExtraResult(node), !ValPinnedOp(node), !ValPinned(res),
+        ) -> (DceRemovable(node, res), DceRemovableNode(node))
+    );
+    let layout_sizeof<node, pl, hm, pos, dp, lc, res, ty, decl>: Rule(
+        (
+            ValLive(node), Operation(node, layout::sizeof.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl), !ValPinned(res),
+        ) -> (DceRemovable(node, res), DceRemovableNode(node))
+    );
+    let layout_alignof<node, pl, hm, pos, dp, lc, res, ty, decl>: Rule(
+        (
+            ValLive(node), Operation(node, layout::alignof.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl), !ValPinned(res),
+        ) -> (DceRemovable(node, res), DceRemovableNode(node))
+    );
+    let layout_offsetof<node, pl, hm, pos, dp, lc, res, ty, decl>: Rule(
+        (
+            ValLive(node), Operation(node, layout::offsetof.kind, pl, hm, pos, dp, lc),
+            Value(res, ty, "result", node, 0, decl), !ValPinned(res),
+        ) -> (DceRemovable(node, res), DceRemovableNode(node))
+    );
+    append(
+        fp_dce_rules(fp::all_ops),
+        List(builtin_pure, frozen_arg, pure_sw, pure_ptradd, unused_alloca, layout_sizeof, layout_alignof, layout_offsetof),
+    )
+};
+
+let demand_rules: List<Rule> = {
+    let root_opnd<user, slot, val>: Rule(
+        (Operand(user, slot, val), !DceRemovableNode(user))
+        -> DceDemand(val)
+    );
+    let root_yield<region, mode, owner, rslot, entry, slot, val>: Rule(
+        (Region(region, mode, owner, rslot, entry), !DceRemovableNode(owner), Yield(region, slot, val))
+        -> DceDemand(val)
+    );
+    let prop_opnd<node, res, slot, val>: Rule(
+        (DceRemovable(node, res), DceDemand(res), Operand(node, slot, val))
+        -> DceDemand(val)
+    );
+    let prop_yield<node, res, region, mode, rslot, entry, slot, val>: Rule(
+        (
+            DceRemovable(node, res), DceDemand(res),
+            Region(region, mode, node, rslot, entry),
+            Yield(region, slot, val),
+        ) -> DceDemand(val)
+    );
+    List(root_opnd, root_yield, prop_opnd, prop_yield)
+};
+
+let dead_rules: List<Rule> = {
+    let unused<node, res>: Rule(
+        (DceRemovable(node, res), !DceDemand(res))
+        -> DceDead(node)
+    );
+    List(unused)
+};
+
+extract rust removable_rules => "@ct";
+extract rust demand_rules    => "@ct";
+extract rust dead_rules      => "@ct";
+
+pub let run_dce = || -> Schedule {
+    Schedule::Seq(List(
+        Schedule::Once(removable_rules),
+        Schedule::Saturate(demand_rules),
+        Schedule::Once(dead_rules),
+    ))
+};

@@ -19,6 +19,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("core::dialects::vector::*", OpDef("vector_ops.rs")),
         ("core::eqsat::*", Program("eqsat.rs")),
         ("core::analysis::*", Program("analyses.rs")),
+        ("core::memory::*", Program("memory_analysis.rs")),
+        ("core::passes::dce::*", Program("dce.rs")),
+        ("core::passes::memopt::*", Program("memopt.rs")),
+        (
+            "core::passes::control_simplify::*",
+            Program("control_simplify.rs"),
+        ),
         ("core::passes::restructure::*", Program("restructure.rs")),
     ])?;
     Ok(())
